@@ -13,3 +13,4 @@ ego = new Car on road
 
 # --- Another fellow car ahead of ego, to interact with ---
 fellow = new Car ahead of ego by 20
+# fellow = new Car with roadS 1020, with roadT 3.5

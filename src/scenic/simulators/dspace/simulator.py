@@ -12,37 +12,25 @@ from scenic.core.vectors import Vector
 from scenic.domains.driving.simulators import DrivingSimulator, DrivingSimulation
 from scenic.core.simulators import SimulationCreationError  # core contract
 
-# ---------------- Small COM helpers (from your working script) ----------------
-
+# --- COM helpers (from your working example) ---
 def _count_any(coll):
-    try:
-        c = getattr(coll, "Count", None)
-        if c is None:
-            c = len(coll)
-        return int(c)
-    except Exception:
-        return 0
+    try: return int(getattr(coll, "Count", len(coll)))
+    except Exception: return 0
 
 def _clear_collection(coll):
+    print("Clearing collection of size", _count_any(coll))
     n = _count_any(coll)
     for i in reversed(range(n)):
         for m in ("Remove", "Delete", "RemoveAt"):
             if hasattr(coll, m):
-                try:
-                    getattr(coll, m)(i)
-                    break
-                except Exception:
-                    pass
+                try: getattr(coll, m)(i); break
+                except Exception: pass
 
 def _ensure_two_segments(sequence):
     segs = sequence.Segments
-    n = _count_any(segs)
-    while n < 2:
-        if hasattr(segs, "Add"):
-            segs.Add()
-            n += 1
-        else:
-            raise SimulationCreationError("Segments.Add() not available; create 2 segments once in UI.")
+    while _count_any(segs) < 2:
+        if hasattr(segs, "Add"): segs.Add()
+        else: raise SimulationCreationError("Segments.Add() missing; create 2 segs once in UI.")
     return segs
 
 def _activate_type(typed_obj, element_name):
@@ -61,61 +49,19 @@ def _activate_type(typed_obj, element_name):
     return False
 
 def _set_activity_constant(typed_obj, value):
-    tgt = typed_obj.ActiveElement
-    tgt = tgt.SourceType
-    tgt = tgt.ActiveElement
+    tgt = typed_obj.ActiveElement.SourceType.ActiveElement
     tgt.Constant = float(value)
 
 def _make_endless_transition(segs):
     try:
-        tr = segs[1].Transition
-        conds = tr.Conditions
-        k = _count_any(conds)
-        for i in reversed(range(k)):
-            try:
-                conds.Remove(i)
-            except Exception:
-                pass
+        conds = segs[1].Transition.Conditions
+        for i in reversed(range(_count_any(conds))):
+            try: conds.Remove(i)
+            except Exception: pass
         conds.Add("Endless")
     except Exception:
         pass
 
-def _add_stationary_fellow(ts, s, t):
-    """Create one Fellow: seg0 Longitudinal=Position(s); seg1 Velocity=0 & Lateral=Deviation(t); Endless."""
-    fellows = ts.Fellows
-    if not hasattr(fellows, "Add"):
-        raise SimulationCreationError("Fellows.Add() not available — add one Fellow once via UI to expose COM path.")
-
-    F = fellows.Add()
-    seqs = F.Sequences
-    S1 = seqs.Add() if hasattr(seqs, "Add") else seqs[0]
-    segs = _ensure_two_segments(S1)
-
-    lt0 = segs[0].Activity.LongitudinalType
-    if not _activate_type(lt0, "Position"):
-        raise SimulationCreationError("Could not activate LongitudinalType 'Position' on seg0.")
-    _set_activity_constant(lt0, s)
-
-    try:
-        lat0 = segs[0].Activity.LateralType
-        _activate_type(lat0, "Continue")
-    except Exception:
-        pass
-
-    lt1 = segs[1].Activity.LongitudinalType
-    if not _activate_type(lt1, "Velocity"):
-        _activate_type(lt1, "Speed")
-    _set_activity_constant(lt1, 0.0)
-
-    try:
-        lat1 = segs[1].Activity.LateralType
-        _activate_type(lat1, "Deviation")
-        _set_activity_constant(lat1, t)
-    except Exception:
-        pass
-
-    _make_endless_transition(segs)
-    return F
 
 # ---------------- Public simulator (no COM side effects here) ----------------
 
@@ -142,11 +88,7 @@ class DSpaceSimulation(DrivingSimulation):
         super().__init__(scene, timestep=ts, **kwargs)
 
     def setup(self):
-        """SaveAs/Activate the MD scenario first, then create Scenic objects.
-
-        Core will later call updateObjects/step; we don't need to run VEOS.  
-        (Core doc: setup() is where objects are created via _createObject → createObjectInSimulator.)"""
-        # 1) SaveAs / Activate (before object creation)
+        """SaveAs/Activate first, then create Scenic objects, then persist & start."""
         pythoncom.CoInitialize()
         app = Dispatch("ModelDesk.Application")
         proj = app.ActiveProject
@@ -156,7 +98,7 @@ class DSpaceSimulation(DrivingSimulation):
         if exp is None:
             raise SimulationCreationError("Activate an experiment in ModelDesk.")
 
-        # switch to source, then SaveAs to new scenario
+        # 1) Switch to source, then SaveAs to new scenario
         try:
             exp.ActivateTrafficScenario(self.sim.scenario_src)
         except Exception:
@@ -164,9 +106,9 @@ class DSpaceSimulation(DrivingSimulation):
 
         name = self.sim.scenario_name or time.strftime("Scenic_%Y%m%d_%H%M%S")
         if self.sim.save_as:
-            ts = exp.TrafficScenario
+            ts0 = exp.TrafficScenario
             try:
-                ts.SaveAs(name, True)                        # same API used in your working script
+                ts0.SaveAs(name, True)    # same API as your working script
             except Exception:
                 editor = exp.EditTrafficScenario()
                 try:
@@ -179,7 +121,7 @@ class DSpaceSimulation(DrivingSimulation):
             except Exception:
                 pass
 
-        # rebind fresh handles after SaveAs/Activate
+        # 2) Rebind fresh handles after SaveAs/Activate
         pythoncom.PumpWaitingMessages()
         time.sleep(0.2)
         proj = app.ActiveProject
@@ -188,30 +130,37 @@ class DSpaceSimulation(DrivingSimulation):
         if self.ts is None:
             raise SimulationCreationError("Active experiment has no TrafficScenario.")
 
-        # Optional: start from a clean Fellows list each run
+        # 3) Start from a clean Fellows list (operate on FRESH self.ts)
         try:
             _clear_collection(self.ts.Fellows)
         except Exception:
             pass
 
-        # 2) NOW let the core create objects (calls our createObjectInSimulator for each)
-        super().setup()  # ← object creation happens here in the core flow :contentReference[oaicite:2]{index=2}
+        # 4) NOW let Scenic create objects (calls our createObjectInSimulator for each)
+        super().setup()   # <— this is where your Fellow is actually added
 
-        # persist the scenario with our newly added Fellows
+        # 5) Persist configuration and (optionally) reset/start
         try:
             self.ts.Save()
             self.ts.Download()
-            mc = exp.ManeuverControl
+
+            mc = self.exp.ManeuverControl
+            # Be defensive in case VEOS is mid-run
+            try: mc.Stop()
+            except Exception: pass
             time.sleep(0.2)
-            mc.Reset()   # syncs the scenario state to the saved state
+            mc.Reset()
             time.sleep(0.2)
-            mc.Start(True)
+            mc.Start(False)   # blocking-normal run; use True for non-blocking if desired
         except Exception:
             pass
 
+
+        
+
     def createObjectInSimulator(self, obj):
-        """Create Scenic object in ModelDesk: ego=no-op; non-ego Car → Fellow."""
-        # Always keep a tiny backend object for Scenic bookkeeping
+        # Minimal backend so Scenic stays happy
+        print(f"Creating object in DSpaceSimulation: {obj}")
         b = type("DSpaceAgent", (), {})()
         b.position = Vector(0, 0, 0)
         b.linvel   = Vector(0, 0, 0)
@@ -219,24 +168,19 @@ class DSpaceSimulation(DrivingSimulation):
         b.heading  = 0.0
         obj._backend = b
 
-        # If we don't have a TrafficScenario yet (shouldn't happen with the new order), bail
-        if self.ts is None:
+        # Only add non-ego cars to ModelDesk
+        if self.ts is None or getattr(obj, "isEgo", False) or not getattr(obj, "isCar", True):
             return
 
-        # Ego already exists in MD scenario → nothing to add
-        if getattr(obj, "isEgo", False):
-            return
+        ts = self.ts
 
-        # Only map cars
-        if not getattr(obj, "isCar", True):
-            return
 
-        # Resolve (s, t) from Scenic object.
-        # Preferred: explicit Scenic properties (roadS/roadT) if you add them later.
+        # --------- read Scenic-specified placement/controls ----------
+        # (s, t) longitudinal & lateral in road coordinates
         s = getattr(obj, "roadS", None)
         t = getattr(obj, "roadT", None)
 
-        # Fallback: use Scenic position's (x, y) as (s, t) if present.
+        # Convenience: allow using Scenic position (x,y) as (s,t)
         if (s is None or t is None) and getattr(obj, "position", None) is not None:
             try:
                 s = float(obj.position.x)
@@ -244,11 +188,60 @@ class DSpaceSimulation(DrivingSimulation):
             except Exception:
                 pass
 
-        # Final fallback: just place it near s=20, t=0 if nothing else is available.
-        if s is None or t is None:
-            s, t = 20.0, 0.0
+        # Defaults if not provided
+        if s is None: s = 20.0
+        if t is None: t = 0.0
 
-        _add_stationary_fellow(self.ts, s, t)  # adds Fellow with the validated sequence
+        # Longitudinal/Lateral “kinds” and values (override-able from Scenic)
+        seg0_long_kind = getattr(obj, "md_seg0_long_kind", "Position")   # e.g., "Position"
+        seg0_long_val  = getattr(obj, "md_seg0_long_val",  s)            # value for seg0.longitudinal
+
+        seg1_long_kind = getattr(obj, "md_seg1_long_kind", "Velocity")   # "Velocity" or "Speed"
+        seg1_long_val  = getattr(obj, "md_seg1_long_val",  getattr(obj, "md_v", 0.0))  # velocity m/s
+
+        seg1_lat_kind  = getattr(obj, "md_seg1_lat_kind",  "Deviation")  # "Deviation"
+        seg1_lat_val   = getattr(obj, "md_seg1_lat_val",   t)            # lateral dev m
+
+        # --------- COM: add the fellow with two segments ----------
+        fellows = ts.Fellows
+        if not hasattr(fellows, "Add"):
+            raise SimulationCreationError("Fellows.Add() not available—create one in UI once to expose COM.")
+
+        F = fellows.Add()
+        seqs = F.Sequences
+        _clear_collection(seqs)
+        S1 = seqs.Add() if hasattr(seqs, "Add") else seqs[0]
+        segs = _ensure_two_segments(S1)
+
+        print(f"segs: {segs}, kinds: {seg0_long_kind}, {seg1_long_kind}, {seg1_lat_kind}, vals: {seg0_long_val}, {seg1_long_val}, {seg1_lat_val}")
+
+        # Segment 0: longitudinal kind/value (default=Position(s)), lateral neutral
+        lt0 = segs[0].Activity.LongitudinalType
+        if not _activate_type(lt0, seg0_long_kind):
+            raise SimulationCreationError(f"Could not activate seg0 LongitudinalType '{seg0_long_kind}'.")
+        _set_activity_constant(lt0, seg0_long_val)
+        try:
+            lat0 = segs[0].Activity.LateralType
+            _activate_type(lat0, "Continue")
+        except Exception:
+            pass
+
+        # Segment 1: longitudinal kind/value (default=Velocity(v))
+        lt1 = segs[1].Activity.LongitudinalType
+        if not _activate_type(lt1, seg1_long_kind):
+            _activate_type(lt1, "Speed")  # fallback if build exposes Speed
+        _set_activity_constant(lt1, seg1_long_val)
+
+        # Segment 1: lateral kind/value (default=Deviation(t))
+        try:
+            lat1 = segs[1].Activity.LateralType
+            _activate_type(lat1, seg1_lat_kind)
+            _set_activity_constant(lat1, seg1_lat_val)
+        except Exception:
+            pass
+
+        _make_endless_transition(segs)
+
 
     # We are not “running” the sim; keep a tiny sleep so the core loop advances.
     def step(self):
@@ -273,3 +266,5 @@ class DSpaceSimulation(DrivingSimulation):
             "elevation":       float(pos.z),
         }
         return {k: vals[k] for k in properties}
+    
+
