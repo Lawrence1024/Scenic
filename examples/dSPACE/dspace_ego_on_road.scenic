@@ -1,5 +1,5 @@
 # --- Map and timing (must come before the model line) ---
-param map = localPath('../../assets/maps/dSPACE/LS_converted.xodr')
+param map = localPath('../../assets/maps/dSPACE/Laguna_seca.xodr')
 param time_step = 1.0/10
 
 # --- Driving world model (brings in Car/road/behaviors) ---
