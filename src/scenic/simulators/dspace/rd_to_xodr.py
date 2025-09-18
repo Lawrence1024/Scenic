@@ -155,7 +155,9 @@ def create_junction_xml(od, junction_id: int, connection_roads: list):
                          contactPoint=contact_point)
         
         # Add lane links (simplified - connect lane -1 to lane -1)
-        lane_link = elem('laneLink', from_='-1', to='-1')
+        lane_link = elem('laneLink')
+        lane_link.set('from', '-1')
+        lane_link.set('to', '-1')
         connection.append(lane_link)
         junction.append(connection)
     
@@ -255,12 +257,28 @@ def write_xodr_from_polyline(XY: np.ndarray, out_path: str, lane_width: float = 
 
     left = elem('left'); ls.append(left)
     l1 = elem('lane', id='1', type='driving', level='false'); left.append(l1)
+    
+    # Add lane links for left lane (self-loop)
+    l1_link = elem('link')
+    l1_pred = elem('predecessor', id='-1')
+    l1_succ = elem('successor', id='-1')
+    l1_link.append(l1_pred); l1_link.append(l1_succ)
+    l1.append(l1_link)
+    
     rml = elem('roadMark', sOffset='0', type='broken', weight='standard', color='standard', width='0.13', laneChange='both')
     l1.append(rml)
     w = elem('width', sOffset='0', a=f'{lane_width:.3f}', b='0', c='0', d='0'); l1.append(w)
 
     right = elem('right'); ls.append(right)
     r1 = elem('lane', id='-1', type='driving', level='false'); right.append(r1)
+    
+    # Add lane links for right lane (self-loop)
+    r1_link = elem('link')
+    r1_pred = elem('predecessor', id='1')
+    r1_succ = elem('successor', id='1')
+    r1_link.append(r1_pred); r1_link.append(r1_succ)
+    r1.append(r1_link)
+    
     rmr = elem('roadMark', sOffset='0', type='broken', weight='standard', color='standard', width='0.13', laneChange='both')
     r1.append(rmr)
     w2 = elem('width', sOffset='0', a=f'{lane_width:.3f}', b='0', c='0', d='0'); r1.append(w2)
@@ -348,10 +366,40 @@ def append_road_xml(od, road_id: int, XY: np.ndarray, name="Road", closed=True, 
     lane0.append(elem('roadMark', sOffset='0', type='solid', weight='standard', color='standard', width='0.13'))
     left = elem('left'); ls.append(left)
     l1 = elem('lane', id='1', type='driving', level='false'); left.append(l1)
+    
+    # Add proper lane links for left lane
+    l1_link = elem('link')
+    if predecessor is not None:
+        l1_pred = elem('predecessor', id='-1')
+        l1_link.append(l1_pred)
+    if successor is not None:
+        l1_succ = elem('successor', id='-1')
+        l1_link.append(l1_succ)
+    if closed and predecessor is None and successor is None:
+        l1_pred = elem('predecessor', id='-1')
+        l1_succ = elem('successor', id='-1')
+        l1_link.append(l1_pred); l1_link.append(l1_succ)
+    l1.append(l1_link)
+    
     l1.append(elem('roadMark', sOffset='0', type='broken', weight='standard', color='standard', width='0.13', laneChange='both'))
     l1.append(elem('width', sOffset='0', a=f'{lane_width:.3f}', b='0', c='0', d='0'))
     right = elem('right'); ls.append(right)
     r1 = elem('lane', id='-1', type='driving', level='false'); right.append(r1)
+    
+    # Add proper lane links for right lane
+    r1_link = elem('link')
+    if predecessor is not None:
+        r1_pred = elem('predecessor', id='1')
+        r1_link.append(r1_pred)
+    if successor is not None:
+        r1_succ = elem('successor', id='1')
+        r1_link.append(r1_succ)
+    if closed and predecessor is None and successor is None:
+        r1_pred = elem('predecessor', id='1')
+        r1_succ = elem('successor', id='1')
+        r1_link.append(r1_pred); r1_link.append(r1_succ)
+    r1.append(r1_link)
+    
     r1.append(elem('roadMark', sOffset='0', type='broken', weight='standard', color='standard', width='0.13', laneChange='both'))
     r1.append(elem('width', sOffset='0', a=f'{lane_width:.3f}', b='0', c='0', d='0'))
     return road
@@ -369,34 +417,11 @@ def make_connector(a_xy: np.ndarray, b_xy: np.ndarray) -> np.ndarray:
     # simple 2-point straight connector (could densify if you like)
     return np.vstack([a_xy, b_xy])
 
-
-
-# ---------- CLI ----------
-
-def main():
-    ap = argparse.ArgumentParser(description="RD → Complete Laguna Seca Circuit XODR")
-    ap.add_argument('--rd', required=True)
-    ap.add_argument('--xodr', required=True)
-    ap.add_argument('--csv', default=None)
-    ap.add_argument('--step', type=float, default=2.0)
-    ap.add_argument('--lanewidth', type=float, default=3.7)
-    ap.add_argument('--complete-circuit', action='store_true', default=True,
-                    help='Generate complete circuit with all road sections (default)')
-    ap.add_argument('--single-track', action='store_true',
-                    help='Generate only one track section instead of complete circuit')
-    ap.add_argument('--main-road', type=int, default=None,
-                    help='Index of road to use as main track (for single-track mode)')
-    args = ap.parse_args()
-
-    # 1) RD → multiple ref lines
-    refs = rd_to_reflines(args.rd, step=args.step)
-    print(f"Found {len(refs)} RD roads.")
-    
-    # Print information about each road to identify track sections
+def identify_track_sections(refs: list) -> list:
+    """Identify and categorize track sections based on Laguna Seca characteristics."""
+    track_sections = []
     lengths = [r[-1,0] for r in refs]
     
-    # Identify track sections based on Laguna Seca circuit characteristics
-    track_sections = []
     for i, (ref, length) in enumerate(zip(refs, lengths)):
         # Analyze track characteristics
         x_coords = ref[:, 1]
@@ -408,12 +433,12 @@ def main():
         if length > 2000:  # Long main section
             section_name = "The Corkscrew"
             section_type = "main_track"
-        elif 160 < np.mean(x_coords) < 175 and 45 < np.mean(y_coords) < 55:  # Upper section coords
+        elif i == 1:  # Track Section 2 is the pit lane based on the RD file structure
             section_name = "Pit Lane"
             section_type = "pit_lane"
-        elif 170 < np.mean(x_coords) < 175 and 50 < np.mean(y_coords) < 85:  # Another upper section
-            section_name = "Andretti Hairpin"
-            section_type = "hairpin_section"
+        elif i == 2:  # Track Section 3 is the main track section
+            section_name = "Track Section 3"
+            section_type = "track_section"
         else:
             section_name = f"Track Section {i+1}"
             section_type = "track_section"
@@ -427,8 +452,289 @@ def main():
             'x_range': x_range,
             'y_range': y_range
         })
+    
+    return track_sections
+
+def generate_comprehensive_mode(od, track_sections, args):
+    """Generate comprehensive mode with all roads and junctions."""
+    print("\n=== COMPREHENSIVE MODE ===")
+    print("Generating full Laguna Seca circuit with all roads and junctions...")
+    
+    # Use the original complex logic for comprehensive mode
+    def distance_2d(p1, p2):
+        return np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
+    
+    # Find optimal connection order
+    corkscrew = next(s for s in track_sections if s['name'] == 'The Corkscrew')
+    remaining = [s for s in track_sections if s['name'] != 'The Corkscrew']
+    
+    ordered_sections = [corkscrew]
+    current_end = (corkscrew['ref'][-1, 1], corkscrew['ref'][-1, 2])
+    
+    while remaining:
+        best_idx = 0
+        best_dist = float('inf')
         
-        print(f"  Road {i}: {section_name} - {length:.1f}m, range=({x_range:.1f}, {y_range:.1f})")
+        for i, section in enumerate(remaining):
+            start = (section['ref'][0, 1], section['ref'][0, 2])
+            dist = distance_2d(current_end, start)
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = i
+        
+        next_section = remaining.pop(best_idx)
+        ordered_sections.append(next_section)
+        current_end = (next_section['ref'][-1, 1], next_section['ref'][-1, 2])
+        print(f"  Connection: {ordered_sections[-2]['name']} → {next_section['name']} ({best_dist:.1f}m gap)")
+    
+    # Find junction clusters
+    def find_junction_clusters(sections, threshold=100.0):
+        endpoints = []
+        for i, section in enumerate(sections):
+            ref = section['ref']
+            start = (ref[0, 1], ref[0, 2], i, 'start')
+            end = (ref[-1, 1], ref[-1, 2], i, 'end')
+            endpoints.append(start)
+            endpoints.append(end)
+        
+        clusters = []
+        used_points = set()
+        
+        for i, (x1, y1, road1, type1) in enumerate(endpoints):
+            if i in used_points:
+                continue
+            
+            cluster = [(x1, y1, road1, type1)]
+            used_points.add(i)
+            
+            for j, (x2, y2, road2, type2) in enumerate(endpoints):
+                if j in used_points or j == i:
+                    continue
+                
+                dist = distance_2d((x1, y1), (x2, y2))
+                if dist <= threshold:
+                    cluster.append((x2, y2, road2, type2))
+                    used_points.add(j)
+            
+            if len(cluster) > 1:
+                clusters.append(cluster)
+        
+        return clusters
+    
+    junction_clusters = find_junction_clusters(ordered_sections, threshold=100.0)
+    
+    print(f"\nIdentified {len(junction_clusters)} junction points")
+    for i, cluster in enumerate(junction_clusters):
+        center_x = np.mean([x for x, y, road, ptype in cluster])
+        center_y = np.mean([y for x, y, road, ptype in cluster])
+        print(f"  Junction {i+1}: {len(cluster)} roads at ({center_x:.1f}, {center_y:.1f})")
+    
+    # Create roads with junction connections
+    road_id = 0
+    for i, section in enumerate(ordered_sections):
+        XY = resample_xy(section['ref'], ds=args.step, closed=False)
+        
+        # Determine junction connections
+        road_start = (section['ref'][0, 1], section['ref'][0, 2])
+        road_end = (section['ref'][-1, 1], section['ref'][-1, 2])
+        
+        start_junction = None
+        end_junction = None
+        
+        for j, cluster in enumerate(junction_clusters):
+            for x, y, cluster_road_id, point_type in cluster:
+                if cluster_road_id == i:
+                    if point_type == 'start':
+                        start_junction = j + 1
+                    elif point_type == 'end':
+                        end_junction = j + 1
+        
+        predecessor = {'elementType': 'junction', 'elementId': str(start_junction), 'contactPoint': 'end'} if start_junction else None
+        successor = {'elementType': 'junction', 'elementId': str(end_junction), 'contactPoint': 'start'} if end_junction else None
+        
+        append_road_xml(od, road_id=road_id, XY=XY, name=section['name'],
+                       closed=False, lane_width=args.lanewidth,
+                       predecessor=predecessor, successor=successor)
+        road_id += 1
+    
+    # Create junctions
+    for junction_id, cluster in enumerate(junction_clusters, 1):
+        center_x = np.mean([x for x, y, road, ptype in cluster])
+        center_y = np.mean([y for x, y, road, ptype in cluster])
+        
+        junction_connections = []
+        for x, y, cluster_road_id, point_type in cluster:
+            if distance_2d((x, y), (center_x, center_y)) > 1.0:
+                connector_xy = np.array([[x, y], [center_x, center_y]])
+                connector_name = f"Junction_{junction_id}_Connector_{cluster_road_id}_{point_type}"
+                
+                append_road_xml(od, road_id=road_id, XY=connector_xy, name=connector_name,
+                               closed=False, lane_width=args.lanewidth, junction_id=str(junction_id))
+                
+                contact_point = 'start' if point_type == 'end' else 'end'
+                junction_connections.append((cluster_road_id, road_id, contact_point))
+                road_id += 1
+        
+        if junction_connections:
+            create_junction_xml(od, junction_id, junction_connections)
+    
+    total_length = sum(s['length'] for s in ordered_sections)
+    print(f"\nGenerated comprehensive Laguna Seca circuit:")
+    print(f"  - Main track roads: {len(ordered_sections)}")
+    print(f"  - Junction connectors: {road_id - len(ordered_sections)}")
+    print(f"  - Total junctions: {len(junction_clusters)}")
+    print(f"  - Total main track length: {total_length:.1f}m")
+
+def generate_simple_circuit_mode(od, track_sections, args, mode):
+    """Generate outer loop or pit lane mode using shared logic."""
+    mode_name = "outer loop" if mode == "outer_loop" else "pit lane"
+    print(f"\n=== {mode.upper().replace('_', ' ')} MODE ===")
+    print(f"Generating {mode_name}...")
+    
+    # Helper function to get road endpoints
+    def get_road_endpoints(section):
+        ref = section['ref']
+        start_x, start_y = ref[0, 1], ref[0, 2]  # First point
+        end_x, end_y = ref[-1, 1], ref[-1, 2]    # Last point
+        return (start_x, start_y), (end_x, end_y)
+    
+    # Find roads based on mode
+    corkscrew = next((s for s in track_sections if s['name'] == 'The Corkscrew'), None)
+    
+    if mode == "outer_loop":
+        # Find main track roads (exclude pit lane)
+        main_tracks = [s for s in track_sections if s['type'] != 'pit_lane']
+        if len(main_tracks) < 2:
+            raise ValueError("Need at least 2 main track sections for outer loop")
+        second_road = next((s for s in main_tracks if s['name'] == 'Track Section 3'), None)
+        if not second_road:
+            raise ValueError("Could not find Track Section 3")
+    else:  # pit_lane mode
+        second_road = next((s for s in track_sections if s['type'] == 'pit_lane'), None)
+        if not second_road:
+            raise ValueError("Could not find Pit Lane section")
+    
+    if not corkscrew:
+        raise ValueError("Could not find The Corkscrew")
+    
+    print(f"  Found: {corkscrew['name']} ({corkscrew['length']:.1f}m)")
+    print(f"  Found: {second_road['name']} ({second_road['length']:.1f}m)")
+    
+    # Get endpoints
+    corkscrew_start, corkscrew_end = get_road_endpoints(corkscrew)
+    second_start, second_end = get_road_endpoints(second_road)
+    
+    print(f"  Corkscrew: start={corkscrew_start}, end={corkscrew_end}")
+    print(f"  {second_road['name']}: start={second_start}, end={second_end}")
+    
+    # Determine connection points
+    if mode == "outer_loop":
+        # For outer loop: connect road endpoints directly
+        entry_point = corkscrew_end
+        exit_point = corkscrew_start
+        entry_target = second_start
+        exit_target = second_end
+    else:  # pit_lane mode
+        # For pit lane: find optimal entry point on corkscrew
+        corkscrew_ref = corkscrew['ref']
+        best_entry_idx = 0
+        min_entry_dist = float('inf')
+        for i in range(len(corkscrew_ref)):
+            point = (corkscrew_ref[i, 1], corkscrew_ref[i, 2])
+            dist = np.sqrt((point[0] - second_start[0])**2 + (point[1] - second_start[1])**2)
+            if dist < min_entry_dist:
+                min_entry_dist = dist
+                best_entry_idx = i
+        entry_point = (corkscrew_ref[best_entry_idx, 1], corkscrew_ref[best_entry_idx, 2])
+        exit_point = corkscrew_start  # Use start for exit (closest to pit end)
+        entry_target = second_start
+        exit_target = second_end
+        print(f"  Pit entry point on corkscrew: {entry_point} (index {best_entry_idx})")
+        print(f"  Pit exit point on corkscrew: {exit_point}")
+    
+    # Calculate connector distances
+    dist_entry = np.sqrt((entry_point[0] - entry_target[0])**2 + (entry_point[1] - entry_target[1])**2)
+    dist_exit = np.sqrt((exit_target[0] - exit_point[0])**2 + (exit_target[1] - exit_point[1])**2)
+    print(f"  Connector Entry distance: {dist_entry:.1f}m")
+    print(f"  Connector Exit distance: {dist_exit:.1f}m")
+    
+    # Create roads with connections
+    road_id = 0
+    
+    # Road 0: The Corkscrew
+    XY0 = resample_xy(corkscrew['ref'], ds=args.step, closed=False)
+    append_road_xml(od, road_id=0, XY=XY0, name="The Corkscrew", closed=False, lane_width=args.lanewidth,
+                   predecessor={'elementType': 'road', 'elementId': '3', 'contactPoint': 'end'},
+                   successor={'elementType': 'road', 'elementId': '2', 'contactPoint': 'start'})
+    
+    # Road 1: Second Road (Track Section 3 or Pit Lane)
+    XY1 = resample_xy(second_road['ref'], ds=args.step, closed=False)
+    append_road_xml(od, road_id=1, XY=XY1, name=second_road['name'], closed=False, lane_width=args.lanewidth,
+                   predecessor={'elementType': 'road', 'elementId': '2', 'contactPoint': 'end'},
+                   successor={'elementType': 'road', 'elementId': '3', 'contactPoint': 'start'})
+    
+    # Road 2: Entry Connector
+    connector2_xy = np.array([entry_point, entry_target])
+    entry_name = f"{mode.replace('_', '_').title()}_Entry_Connector" if mode == "pit_lane" else "Connector_0_to_1"
+    append_road_xml(od, road_id=2, XY=connector2_xy, name=entry_name, closed=False, lane_width=args.lanewidth,
+                   predecessor={'elementType': 'road', 'elementId': '0', 'contactPoint': 'end'},
+                   successor={'elementType': 'road', 'elementId': '1', 'contactPoint': 'start'})
+    
+    # Road 3: Exit Connector
+    connector3_xy = np.array([exit_target, exit_point])
+    exit_name = f"{mode.replace('_', '_').title()}_Exit_Connector" if mode == "pit_lane" else "Connector_1_to_0"
+    append_road_xml(od, road_id=3, XY=connector3_xy, name=exit_name, closed=False, lane_width=args.lanewidth,
+                   predecessor={'elementType': 'road', 'elementId': '1', 'contactPoint': 'end'},
+                   successor={'elementType': 'road', 'elementId': '0', 'contactPoint': 'start'})
+    
+    total_length = corkscrew['length'] + second_road['length']
+    print(f"\nGenerated {mode_name}:")
+    print(f"  - Road 0: The Corkscrew ({corkscrew['length']:.1f}m)")
+    print(f"  - Road 1: {second_road['name']} ({second_road['length']:.1f}m)")
+    print(f"  - Road 2: {entry_name} ({dist_entry:.1f}m)")
+    print(f"  - Road 3: {exit_name} ({dist_exit:.1f}m)")
+    print(f"  - Total track length: {total_length:.1f}m")
+    print(f"  - Circuit: 0 → 2 → 1 → 3 → 0")
+
+
+
+# ---------- CLI ----------
+
+def main():
+    ap = argparse.ArgumentParser(description="RD → Laguna Seca XODR Generator")
+    ap.add_argument('--rd', required=True, help='Input RD file path')
+    ap.add_argument('--xodr', required=True, help='Output XODR file path')
+    ap.add_argument('--csv', default=None, help='Output CSV file prefix (optional)')
+    ap.add_argument('--step', type=float, default=2.0, help='Resampling step size in meters')
+    ap.add_argument('--lanewidth', type=float, default=3.7, help='Lane width in meters')
+    
+    # Mode selection - mutually exclusive
+    mode_group = ap.add_mutually_exclusive_group(required=True)
+    mode_group.add_argument('--comprehensive', action='store_true',
+                           help='Generate full comprehensive map with all roads and junctions')
+    mode_group.add_argument('--outer-loop', action='store_true',
+                           help='Generate outer loop (main track only, no pit lane)')
+    mode_group.add_argument('--pit-lane', action='store_true',
+                           help='Generate corkscrew connected to pit lane mode')
+    
+    # Legacy support
+    ap.add_argument('--single-track', action='store_true',
+                    help='Generate only one track section (legacy mode)')
+    ap.add_argument('--main-road', type=int, default=None,
+                    help='Index of road to use as main track (for single-track mode)')
+    
+    args = ap.parse_args()
+
+    # 1) RD → multiple ref lines
+    refs = rd_to_reflines(args.rd, step=args.step)
+    print(f"Found {len(refs)} RD roads.")
+    
+    # Identify track sections based on Laguna Seca circuit characteristics
+    track_sections = identify_track_sections(refs)
+    
+    # Print information about each road
+    for section in track_sections:
+        print(f"  Road {section['id']}: {section['name']} - {section['length']:.1f}m, range=({section['x_range']:.1f}, {section['y_range']:.1f})")
 
     # 2) Generate CSV files for all sections if requested
     if args.csv:
@@ -438,17 +744,34 @@ def main():
             write_refline_csv(section['ref'], filename)
             print(f"Wrote CSV: {filename}")
 
-    # 3) Build complete circuit XODR
+    # 3) Build XODR based on selected mode
     od = ET.Element('OpenDRIVE')
     header = ET.Element('header')
-    for k,v in dict(revMajor='1', revMinor='6', name='Laguna_Seca_Complete_Circuit', version='1.6',
+    
+    # Set header name based on mode
+    if args.comprehensive:
+        header_name = 'Laguna_Seca_Comprehensive'
+    elif args.outer_loop:
+        header_name = 'Laguna_Seca_OuterLoop'
+    elif args.pit_lane:
+        header_name = 'Laguna_Seca_PitLane'
+    else:
+        header_name = 'Laguna_Seca_SingleTrack'
+    
+    for k,v in dict(revMajor='1', revMinor='6', name=header_name, version='1.6',
                     date='', north='0', south='0', east='0', west='0').items():
         header.set(k,v)
     od.append(header)
 
-    # 4) Create all track sections or single track based on mode
-    if args.single_track and args.main_road is not None:
-        # Single track mode - use specified road
+    # 4) Generate XODR based on selected mode
+    if args.comprehensive:
+        generate_comprehensive_mode(od, track_sections, args)
+    elif args.outer_loop:
+        generate_simple_circuit_mode(od, track_sections, args, "outer_loop")
+    elif args.pit_lane:
+        generate_simple_circuit_mode(od, track_sections, args, "pit_lane")
+    elif args.single_track and args.main_road is not None:
+        # Legacy single track mode
         main_idx = args.main_road
         if main_idx < 0 or main_idx >= len(refs):
             raise ValueError(f"--main-road {main_idx} out of range [0,{len(refs)-1}]")
@@ -459,181 +782,15 @@ def main():
                        closed=True, lane_width=args.lanewidth)
         
         print(f"Generated single track: {section['name']} ({section['length']:.1f}m)")
-        
     else:
-        # Complete circuit mode - create directly connected roads (no junctions needed)
-        def distance_2d(p1, p2):
-            return np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
-        
-        # Analyze track endpoints for connection planning
-        print(f"\nAnalyzing track segments for direct connection:")
-        for section in track_sections:
-            ref = section['ref']
-            start = (ref[0, 1], ref[0, 2])   # x, y of first point
-            end = (ref[-1, 1], ref[-1, 2])  # x, y of last point
-            print(f"  {section['name']}: ({start[0]:.1f}, {start[1]:.1f}) → ({end[0]:.1f}, {end[1]:.1f})")
-        
-        # Find optimal connection order by analyzing endpoint proximities
-        # Start with Corkscrew and find the chain that minimizes total connection distances
-        corkscrew = next(s for s in track_sections if s['name'] == 'The Corkscrew')
-        remaining = [s for s in track_sections if s['name'] != 'The Corkscrew']
-        
-        ordered_sections = [corkscrew]
-        current_end = (corkscrew['ref'][-1, 1], corkscrew['ref'][-1, 2])
-        
-        while remaining:
-            # Find closest segment start to current end
-            best_idx = 0
-            best_dist = float('inf')
-            
-            for i, section in enumerate(remaining):
-                start = (section['ref'][0, 1], section['ref'][0, 2])
-                dist = distance_2d(current_end, start)
-                if dist < best_dist:
-                    best_dist = dist
-                    best_idx = i
-            
-            next_section = remaining.pop(best_idx)
-            ordered_sections.append(next_section)
-            current_end = (next_section['ref'][-1, 1], next_section['ref'][-1, 2])
-            print(f"  Connection: {ordered_sections[-2]['name']} → {next_section['name']} ({best_dist:.1f}m gap)")
-        
-        # Check if final segment connects back to start (completing the circuit)
-        circuit_start = (ordered_sections[0]['ref'][0, 1], ordered_sections[0]['ref'][0, 2])
-        final_gap = distance_2d(current_end, circuit_start)
-        print(f"  Circuit closure: {ordered_sections[-1]['name']} → {ordered_sections[0]['name']} ({final_gap:.1f}m gap)")
-        
-        print(f"\nOptimal road sequence for continuous circuit:")
-        for i, section in enumerate(ordered_sections):
-            print(f"  Road {i}: {section['name']}")
-        
-        # Analyze natural junction points (where multiple roads converge)
-        def find_junction_clusters(sections, threshold=100.0):
-            endpoints = []
-            for i, section in enumerate(sections):
-                ref = section['ref']
-                start = (ref[0, 1], ref[0, 2], i, 'start')
-                end = (ref[-1, 1], ref[-1, 2], i, 'end')
-                endpoints.append(start)
-                endpoints.append(end)
-            
-            clusters = []
-            used_points = set()
-            
-            for i, (x1, y1, road1, type1) in enumerate(endpoints):
-                if i in used_points:
-                    continue
-                
-                cluster = [(x1, y1, road1, type1)]
-                used_points.add(i)
-                
-                for j, (x2, y2, road2, type2) in enumerate(endpoints):
-                    if j in used_points or j == i:
-                        continue
-                    
-                    dist = distance_2d((x1, y1), (x2, y2))
-                    if dist <= threshold:
-                        cluster.append((x2, y2, road2, type2))
-                        used_points.add(j)
-                
-                if len(cluster) > 1:
-                    clusters.append(cluster)
-            
-            return clusters
-        
-        # Find natural junction points
-        junction_clusters = find_junction_clusters(ordered_sections, threshold=100.0)
-        
-        print(f"\nIdentified {len(junction_clusters)} natural junction points:")
-        for i, cluster in enumerate(junction_clusters):
-            center_x = np.mean([x for x, y, road, ptype in cluster])
-            center_y = np.mean([y for x, y, road, ptype in cluster])
-            print(f"  Junction {i+1}: {len(cluster)} roads at ({center_x:.1f}, {center_y:.1f})")
-            for x, y, road_id, point_type in cluster:
-                section_name = ordered_sections[road_id]['name']
-                print(f"    Road {road_id} ({section_name}) {point_type}: ({x:.1f}, {y:.1f})")
-        
-        # Create main track roads first
-        road_id = 0
-        for i, section in enumerate(ordered_sections):
-            XY = resample_xy(section['ref'], ds=args.step, closed=False)
-            
-            # Determine which junctions this road connects to
-            road_start = (section['ref'][0, 1], section['ref'][0, 2])
-            road_end = (section['ref'][-1, 1], section['ref'][-1, 2])
-            
-            start_junction = None
-            end_junction = None
-            
-            for j, cluster in enumerate(junction_clusters):
-                for x, y, cluster_road_id, point_type in cluster:
-                    if cluster_road_id == i:
-                        if point_type == 'start':
-                            start_junction = j + 1
-                        elif point_type == 'end':
-                            end_junction = j + 1
-            
-            # Create road with junction connections
-            predecessor = {'elementType': 'junction', 'elementId': str(start_junction), 'contactPoint': 'end'} if start_junction else None
-            successor = {'elementType': 'junction', 'elementId': str(end_junction), 'contactPoint': 'start'} if end_junction else None
-            
-            append_road_xml(od, road_id=road_id, XY=XY, name=section['name'],
-                           closed=False, lane_width=args.lanewidth,
-                           predecessor=predecessor, successor=successor)
-            road_id += 1
-        
-        # Create multi-road junctions with connecting roads
-        for junction_id, cluster in enumerate(junction_clusters, 1):
-            # Calculate junction center
-            center_x = np.mean([x for x, y, road, ptype in cluster])
-            center_y = np.mean([y for x, y, road, ptype in cluster])
-            
-            print(f"\nCreating Junction {junction_id} with {len(cluster)} connections:")
-            
-            # Create connecting roads from each endpoint to junction center
-            junction_connections = []
-            for x, y, cluster_road_id, point_type in cluster:
-                section_name = ordered_sections[cluster_road_id]['name']
-                print(f"  Connecting Road {cluster_road_id} ({section_name}) {point_type}")
-                
-                # Create connector road from road endpoint to junction center
-                if distance_2d((x, y), (center_x, center_y)) > 1.0:  # Only if there's a significant gap
-                    connector_xy = np.array([[x, y], [center_x, center_y]])
-                    connector_name = f"Junction_{junction_id}_Connector_{cluster_road_id}_{point_type}"
-                    
-                    append_road_xml(od, road_id=road_id, XY=connector_xy, name=connector_name,
-                                   closed=False, lane_width=args.lanewidth, junction_id=str(junction_id))
-                    
-                    # Add connection: main road <-> connector road
-                    contact_point = 'start' if point_type == 'end' else 'end'
-                    junction_connections.append((cluster_road_id, road_id, contact_point))
-                    road_id += 1
-            
-            # Create the junction element with all connections
-            if junction_connections:
-                create_junction_xml(od, junction_id, junction_connections)
-        
-        print(f"\nGenerated junction-connected Laguna Seca circuit:")
-        total_length = sum(s['length'] for s in ordered_sections)
-        print(f"  - Main track roads: {len(ordered_sections)}")
-        print(f"  - Junction connectors: {len(ordered_sections)}")
-        print(f"  - Total junctions: {len(ordered_sections)}")
-        print(f"  - Circuit type: Junction-connected segments")
-        print(f"  - Total main track length: {total_length:.1f}m")
-        for i, section in enumerate(ordered_sections):
-            prev_junction = ((i - 1) % len(ordered_sections)) + 1
-            next_junction = i + 1
-            print(f"    Road {i}: {section['name']} ({section['length']:.1f}m) [← Junction {prev_junction}, → Junction {next_junction}]")
+        raise ValueError("No mode specified. Use --comprehensive, --outer-loop, or --pit-lane")
 
     # 5) Write XODR
     tree = ET.ElementTree(od)
     ET.indent(tree, space="  ", level=0)
     tree.write(args.xodr, encoding='utf-8', xml_declaration=True)
     
-    total_length = sum(s['length'] for s in track_sections)
-    print(f"Wrote Laguna Seca circuit XODR: {args.xodr}")
-    print(f"  - Total circuit length: {total_length:.1f}m")
-    print(f"  - Number of track sections: {len(track_sections)}")
+    print(f"\n✅ Successfully wrote XODR file: {args.xodr}")
 
 
 if __name__ == '__main__':

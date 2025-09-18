@@ -1,6 +1,6 @@
 <?xml version='1.0' encoding='utf-8'?>
 <OpenDRIVE>
-  <header revMajor="1" revMinor="6" name="Laguna_Seca_Complete_Circuit" version="1.6" date="" north="0" south="0" east="0" west="0" />
+  <header revMajor="1" revMinor="6" name="Laguna_Seca_Comprehensive" version="1.6" date="" north="0" south="0" east="0" west="0" />
   <road name="The Corkscrew" length="2484.420398" id="0" junction="-1">
     <link>
       <predecessor elementType="junction" elementId="1" contactPoint="end" />
@@ -3745,12 +3745,20 @@
         </center>
         <left>
           <lane id="1" type="driving" level="false">
+            <link>
+              <predecessor id="-1" />
+              <successor id="-1" />
+            </link>
             <roadMark sOffset="0" type="broken" weight="standard" color="standard" width="0.13" laneChange="both" />
             <width sOffset="0" a="3.700" b="0" c="0" d="0" />
           </lane>
         </left>
         <right>
           <lane id="-1" type="driving" level="false">
+            <link>
+              <predecessor id="1" />
+              <successor id="1" />
+            </link>
             <roadMark sOffset="0" type="broken" weight="standard" color="standard" width="0.13" laneChange="both" />
             <width sOffset="0" a="3.700" b="0" c="0" d="0" />
           </lane>
@@ -5258,12 +5266,20 @@
         </center>
         <left>
           <lane id="1" type="driving" level="false">
+            <link>
+              <predecessor id="-1" />
+              <successor id="-1" />
+            </link>
             <roadMark sOffset="0" type="broken" weight="standard" color="standard" width="0.13" laneChange="both" />
             <width sOffset="0" a="3.700" b="0" c="0" d="0" />
           </lane>
         </left>
         <right>
           <lane id="-1" type="driving" level="false">
+            <link>
+              <predecessor id="1" />
+              <successor id="1" />
+            </link>
             <roadMark sOffset="0" type="broken" weight="standard" color="standard" width="0.13" laneChange="both" />
             <width sOffset="0" a="3.700" b="0" c="0" d="0" />
           </lane>
@@ -6615,12 +6631,20 @@
         </center>
         <left>
           <lane id="1" type="driving" level="false">
+            <link>
+              <predecessor id="-1" />
+              <successor id="-1" />
+            </link>
             <roadMark sOffset="0" type="broken" weight="standard" color="standard" width="0.13" laneChange="both" />
             <width sOffset="0" a="3.700" b="0" c="0" d="0" />
           </lane>
         </left>
         <right>
           <lane id="-1" type="driving" level="false">
+            <link>
+              <predecessor id="1" />
+              <successor id="1" />
+            </link>
             <roadMark sOffset="0" type="broken" weight="standard" color="standard" width="0.13" laneChange="both" />
             <width sOffset="0" a="3.700" b="0" c="0" d="0" />
           </lane>
@@ -6645,12 +6669,14 @@
         </center>
         <left>
           <lane id="1" type="driving" level="false">
+            <link />
             <roadMark sOffset="0" type="broken" weight="standard" color="standard" width="0.13" laneChange="both" />
             <width sOffset="0" a="3.700" b="0" c="0" d="0" />
           </lane>
         </left>
         <right>
           <lane id="-1" type="driving" level="false">
+            <link />
             <roadMark sOffset="0" type="broken" weight="standard" color="standard" width="0.13" laneChange="both" />
             <width sOffset="0" a="3.700" b="0" c="0" d="0" />
           </lane>
@@ -6675,12 +6701,14 @@
         </center>
         <left>
           <lane id="1" type="driving" level="false">
+            <link />
             <roadMark sOffset="0" type="broken" weight="standard" color="standard" width="0.13" laneChange="both" />
             <width sOffset="0" a="3.700" b="0" c="0" d="0" />
           </lane>
         </left>
         <right>
           <lane id="-1" type="driving" level="false">
+            <link />
             <roadMark sOffset="0" type="broken" weight="standard" color="standard" width="0.13" laneChange="both" />
             <width sOffset="0" a="3.700" b="0" c="0" d="0" />
           </lane>
@@ -6705,12 +6733,14 @@
         </center>
         <left>
           <lane id="1" type="driving" level="false">
+            <link />
             <roadMark sOffset="0" type="broken" weight="standard" color="standard" width="0.13" laneChange="both" />
             <width sOffset="0" a="3.700" b="0" c="0" d="0" />
           </lane>
         </left>
         <right>
           <lane id="-1" type="driving" level="false">
+            <link />
             <roadMark sOffset="0" type="broken" weight="standard" color="standard" width="0.13" laneChange="both" />
             <width sOffset="0" a="3.700" b="0" c="0" d="0" />
           </lane>
@@ -6746,12 +6776,14 @@
         </center>
         <left>
           <lane id="1" type="driving" level="false">
+            <link />
             <roadMark sOffset="0" type="broken" weight="standard" color="standard" width="0.13" laneChange="both" />
             <width sOffset="0" a="3.700" b="0" c="0" d="0" />
           </lane>
         </left>
         <right>
           <lane id="-1" type="driving" level="false">
+            <link />
             <roadMark sOffset="0" type="broken" weight="standard" color="standard" width="0.13" laneChange="both" />
             <width sOffset="0" a="3.700" b="0" c="0" d="0" />
           </lane>
@@ -6776,12 +6808,14 @@
         </center>
         <left>
           <lane id="1" type="driving" level="false">
+            <link />
             <roadMark sOffset="0" type="broken" weight="standard" color="standard" width="0.13" laneChange="both" />
             <width sOffset="0" a="3.700" b="0" c="0" d="0" />
           </lane>
         </left>
         <right>
           <lane id="-1" type="driving" level="false">
+            <link />
             <roadMark sOffset="0" type="broken" weight="standard" color="standard" width="0.13" laneChange="both" />
             <width sOffset="0" a="3.700" b="0" c="0" d="0" />
           </lane>
@@ -6806,12 +6840,14 @@
         </center>
         <left>
           <lane id="1" type="driving" level="false">
+            <link />
             <roadMark sOffset="0" type="broken" weight="standard" color="standard" width="0.13" laneChange="both" />
             <width sOffset="0" a="3.700" b="0" c="0" d="0" />
           </lane>
         </left>
         <right>
           <lane id="-1" type="driving" level="false">
+            <link />
             <roadMark sOffset="0" type="broken" weight="standard" color="standard" width="0.13" laneChange="both" />
             <width sOffset="0" a="3.700" b="0" c="0" d="0" />
           </lane>
