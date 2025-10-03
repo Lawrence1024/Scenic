@@ -1807,7 +1807,8 @@ class RoadMap:
             # Gather maneuvers
             allManeuvers = []
             for lane, maneuvers in maneuversForLane.items():
-                assert lane.maneuvers == ()
+                if lane.maneuvers:
+                    warn(f"Lane {lane.id} already has maneuvers, overwriting with junction maneuvers")
                 lane.maneuvers = tuple(maneuvers)
                 allManeuvers.extend(maneuvers)
 

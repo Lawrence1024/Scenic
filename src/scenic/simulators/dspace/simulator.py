@@ -33,7 +33,8 @@ class DSpaceSimulation(DrivingSimulation):
         self.sim = sim
         self.exp = None
         self.ts  = None
-        self._road_index = None   # parsed from XODR
+        self._road_index = None   # parsed from XODR or RD
+        self._coordinate_transform = None  # XODR→RD transformation if needed
         
         # Configuration for relative positioning (can be overridden via kwargs)
         self.config = {
@@ -135,17 +136,64 @@ class DSpaceSimulation(DrivingSimulation):
         except Exception:
             pass
 
-        # 4) Build XODR index from Scenic param map
+        # 4) Build road geometry index and coordinate transformation
+        # Strategy: Scenic gives us coordinates in XODR system, but ModelDesk/Aurelion
+        # uses RD system. We need to transform between them.
         map_path = self._get_scx_map_path()
         if map_path:
-            try:
-                self._road_index = dutils.build_xodr_sec_points(map_path)
-                print(f"[XODR] Reference polylines loaded: {map_path}")
-            except Exception as e:
-                print(f"[XODR] Failed to parse {map_path}: {e}")
-                self._road_index = None
+            import os
+            rd_path = map_path.replace('.xodr', '.rd').replace('LagunaSeca', 'Laguna_Seca')
+            
+            if os.path.exists(rd_path):
+                # BEST CASE: We have both XODR and RD files
+                # Build automatic transformation from XODR coords → RD coords
+                try:
+                    from . import coordinate_transform
+                    
+                    # Check if cached transform exists
+                    cache_path = rd_path.replace('.rd', '_transform.json')
+                    if os.path.exists(cache_path):
+                        print(f"[Transform] Loading cached coordinate transformation")
+                        self._coordinate_transform = coordinate_transform.load_transform(cache_path)
+                    else:
+                        print(f"[Transform] Building automatic XODR→RD coordinate transformation...")
+                        self._coordinate_transform = coordinate_transform.build_coordinate_transform(
+                            map_path, rd_path, num_samples=100
+                        )
+                        # Cache for future use
+                        coordinate_transform.save_transform(self._coordinate_transform, cache_path)
+                    
+                    # Use RD geometry for projection (after transformation)
+                    from . import rd_geometry
+                    self._road_index = rd_geometry.build_rd_road_index(rd_path, step=0.5)
+                    print(f"[Geometry] Using RD geometry for accurate (s,t) projection")
+                    print(f"[Status] ✅ Full coordinate transformation pipeline active")
+                    
+                except Exception as e:
+                    print(f"[Transform] Failed to build transformation: {e}")
+                    print(f"[Transform] Falling back to XODR-only mode (may have positioning errors)")
+                    try:
+                        self._road_index = dutils.build_xodr_sec_points(map_path)
+                        self._coordinate_transform = None
+                        print(f"[Geometry] Using XODR geometry")
+                    except Exception as e2:
+                        print(f"[Error] Failed to parse {map_path}: {e2}")
+                        self._road_index = None
+                        self._coordinate_transform = None
+            else:
+                # FALLBACK: Only XODR available
+                try:
+                    self._road_index = dutils.build_xodr_sec_points(map_path)
+                    self._coordinate_transform = None
+                    print(f"[Geometry] Using XODR geometry")
+                    print(f"[Warning] ⚠️  No RD file found - coordinate mismatches possible (up to 34m)")
+                    print(f"[Hint] Place '{os.path.basename(rd_path)}' next to XODR for accurate positioning")
+                except Exception as e:
+                    print(f"[Error] Failed to parse {map_path}: {e}")
+                    self._road_index = None
+                    self._coordinate_transform = None
         else:
-            print("[XODR] No Scenic `map` param found; will fall back to (0,0).")
+            print("[Map] No Scenic `map` param found; will fall back to (0,0).")
 
         # 5) Let Scenic create objects (calls createObjectInSimulator)
         super().setup()
@@ -185,12 +233,31 @@ class DSpaceSimulation(DrivingSimulation):
         print(f"Creating object in dSPACE with position and heading: {obj.position}, heading: {obj.heading}")
 
         # 1) Project Scenic (x,y) → (s,t). If no map, use zeros.
-        if getattr(obj, "position", None) is not None and self._road_index is not None:
-            s_val, t_val = dutils.project_world_to_st(self._road_index, (obj.position.x, obj.position.y))
-            print(f"Transformed world coordinates ({obj.position.x:.3f}, {obj.position.y:.3f}) to road coordinates (s={s_val:.3f}, t={t_val:.3f})")
+        if getattr(obj, "position", None) is not None:
+            scenic_x, scenic_y = obj.position.x, obj.position.y
+            
+            # Apply coordinate transformation if available (XODR→RD correction)
+            if self._coordinate_transform is not None:
+                from . import coordinate_transform
+                transformed_x, transformed_y = coordinate_transform.apply_coordinate_transform(
+                    self._coordinate_transform, (scenic_x, scenic_y)
+                )
+                print(f"Scenic coords ({scenic_x:.3f}, {scenic_y:.3f}) → "
+                      f"RD coords ({transformed_x:.3f}, {transformed_y:.3f})")
+                work_x, work_y = transformed_x, transformed_y
+            else:
+                work_x, work_y = scenic_x, scenic_y
+            
+            # Use road index for proper geometric projection
+            if self._road_index:
+                s_val, t_val = dutils.project_world_to_st(self._road_index, (work_x, work_y))
+                print(f"World coordinates ({work_x:.3f}, {work_y:.3f}) → Road coordinates (s={s_val:.1f}, t={t_val:.3f})")
+            else:
+                s_val, t_val = dutils.map_scenic_to_modeldesk(work_x, work_y)
+                print(f"World coordinates ({work_x:.3f}, {work_y:.3f}) → Fallback coordinates (s={s_val:.1f}, t={t_val:.3f})")
         else:
             s_val, t_val = 0.0, 0.0
-            print("Warning: No road index available, using default coordinates (s=0, t=0)")
+            print("Warning: No position available, using default coordinates (s=0, t=0)")
 
         # 2) Store the object's position for relative positioning analysis
         if not hasattr(self, '_object_positions'):
@@ -248,6 +315,7 @@ class DSpaceSimulation(DrivingSimulation):
         """
         if not hasattr(self, '_object_positions') or len(self._object_positions) < 2:
             return
+        # exit()
             
         print(f"\n=== Applying Relative Positioning Logic ===")
         print(f"Found {len(self._object_positions)} objects to analyze")

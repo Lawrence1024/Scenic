@@ -1,0 +1,16 @@
+param map = localPath('../../assets/maps/dSPACE/LagunaSeca.xodr')
+model scenic.domains.driving.model
+
+fellow1 = new Car at (-115.049129, -360.688095, 0.000000)
+fellow2 = new Car at (601.412408, -432.289069, 0.000000)
+fellow3 = new Car at   (-101.919263, -457.524908, 0.0)
+# fellow2 = new Car at (-88.818771, -260.414600, 0.000000)
+# fellow3 = new Car at (24.153787, -282.000078, 0.000000)
+# fellow4 = new Car at (121.433853, -305.520242, 0.000000)
+# fellow5 = new Car at (190.656480, -367.454840, 0.000000)
+# fellow6 = new Car at (196.063775, -467.757338, 0.000000)
+# fellow7 = new Car at (190.721348, -567.074749, 0.000000)
+# fellow8 = new Car at (168.776849, -664.637236, 0.000000)
+# fellow9 = new Car at (139.088454, -760.281406, 0.000000)
+# fellow10 = new Car at (176.648540, -850.399785, 0.000000)
+# fellow11 = new Car at (296.001749, -816.429173, 0.000000)
