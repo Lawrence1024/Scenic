@@ -1,9 +1,9 @@
 param map = localPath('../../assets/maps/dSPACE/LagunaSeca.xodr')
 model scenic.domains.driving.model
 
-fellow1 = new Car at (-115.049129, -1160.688095, 0.000000)
-fellow2 = new Car at (601.412408, -432.289069, 0.000000)
-fellow3 = new Car at   (-101.919263, -457.524908, 0.0)
+fellow1 = new Car at (-115.049129, -1860.688095, 0.000000)
+#fellow2 = new Car at (601.412408, -432.289069, 0.000000)
+#fellow3 = new Car at   (-101.919263, -457.524908, 0.0)
 # fellow2 = new Car at (-88.818771, -260.414600, 0.000000)
 # fellow3 = new Car at (24.153787, -282.000078, 0.000000)
 # fellow4 = new Car at (121.433853, -305.520242, 0.000000)

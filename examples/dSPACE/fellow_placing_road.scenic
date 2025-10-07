@@ -7,8 +7,8 @@ model scenic.domains.driving.model
 
 # --- Fellow cars placed at validated coordinates ---
 fellow1 = new Car on road
-fellow2 = new Car ahead of fellow1 by 10
-fellow3 = new Car behind fellow1 by 10
+fellow2 = new Car left of fellow1 by 5
+fellow3 = new Car right of fellow1 by 5
 # fellow4 = new Car on road
 # fellow5 = new Car on road
 # fellow6 = new Car on road
