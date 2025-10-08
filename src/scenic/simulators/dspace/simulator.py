@@ -35,6 +35,7 @@ class DSpaceSimulation(DrivingSimulation):
         self.ts  = None
         self._road_index = None   # parsed from XODR or RD
         self._coordinate_transform = None  # XODR→RD transformation if needed
+        self._ego_created = False  # Track if ego vehicle was created
         
         # Configuration for relative positioning (can be overridden via kwargs)
         self.config = {
@@ -217,20 +218,137 @@ class DSpaceSimulation(DrivingSimulation):
             pass
 
     def createObjectInSimulator(self, obj):
-        """Place every car by absolute (s,t) computed from (x,y) and XODR.
+        """Place car (ego or fellow) by absolute (s,t) computed from (x,y) and XODR.
         
         This function automatically transforms Scenic world coordinates (x,y,z) 
         to the corresponding (s,t) coordinates that will map correctly to Aurelion's
         coordinate system through the dSPACE simulator.
         
-        Additionally, it analyzes the resolved coordinates from Scenic to detect
-        relative positioning patterns (lateral vs longitudinal) and adjusts
-        positions to maintain proper track distances in the dSPACE simulator.
-        
-        Note: This works with any Scenic positioning syntax since it only uses
-        the final resolved coordinates that Scenic provides.
+        The ego vehicle is handled through the Maneuver API, while other vehicles
+        are created as Fellows.
         """
-        print(f"Creating object in dSPACE with position and heading: {obj.position}, heading: {obj.heading}")
+        # Check if this is the ego object
+        is_ego = (obj is self.scene.egoObject)
+        
+        if is_ego:
+            print(f"Creating EGO vehicle in dSPACE at position: {obj.position}, heading: {obj.heading}")
+            return self.createEgoInSimulator(obj)
+        else:
+            print(f"Creating FELLOW vehicle in dSPACE at position: {obj.position}, heading: {obj.heading}")
+            return self.createFellowInSimulator(obj)
+    
+    def createEgoInSimulator(self, obj):
+        """Create/configure the ego vehicle using the Maneuver API.
+        
+        Unlike Fellows which are added to the Fellows collection, the ego vehicle
+        is accessed through TrafficScenario.Maneuver.Item(0) and configured.
+        """
+        print(f"  Configuring ego vehicle (Maneuver)")
+        
+        # 1) Project Scenic (x,y) → (s,t)
+        if getattr(obj, "position", None) is not None:
+            scenic_x, scenic_y = obj.position.x, obj.position.y
+            
+            # Apply coordinate transformation if available
+            if self._coordinate_transform is not None:
+                from . import coordinate_transform
+                transformed_x, transformed_y = coordinate_transform.apply_coordinate_transform(
+                    self._coordinate_transform, (scenic_x, scenic_y)
+                )
+                print(f"  Scenic coords ({scenic_x:.3f}, {scenic_y:.3f}) -> "
+                      f"RD coords ({transformed_x:.3f}, {transformed_y:.3f})")
+                work_x, work_y = transformed_x, transformed_y
+            else:
+                work_x, work_y = scenic_x, scenic_y
+            
+            # Use road index for proper geometric projection
+            if self._road_index:
+                s_val, t_val = dutils.project_world_to_st(self._road_index, (work_x, work_y))
+                print(f"  World coordinates ({work_x:.3f}, {work_y:.3f}) -> Road coordinates (s={s_val:.1f}, t={t_val:.3f})")
+            else:
+                s_val, t_val = dutils.map_scenic_to_modeldesk(work_x, work_y)
+                print(f"  World coordinates ({work_x:.3f}, {work_y:.3f}) -> Fallback coordinates (s={s_val:.1f}, t={t_val:.3f})")
+        else:
+            s_val, t_val = 0.0, 0.0
+            print("  Warning: No position available, using default coordinates (s=0, t=0)")
+        
+        # 2) Get velocity
+        base_v = getattr(obj, "md_v", None)
+        if base_v is None:
+            base_v = getattr(obj, "speed", 0.0) or 0.0
+        
+        # 3) Access the ego maneuver (Maneuver is a collection, use Item(0))
+        try:
+            maneuver_collection = self.ts.Maneuver
+            if maneuver_collection.Count == 0:
+                print("  Warning: No ego maneuver found in scenario - cannot configure ego")
+                return None
+            
+            ego_maneuver = maneuver_collection.Item(0)
+            print(f"  Accessed ego maneuver: {ego_maneuver.Name if hasattr(ego_maneuver, 'Name') else 'Ego'}")
+            
+            # Access sequences
+            sequences = ego_maneuver.Sequences
+            if sequences.Count == 0:
+                print("  Warning: No sequences in ego maneuver - cannot configure")
+                return None
+            
+            seq = sequences.Item(0)
+            
+            # 4) Configure ego vehicle position and properties
+            print(f"  Setting ego position: s={s_val:.1f}, t={t_val:.3f}, velocity={base_v:.1f}")
+            
+            # Set starting position (s-coordinate)
+            seq.StartPosition = float(s_val)
+            
+            # Set initial velocity
+            seq.InitialLongitudinalVelocity = float(base_v)
+            
+            # Set orientation
+            # VehicleOrientation in ModelDesk appears to be relative to road direction:
+            #   0.0 = aligned with road
+            #   positive = counter-clockwise rotation from road direction
+            #   negative = clockwise rotation from road direction
+            # For now, default to 0.0 to align with road
+            # TODO: Compute relative angle if obj has specific heading requirements
+            seq.VehicleOrientation = 0.0
+            print(f"  Set orientation: 0.0 degrees (aligned with road)")
+            
+            # Optionally set lateral position through segments if t != 0
+            if abs(t_val) > 0.1:
+                try:
+                    segments = seq.Segments
+                    if segments.Count > 0:
+                        seg0 = segments.Item(0)
+                        
+                        # Configure lateral position (similar to Fellows)
+                        lat0 = seg0.Activity.LateralType
+                        dutils.activate_type(lat0, "Deviation")
+                        
+                        # Set dependency to Absolute
+                        dep = getattr(lat0.ActiveElement, "DependencyType", None)
+                        if dep is not None:
+                            dutils.activate_type(dep, "Absolute")
+                        
+                        dutils.set_activity_constant(lat0, t_val)
+                        print(f"  Set lateral deviation: {t_val:.3f}m")
+                except Exception as e:
+                    print(f"  Warning: Could not set lateral position: {e}")
+            
+            self._ego_created = True
+            return ego_maneuver
+            
+        except Exception as e:
+            print(f"  Error configuring ego vehicle: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def createFellowInSimulator(self, obj):
+        """Create a Fellow vehicle (non-ego) using the Fellows API.
+        
+        This is the original logic for creating Fellows.
+        """
 
         # 1) Project Scenic (x,y) → (s,t). If no map, use zeros.
         if getattr(obj, "position", None) is not None:
@@ -242,7 +360,7 @@ class DSpaceSimulation(DrivingSimulation):
                 transformed_x, transformed_y = coordinate_transform.apply_coordinate_transform(
                     self._coordinate_transform, (scenic_x, scenic_y)
                 )
-                print(f"Scenic coords ({scenic_x:.3f}, {scenic_y:.3f}) → "
+                print(f"Scenic coords ({scenic_x:.3f}, {scenic_y:.3f}) -> "
                       f"RD coords ({transformed_x:.3f}, {transformed_y:.3f})")
                 work_x, work_y = transformed_x, transformed_y
             else:
@@ -251,10 +369,10 @@ class DSpaceSimulation(DrivingSimulation):
             # Use road index for proper geometric projection
             if self._road_index:
                 s_val, t_val = dutils.project_world_to_st(self._road_index, (work_x, work_y))
-                print(f"World coordinates ({work_x:.3f}, {work_y:.3f}) → Road coordinates (s={s_val:.1f}, t={t_val:.3f})")
+                print(f"World coordinates ({work_x:.3f}, {work_y:.3f}) -> Road coordinates (s={s_val:.1f}, t={t_val:.3f})")
             else:
                 s_val, t_val = dutils.map_scenic_to_modeldesk(work_x, work_y)
-                print(f"World coordinates ({work_x:.3f}, {work_y:.3f}) → Fallback coordinates (s={s_val:.1f}, t={t_val:.3f})")
+                print(f"World coordinates ({work_x:.3f}, {work_y:.3f}) -> Fallback coordinates (s={s_val:.1f}, t={t_val:.3f})")
         else:
             s_val, t_val = 0.0, 0.0
             print("Warning: No position available, using default coordinates (s=0, t=0)")
