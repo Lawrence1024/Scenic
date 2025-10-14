@@ -14,6 +14,8 @@ from scenic.core.simulators import SimulationCreationError
 
 from . import utils as dutils
 
+import pandas as pd
+
 
 class DSpaceSimulator(DrivingSimulator):
     def __init__(self, *, scenario_src="LagunaSeca_ExternalControl",
@@ -23,6 +25,7 @@ class DSpaceSimulator(DrivingSimulator):
         self.scenario_name = scenario_name
         self.timestep = float(timestep)
         self.save_as = bool(save_as)
+        
 
     def createSimulation(self, scene, **kwargs):
         return DSpaceSimulation(scene, self, **kwargs)
@@ -262,13 +265,13 @@ class DSpaceSimulation(DrivingSimulation):
         # 2) Store the object's position for relative positioning analysis
         if not hasattr(self, '_object_positions'):
             self._object_positions = []
-        self._object_positions.append({
-            'obj': obj,
-            'position': obj.position,
-            's_coord': s_val,
-            't_coord': t_val,
-            'heading': obj.heading
-        })
+            self._object_positions.append({
+                'obj': obj,
+                'position': obj.position,
+                's_coord': s_val,
+                't_coord': t_val,
+                'heading': obj.heading
+            })
 
         # 3) Create Fellow with one Sequence and two Segments
         F = self.ts.Fellows.Add()
@@ -300,7 +303,41 @@ class DSpaceSimulation(DrivingSimulation):
         dutils.configure_seg1_motion(segs, v=float(base_v), t=float(t_val))
         dutils.make_endless_transition(segs)
 
+        fellow_dict = {}
+
+        self.create_csv(fellow_dict, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val)
+
         return F
+
+
+    def create_csv(self, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val):
+        # cols:
+        #   car name
+
+        #   Scenic Vector (x,y,z) 
+        #   Scenic heading (rad)
+        #   Unit vector in left direction = (cos(heading + π/2), sin(heading + π/2)) 
+
+        #   Scenic coord ({scenic_x:.3f}, {scenic_y:.3f}) => Scenic vectors's x and y
+
+        #   RD/World coord ({transformed_x:.3f}, {transformed_y:.3f}) => affine transform of Scenic coord
+
+        #   Road/ST coord (s,t) => projection of RD/World coord to road
+        
+        coords = {
+            'car_index': [fellow_idx],
+            'scenic_x': [scenic_x],
+            'scenic_y': [scenic_y],
+            'transformed_x': [transformed_x],
+            'transformed_y': [transformed_y],
+            's_val': [s_val],
+            't_val': [t_val]
+        }
+        
+        df = pd.DataFrame(coords)
+        print(df)
+        # df.to_csv('coords.csv')
+
 
     def _apply_relative_positioning(self):
         """Apply relative positioning logic based on Scenic's resolved coordinates.
