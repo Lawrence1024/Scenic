@@ -14,8 +14,6 @@ from scenic.core.simulators import SimulationCreationError
 
 from . import utils as dutils
 
-import pandas as pd
-
 
 class DSpaceSimulator(DrivingSimulator):
     def __init__(self, *, scenario_src="LagunaSeca_ExternalControl",
@@ -284,6 +282,8 @@ class DSpaceSimulation(DrivingSimulation):
             else:
                 F.Name = f"Fellow_{fellow_idx}"
             print(f"    Created Fellow with name: {F.Name}")
+            self.create_csv(obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val)
+            
         except Exception as e:
             F.Name = f"Fellow_{fellow_idx}"
             print(f"    Created Fellow with fallback name: {F.Name} (error: {e})")
@@ -303,40 +303,58 @@ class DSpaceSimulation(DrivingSimulation):
         dutils.configure_seg1_motion(segs, v=float(base_v), t=float(t_val))
         dutils.make_endless_transition(segs)
 
-        fellow_dict = {}
-
-        self.create_csv(fellow_dict, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val)
 
         return F
 
-
-    def create_csv(self, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val):
-        # cols:
-        #   car name
-
-        #   Scenic Vector (x,y,z) 
-        #   Scenic heading (rad)
-        #   Unit vector in left direction = (cos(heading + π/2), sin(heading + π/2)) 
-
-        #   Scenic coord ({scenic_x:.3f}, {scenic_y:.3f}) => Scenic vectors's x and y
-
-        #   RD/World coord ({transformed_x:.3f}, {transformed_y:.3f}) => affine transform of Scenic coord
-
-        #   Road/ST coord (s,t) => projection of RD/World coord to road
+    def create_csv(self, obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val):
+        """Create a CSV file with car positions and orientations.
         
+        Columns:
+            car_name: Name/index of the car
+            scenic_vector_x/y/z: Position vector in Scenic coordinates
+            scenic_heading: Heading in radians
+            left_vector_x/y: Unit vector in left direction
+            scenic_x/y: Original Scenic coordinates
+            rd_world_x/y: Transformed RD/World coordinates
+            road_s/t: Road coordinates (s,t)
+        """
+        import pandas as pd
+        import math
+
+        # Calculate left unit vector (90 degrees counter-clockwise from heading)
+        heading = obj.heading if hasattr(obj, 'heading') else 0
+        left_vector_x = -math.sin(heading)  # cos(heading + π/2)
+        left_vector_y = math.cos(heading)   # sin(heading + π/2)
+
+        # Extract z coordinate if available
+        z_coord = obj.position.z if hasattr(obj, 'position') and hasattr(obj.position, 'z') else 0
+
         coords = {
-            'car_index': [fellow_idx],
+            'car_name': [f'fellow{fellow_idx + 1}'],
+            'scenic_vector_x': [scenic_x],
+            'scenic_vector_y': [scenic_y],
+            'scenic_vector_z': [z_coord],
+            'scenic_heading': [heading],
+            'left_vector_x': [left_vector_x],
+            'left_vector_y': [left_vector_y],
             'scenic_x': [scenic_x],
             'scenic_y': [scenic_y],
-            'transformed_x': [transformed_x],
-            'transformed_y': [transformed_y],
-            's_val': [s_val],
-            't_val': [t_val]
+            'rd_world_x': [transformed_x],
+            'rd_world_y': [transformed_y],
+            'road_s': [s_val],
+            'road_t': [t_val]
         }
         
         df = pd.DataFrame(coords)
         print(df)
-        # df.to_csv('coords.csv')
+
+        # Create or append to the CSV file
+        #csv_path = 'scenic_cars_coords.csv'
+        #if not hasattr(self, '_csv_created'):
+        #    df.to_csv(csv_path, index=False)
+        #    self._csv_created = True
+        #else:
+        #    df.to_csv(csv_path, mode='a', header=False, index=False)
 
 
     def _apply_relative_positioning(self):
