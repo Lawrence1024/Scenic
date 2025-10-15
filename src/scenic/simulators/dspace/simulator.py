@@ -263,13 +263,13 @@ class DSpaceSimulation(DrivingSimulation):
         # 2) Store the object's position for relative positioning analysis
         if not hasattr(self, '_object_positions'):
             self._object_positions = []
-            self._object_positions.append({
-                'obj': obj,
-                'position': obj.position,
-                's_coord': s_val,
-                't_coord': t_val,
-                'heading': obj.heading
-            })
+        self._object_positions.append({
+            'obj': obj,
+            'position': obj.position,
+            's_coord': s_val,
+            't_coord': t_val,
+            'heading': obj.heading
+        })
 
         # 3) Create Fellow with one Sequence and two Segments
         F = self.ts.Fellows.Add()
@@ -283,7 +283,6 @@ class DSpaceSimulation(DrivingSimulation):
                 F.Name = f"Fellow_{fellow_idx}"
             print(f"    Created Fellow with name: {F.Name}")
             self.create_csv(obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val)
-            
         except Exception as e:
             F.Name = f"Fellow_{fellow_idx}"
             print(f"    Created Fellow with fallback name: {F.Name} (error: {e})")
@@ -302,7 +301,6 @@ class DSpaceSimulation(DrivingSimulation):
             base_v = getattr(obj, "speed", 0.0) or 0.0
         dutils.configure_seg1_motion(segs, v=float(base_v), t=float(t_val))
         dutils.make_endless_transition(segs)
-
 
         return F
 
@@ -330,7 +328,7 @@ class DSpaceSimulation(DrivingSimulation):
         z_coord = obj.position.z if hasattr(obj, 'position') and hasattr(obj.position, 'z') else 0
 
         coords = {
-            'car_name': [f'fellow{fellow_idx + 1}'],
+            'car_name': [f'fellow{fellow_idx}'],
             'scenic_vector_x': [scenic_x],
             'scenic_vector_y': [scenic_y],
             'scenic_vector_z': [z_coord],
