@@ -13,6 +13,7 @@ from scenic.domains.driving.simulators import DrivingSimulator, DrivingSimulatio
 from scenic.core.simulators import SimulationCreationError
 
 from . import utils as dutils
+import pandas as pd
 
 
 class DSpaceSimulator(DrivingSimulator):
@@ -273,7 +274,7 @@ class DSpaceSimulation(DrivingSimulation):
 
         # 3) Create Fellow with one Sequence and two Segments
         F = self.ts.Fellows.Add()
-        
+
         # Set a unique name for relative positioning
         fellow_idx = len(self._object_positions) if hasattr(self, '_object_positions') else 0
         try:
@@ -282,7 +283,7 @@ class DSpaceSimulation(DrivingSimulation):
             else:
                 F.Name = f"Fellow_{fellow_idx}"
             print(f"    Created Fellow with name: {F.Name}")
-            self.create_csv(obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val)
+            self.append_csv(obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val)
         except Exception as e:
             F.Name = f"Fellow_{fellow_idx}"
             print(f"    Created Fellow with fallback name: {F.Name} (error: {e})")
@@ -304,11 +305,11 @@ class DSpaceSimulation(DrivingSimulation):
 
         return F
 
-    def create_csv(self, obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val):
+    def append_csv(self, obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val):
         """Create a CSV file with car positions and orientations.
         
         Columns:
-            car_name: Name/index of the car
+            scen_name: __dir__ of __dist__
             scenic_vector_x/y/z: Position vector in Scenic coordinates
             scenic_heading: Heading in radians
             left_vector_x/y: Unit vector in left direction
@@ -316,35 +317,36 @@ class DSpaceSimulation(DrivingSimulation):
             rd_world_x/y: Transformed RD/World coordinates
             road_s/t: Road coordinates (s,t)
         """
-        import pandas as pd
         import math
 
+        
         # Calculate left unit vector (90 degrees counter-clockwise from heading)
         heading = obj.heading if hasattr(obj, 'heading') else 0
         left_vector_x = -math.sin(heading)  # cos(heading + π/2)
         left_vector_y = math.cos(heading)   # sin(heading + π/2)
 
-        # Extract z coordinate if available
-        z_coord = obj.position.z if hasattr(obj, 'position') and hasattr(obj.position, 'z') else 0
-
         coords = {
             'car_name': [f'fellow{fellow_idx}'],
             'scenic_vector_x': [scenic_x],
             'scenic_vector_y': [scenic_y],
-            'scenic_vector_z': [z_coord],
+            # 'scenic_vector_z': [z_coord],
             'scenic_heading': [heading],
             'left_vector_x': [left_vector_x],
             'left_vector_y': [left_vector_y],
-            'scenic_x': [scenic_x],
-            'scenic_y': [scenic_y],
+            # 'scenic_x': [scenic_x],
+            # 'scenic_y': [scenic_y],
             'rd_world_x': [transformed_x],
             'rd_world_y': [transformed_y],
             'road_s': [s_val],
             'road_t': [t_val]
         }
-        
-        df = pd.DataFrame(coords)
-        print(df)
+
+        data_frame = pd.DataFrame(coords)
+
+        data_frame.to_csv('scenic_fellows_scenarios.csv', mode='a', header=False, index=False)
+
+    
+        print(data_frame)
 
         # Create or append to the CSV file
         #csv_path = 'scenic_cars_coords.csv'
@@ -353,6 +355,19 @@ class DSpaceSimulation(DrivingSimulation):
         #    self._csv_created = True
         #else:
         #    df.to_csv(csv_path, mode='a', header=False, index=False)
+    
+    def append_analysis_csv(self):
+        scenic_df = pd.read_csv('scenic_fellows_scenarios.csv')
+        scenic_coords = []
+        for i in range(9):
+            indiv_coords = []
+            for j in range(2):
+                element = scenic_df.iloc[j, i]
+                indiv_coords.append(element)
+            scenic_coords.append(indiv_coords)
+            indiv_coords = []
+        
+        # extract data from scenic_coords, do analysis and calculations, append to csv
 
 
     def _apply_relative_positioning(self):
