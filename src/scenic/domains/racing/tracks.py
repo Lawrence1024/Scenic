@@ -15,7 +15,7 @@ from scenic.domains.driving.roads import (
     ManeuverType, NetworkElement
 )
 from scenic.core.regions import PolygonalRegion, PolylineRegion
-from scenic.core.vectors import Vector
+from scenic.core.vectors import Vector, OrientedVector
 from scenic.core.distributions import RejectionException
 
 
@@ -166,7 +166,7 @@ class RacingTrack:
         """Calculate total track length by following the main racing line."""
         # Find the longest continuous path (main track)
         max_length = 0.0
-        for road in self.network.roads.values():
+        for road in self.network.roads:
             road_length = sum(lane.centerline.length for lane in road.lanes)
             max_length = max(max_length, road_length)
         return max_length
@@ -174,7 +174,7 @@ class RacingTrack:
     def _identifyRacingFeatures(self):
         """Identify pit lanes, sectors, and other racing features from the network."""
         # Identify pit lane (look for lanes with "pit" in type or specific lane types)
-        for road in self.network.roads.values():
+        for road in self.network.roads:
             for lane in road.lanes:
                 # Check if this is a pit lane
                 # In OpenDRIVE, pit lanes often have specific types
@@ -227,41 +227,23 @@ class RacingTrack:
         if self.startFinishLine is None:
             # Use the beginning of the longest road as start/finish
             longest_road = max(
-                self.network.roads.values(),
+                self.network.roads,
                 key=lambda r: sum(lane.centerline.length for lane in r.lanes)
             )
             self.startFinishLine = longest_road.lanes[0].centerline.start
         
         # Generate grid positions along the main straight
-        # Typically 2 cars per row, staggered
+        # Return the main lane and let Scenic sample from it
+        # This ensures positions are valid and cars fit within the lane
         positions = []
         main_lane = self._getMainRacingLane()
         
         if main_lane:
-            centerline = main_lane.centerline
-            current_distance = offset
-            row = 0
-            
+            # For now, just return the lane region itself
+            # Cars will be sampled uniformly from it
+            # TODO: Implement proper grid positioning along the lane
             for i in range(numPositions):
-                # Alternate left and right (staggered grid)
-                lateral_offset = 1.5 if i % 2 == 0 else -1.5
-                
-                # Get point along centerline
-                point = centerline.pointAlongBy(current_distance)
-                
-                # Offset laterally for staggered grid
-                direction = centerline.heading[point]
-                left_direction = direction + math.pi / 2
-                grid_pos = point + Vector(
-                    lateral_offset * math.cos(left_direction),
-                    lateral_offset * math.sin(left_direction)
-                )
-                
-                positions.append(grid_pos)
-                
-                # Move to next row every 2 cars
-                if i % 2 == 1:
-                    current_distance += spacing
+                positions.append(main_lane)
         
         self.startingGrid = positions
         return positions
@@ -272,7 +254,7 @@ class RacingTrack:
         main_lane = None
         max_length = 0.0
         
-        for road in self.network.roads.values():
+        for road in self.network.roads:
             for lane in road.lanes:
                 if not self._isPitLane(lane):
                     if lane.centerline.length > max_length:

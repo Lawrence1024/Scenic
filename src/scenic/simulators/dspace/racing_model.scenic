@@ -13,3 +13,16 @@ Usage::
 # Import racing domain model (which imports driving domain)
 from scenic.domains.racing.model import *
 
+import scenic.simulators.dspace as dspace
+
+# dSPACE ModelDesk parameters
+param scenario_src = "LagunaSeca_ExternalControl"
+param scenario_name = None
+param timestep = 0.1
+
+# Configure the dSPACE simulator
+simulator dspace.DSpaceSimulator(
+    scenario_src=globalParameters.scenario_src,
+    scenario_name=globalParameters.scenario_name,
+    timestep=globalParameters.timestep,
+)

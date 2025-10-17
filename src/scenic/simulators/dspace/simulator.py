@@ -68,6 +68,7 @@ class DSpaceSimulation(DrivingSimulation):
                 - lateral_pattern_heading_threshold: Maximum heading difference for lateral pattern detection in degrees (default: 15.0)
                 - lateral_pattern_world_threshold: Maximum world distance for lateral pattern detection in meters (default: 20.0)
         """
+        # exit()
         for key, value in config_updates.items():
             if key in self.config:
                 self.config[key] = value
