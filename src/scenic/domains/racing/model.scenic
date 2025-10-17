@@ -18,6 +18,7 @@ Example::
 # Import everything from driving domain
 from scenic.domains.driving.model import *
 from scenic.domains.racing.tracks import RacingTrack, createRacingTrack
+from scenic.core.regions import UnionRegion
 
 ## Racing-specific parameters
 
@@ -26,17 +27,29 @@ param generateStartingGrid = True
 param startingGridPositions = 20
 param startingGridSpacing = 8.0  # meters between grid positions
 
+# Track segment identification (optional)
+param pitLaneRoadId = None  # e.g., "1545702203" for Laguna Seca
+param pitLaneRoadName = "pit"  # Pattern to match pit lane name
+param mainLineRoadId = None  # e.g., "2117817291" for Laguna Seca
+
 ## Create racing track from the network
 
 #: The racing track, extending the road network with racing features
 track: RacingTrack = createRacingTrack(
     globalParameters.map, 
     direction=globalParameters.trackDirection,
+    pitLaneRoadId=globalParameters.pitLaneRoadId,
+    pitLaneRoadName=globalParameters.pitLaneRoadName,
+    mainLineRoadId=globalParameters.mainLineRoadId,
     **globalParameters.map_options
 )
 
 # Replace the generic network with our racing track's network
 network = track.network
+
+# Store road segment IDs in params for simulator access
+param pitLaneRoadIds = [str(track.pitLaneRoad.id)] if track.pitLaneRoad else []
+param mainRacingRoadIds = [str(r.id) for r in track._mainRacingRoads] if track._mainRacingRoads else []
 
 ## Racing-specific regions
 
@@ -45,6 +58,12 @@ pitLane: Region = track.pitLane.region if track.pitLane else nowhere
 
 #: The main racing line region (excluding pit lane)
 racingLine: Region = road.difference(pitLane) if track.pitLane else road
+
+#: Individual track segment regions (mutually exclusive)
+#: Main racing road includes all non-pit roads (main line + parallel tracks)
+mainRacingRoad: Region = track.mainRacingRoad if track.mainRacingRoad else road
+#: Pit lane road (separate from main racing circuit) - create proper region from road lanes
+pitLaneRoad: Region = UnionRegion(*[lane for lane in track.pitLaneRoad.lanes]) if track.pitLaneRoad and track.pitLaneRoad.lanes and len(track.pitLaneRoad.lanes) > 1 else (track.pitLaneRoad.lanes[0] if track.pitLaneRoad and track.pitLaneRoad.lanes else nowhere)
 
 #: Start/finish line region
 # TODO: Create actual start/finish line region from track data

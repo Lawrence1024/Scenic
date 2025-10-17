@@ -68,7 +68,6 @@ class DSpaceSimulation(DrivingSimulation):
                 - lateral_pattern_heading_threshold: Maximum heading difference for lateral pattern detection in degrees (default: 15.0)
                 - lateral_pattern_world_threshold: Maximum world distance for lateral pattern detection in meters (default: 20.0)
         """
-        # exit()
         for key, value in config_updates.items():
             if key in self.config:
                 self.config[key] = value
@@ -273,10 +272,8 @@ class DSpaceSimulation(DrivingSimulation):
             s_val, t_val = 0.0, 0.0
             print("  Warning: No position available, using default coordinates (s=0, t=0)")
         
-        # 2) Get velocity
-        base_v = getattr(obj, "md_v", None)
-        if base_v is None:
-            base_v = getattr(obj, "speed", 0.0) or 0.0
+        # 2) Get velocity - always set to 0 for static scenarios
+        base_v = 0.0  # Force velocity to 0 for all vehicles
         
         # 3) Access the ego maneuver (Maneuver is a collection, use Item(0))
         try:
@@ -302,7 +299,7 @@ class DSpaceSimulation(DrivingSimulation):
             # Set starting position (s-coordinate)
             seq.StartPosition = float(s_val)
             
-            # Set initial velocity
+            # Set initial velocity (0 for static positioning)
             seq.InitialLongitudinalVelocity = float(base_v)
             
             # Set orientation
@@ -370,6 +367,14 @@ class DSpaceSimulation(DrivingSimulation):
             # Use road index for proper geometric projection
             if self._road_index:
                 s_val, t_val = dutils.project_world_to_st(self._road_index, (work_x, work_y))
+                
+                # Auto-detect route and adjust s-coordinate if needed
+                route_pref = self._detect_route_from_road_segment(obj)
+                if route_pref == "Pit":
+                    # For pit lane, ensure s-coordinate is reasonable for pit lane length (~883m)
+                    if s_val > 1000:  # If s-value seems too high for pit lane
+                        s_val = s_val % 883.4  # Wrap to pit lane length
+                
                 print(f"World coordinates ({work_x:.3f}, {work_y:.3f}) -> Road coordinates (s={s_val:.1f}, t={t_val:.3f})")
             else:
                 s_val, t_val = dutils.map_scenic_to_modeldesk(work_x, work_y)
@@ -381,12 +386,25 @@ class DSpaceSimulation(DrivingSimulation):
         # 2) Store the object's position for relative positioning analysis
         if not hasattr(self, '_object_positions'):
             self._object_positions = []
+        
+        # Store which Scenic road/region this object was placed on
+        scenic_road_name = None
+        if hasattr(obj, 'position'):
+            # Try to determine which road the object is on by checking parent region
+            try:
+                # Check if there's a region attribute or similar
+                if hasattr(obj.position, 'region'):
+                    scenic_road_name = str(obj.position.region)
+            except:
+                pass
+        
         self._object_positions.append({
             'obj': obj,
             'position': obj.position,
             's_coord': s_val,
             't_coord': t_val,
-            'heading': obj.heading
+            'heading': obj.heading,
+            'scenic_road': scenic_road_name
         })
 
         # 3) Create Fellow with one Sequence and two Segments
@@ -413,13 +431,524 @@ class DSpaceSimulation(DrivingSimulation):
         dutils.configure_seg0_absolute_pose(segs, s=float(s_val), t=float(t_val))
 
         # 5) seg1 = Velocity + Endless; keep lateral "Continue"
-        base_v = getattr(obj, "md_v", None)
-        if base_v is None:
-            base_v = getattr(obj, "speed", 0.0) or 0.0
+        # Set velocity to 0 for static scenarios
+        base_v = 0.0  # Force velocity to 0 for all vehicles
         dutils.configure_seg1_motion(segs, v=float(base_v), t=float(t_val))
         dutils.make_endless_transition(segs)
 
+        # 6) Set Route via FellowSequence.Route (per updated fellow_starting.md)
+        self._set_fellow_route_via_sequence(S1, obj)
+
         return F
+    
+    def _detect_route_from_road_segment(self, obj):
+        """Auto-detect route preference based on which region the object is closer to.
+        
+        This method determines the route by calculating which track segment the object
+        is closest to, since the coordinate projection (x,y)→(s,t) can lose the original
+        road context when roads are close together.
+        
+        Args:
+            obj: The Scenic object
+            
+        Returns:
+            String route preference ('Pit' or 'Lap') or None
+        """
+        try:
+            # Get the racing track regions from params (set by racing/model.scenic)
+            params = getattr(self.scene, "params", {}) or {}
+            pit_lane_ids = params.get('pitLaneRoadIds', [])
+            main_racing_ids = params.get('mainRacingRoadIds', [])
+            
+            if not pit_lane_ids and not main_racing_ids:
+                # Not a racing scenario
+                return None
+            
+            # Get object position
+            obj_pos = obj.position
+            obj_x, obj_y = float(obj_pos.x), float(obj_pos.y)
+            
+            # Calculate distance to pit lane region
+            pit_dist = self._distance_to_road_region(obj_x, obj_y, pit_lane_ids)
+            
+            # Calculate distance to main racing region  
+            main_dist = self._distance_to_road_region(obj_x, obj_y, main_racing_ids)
+            
+            # Choose the closer region
+            if pit_dist < main_dist:
+                return "Pit"
+            else:
+                return "Lap"
+                
+        except Exception as e:
+            print(f"    [Route] Auto-detection error: {e}")
+            return None
+    
+    def _distance_to_road_region(self, x, y, road_ids):
+        """Calculate minimum distance from point (x,y) to any road in road_ids.
+        
+        Args:
+            x, y: Point coordinates
+            road_ids: List of road IDs to check against
+            
+        Returns:
+            Minimum distance in meters (or float('inf') if no roads found)
+        """
+        if not road_ids or not self._road_index:
+            return float('inf')
+        
+        # Get roads from the workspace network (not _road_index which loses IDs)
+        workspace = getattr(self.scene, 'workspace', None)
+        if not workspace or not hasattr(workspace, 'network'):
+            return float('inf')
+        
+        network = workspace.network
+        min_dist = float('inf')
+        
+        # Check each road in the network
+        for road in network.roads:
+            road_id = str(getattr(road, 'id', None))
+            if road_id in road_ids:
+                # Calculate distance to this road's centerline
+                road_dist = self._distance_to_road_centerline(x, y, road)
+                min_dist = min(min_dist, road_dist)
+        
+        return min_dist
+    
+    def _distance_to_road_centerline(self, x, y, road):
+        """Calculate minimum distance from point to a road's centerline.
+        
+        Args:
+            x, y: Point coordinates  
+            road: Road object with lanes
+            
+        Returns:
+            Minimum distance to road centerline in meters
+        """
+        if not road.lanes:
+            return float('inf')
+        
+        min_dist = float('inf')
+        
+        # Check distance to each lane's centerline
+        for lane in road.lanes:
+            if hasattr(lane, 'centerline'):
+                centerline = lane.centerline
+                if hasattr(centerline, 'distanceTo'):
+                    # Use Scenic's built-in distance method
+                    try:
+                        from scenic.core.geometry import Point
+                        point = Point(x, y)
+                        dist = centerline.distanceTo(point)
+                        min_dist = min(min_dist, dist)
+                    except:
+                        # Fallback: approximate distance using line segments
+                        dist = self._distance_to_polyline(x, y, centerline.points)
+                        min_dist = min(min_dist, dist)
+        
+        return min_dist
+    
+    def _distance_to_polyline(self, x, y, points):
+        """Calculate minimum distance from point to polyline.
+        
+        Args:
+            x, y: Point coordinates
+            points: List of (x, y) points defining the polyline
+            
+        Returns:
+            Minimum distance to polyline in meters
+        """
+        if len(points) < 2:
+            return float('inf')
+        
+        min_dist = float('inf')
+        
+        # Check distance to each line segment
+        for i in range(len(points) - 1):
+            x0, y0 = points[i][:2]  # Take first 2 coordinates
+            x1, y1 = points[i+1][:2]
+            
+            # Distance from point to line segment
+            dist = self._point_to_line_segment_distance(x, y, x0, y0, x1, y1)
+            min_dist = min(min_dist, dist)
+        
+        return min_dist
+    
+    def _point_to_line_segment_distance(self, px, py, x0, y0, x1, y1):
+        """Calculate distance from point to line segment.
+        
+        Args:
+            px, py: Point coordinates
+            x0, y0, x1, y1: Line segment endpoints
+            
+        Returns:
+            Distance from point to line segment
+        """
+        # Vector from line start to end
+        dx = x1 - x0
+        dy = y1 - y0
+        
+        # Vector from line start to point
+        wx = px - x0
+        wy = py - y0
+        
+        # Project point onto line
+        seg_len_sq = dx*dx + dy*dy
+        if seg_len_sq < 1e-12:
+            # Degenerate line segment
+            return ((px - x0)**2 + (py - y0)**2)**0.5
+        
+        t = (wx*dx + wy*dy) / seg_len_sq
+        t = max(0.0, min(1.0, t))  # Clamp to segment
+        
+        # Closest point on line segment
+        closest_x = x0 + t*dx
+        closest_y = y0 + t*dy
+        
+        # Distance to closest point
+        return ((px - closest_x)**2 + (py - closest_y)**2)**0.5
+    
+    def _set_fellow_route_via_sequence(self, sequence, obj):
+        """Set the ModelDesk route for a fellow vehicle via FellowSequence.Route.
+        
+        Automatically detects appropriate route based on road segment placement.
+        Falls back to explicit dspace_route attribute if auto-detection fails.
+        
+        Args:
+            sequence: The fellow's sequence object (FellowSequence)
+            obj: The Scenic object (vehicle)
+        """
+        try:
+            # Access Route property on the sequence
+            if not hasattr(sequence, 'Route'):
+                print(f"    [INFO] Sequence has no Route property, skipping route assignment")
+                return
+            
+            route_sel = sequence.Route
+            print(f"    [Route] Accessed FellowSequence.Route successfully")
+            
+            # Determine route preference
+            route_preference = None
+            
+            # Priority 1: Auto-detect from road segment (clean design)
+            route_preference = self._detect_route_from_road_segment(obj)
+            if route_preference:
+                print(f"    [Route] Auto-detected from placement: {route_preference}")
+            # Priority 2: Explicit attribute (backward compatibility)
+            elif hasattr(obj, 'dspace_route'):
+                route_preference = obj.dspace_route
+                print(f"    [Route] Using explicit attribute: {route_preference}")
+            else:
+                print(f"    [Route] No route preference determined")
+            
+            # Check available routes - try multiple methods
+            available_routes = []
+            
+            # Method 1: Try AvailableElements directly
+            if hasattr(route_sel, 'AvailableElements'):
+                try:
+                    available = route_sel.AvailableElements
+                    if available is not None:
+                        # Try to iterate even if Count doesn't work
+                        if hasattr(available, 'Count'):
+                            try:
+                                count = available.Count
+                                print(f"    [Route] Available routes via AvailableElements: {count}")
+                                
+                                for i in range(count):
+                                    try:
+                                        route = available.Item(i)
+                                        if route:
+                                            name = route.Name if hasattr(route, 'Name') else f"Route{i}"
+                                            available_routes.append((i, name, route))
+                                            print(f"      Route {i}: {name}")
+                                    except Exception as e:
+                                        print(f"      Route {i}: (error: {e})")
+                            except Exception as e:
+                                print(f"    [WARN] Could not get Count from AvailableElements: {e}")
+                        
+                        # Try iteration without Count
+                        if not available_routes:
+                            try:
+                                for i, route in enumerate(available):
+                                    if route:
+                                        name = route.Name if hasattr(route, 'Name') else f"Route{i}"
+                                        available_routes.append((i, name, route))
+                                        print(f"      Route {i}: {name} (via iteration)")
+                            except Exception as e:
+                                print(f"    [INFO] Could not iterate AvailableElements: {e}")
+                    else:
+                        print(f"    [INFO] AvailableElements is None")
+                except Exception as e:
+                    print(f"    [WARN] Error accessing AvailableElements: {e}")
+            
+            # Method 2: Try getting current ActiveElement to see if routes exist
+            if not available_routes and hasattr(route_sel, 'ActiveElement'):
+                try:
+                    active = route_sel.ActiveElement
+                    if active:
+                        name = active.Name if hasattr(active, 'Name') else "Unknown"
+                        print(f"    [INFO] Found ActiveElement: {name}")
+                        print(f"    [INFO] Routes exist but AvailableElements not accessible")
+                        print(f"    [INFO] Will try to activate by name directly")
+                except Exception as e:
+                    print(f"    [INFO] Could not access ActiveElement: {e}")
+            
+            # If still no routes found, give helpful message but continue
+            if not available_routes:
+                print(f"    [INFO] Could not enumerate routes via AvailableElements")
+                print(f"    [INFO] Will attempt direct activation by route name")
+                # Continue anyway - try to activate by name even if we can't list them
+            
+            # Try to activate the route
+            if not hasattr(route_sel, 'Activate'):
+                print(f"    [INFO] RouteSelection does not support Activate method")
+                return
+            
+            # Try to activate the route
+            activated = False
+            
+            # If we have enumerated routes, use smart matching
+            if available_routes and route_preference:
+                # Strategy 1: Exact match
+                matching_route = None
+                for idx, name, route in available_routes:
+                    if name.lower() == route_preference.lower():
+                        matching_route = (idx, name, route)
+                        print(f"    [Match] Found exact match: {name}")
+                        break
+                
+                # Strategy 2: Pattern matching
+                if not matching_route:
+                    pref_lower = route_preference.lower()
+                    for idx, name, route in available_routes:
+                        name_lower = name.lower()
+                        if pref_lower in name_lower or name_lower in pref_lower:
+                            matching_route = (idx, name, route)
+                            print(f"    [Match] Found pattern match: {name}")
+                            break
+                
+                # Strategy 3: Heuristic matching by index
+                # Common ModelDesk convention: Route0 = Pit, Route1 = Main/Lap
+                if not matching_route and len(available_routes) >= 2:
+                    pref_lower = route_preference.lower()
+                    if pref_lower in ['pit', 'pitlane']:
+                        # Prefer Route0 for pit
+                        for idx, name, route in available_routes:
+                            if 'route0' in name.lower() or idx == 0:
+                                matching_route = (idx, name, route)
+                                print(f"    [Match] Heuristic match for pit: {name} (index {idx})")
+                                break
+                    elif pref_lower in ['lap', 'main', 'race']:
+                        # Prefer Route1 for main/lap
+                        for idx, name, route in available_routes:
+                            if 'route1' in name.lower() or idx == 1:
+                                matching_route = (idx, name, route)
+                                print(f"    [Match] Heuristic match for lap: {name} (index {idx})")
+                                break
+                
+                # Activate matched route
+                if matching_route:
+                    idx, name, route = matching_route
+                    
+                    # Try multiple activation methods
+                    activation_methods = [
+                        ('by index', lambda: route_sel.Activate(idx)),
+                        ('by name', lambda: route_sel.Activate(name)),
+                        ('by route object', lambda: route_sel.Activate(route)),
+                        ('set ActiveElement', lambda: setattr(route_sel, 'ActiveElement', route)),
+                    ]
+                    
+                    for method_name, activate_fn in activation_methods:
+                        try:
+                            activate_fn()
+                            print(f"    [OK] Activated route '{name}' (index {idx}) {method_name}")
+                            activated = True
+                            break
+                        except Exception as e:
+                            print(f"    [DEBUG] Activation {method_name} failed: {e}")
+                            continue
+            
+            # If no enumerated routes, try direct activation with common names
+            if not activated and route_preference:
+                # Try common route name variations
+                names_to_try = [
+                    route_preference,  # Try preference as-is
+                ]
+                
+                # Add variations
+                pref_lower = route_preference.lower()
+                if pref_lower in ['pit', 'pitlane']:
+                    names_to_try.extend(['Pit', 'PitLane', 'Pit Lane', 'pit', 'pitlane', 'Route_1'])
+                elif pref_lower in ['lap', 'main', 'race']:
+                    names_to_try.extend(['Lap', 'Main', 'MainRoute', 'Main Route', 'lap', 'main', 'Route_2'])
+                
+                print(f"    [INFO] Trying direct activation with name variants...")
+                for name in names_to_try:
+                    try:
+                        route_sel.Activate(name)
+                        print(f"    [OK] Successfully activated route: '{name}'")
+                        activated = True
+                        break
+                    except Exception as e:
+                        print(f"    [DEBUG] Could not activate '{name}': {e}")
+                        continue
+            
+            # Verify final activation status
+            if activated:
+                try:
+                    if hasattr(route_sel, 'ActiveElement') and route_sel.ActiveElement:
+                        active_name = route_sel.ActiveElement.Name if hasattr(route_sel.ActiveElement, 'Name') else "Unknown"
+                        print(f"    [OK] Active route confirmed: '{active_name}'")
+                except:
+                    pass
+            else:
+                print(f"    [WARN] Could not activate any route for preference: {route_preference}")
+                
+        except Exception as e:
+            print(f"    [WARN] Could not set route via sequence: {e}")
+    
+    def _set_fellow_route_via_segment(self, segs, obj):
+        """Set the ModelDesk route for a fellow vehicle via segment Activity.RouteSelection.
+        
+        Args:
+            segs: The fellow's segments collection
+            obj: The Scenic object (vehicle)
+        """
+        try:
+            # Get the start segment (seg0)
+            if hasattr(segs, 'Count') and segs.Count > 0:
+                seg0 = segs.Item(0)
+            else:
+                print(f"    [INFO] No segments available for route assignment")
+                return
+            
+            # Try to access RouteSelection through Activity
+            route_sel = None
+            if hasattr(seg0, 'Activity') and hasattr(seg0.Activity, 'RouteSelection'):
+                route_sel = seg0.Activity.RouteSelection
+                print(f"    [Route] Found RouteSelection via seg0.Activity")
+            elif hasattr(seg0, 'RouteSelection'):
+                route_sel = seg0.RouteSelection  
+                print(f"    [Route] Found RouteSelection on seg0 directly")
+            else:
+                print(f"    [INFO] No RouteSelection found on segment")
+                return
+            
+            # Determine which route to use
+            route_index = 1  # Default to Lap
+            route_name_to_find = "Lap"
+            
+            # Check if object specifies a route
+            if hasattr(obj, 'dspace_route'):
+                if obj.dspace_route.lower() == "pit":
+                    route_index = 0
+                    route_name_to_find = "Pit"
+                print(f"    [Route] Object specifies route: {obj.dspace_route}")
+            
+            # Try to set the route
+            if route_sel and hasattr(route_sel, 'AvailableElements'):
+                available = route_sel.AvailableElements
+                if hasattr(available, 'Count'):
+                    print(f"    [Route] Available routes: {available.Count}")
+                    
+                    # List all available routes for debugging
+                    for i in range(available.Count):
+                        try:
+                            route = available.Item(i)
+                            name = route.Name if hasattr(route, 'Name') else f"Route{i}"
+                            print(f"      Route {i}: {name}")
+                        except:
+                            pass
+                    
+                    # Try to activate the desired route
+                    if available.Count > route_index:
+                        try:
+                            route_item = available.Item(route_index)
+                            actual_name = route_item.Name if hasattr(route_item, 'Name') else f"Route{route_index}"
+                            
+                            if hasattr(route_sel, 'Activate'):
+                                route_sel.Activate(actual_name)
+                                print(f"    [OK] Activated route: {actual_name} (index {route_index})")
+                            elif hasattr(route_sel, 'ActiveElement'):
+                                route_sel.ActiveElement = route_item
+                                print(f"    [OK] Set ActiveElement to: {actual_name}")
+                        except Exception as e:
+                            print(f"    [WARN] Could not activate route {route_index}: {e}")
+            
+        except Exception as e:
+            print(f"    [WARN] Could not set route via segment: {e}")
+    
+    def _set_fellow_route(self, sequence, obj):
+        """Set the ModelDesk route for a fellow vehicle based on which Scenic road it was placed on.
+        
+        ModelDesk typically has predefined routes:
+        - R1: Pit (route index 0) - for pit lane
+        - R2: Lap (route index 1) - for main racing line
+        
+        Args:
+            sequence: The fellow's sequence object
+            obj: The Scenic object (vehicle)
+        """
+        try:
+            # Check if the sequence has RouteSelection
+            if not hasattr(sequence, 'RouteSelection'):
+                print(f"    [INFO] Sequence has no RouteSelection property, skipping route assignment")
+                return
+            
+            route_sel = sequence.RouteSelection
+            
+            # Determine which route to use based on the object's placement
+            route_name = "Lap"  # Default to R2: Lap (main racing line)
+            route_index = 1
+            
+            # Check if object has dspace_route attribute (can be set in scenario)
+            if hasattr(obj, 'dspace_route'):
+                route_name = obj.dspace_route
+                if route_name.lower() == "pit":
+                    route_index = 0
+                print(f"    [Route] Using explicit route from object: {route_name}")
+            else:
+                # Try to infer from object's region
+                region_check = []
+                
+                # Check various possible sources of region information
+                if hasattr(obj, '_parentRegion'):
+                    region_check.append(str(obj._parentRegion))
+                if hasattr(obj, 'position') and hasattr(obj.position, '_region'):
+                    region_check.append(str(obj.position._region))
+                    
+                # Look for pit lane indicators
+                region_str = ' '.join(region_check).lower()
+                if 'pit' in region_str:
+                    route_name = "Pit"
+                    route_index = 0
+                    print(f"    [Route] Detected pit lane from region info, setting to R1: Pit")
+                else:
+                    print(f"    [Route] Defaulting to R2: Lap (main racing line)")
+            
+            # Set the route in ModelDesk
+            if hasattr(route_sel, 'Activate') and hasattr(route_sel, 'AvailableElements'):
+                available = route_sel.AvailableElements
+                if hasattr(available, 'Count') and available.Count > 0:
+                    print(f"    [Route] Available routes: {available.Count}")
+                    
+                    # Try to activate by index
+                    if available.Count > route_index:
+                        try:
+                            route_item = available.Item(route_index)
+                            actual_name = route_item.Name if hasattr(route_item, 'Name') else f"Route{route_index}"
+                            route_sel.Activate(actual_name)
+                            print(f"    [OK] Activated route: {actual_name} (index {route_index})")
+                        except Exception as e:
+                            print(f"    [WARN] Could not activate route by index {route_index}: {e}")
+                    else:
+                        print(f"    [WARN] Route index {route_index} out of range (only {available.Count} routes available)")
+            else:
+                print(f"    [INFO] RouteSelection does not support Activate or AvailableElements")
+            
+        except Exception as e:
+            print(f"    [WARN] Could not set route: {e}")
 
     def _apply_relative_positioning(self):
         """Apply relative positioning logic based on Scenic's resolved coordinates.
