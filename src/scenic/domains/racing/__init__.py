@@ -40,11 +40,31 @@ Example racing scenario::
     # Follow racing line behavior
     ego with behavior FollowRacingLineBehavior()
 
-The racing domain is designed to work with:
+The racing domain is designed to work with simulators that inherit from
+:class:`RacingSimulator`:
 
-* dSPACE ModelDesk (Laguna Seca and other racing circuits)
-* CARLA (racing tracks)
-* Any simulator supporting the driving domain with racing-specific maps
+* **dSPACE ModelDesk** - Laguna Seca and other racing circuits
+  (see :doc:`scenic.simulators.dspace.racing_model`)
+* **CARLA** - Racing tracks and circuits
+* **Any simulator** supporting the driving domain with racing-specific maps
+
+Scenarios written for the racing domain should work without changes in any
+simulator that implements the racing domain interface. For example, the
+:file:`examples/racing/three_segments.scenic` scenario can be run in:
+
+* dSPACE ModelDesk (with proper route setup):
+
+    .. code-block:: console
+
+        $ scenic --2d --model scenic.simulators.dspace.racing_model \\
+            examples/racing/three_segments.scenic --simulate
+
+* CARLA (with racing track maps):
+
+    .. code-block:: console
+
+        $ scenic --model scenic.simulators.carla.racing_model \\
+            examples/racing/three_segments.scenic --simulate
 
 .. note::
 

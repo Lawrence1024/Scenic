@@ -9,13 +9,13 @@ import pythoncom
 from win32com.client import Dispatch
 
 from scenic.core.vectors import Vector
-from scenic.domains.driving.simulators import DrivingSimulator, DrivingSimulation
+from scenic.domains.racing.simulators import RacingSimulator, RacingSimulation
 from scenic.core.simulators import SimulationCreationError
 
 from . import utils as dutils
 
 
-class DSpaceSimulator(DrivingSimulator):
+class DSpaceSimulator(RacingSimulator):
     def __init__(self, *, scenario_src="LagunaSeca_ExternalControl",
                  scenario_name=None, timestep=0.1, save_as=True):
         super().__init__()
@@ -28,7 +28,7 @@ class DSpaceSimulator(DrivingSimulator):
         return DSpaceSimulation(scene, self, **kwargs)
 
 
-class DSpaceSimulation(DrivingSimulation):
+class DSpaceSimulation(RacingSimulation):
     def __init__(self, scene, sim: DSpaceSimulator, **kwargs):
         self.sim = sim
         self.exp = None
@@ -442,11 +442,10 @@ class DSpaceSimulation(DrivingSimulation):
         return F
     
     def _detect_route_from_road_segment(self, obj):
-        """Auto-detect route preference based on which region the object is closer to.
+        """Auto-detect route preference using racing domain abstract methods.
         
-        This method determines the route by calculating which track segment the object
-        is closest to, since the coordinate projection (x,y)→(s,t) can lose the original
-        road context when roads are close together.
+        Uses the abstract detectTrackSegment() and assignRoute() methods
+        to determine the appropriate route for the object.
         
         Args:
             obj: The Scenic object
@@ -455,30 +454,18 @@ class DSpaceSimulation(DrivingSimulation):
             String route preference ('Pit' or 'Lap') or None
         """
         try:
-            # Get the racing track regions from params (set by racing/model.scenic)
-            params = getattr(self.scene, "params", {}) or {}
-            pit_lane_ids = params.get('pitLaneRoadIds', [])
-            main_racing_ids = params.get('mainRacingRoadIds', [])
-            
-            if not pit_lane_ids and not main_racing_ids:
-                # Not a racing scenario
-                return None
-            
             # Get object position
             obj_pos = obj.position
-            obj_x, obj_y = float(obj_pos.x), float(obj_pos.y)
+            position = (float(obj_pos.x), float(obj_pos.y))
             
-            # Calculate distance to pit lane region
-            pit_dist = self._distance_to_road_region(obj_x, obj_y, pit_lane_ids)
+            # Use abstract method to detect track segment
+            track_segment = self.detectTrackSegment(position)
+            if track_segment is None:
+                return None
             
-            # Calculate distance to main racing region  
-            main_dist = self._distance_to_road_region(obj_x, obj_y, main_racing_ids)
-            
-            # Choose the closer region
-            if pit_dist < main_dist:
-                return "Pit"
-            else:
-                return "Lap"
+            # Use abstract method to assign route
+            route_preference = self.assignRoute(obj, track_segment)
+            return route_preference
                 
         except Exception as e:
             print(f"    [Route] Auto-detection error: {e}")
@@ -607,6 +594,65 @@ class DSpaceSimulation(DrivingSimulation):
         
         # Distance to closest point
         return ((px - closest_x)**2 + (py - closest_y)**2)**0.5
+    
+    def detectTrackSegment(self, position):
+        """Detect which track segment a position belongs to (racing-specific).
+        
+        Uses distance calculation to determine if position is closer to
+        pit lane or main racing circuit.
+        
+        Args:
+            position: (x, y) world coordinates
+            
+        Returns:
+            String indicating the track segment: 'mainRacing', 'pitLane', or None
+        """
+        try:
+            # Get the racing track regions from params (set by racing/model.scenic)
+            params = getattr(self.scene, "params", {}) or {}
+            pit_lane_ids = params.get('pitLaneRoadIds', [])
+            main_racing_ids = params.get('mainRacingRoadIds', [])
+            
+            if not pit_lane_ids and not main_racing_ids:
+                # Not a racing scenario
+                return None
+            
+            obj_x, obj_y = float(position[0]), float(position[1])
+            
+            # Calculate distance to pit lane region
+            pit_dist = self._distance_to_road_region(obj_x, obj_y, pit_lane_ids)
+            
+            # Calculate distance to main racing region  
+            main_dist = self._distance_to_road_region(obj_x, obj_y, main_racing_ids)
+            
+            # Choose the closer region
+            if pit_dist < main_dist:
+                return 'pitLane'
+            else:
+                return 'mainRacing'
+                
+        except Exception as e:
+            print(f"    [TrackSegment] Detection error: {e}")
+            return None
+
+    def assignRoute(self, agent, track_segment):
+        """Assign appropriate route based on track segment (dSPACE-specific).
+        
+        Maps track segments to dSPACE ModelDesk route names.
+        
+        Args:
+            agent: The racing agent
+            track_segment: Track segment identifier ('mainRacing' or 'pitLane')
+            
+        Returns:
+            String indicating the route preference for dSPACE
+        """
+        if track_segment == 'pitLane':
+            return 'Pit'
+        elif track_segment == 'mainRacing':
+            return 'Lap'
+        else:
+            return None
     
     def _set_fellow_route_via_sequence(self, sequence, obj):
         """Set the ModelDesk route for a fellow vehicle via FellowSequence.Route.
