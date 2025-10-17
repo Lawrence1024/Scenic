@@ -14,6 +14,9 @@ from scenic.core.simulators import SimulationCreationError
 
 from . import utils as dutils
 import pandas as pd
+from pandas import DataFrame
+import numpy as np
+import math
 
 
 class DSpaceSimulator(DrivingSimulator):
@@ -283,7 +286,19 @@ class DSpaceSimulation(DrivingSimulation):
             else:
                 F.Name = f"Fellow_{fellow_idx}"
             print(f"    Created Fellow with name: {F.Name}")
-            self.append_csv(obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val)
+            fellow1_df = pd.DataFrame()
+            fellow2_df = pd.DataFrame()
+            analysis_df = pd.DataFrame()
+            if fellow_idx == 1:
+                fellow1_df = self.fellow_coords_df(obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val)
+                fellow1_df.to_csv('scenic_fellows_scenarios.csv')
+            elif fellow_idx == 2:
+                fellow1_df = pd.read_csv('scenic_fellows_scenarios.csv')
+                fellow2_df = self.fellow_coords_df(obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val)
+                combined_df = pd.concat([fellow1_df, fellow2_df], axis=0, ignore_index=True)
+                analysis_df = self.create_analysis(combined_df['scenic_vector_x'], combined_df['scenic_vector_y'], combined_df['scenic_heading'], combined_df['rd_world_x'], combined_df['rd_world_y'], combined_df['road_s'], combined_df['road_t'])
+                combined_df = pd.concat([fellow1_df, fellow2_df, analysis_df], axis=1)
+                combined_df.to_csv('scenic_fellows_scenarios.csv')
         except Exception as e:
             F.Name = f"Fellow_{fellow_idx}"
             print(f"    Created Fellow with fallback name: {F.Name} (error: {e})")
@@ -305,7 +320,7 @@ class DSpaceSimulation(DrivingSimulation):
 
         return F
 
-    def append_csv(self, obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val):
+    def fellow_coords_df(self, obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val):
         """Create a CSV file with car positions and orientations.
         
         Columns:
@@ -317,8 +332,6 @@ class DSpaceSimulation(DrivingSimulation):
             rd_world_x/y: Transformed RD/World coordinates
             road_s/t: Road coordinates (s,t)
         """
-        import math
-
         
         # Calculate left unit vector (90 degrees counter-clockwise from heading)
         heading = obj.heading if hasattr(obj, 'heading') else 0
@@ -326,6 +339,7 @@ class DSpaceSimulation(DrivingSimulation):
         left_vector_y = math.cos(heading)   # sin(heading + π/2)
 
         coords = {
+            'scen_name': ['Left of 2'],
             'car_name': [f'fellow{fellow_idx}'],
             'scenic_vector_x': [scenic_x],
             'scenic_vector_y': [scenic_y],
@@ -342,11 +356,18 @@ class DSpaceSimulation(DrivingSimulation):
         }
 
         data_frame = pd.DataFrame(coords)
+        return data_frame
 
-        data_frame.to_csv('scenic_fellows_scenarios.csv', mode='a', header=False, index=False)
+        # if fellow_idx == 1:
+        #     data_frame.to_csv('scenic_fellows_scenarios.csv', mode='a')
+        # else:
+        #     scenarios_df = pd.read_csv('scenic_fellows_scenarios.csv')
+        #     scenarios_df = pd.concat([scenarios_df, data_frame], axis=1)
+        #     scenarios_df.to_csv('scenic_fellows_scenarios.csv')
+            
 
     
-        print(data_frame)
+        #print(data_frame)
 
         # Create or append to the CSV file
         #csv_path = 'scenic_cars_coords.csv'
@@ -356,18 +377,44 @@ class DSpaceSimulation(DrivingSimulation):
         #else:
         #    df.to_csv(csv_path, mode='a', header=False, index=False)
     
-    def append_analysis_csv(self):
-        scenic_df = pd.read_csv('scenic_fellows_scenarios.csv')
-        scenic_coords = []
-        for i in range(9):
-            indiv_coords = []
-            for j in range(2):
-                element = scenic_df.iloc[j, i]
-                indiv_coords.append(element)
-            scenic_coords.append(indiv_coords)
-            indiv_coords = []
-        
-        # extract data from scenic_coords, do analysis and calculations, append to csv
+    def create_analysis(self, scenic_x, scenic_y, scenic_heading, rd_world_x, rd_world_y, road_s, road_t):
+         # scenic coordinates difference
+        sc_dist_x = scenic_x[1] - scenic_x[0]
+        sc_dist_y = scenic_y[1] - scenic_y[0]
+
+        left_unit_x = math.cos(scenic_heading[0])
+        left_unit_y = math.sin(scenic_heading[0])
+
+        scenic_dot_product = sc_dist_x * left_unit_x + sc_dist_y * left_unit_y
+
+        # road coordinates difference
+        rd_dist_x = rd_world_x[1] - rd_world_x[0]
+        rd_dist_y = rd_world_y[1] - rd_world_y[0]
+
+        rd_dot_product = rd_dist_x * left_unit_x + rd_dist_y * left_unit_y
+
+        # s, t difference
+        s_dist = road_s[1] - road_s[0]
+        t_dist = road_t[1] - road_t[0]
+
+        s_t_diff = t_dist - s_dist
+
+        analysis_data = {
+            'scenic_dist_x': [sc_dist_x],
+            'scenic_dist_y': [sc_dist_y],
+            'left_unit_x': [left_unit_x],
+            'left_unit_y': [left_unit_y],
+            'scenic_dot_product': [scenic_dot_product],
+            'rd_dist_x': [rd_dist_x],
+            'rd_dist_y': [rd_dist_y],
+            'rd_dot_product': [rd_dot_product],
+            's_dist': [s_dist],
+            't_dist': [t_dist],
+            's_t_diff': [s_t_diff]
+        }
+
+        analysis_df = pd.DataFrame(analysis_data)
+        return analysis_df
 
 
     def _apply_relative_positioning(self):
