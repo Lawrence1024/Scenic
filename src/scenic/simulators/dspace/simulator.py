@@ -14,9 +14,8 @@ from scenic.core.simulators import SimulationCreationError
 
 from . import utils as dutils
 import pandas as pd
-from pandas import DataFrame
-import numpy as np
 import math
+import os
 
 
 class DSpaceSimulator(DrivingSimulator):
@@ -291,14 +290,22 @@ class DSpaceSimulation(DrivingSimulation):
             analysis_df = pd.DataFrame()
             if fellow_idx == 1:
                 fellow1_df = self.fellow_coords_df(obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val)
-                fellow1_df.to_csv('scenic_fellows_scenarios.csv')
+                if os.path.exists('scenic_fellows_scenarios1.csv'):
+                    fellow1_df.to_csv('scenic_fellows_scenarios1.csv', mode='a', header=False, index=False)
+                else:
+                    fellow1_df.to_csv('scenic_fellows_scenarios1.csv', index=False)
             elif fellow_idx == 2:
-                fellow1_df = pd.read_csv('scenic_fellows_scenarios.csv')
+                #fellow1_df = pd.read_csv('scenic_fellows_scenarios1.csv')
+                fellow1_df = pd.read_csv('scenic_fellows_scenarios1.csv', usecols=['scen_name','car_name','scenic_vector_x','scenic_vector_y','scenic_heading','left_vector_x','left_vector_y','rd_world_x','rd_world_y','road_s','road_t'])
                 fellow2_df = self.fellow_coords_df(obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val)
-                combined_df = pd.concat([fellow1_df, fellow2_df], axis=0, ignore_index=True)
+                print(fellow1_df, fellow2_df)
+                combined_df = pd.concat([fellow1_df[1:], fellow2_df], axis=0, ignore_index=True)
+                print(combined_df)
                 analysis_df = self.create_analysis(combined_df['scenic_vector_x'], combined_df['scenic_vector_y'], combined_df['scenic_heading'], combined_df['rd_world_x'], combined_df['rd_world_y'], combined_df['road_s'], combined_df['road_t'])
-                combined_df = pd.concat([fellow1_df, fellow2_df, analysis_df], axis=1)
-                combined_df.to_csv('scenic_fellows_scenarios.csv')
+                print(analysis_df)
+                combined_df = pd.concat([fellow1_df[1:], fellow2_df, analysis_df], axis=1)
+                print(combined_df)
+                #combined_df.to_csv('scenic_fellows_scenarios1.csv', index=False)
         except Exception as e:
             F.Name = f"Fellow_{fellow_idx}"
             print(f"    Created Fellow with fallback name: {F.Name} (error: {e})")
@@ -397,20 +404,17 @@ class DSpaceSimulation(DrivingSimulation):
         s_dist = road_s[1] - road_s[0]
         t_dist = road_t[1] - road_t[0]
 
-        s_t_diff = t_dist - s_dist
-
         analysis_data = {
             'scenic_dist_x': [sc_dist_x],
             'scenic_dist_y': [sc_dist_y],
-            'left_unit_x': [left_unit_x],
-            'left_unit_y': [left_unit_y],
+            'true_left_x': [left_unit_x],
+            'true_right_y': [left_unit_y],
             'scenic_dot_product': [scenic_dot_product],
             'rd_dist_x': [rd_dist_x],
             'rd_dist_y': [rd_dist_y],
             'rd_dot_product': [rd_dot_product],
             's_dist': [s_dist],
             't_dist': [t_dist],
-            's_t_diff': [s_t_diff]
         }
 
         analysis_df = pd.DataFrame(analysis_data)
