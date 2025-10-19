@@ -285,8 +285,10 @@ def project_world_to_st(index_or_map, pos: Tuple[float, float], xodr_file: str =
         # Fallback to direct mapping if no road network available
         return map_scenic_to_modeldesk(px, py)
 
-    # Project onto OpenDRIVE road network
-    best = None  # (dist2, s_proj, t_signed, road_id)
+    # Project onto OpenDRIVE road network - IMPROVED ALGORITHM
+    # Collect all projections first, then find the truly closest one
+    all_projections = []  # List of (dist2, s_proj, t_signed, road_id, road_name)
+    
     it = roads_obj.values() if isinstance(roads_obj, dict) else roads_obj
     for road in it:
         sec_list = road.get('sec_points') if isinstance(road, dict) else getattr(road, 'sec_points', [])
@@ -324,11 +326,25 @@ def project_world_to_st(index_or_map, pos: Tuple[float, float], xodr_file: str =
                 t_signed = get_calibrated_t_coordinate(px, py, t_left)
                 s_proj = s0 + u*(s1 - s0)
                 
-                # Get road ID for calibration
+                # Get road ID and name for calibration
                 road_id = road.get('id') if isinstance(road, dict) else getattr(road, 'id', None)
-
-                if (best is None) or (dist2 < best[0]):
-                    best = (dist2, s_proj, t_signed, road_id)
+                road_name = road.get('name') if isinstance(road, dict) else getattr(road, 'name', f'Road_{road_id}')
+                
+                # Store all projections
+                all_projections.append((dist2, s_proj, t_signed, road_id, road_name))
+    
+    # Find the truly closest projection
+    if not all_projections:
+        # Fallback to direct mapping if projection fails
+        return map_scenic_to_modeldesk(px, py)
+    
+    # Sort by distance and take the closest
+    all_projections.sort(key=lambda x: x[0])
+    best = all_projections[0]
+    
+    # Debug: Show the best projection for pit lane
+    if best[3] == '1545702203':  # Pit Lane1_2
+        print(f"    [Projection] World ({px:.1f}, {py:.1f}) -> BEST: Road {best[4]}, s={best[1]:.1f}, t={best[2]:.3f}, dist={best[0]:.3f}")
 
     if best is None:
         # Fallback to direct mapping if projection fails
@@ -717,43 +733,80 @@ def build_refline(path, step=2.0):
     return pts
 
 def build_xodr_sec_points(xodr_path, step=2.0):
-    """Build a road index from XODR file compatible with project_world_to_st function.
+    """Build a road index from XODR file with independent road s-coordinate systems.
     
     Returns a dict with 'roads' key containing road data with 'sec_points' lists.
-    Each sec_points list contains (x, y, s) tuples for projection calculations.
+    Each road gets its own independent s-coordinate system starting from 0.
+    This fixes the issue where multiple cars on pit lane get the same s-coordinate.
     """
     try:
-        # Build reference line from the XODR file
-        refline, total_length = build_circuit_refline(xodr_path, step=step)
+        import xml.etree.ElementTree as ET
         
-        # Convert to the format expected by project_world_to_st
-        # Create a single road entry with sec_points
-        road_data = {
-            'sec_points': []
-        }
+        root = ET.parse(xodr_path).getroot()
+        ns = '' if not root.tag.startswith('{') else root.tag.split('}')[0]+'}'
         
-        # Convert (s,x,y,z,h) tuples to (x,y,s) tuples for sec_points
-        # Group points into segments for the projection algorithm
-        sec_points_list = []
-        for s, x, y, z, h in refline:
-            sec_points_list.append((x, y, s))
+        # Get all roads
+        road_elements = root.findall(f'{ns}road')
+        if not road_elements:
+            raise RuntimeError("No <road> elements in XODR")
         
-        # The projection function expects a list of point segments
-        road_data['sec_points'] = [sec_points_list]
+        road_index = {'roads': {}}
         
-        # Return in the format expected by project_world_to_st
-        road_index = {
-            'roads': {
-                'main_road': road_data
+        # Process each road independently - FILTER TO MAIN ROADS ONLY
+        main_road_names = ['The Corkscrew1', 'Pit Lane1_2', 'Andretti Hairpin1_3']
+        
+        for road_elem in road_elements:
+            road_id = road_elem.get('id')
+            road_name = road_elem.get('name', f'Road_{road_id}')
+            road_length = float(road_elem.get('length', '0'))
+            
+            # Only process main roads, skip junction roads
+            if road_name not in main_road_names:
+                continue
+                
+            if road_length <= 0:
+                continue
+                
+            # Build reference line for this specific road
+            pts, L, _ = _road_local_ref(root, road_id, ns, step)
+            if not pts:
+                continue
+            
+            # Convert to independent s-coordinate system (starting from 0)
+            sec_points_list = []
+            for s_local, x, y, z, h in pts:
+                # Use local s-coordinate (0 to road_length) instead of cumulative
+                sec_points_list.append((x, y, s_local))
+            
+            # Store road data with independent s-coordinate system
+            road_data = {
+                'id': road_id,
+                'name': road_name,
+                'length': road_length,
+                'sec_points': [sec_points_list]
             }
-        }
+            
+            # Use road name as key for easier identification
+            road_index['roads'][road_name] = road_data
+            
+            print(f"  Built independent road: {road_name} (ID: {road_id}, Length: {road_length:.1f}m, Points: {len(sec_points_list)})")
         
+        print(f"Built {len(road_index['roads'])} independent roads with separate s-coordinate systems")
         return road_index
         
     except Exception as e:
         print(f"Error building XODR road index: {e}")
-        # Return empty structure on error
-        return {'roads': {}}
+        # Fallback to old method
+        try:
+            refline, total_length = build_circuit_refline(xodr_path, step=step)
+            road_data = {'sec_points': []}
+            sec_points_list = []
+            for s, x, y, z, h in refline:
+                sec_points_list.append((x, y, s))
+            road_data['sec_points'] = [sec_points_list]
+            return {'roads': {'main_road': road_data}}
+        except:
+            return {'roads': {}}
 
 
 def st_to_world(refline, s, t=0.0):

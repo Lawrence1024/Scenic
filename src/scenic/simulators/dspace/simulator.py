@@ -199,10 +199,7 @@ class DSpaceSimulation(RacingSimulation):
         # 5) Let Scenic create objects (calls createObjectInSimulator)
         super().setup()
 
-        # 6) Apply relative positioning logic after all objects are created
-        self._apply_relative_positioning()
-
-        # 7) Persist and (optionally) run
+        # 6) Persist and (optionally) run
         try:
             self.ts.Save()
             self.ts.Download()
@@ -596,10 +593,10 @@ class DSpaceSimulation(RacingSimulation):
         return ((px - closest_x)**2 + (py - closest_y)**2)**0.5
     
     def detectTrackSegment(self, position):
-        """Detect which track segment a position belongs to (racing-specific).
+        """Detect which track segment a position belongs to using actual road projection.
         
-        Uses distance calculation to determine if position is closer to
-        pit lane or main racing circuit.
+        Uses the road index to determine which road the position actually projects onto,
+        rather than distance-based heuristics.
         
         Args:
             position: (x, y) world coordinates
@@ -619,13 +616,25 @@ class DSpaceSimulation(RacingSimulation):
             
             obj_x, obj_y = float(position[0]), float(position[1])
             
-            # Calculate distance to pit lane region
-            pit_dist = self._distance_to_road_region(obj_x, obj_y, pit_lane_ids)
+            # Use actual road projection to determine which road the position is on
+            if self._road_index:
+                # Project onto road network to find the actual road
+                s_val, t_val = dutils.project_world_to_st(self._road_index, (obj_x, obj_y))
+                
+                # Find which road this position projects onto
+                projected_road_id = self._find_road_id_for_position(obj_x, obj_y)
+                
+                if projected_road_id:
+                    # Check if this road ID belongs to pit lane or main racing
+                    if str(projected_road_id) in pit_lane_ids:
+                        return 'pitLane'
+                    elif str(projected_road_id) in main_racing_ids:
+                        return 'mainRacing'
             
-            # Calculate distance to main racing region  
+            # Fallback to distance-based detection if projection fails
+            pit_dist = self._distance_to_road_region(obj_x, obj_y, pit_lane_ids)
             main_dist = self._distance_to_road_region(obj_x, obj_y, main_racing_ids)
             
-            # Choose the closer region
             if pit_dist < main_dist:
                 return 'pitLane'
             else:
@@ -633,6 +642,62 @@ class DSpaceSimulation(RacingSimulation):
                 
         except Exception as e:
             print(f"    [TrackSegment] Detection error: {e}")
+            return None
+
+    def _find_road_id_for_position(self, x, y):
+        """Find which road ID a position projects onto.
+        
+        Args:
+            x, y: World coordinates
+            
+        Returns:
+            Road ID or None if not found
+        """
+        try:
+            if not self._road_index:
+                return None
+                
+            roads_obj = self._road_index.get('roads', {})
+            if not roads_obj:
+                return None
+            
+            best_road_id = None
+            min_distance = float('inf')
+            
+            # Check each road to find the closest projection
+            for road_name, road_data in roads_obj.items():
+                sec_list = road_data.get('sec_points', [])
+                if not sec_list:
+                    continue
+                    
+                for pts in sec_list:
+                    if not pts or len(pts) < 2:
+                        continue
+                        
+                    for i in range(len(pts) - 1):
+                        x0, y0, s0 = pts[i]
+                        x1, y1, s1 = pts[i+1]
+                        vx, vy = x1 - x0, y1 - y0
+                        seg_len2 = vx*vx + vy*vy
+                        if seg_len2 <= 1e-12:
+                            continue
+                            
+                        wx, wy = x - x0, y - y0
+                        u = (wx*vx + wy*vy) / seg_len2
+                        u = 0.0 if u < 0.0 else (1.0 if u > 1.0 else u)
+                        qx = x0 + u*vx
+                        qy = y0 + u*vy
+                        dx, dy = x - qx, y - qy
+                        dist2 = dx*dx + dy*dy
+                        
+                        if dist2 < min_distance:
+                            min_distance = dist2
+                            best_road_id = road_data.get('id')
+            
+            return best_road_id
+            
+        except Exception as e:
+            print(f"    [RoadID] Error finding road ID: {e}")
             return None
 
     def assignRoute(self, agent, track_segment):
@@ -996,116 +1061,6 @@ class DSpaceSimulation(RacingSimulation):
         except Exception as e:
             print(f"    [WARN] Could not set route: {e}")
 
-    def _apply_relative_positioning(self):
-        """Apply relative positioning logic based on Scenic's resolved coordinates.
-        
-        This method analyzes the actual coordinates that Scenic has computed for each
-        car and detects when cars appear to be positioned relative to each other
-        (lateral vs longitudinal). It then adjusts the dSPACE Fellow positions to
-        maintain proper track distances.
-        
-        This works with any Scenic positioning syntax since it only uses the
-        final resolved coordinates that Scenic provides.
-        """
-        if not hasattr(self, '_object_positions') or len(self._object_positions) < 2:
-            return
-        # exit()
-            
-        print(f"\n=== Applying Relative Positioning Logic ===")
-        print(f"Found {len(self._object_positions)} objects to analyze")
-        
-        # Group cars that are likely meant to be relative to each other
-        car_groups = self._group_relative_cars()
-        
-        for group_idx, group in enumerate(car_groups):
-            if len(group) < 2:
-                continue
-                
-            print(f"\nProcessing group {group_idx + 1} with {len(group)} cars:")
-            
-            # Sort by s-coordinate to establish order
-            group.sort(key=lambda x: x['s_coord'])
-            
-            # Calculate track distances and adjust s-coordinates
-            self._adjust_group_positions(group)
-    
-    def _group_relative_cars(self):
-        """Group cars that are likely meant to be relative to each other.
-        
-        Cars are grouped if they are:
-        1. Close to each other in world coordinates (< 100m)
-        2. Have similar headings (within 45 degrees)
-        3. Are on the same road segment
-        """
-        groups = []
-        processed = set()
-        
-        for i, obj1 in enumerate(self._object_positions):
-            if i in processed:
-                continue
-                
-            # Start a new group with this car
-            group = [obj1]
-            processed.add(i)
-            
-            # Find other cars that should be in the same group
-            for j, obj2 in enumerate(self._object_positions[i+1:], i+1):
-                if j in processed:
-                    continue
-                    
-                if self._should_be_relative(obj1, obj2):
-                    group.append(obj2)
-                    processed.add(j)
-            
-            groups.append(group)
-            
-        return groups
-    
-    def _should_be_relative(self, obj1, obj2):
-        """Determine if two cars should be considered relative to each other."""
-        import math
-        
-        # Calculate world distance
-        pos1 = obj1['position']
-        pos2 = obj2['position']
-        world_dist = ((pos1.x - pos2.x)**2 + (pos1.y - pos2.y)**2)**0.5
-        
-        # Calculate s-coordinate distance
-        s_dist = abs(obj1['s_coord'] - obj2['s_coord'])
-        
-        # Calculate t-coordinate distance (lateral)
-        t_dist = abs(obj1['t_coord'] - obj2['t_coord'])
-        
-        # Calculate heading difference
-        h1 = obj1['heading']
-        h2 = obj2['heading']
-        heading_diff = abs(h1 - h2)
-        # Normalize to [0, π]
-        if heading_diff > math.pi:
-            heading_diff = 2*math.pi - heading_diff
-        
-        # Check if cars are too close (essentially identical positions)
-        threshold = self.config['duplicate_position_threshold']
-        if world_dist < threshold and s_dist < threshold and t_dist < threshold:
-            print(f"  Cars are too close to be relative (identical positions): world_dist={world_dist:.3f}m")
-            return False
-        
-        # Check if this looks like a lateral positioning pattern
-        is_lateral_pattern = self._is_lateral_positioning_pattern(obj1, obj2)
-        
-        print(f"  Comparing cars: world_dist={world_dist:.1f}m, s_dist={s_dist:.1f}m, t_dist={t_dist:.1f}m, heading_diff={heading_diff:.2f}rad, lateral_pattern={is_lateral_pattern}")
-        
-        # Criteria for relative positioning:
-        # 1. Close in world coordinates
-        # 2. Close in s-coordinates OR lateral pattern detected
-        # 3. Similar headings
-        should_be_relative = (world_dist < self.config['relative_distance_threshold'] and 
-                             (s_dist < self.config['s_coordinate_threshold'] or is_lateral_pattern) and 
-                             heading_diff < math.radians(self.config['heading_difference_threshold']))
-        
-        print(f"  Should be relative: {should_be_relative}")
-        return should_be_relative
-    
     def _is_lateral_positioning_pattern(self, obj1, obj2):
         """Detect if two cars are positioned laterally based on their generated coordinates.
         

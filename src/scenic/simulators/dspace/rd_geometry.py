@@ -105,6 +105,8 @@ def build_rd_road_index(rd_path: str, step: float = 1.0) -> dict:
     Returns a dict with 'roads' key containing road data with 'sec_points' lists.
     This uses Aurelion's native RD coordinate system instead of converted XODR.
     
+    FIXED: Creates independent road segments to prevent s-coordinate clustering.
+    
     Args:
         rd_path: Path to .rd file
         step: Sampling step size (smaller = more accurate, default 1.0m recommended)
@@ -114,18 +116,39 @@ def build_rd_road_index(rd_path: str, step: float = 1.0) -> dict:
     """
     roads = parse_rd_geometry(rd_path, step=step)
     
-    # Find the main/longest road (usually the racing circuit)
     if not roads:
         raise RuntimeError("No roads found in RD file")
     
-    main_road = max(roads, key=lambda r: r['total_length'])
+    # FIXED: Create independent road segments instead of single cumulative road
+    # This prevents clustering by giving each road segment its own s-coordinate system
+    road_index = {'roads': {}}
     
-    # Return in format expected by project_world_to_st
-    return {
-        'roads': {
-            'main_road': main_road
+    for i, road in enumerate(roads):
+        road_name = f'Road_{i}'
+        
+        # Convert cumulative s-coordinates to independent (0 to road_length)
+        sec_points = road['sec_points'][0]  # Get the points list
+        road_length = road['total_length']
+        
+        # Create independent s-coordinate system (0 to road_length)
+        independent_points = []
+        for x, y, s_cumulative in sec_points:
+            # Convert cumulative s to local s (0 to road_length)
+            s_local = s_cumulative if s_cumulative <= road_length else road_length
+            independent_points.append((x, y, s_local))
+        
+        road_data = {
+            'id': road['id'],
+            'name': road_name,
+            'length': road_length,
+            'sec_points': [independent_points]
         }
-    }
+        
+        road_index['roads'][road_name] = road_data
+        print(f"  Built independent RD road: {road_name} (ID: {road['id']}, Length: {road_length:.1f}m, Points: {len(independent_points)})")
+    
+    print(f"Built {len(road_index['roads'])} independent RD roads with separate s-coordinate systems")
+    return road_index
 
 
 def project_world_to_st_rd(rd_index: dict, pos: Tuple[float, float]) -> Tuple[float, float]:
