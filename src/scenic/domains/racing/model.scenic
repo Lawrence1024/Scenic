@@ -18,6 +18,7 @@ Example::
 # Import everything from driving domain
 from scenic.domains.driving.model import *
 from scenic.domains.racing.tracks import RacingTrack, createRacingTrack
+from scenic.domains.racing.behaviors import *
 from scenic.core.regions import UnionRegion
 
 ## Racing-specific parameters
@@ -83,87 +84,68 @@ else:
 ## Racing-specific object types
 
 class RacingCar(Car):
-    """A racing car optimized for track performance.
+    """A configurable racing car based on Dallara AV-24 specifications.
     
-    Extends the standard Car with racing-specific properties.
+    This single class can represent any type of racing vehicle through
+    configurable properties, making it suitable for autonomous racing scenarios.
+    
+    Default specifications based on Dallara AV-24:
+    - Engine: 2.0L Turbocharged Inline-4 (495 PS, 518 Nm)
+    - Weight: 748 kg
+    - Dimensions: 4.88m x 1.93m x 1.16m
+    - Wheelbase: 2.97m
     
     Properties:
-        speed: Default speed higher than regular cars (20 m/s = 72 km/h)
-        position: Default position is on the racing line
-        requireVisible: False (multiple cars in close proximity on track)
-        raceNumber: Number displayed on the car (for identification)
+        raceNumber: Car number for identification (1-999)
         team: Team name or identifier
+        carType: Vehicle type for reference ("Dallara AV-24", "Custom", etc.)
+        
+        # Performance characteristics (configurable)
+        maxSpeed: Maximum speed in m/s (default: 30 m/s = 108 km/h)
+        acceleration: Acceleration capability in m/s² (default: 8.0)
+        braking: Braking capability in m/s² (default: -12.0)
+        
+        # State properties
         fuelLevel: Current fuel level (0.0 to 1.0)
-        tireWear: Tire wear level (0.0 = new, 1.0 = worn out)
+        tireWear: Tire wear level (0.0 = new, 1.0 = worn)
+        
+        # Autonomous racing capabilities
+        waypointTolerance: Distance tolerance for waypoint following (default: 2.5)
+        controllerAggressiveness: Controller aggressiveness (0.0-1.0, default: 0.5)
     """
-    speed: 20  # Higher default speed for racing
+    
+    # Default racing properties
+    speed: 25  # Higher default speed for racing (90 km/h)
     position: new Point on racingLine
     requireVisible: False
     
-    # Racing-specific properties
-    raceNumber: Range(1, 99)
+    # Dallara AV-24 specifications
+    width: 1.93  # AV-24 width
+    length: 4.88  # AV-24 length
+    height: 1.16  # AV-24 height
+    
+    # Racing identification
+    raceNumber: Range(1, 999)
     team: None
+    carType: "Dallara AV-24"  # Default type
+    
+    # Performance characteristics (configurable)
+    maxSpeed: 30.0  # ~108 km/h top speed
+    acceleration: 8.0  # m/s² acceleration capability
+    braking: -12.0  # m/s² braking capability
+    
+    # State properties
     fuelLevel: Range(0.5, 1.0)  # Start with reasonable fuel
     tireWear: 0.0  # Start with fresh tires
-
-class FormulaCar(RacingCar):
-    """An open-wheel formula racing car (F1, F2, IndyCar style).
     
-    Properties:
-        width: Narrower than standard cars (2.0m)
-        length: Longer for aerodynamics (5.5m)  
-        speed: Higher default speed (25 m/s = 90 km/h)
-    """
-    width: 2.0
-    length: 5.5
-    speed: 25
-
-class GTCar(RacingCar):
-    """A GT (Grand Touring) racing car.
-    
-    Properties:
-        width: Similar to road cars (2.0m)
-        length: Standard racing car length (4.8m)
-    """
-    width: 2.0
-    length: 4.8
-
-class PrototypeCar(RacingCar):
-    """A prototype racing car (LMP1, LMP2, DPi style).
-    
-    Properties:
-        width: Wider for stability (2.0m)
-        length: Longer for aerodynamics (5.0m)
-        speed: Very high default speed (30 m/s = 108 km/h)
-    """
-    width: 2.0
-    length: 5.0
-    speed: 30
-
-class PitCrew(Pedestrian):
-    """A member of a pit crew.
-    
-    Properties:
-        position: Default position is in the pit lane
-        team: Team identifier
-    """
-    position: new Point on pitLane if track.pitLane else new Point on sidewalk
-    team: None
-
-class TrackMarshal(Pedestrian):
-    """A track marshal (safety official).
-    
-    Properties:
-        position: Positioned near track boundaries or critical points
-        stationNumber: Marshal post number
-    """
-    position: new Point on shoulder
-    stationNumber: None
+    # Autonomous capabilities
+    waypointTolerance: 2.5  # Distance tolerance for waypoint following
+    controllerAggressiveness: 0.5  # Controller aggressiveness (0.0-1.0)
 
 ## Racing-specific utility functions
 
-def carsInFormation(positions, carType=RacingCar):
-    """Create a formation of cars at the given positions.
+def carsInFormation(positions):
+    """Create a formation of racing cars at the given positions.
     
     Example::
     
@@ -171,14 +153,13 @@ def carsInFormation(positions, carType=RacingCar):
     
     Args:
         positions: List of positions (typically from startingGrid)
-        carType: Type of car to create (default: RacingCar)
         
     Returns:
-        List of car objects
+        List of RacingCar objects
     """
     cars = []
     for i, pos in enumerate(positions):
-        car = new carType at pos, with raceNumber (i + 1)
+        car = new RacingCar at pos, with raceNumber (i + 1)
         cars.append(car)
     return cars
 
