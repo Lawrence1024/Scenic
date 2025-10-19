@@ -7,6 +7,9 @@ import math
 import xml.etree.ElementTree as ET
 from typing import Tuple, List, Optional
 
+# Import shared constants
+from .utils import MAIN_ROAD_NAMES
+
 NS = {'r': 'http://www.dspace.com/XMLSchema/ScenarioAccess/Scenario/Road'}
 
 
@@ -121,10 +124,22 @@ def build_rd_road_index(rd_path: str, step: float = 1.0) -> dict:
     
     # FIXED: Create independent road segments instead of single cumulative road
     # This prevents clustering by giving each road segment its own s-coordinate system
+    # CONSISTENT: Filter to main roads only (same as XODR path)
     road_index = {'roads': {}}
     
+    # Map RD road indices to expected road names (consistent with XODR)
+    road_mapping = {
+        0: MAIN_ROAD_NAMES[0],    # The Corkscrew1
+        1: MAIN_ROAD_NAMES[1],    # Pit Lane1_2
+        2: MAIN_ROAD_NAMES[2]     # Andretti Hairpin1_3
+    }
+    
     for i, road in enumerate(roads):
-        road_name = f'Road_{i}'
+        # Only process the 3 main roads (consistent with XODR filtering)
+        if i not in road_mapping:
+            continue
+            
+        road_name = road_mapping[i]
         
         # Convert cumulative s-coordinates to independent (0 to road_length)
         sec_points = road['sec_points'][0]  # Get the points list
@@ -151,24 +166,8 @@ def build_rd_road_index(rd_path: str, step: float = 1.0) -> dict:
     return road_index
 
 
-def project_world_to_st_rd(rd_index: dict, pos: Tuple[float, float]) -> Tuple[float, float]:
-    """Project world (x,y) onto RD road geometry to get (s,t).
-    
-    This function uses the NATIVE RD coordinate system, ensuring perfect alignment
-    with Aurelion's internal representation.
-    
-    Args:
-        rd_index: Road index from build_rd_road_index()
-        pos: (x, y) world coordinates
-        
-    Returns:
-        (s, t) road coordinates in Aurelion's native system
-    """
-    # Import the existing projection function
-    from . import utils as dutils
-    
-    # Use the existing projection algorithm, but with RD geometry
-    return dutils.project_world_to_st(rd_index, pos)
+# Note: RD geometry uses the same projection logic as XODR geometry
+# via the main project_world_to_st function in utils.py
 
 
 if __name__ == "__main__":
@@ -193,7 +192,8 @@ if __name__ == "__main__":
     ]
     
     print("\nTest Projections:")
+    from . import utils as dutils
     for x, y in test_points:
-        s, t = project_world_to_st_rd(rd_index, (x, y))
+        s, t = dutils.project_world_to_st(rd_index, (x, y))
         print(f"  ({x:7.2f}, {y:7.2f}) -> s={s:7.2f}m, t={t:5.2f}m")
 
