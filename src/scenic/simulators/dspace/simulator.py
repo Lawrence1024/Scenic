@@ -290,22 +290,19 @@ class DSpaceSimulation(DrivingSimulation):
             analysis_df = pd.DataFrame()
             if fellow_idx == 1:
                 fellow1_df = self.fellow_coords_df(obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val)
-                if os.path.exists('scenic_fellows_scenarios1.csv'):
-                    fellow1_df.to_csv('scenic_fellows_scenarios1.csv', mode='a', header=False, index=False)
-                else:
-                    fellow1_df.to_csv('scenic_fellows_scenarios1.csv', index=False)
+                fellow1_df.to_csv('scenic_fellows_scenarios17.csv', index=False)
+                # if os.path.exists('scenic_fellows_scenarios2.csv'):
+                #     fellow1_df.to_csv('scenic_fellows_scenarios2.csv', mode='a', header=False, index=False)
+                # else:
+                #     fellow1_df.to_csv('scenic_fellows_scenarios2.csv', index=False)
             elif fellow_idx == 2:
-                #fellow1_df = pd.read_csv('scenic_fellows_scenarios1.csv')
-                fellow1_df = pd.read_csv('scenic_fellows_scenarios1.csv', usecols=['scen_name','car_name','scenic_vector_x','scenic_vector_y','scenic_heading','left_vector_x','left_vector_y','rd_world_x','rd_world_y','road_s','road_t'])
+                fellow1_df = pd.read_csv('scenic_fellows_scenarios17.csv')
+                #fellow1_df = pd.read_csv('scenic_fellows_scenarios1.csv', usecols=['scen_name','car_name','scenic_vector_x','scenic_vector_y','scenic_heading','left_vector_x','left_vector_y','rd_world_x','rd_world_y','road_s','road_t'])
                 fellow2_df = self.fellow_coords_df(obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val)
-                print(fellow1_df, fellow2_df)
-                combined_df = pd.concat([fellow1_df[1:], fellow2_df], axis=0, ignore_index=True)
-                print(combined_df)
-                analysis_df = self.create_analysis(combined_df['scenic_vector_x'], combined_df['scenic_vector_y'], combined_df['scenic_heading'], combined_df['rd_world_x'], combined_df['rd_world_y'], combined_df['road_s'], combined_df['road_t'])
-                print(analysis_df)
-                combined_df = pd.concat([fellow1_df[1:], fellow2_df, analysis_df], axis=1)
-                print(combined_df)
-                #combined_df.to_csv('scenic_fellows_scenarios1.csv', index=False)
+                combined_df = pd.concat([fellow1_df, fellow2_df], axis=0, ignore_index=True)
+                analysis_df = self.create_analysis(combined_df['scenic_vector_x'], combined_df['scenic_vector_y'], combined_df['true_left_x'], combined_df['true_left_y'], combined_df['rd_world_x'], combined_df['rd_world_y'], combined_df['road_s'], combined_df['road_t'])
+                combined_df = pd.concat([fellow1_df, fellow2_df, analysis_df], axis=1)
+                combined_df.to_csv('scenic_fellows_scenarios17.csv', index=False)
         except Exception as e:
             F.Name = f"Fellow_{fellow_idx}"
             print(f"    Created Fellow with fallback name: {F.Name} (error: {e})")
@@ -339,23 +336,22 @@ class DSpaceSimulation(DrivingSimulation):
             rd_world_x/y: Transformed RD/World coordinates
             road_s/t: Road coordinates (s,t)
         """
-        
         # Calculate left unit vector (90 degrees counter-clockwise from heading)
         heading = obj.heading if hasattr(obj, 'heading') else 0
-        left_vector_x = -math.sin(heading)  # cos(heading + π/2)
-        left_vector_y = math.cos(heading)   # sin(heading + π/2)
+        true_left_x = math.cos(heading + math.pi/2) 
+        true_left_y = math.sin(heading + math.pi/2)   # sin(heading + π/2)
+        mag_left_x_y = (true_left_x**2 + true_left_y**2)**0.5
+        true_left_x /= mag_left_x_y
+        true_left_y /= mag_left_x_y
 
         coords = {
             'scen_name': ['Left of 2'],
             'car_name': [f'fellow{fellow_idx}'],
             'scenic_vector_x': [scenic_x],
             'scenic_vector_y': [scenic_y],
-            # 'scenic_vector_z': [z_coord],
             'scenic_heading': [heading],
-            'left_vector_x': [left_vector_x],
-            'left_vector_y': [left_vector_y],
-            # 'scenic_x': [scenic_x],
-            # 'scenic_y': [scenic_y],
+            'true_left_x': [true_left_x],
+            'true_left_y': [true_left_y],
             'rd_world_x': [transformed_x],
             'rd_world_y': [transformed_y],
             'road_s': [s_val],
@@ -384,31 +380,26 @@ class DSpaceSimulation(DrivingSimulation):
         #else:
         #    df.to_csv(csv_path, mode='a', header=False, index=False)
     
-    def create_analysis(self, scenic_x, scenic_y, scenic_heading, rd_world_x, rd_world_y, road_s, road_t):
+    def create_analysis(self, scenic_x, scenic_y, true_left_x, true_left_y, rd_world_x, rd_world_y, road_s, road_t):
          # scenic coordinates difference
         sc_dist_x = scenic_x[1] - scenic_x[0]
         sc_dist_y = scenic_y[1] - scenic_y[0]
 
-        left_unit_x = math.cos(scenic_heading[0])
-        left_unit_y = math.sin(scenic_heading[0])
-
-        scenic_dot_product = sc_dist_x * left_unit_x + sc_dist_y * left_unit_y
+        scenic_dot_product = sc_dist_x * true_left_x[0] + sc_dist_y * true_left_y[0] # shud approximately be the distance defined in fellow_placing_road.scenic
 
         # road coordinates difference
         rd_dist_x = rd_world_x[1] - rd_world_x[0]
         rd_dist_y = rd_world_y[1] - rd_world_y[0]
 
-        rd_dot_product = rd_dist_x * left_unit_x + rd_dist_y * left_unit_y
+        rd_dot_product = rd_dist_x * true_left_x[0] + rd_dist_y * true_left_y[0] # shud approximately be the distance defined in fellow_placing_road.scenic
 
         # s, t difference
-        s_dist = road_s[1] - road_s[0]
-        t_dist = road_t[1] - road_t[0]
+        s_dist = road_s[1] - road_s[0] # shud be 0
+        t_dist = road_t[1] - road_t[0]  # shud approximately be the distance defined in fellow_placing_road.scenic
 
         analysis_data = {
             'scenic_dist_x': [sc_dist_x],
             'scenic_dist_y': [sc_dist_y],
-            'true_left_x': [left_unit_x],
-            'true_right_y': [left_unit_y],
             'scenic_dot_product': [scenic_dot_product],
             'rd_dist_x': [rd_dist_x],
             'rd_dist_y': [rd_dist_y],
