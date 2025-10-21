@@ -16,6 +16,7 @@ from . import utils as dutils
 import pandas as pd
 import math
 import os
+import datetime
 
 
 class DSpaceSimulator(DrivingSimulator):
@@ -277,6 +278,9 @@ class DSpaceSimulation(DrivingSimulation):
         # 3) Create Fellow with one Sequence and two Segments
         F = self.ts.Fellows.Add()
 
+        # Set the scenario name for csv file
+        csv_filename = "scenic_runs_left_by_3.csv"
+
         # Set a unique name for relative positioning
         fellow_idx = len(self._object_positions) if hasattr(self, '_object_positions') else 0
         try:
@@ -289,20 +293,77 @@ class DSpaceSimulation(DrivingSimulation):
             fellow2_df = pd.DataFrame()
             analysis_df = pd.DataFrame()
             if fellow_idx == 1:
-                fellow1_df = self.fellow_coords_df(obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val)
-                fellow1_df.to_csv('scenic_fellows_scenarios17.csv', index=False)
-                # if os.path.exists('scenic_fellows_scenarios2.csv'):
-                #     fellow1_df.to_csv('scenic_fellows_scenarios2.csv', mode='a', header=False, index=False)
-                # else:
-                #     fellow1_df.to_csv('scenic_fellows_scenarios2.csv', index=False)
+                # Store fellow1_df IN MEMORY, not in a file
+                self._fellow1_df = self.fellow_coords_df(
+                    obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val
+                )
+
+                # Set CSV filename once
+                if not hasattr(self, '_csv_filename'):
+                    scenario_name = "fellow2_left_by_3"
+                    self._csv_filename = f"scenic_runs_{scenario_name}.csv"
+
             elif fellow_idx == 2:
-                fellow1_df = pd.read_csv('scenic_fellows_scenarios17.csv')
-                #fellow1_df = pd.read_csv('scenic_fellows_scenarios1.csv', usecols=['scen_name','car_name','scenic_vector_x','scenic_vector_y','scenic_heading','left_vector_x','left_vector_y','rd_world_x','rd_world_y','road_s','road_t'])
-                fellow2_df = self.fellow_coords_df(obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val)
+                fellow2_df = self.fellow_coords_df(
+                    obj, fellow_idx, scenic_x, scenic_y, transformed_x, transformed_y, s_val, t_val
+                )
+
+                fellow1_df = self._fellow1_df  # Fellow1 info stored in memory
+
+                # Combine to compute analysis
                 combined_df = pd.concat([fellow1_df, fellow2_df], axis=0, ignore_index=True)
-                analysis_df = self.create_analysis(combined_df['scenic_vector_x'], combined_df['scenic_vector_y'], combined_df['true_left_x'], combined_df['true_left_y'], combined_df['rd_world_x'], combined_df['rd_world_y'], combined_df['road_s'], combined_df['road_t'])
-                combined_df = pd.concat([fellow1_df, fellow2_df, analysis_df], axis=1)
-                combined_df.to_csv('scenic_fellows_scenarios17.csv', index=False)
+                analysis_df = self.create_analysis(
+                    combined_df['scenic_vector_x'],
+                    combined_df['scenic_vector_y'],
+                    combined_df['true_left_x'],
+                    combined_df['true_left_y'],
+                    combined_df['rd_world_x'],
+                    combined_df['rd_world_y'],
+                    combined_df['road_s'],
+                    combined_df['road_t']
+                )
+
+                # Flatten all data into a single-row dict (ordered)
+                row = {
+                    # Fellow1 (columns 1-11)
+                    'scene_name':         fellow1_df.iloc[0]['scene_name'],
+                    'car_name':           fellow1_df.iloc[0]['car_name'],
+                    'scenic_heading':     fellow1_df.iloc[0]['scenic_heading'],
+                    'true_left_x':        fellow1_df.iloc[0]['true_left_x'],
+                    'true_left_y':        fellow1_df.iloc[0]['true_left_y'],
+                    'scenic_vector_x':    fellow1_df.iloc[0]['scenic_vector_x'],
+                    'scenic_vector_y':    fellow1_df.iloc[0]['scenic_vector_y'],
+                    'rd_world_x':         fellow1_df.iloc[0]['rd_world_x'],
+                    'rd_world_y':         fellow1_df.iloc[0]['rd_world_y'],
+                    'road_s':             fellow1_df.iloc[0]['road_s'],
+                    'road_t':             fellow1_df.iloc[0]['road_t'],
+
+                    # Fellow2 (columns 12-22)
+                    'scene_name_2':       fellow2_df.iloc[0]['scene_name'],
+                    'car_name_2':         fellow2_df.iloc[0]['car_name'],
+                    'scenic_vector_x_2':  fellow2_df.iloc[0]['scenic_vector_x'],
+                    'scenic_vector_y_2':  fellow2_df.iloc[0]['scenic_vector_y'],
+                    'rd_world_x_2':       fellow2_df.iloc[0]['rd_world_x'],
+                    'rd_world_y_2':       fellow2_df.iloc[0]['rd_world_y'],
+                    'road_s_2':           fellow2_df.iloc[0]['road_s'],
+                    'road_t_2':           fellow2_df.iloc[0]['road_t'],
+
+                    # Analysis (columns 23-30)
+                    'scenic_x_diff':      analysis_df.iloc[0]['scenic_x_diff'],
+                    'scenic_x_diff':      analysis_df.iloc[0]['scenic_x_diff'],
+                    'scenic_dot_product': analysis_df.iloc[0]['scenic_dot_product'],
+                    'rd_x_diff':          analysis_df.iloc[0]['rd_x_diff'],
+                    'rd_y_diff':          analysis_df.iloc[0]['rd_y_diff'],
+                    'rd_dot_product':     analysis_df.iloc[0]['rd_dot_product'],
+                    's_diff':             analysis_df.iloc[0]['s_diff'],
+                    't_diff':             analysis_df.iloc[0]['t_diff']
+                }
+
+                # Convert to DataFrame
+                row_df = pd.DataFrame([row])
+                write_header = not os.path.exists(self._csv_filename)
+                row_df.to_csv(self._csv_filename, mode='a', header=write_header, index=False)
+
         except Exception as e:
             F.Name = f"Fellow_{fellow_idx}"
             print(f"    Created Fellow with fallback name: {F.Name} (error: {e})")
@@ -345,7 +406,7 @@ class DSpaceSimulation(DrivingSimulation):
         true_left_y /= mag_left_x_y
 
         coords = {
-            'scen_name': ['Left of 2'],
+            'scene_name': ['Left of 3'],
             'car_name': [f'fellow{fellow_idx}'],
             'scenic_vector_x': [scenic_x],
             'scenic_vector_y': [scenic_y],
@@ -398,14 +459,14 @@ class DSpaceSimulation(DrivingSimulation):
         t_dist = road_t[1] - road_t[0]  # shud approximately be the distance defined in fellow_placing_road.scenic
 
         analysis_data = {
-            'scenic_dist_x': [sc_dist_x],
-            'scenic_dist_y': [sc_dist_y],
+            'scenic_x_diff': [sc_dist_x],
+            'scenic_y_diff': [sc_dist_y],
             'scenic_dot_product': [scenic_dot_product],
-            'rd_dist_x': [rd_dist_x],
-            'rd_dist_y': [rd_dist_y],
+            'rd_x_diff': [rd_dist_x],
+            'rd_y_diff': [rd_dist_y],
             'rd_dot_product': [rd_dot_product],
-            's_dist': [s_dist],
-            't_dist': [t_dist],
+            's_diff': [s_dist],
+            't_diff': [t_dist],
         }
 
         analysis_df = pd.DataFrame(analysis_data)
