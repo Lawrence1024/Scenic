@@ -279,7 +279,7 @@ class DSpaceSimulation(DrivingSimulation):
         F = self.ts.Fellows.Add()
 
         # Set the scenario name for csv file
-        csv_filename = "scenic_runs_left_by_3.csv"
+        csv_filename = "scenic_runs_left_by_2.csv"
 
         # Set a unique name for relative positioning
         fellow_idx = len(self._object_positions) if hasattr(self, '_object_positions') else 0
@@ -300,7 +300,7 @@ class DSpaceSimulation(DrivingSimulation):
 
                 # Set CSV filename once
                 if not hasattr(self, '_csv_filename'):
-                    scenario_name = "fellow2_left_by_3"
+                    scenario_name = "fellow2_left_by_2"
                     self._csv_filename = f"scenic_runs_{scenario_name}.csv"
 
             elif fellow_idx == 2:
@@ -326,32 +326,34 @@ class DSpaceSimulation(DrivingSimulation):
                 # Flatten all data into a single-row dict (ordered)
                 row = {
                     # Fellow1 (columns 1-11)
-                    'scene_name':         fellow1_df.iloc[0]['scene_name'],
-                    'car_name':           fellow1_df.iloc[0]['car_name'],
-                    'scenic_heading':     fellow1_df.iloc[0]['scenic_heading'],
-                    'true_left_x':        fellow1_df.iloc[0]['true_left_x'],
-                    'true_left_y':        fellow1_df.iloc[0]['true_left_y'],
-                    'scenic_vector_x':    fellow1_df.iloc[0]['scenic_vector_x'],
-                    'scenic_vector_y':    fellow1_df.iloc[0]['scenic_vector_y'],
-                    'rd_world_x':         fellow1_df.iloc[0]['rd_world_x'],
-                    'rd_world_y':         fellow1_df.iloc[0]['rd_world_y'],
-                    'road_s':             fellow1_df.iloc[0]['road_s'],
-                    'road_t':             fellow1_df.iloc[0]['road_t'],
+                    'scene_name_f1':         fellow1_df.iloc[0]['scene_name'],
+                    'car_name_f1':           fellow1_df.iloc[0]['car_name'],
+                    'scenic_heading_f1':     fellow1_df.iloc[0]['scenic_heading'],
+                    'true_left_x_f1':        fellow1_df.iloc[0]['true_left_x'],
+                    'true_left_y_f1':        fellow1_df.iloc[0]['true_left_y'],
+                    'scenic_vector_x_f1':    fellow1_df.iloc[0]['scenic_vector_x'],
+                    'scenic_vector_y_f1':    fellow1_df.iloc[0]['scenic_vector_y'],
+                    'rd_world_x_f1':         fellow1_df.iloc[0]['rd_world_x'],
+                    'rd_world_y_f1':         fellow1_df.iloc[0]['rd_world_y'],
+                    'road_s_f1':             fellow1_df.iloc[0]['road_s'],
+                    'road_t_f1':             fellow1_df.iloc[0]['road_t'],
 
                     # Fellow2 (columns 12-22)
-                    'scene_name_2':       fellow2_df.iloc[0]['scene_name'],
-                    'car_name_2':         fellow2_df.iloc[0]['car_name'],
-                    'scenic_vector_x_2':  fellow2_df.iloc[0]['scenic_vector_x'],
-                    'scenic_vector_y_2':  fellow2_df.iloc[0]['scenic_vector_y'],
-                    'rd_world_x_2':       fellow2_df.iloc[0]['rd_world_x'],
-                    'rd_world_y_2':       fellow2_df.iloc[0]['rd_world_y'],
-                    'road_s_2':           fellow2_df.iloc[0]['road_s'],
-                    'road_t_2':           fellow2_df.iloc[0]['road_t'],
+                    'scene_name_f2':       fellow2_df.iloc[0]['scene_name'],
+                    'car_name_f2':         fellow2_df.iloc[0]['car_name'],
+                    'scenic_vector_x_f2':  fellow2_df.iloc[0]['scenic_vector_x'],
+                    'scenic_vector_y_f2':  fellow2_df.iloc[0]['scenic_vector_y'],
+                    'rd_world_x_f2':       fellow2_df.iloc[0]['rd_world_x'],
+                    'rd_world_y_f2':       fellow2_df.iloc[0]['rd_world_y'],
+                    'road_s_2_f2':           fellow2_df.iloc[0]['road_s'],
+                    'road_t_2_f2':           fellow2_df.iloc[0]['road_t'],
 
                     # Analysis (columns 23-30)
                     'scenic_x_diff':      analysis_df.iloc[0]['scenic_x_diff'],
                     'scenic_x_diff':      analysis_df.iloc[0]['scenic_x_diff'],
-                    'scenic_dot_product': analysis_df.iloc[0]['scenic_dot_product'],
+                    'scenic_coords_diff_dot_true_left_vec': analysis_df.iloc[0]['scenic_coords_diff_dot_true_left_vec'],
+                    'scenic_coords_magnitude': analysis_df.iloc[0]['scenic_coords_magnitude'],
+                    'scenic_calculated_angle (radians)': analysis_df.iloc[0]['scenic_calculated_angle (radians)'],
                     'rd_x_diff':          analysis_df.iloc[0]['rd_x_diff'],
                     'rd_y_diff':          analysis_df.iloc[0]['rd_y_diff'],
                     'rd_dot_product':     analysis_df.iloc[0]['rd_dot_product'],
@@ -401,12 +403,9 @@ class DSpaceSimulation(DrivingSimulation):
         heading = obj.heading if hasattr(obj, 'heading') else 0
         true_left_x = math.cos(heading + math.pi/2) 
         true_left_y = math.sin(heading + math.pi/2)   # sin(heading + π/2)
-        mag_left_x_y = (true_left_x**2 + true_left_y**2)**0.5
-        true_left_x /= mag_left_x_y
-        true_left_y /= mag_left_x_y
 
         coords = {
-            'scene_name': ['Left of 3'],
+            'scene_name': ['Left of 2'],
             'car_name': [f'fellow{fellow_idx}'],
             'scenic_vector_x': [scenic_x],
             'scenic_vector_y': [scenic_y],
@@ -421,25 +420,6 @@ class DSpaceSimulation(DrivingSimulation):
 
         data_frame = pd.DataFrame(coords)
         return data_frame
-
-        # if fellow_idx == 1:
-        #     data_frame.to_csv('scenic_fellows_scenarios.csv', mode='a')
-        # else:
-        #     scenarios_df = pd.read_csv('scenic_fellows_scenarios.csv')
-        #     scenarios_df = pd.concat([scenarios_df, data_frame], axis=1)
-        #     scenarios_df.to_csv('scenic_fellows_scenarios.csv')
-            
-
-    
-        #print(data_frame)
-
-        # Create or append to the CSV file
-        #csv_path = 'scenic_cars_coords.csv'
-        #if not hasattr(self, '_csv_created'):
-        #    df.to_csv(csv_path, index=False)
-        #    self._csv_created = True
-        #else:
-        #    df.to_csv(csv_path, mode='a', header=False, index=False)
     
     def create_analysis(self, scenic_x, scenic_y, true_left_x, true_left_y, rd_world_x, rd_world_y, road_s, road_t):
          # scenic coordinates difference
@@ -447,6 +427,8 @@ class DSpaceSimulation(DrivingSimulation):
         sc_dist_y = scenic_y[1] - scenic_y[0]
 
         scenic_dot_product = sc_dist_x * true_left_x[0] + sc_dist_y * true_left_y[0] # shud approximately be the distance defined in fellow_placing_road.scenic
+        scenic_coords_magnitude = (sc_dist_x**2 + sc_dist_y**2)**0.5
+        scenic_calculated_angle = math.acos(scenic_dot_product / scenic_coords_magnitude) if scenic_coords_magnitude != 0 else 0
 
         # road coordinates difference
         rd_dist_x = rd_world_x[1] - rd_world_x[0]
@@ -461,10 +443,12 @@ class DSpaceSimulation(DrivingSimulation):
         analysis_data = {
             'scenic_x_diff': [sc_dist_x],
             'scenic_y_diff': [sc_dist_y],
-            'scenic_dot_product': [scenic_dot_product],
+            'scenic_coords_diff_dot_true_left_vec': [scenic_dot_product],
+            'scenic_coords_magnitude': [scenic_coords_magnitude],
+            'scenic_calculated_angle (radians)': [scenic_calculated_angle],
             'rd_x_diff': [rd_dist_x],
             'rd_y_diff': [rd_dist_y],
-            'rd_dot_product': [rd_dot_product],
+            'rd_coords_diff_dot_true_left_vec': [rd_dot_product],
             's_diff': [s_dist],
             't_diff': [t_dist],
         }

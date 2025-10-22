@@ -13,7 +13,7 @@ import math
 # --- Fellow cars placed at validated coordinates ---
 
 fellow1 = new Car on road
-fellow2 = new Car left of fellow1 by 3
+fellow2 = new Car left of fellow1 by 2
 
 # fellow3 = new Car right of fellow1 by 10, facing 90 deg
 # fellow2 = new Car left of fellow1 by 5
