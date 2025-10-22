@@ -422,35 +422,44 @@ class DSpaceSimulation(DrivingSimulation):
         return data_frame
     
     def create_analysis(self, scenic_x, scenic_y, true_left_x, true_left_y, rd_world_x, rd_world_y, road_s, road_t):
-         # scenic coordinates difference
-        sc_dist_x = scenic_x[1] - scenic_x[0]
-        sc_dist_y = scenic_y[1] - scenic_y[0]
+        # scenic coordinates difference
+        scenic_x_diff = scenic_x[1] - scenic_x[0]
+        scenic_y_diff = scenic_y[1] - scenic_y[0]
 
-        scenic_dot_product = sc_dist_x * true_left_x[0] + sc_dist_y * true_left_y[0] # should approximately be the distance defined in fellow_placing_road.scenic
-        scenic_coords_magnitude = (sc_dist_x**2 + sc_dist_y**2)**0.5
-        scenic_calculated_angle = math.acos(scenic_dot_product / scenic_coords_magnitude) if scenic_coords_magnitude != 0 else 0
+        scenic_diff_dot_true = scenic_x_diff * true_left_x[0] + scenic_y_diff * true_left_y[0]
+        # should approximately be the distance defined in fellow_placing_road.scenic since ||true_left|| = 1, cos(theta) = 1
+        # if dot > 0, then the fellow2 is to the left of fellow1
+        # if dot = 0, then the fellow2 is directly ahead/behind fellow1
+        # if dot < 0, then the fellow2 is to the right of fellow1
+
+        scenic_diff_magnitude = (scenic_x_diff**2 + scenic_y_diff**2)**0.5
+        # should approximately be the distance defined in fellow_placing_road.scenic without considering the direction
+        
+        scenic_diff_to_true_angle = math.acos(scenic_diff_dot_true / scenic_diff_magnitude) if scenic_diff_magnitude != 0 else 0
+        # should be close to 0 if they are in parallel
 
         # road coordinates difference
-        rd_dist_x = rd_world_x[1] - rd_world_x[0]
-        rd_dist_y = rd_world_y[1] - rd_world_y[0]
+        rd_x_diff = rd_world_x[1] - rd_world_x[0]
+        rd_y_diff = rd_world_y[1] - rd_world_y[0]
 
-        rd_dot_product = rd_dist_x * true_left_x[0] + rd_dist_y * true_left_y[0] # should approximately be the distance defined in fellow_placing_road.scenic
+        rd_diff_dot_true = rd_x_diff * true_left_x[0] + rd_y_diff * true_left_y[0]    
+        # should approximately be the distance defined in fellow_placing_road.scenic
 
         # s, t difference
-        s_dist = road_s[1] - road_s[0] # should be 0
-        t_dist = road_t[1] - road_t[0]  # should approximately be the distance defined in fellow_placing_road.scenic
+        s_diff = road_s[1] - road_s[0]  # should be 0
+        t_diff = road_t[1] - road_t[0]  # should approximately be the distance defined in fellow_placing_road.scenic
 
         analysis_data = {
-            'scenic_x_diff': [sc_dist_x],
-            'scenic_y_diff': [sc_dist_y],
-            'scenic_diff_dot_true_left': [scenic_dot_product],
-            'scenic_magnitude': [scenic_coords_magnitude],
-            'scenic_diff_to_true_left_angle (radians)': [scenic_calculated_angle],
-            'rd_x_diff': [rd_dist_x],
-            'rd_y_diff': [rd_dist_y],
-            'rd_diff_dot_true_left': [rd_dot_product],
-            's_diff': [s_dist],
-            't_diff': [t_dist],
+            'scenic_x_diff': [scenic_x_diff],
+            'scenic_y_diff': [scenic_y_diff],
+            'scenic_diff_dot_true_left': [scenic_diff_dot_true],
+            'scenic_diff_magnitude': [scenic_diff_magnitude],
+            'scenic_diff_to_true_left_angle (radians)': [scenic_diff_to_true_angle],
+            'rd_x_diff': [rd_x_diff],
+            'rd_y_diff': [rd_y_diff],
+            'rd_diff_dot_true_left': [rd_diff_dot_true],
+            's_diff': [s_diff],
+            't_diff': [t_diff],
         }
 
         analysis_df = pd.DataFrame(analysis_data)
