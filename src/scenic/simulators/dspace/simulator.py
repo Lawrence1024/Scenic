@@ -279,7 +279,7 @@ class DSpaceSimulation(DrivingSimulation):
         F = self.ts.Fellows.Add()
 
         # Set the scenario name for csv file
-        csv_filename = "scenic_runs_left_by_2.csv"
+        csv_filename = "scenic_runs_fellow2_left_by_2.csv"
 
         # Set a unique name for relative positioning
         fellow_idx = len(self._object_positions) if hasattr(self, '_object_positions') else 0
@@ -350,13 +350,13 @@ class DSpaceSimulation(DrivingSimulation):
 
                     # Analysis (columns 23-30)
                     'scenic_x_diff':      analysis_df.iloc[0]['scenic_x_diff'],
-                    'scenic_x_diff':      analysis_df.iloc[0]['scenic_x_diff'],
-                    'scenic_coords_diff_dot_true_left_vec': analysis_df.iloc[0]['scenic_coords_diff_dot_true_left_vec'],
-                    'scenic_coords_magnitude': analysis_df.iloc[0]['scenic_coords_magnitude'],
-                    'scenic_calculated_angle (radians)': analysis_df.iloc[0]['scenic_calculated_angle (radians)'],
+                    'scenic_y_diff':      analysis_df.iloc[0]['scenic_y_diff'],
+                    'scenic_diff_dot_true_left': analysis_df.iloc[0]['scenic_diff_dot_true_left'],
+                    'scenic_magnitude': analysis_df.iloc[0]['scenic_magnitude'],
+                    'scenic_diff_to_true_left_angle (radians)': analysis_df.iloc[0]['scenic_diff_to_true_left_angle (radians)'],
                     'rd_x_diff':          analysis_df.iloc[0]['rd_x_diff'],
                     'rd_y_diff':          analysis_df.iloc[0]['rd_y_diff'],
-                    'rd_dot_product':     analysis_df.iloc[0]['rd_dot_product'],
+                    'rd_diff_dot_true_left':     analysis_df.iloc[0]['rd_diff_dot_true_left'],
                     's_diff':             analysis_df.iloc[0]['s_diff'],
                     't_diff':             analysis_df.iloc[0]['t_diff']
                 }
@@ -426,7 +426,7 @@ class DSpaceSimulation(DrivingSimulation):
         sc_dist_x = scenic_x[1] - scenic_x[0]
         sc_dist_y = scenic_y[1] - scenic_y[0]
 
-        scenic_dot_product = sc_dist_x * true_left_x[0] + sc_dist_y * true_left_y[0] # shud approximately be the distance defined in fellow_placing_road.scenic
+        scenic_dot_product = sc_dist_x * true_left_x[0] + sc_dist_y * true_left_y[0] # should approximately be the distance defined in fellow_placing_road.scenic
         scenic_coords_magnitude = (sc_dist_x**2 + sc_dist_y**2)**0.5
         scenic_calculated_angle = math.acos(scenic_dot_product / scenic_coords_magnitude) if scenic_coords_magnitude != 0 else 0
 
@@ -434,21 +434,21 @@ class DSpaceSimulation(DrivingSimulation):
         rd_dist_x = rd_world_x[1] - rd_world_x[0]
         rd_dist_y = rd_world_y[1] - rd_world_y[0]
 
-        rd_dot_product = rd_dist_x * true_left_x[0] + rd_dist_y * true_left_y[0] # shud approximately be the distance defined in fellow_placing_road.scenic
+        rd_dot_product = rd_dist_x * true_left_x[0] + rd_dist_y * true_left_y[0] # should approximately be the distance defined in fellow_placing_road.scenic
 
         # s, t difference
-        s_dist = road_s[1] - road_s[0] # shud be 0
-        t_dist = road_t[1] - road_t[0]  # shud approximately be the distance defined in fellow_placing_road.scenic
+        s_dist = road_s[1] - road_s[0] # should be 0
+        t_dist = road_t[1] - road_t[0]  # should approximately be the distance defined in fellow_placing_road.scenic
 
         analysis_data = {
             'scenic_x_diff': [sc_dist_x],
             'scenic_y_diff': [sc_dist_y],
-            'scenic_coords_diff_dot_true_left_vec': [scenic_dot_product],
-            'scenic_coords_magnitude': [scenic_coords_magnitude],
-            'scenic_calculated_angle (radians)': [scenic_calculated_angle],
+            'scenic_diff_dot_true_left': [scenic_dot_product],
+            'scenic_magnitude': [scenic_coords_magnitude],
+            'scenic_diff_to_true_left_angle (radians)': [scenic_calculated_angle],
             'rd_x_diff': [rd_dist_x],
             'rd_y_diff': [rd_dist_y],
-            'rd_coords_diff_dot_true_left_vec': [rd_dot_product],
+            'rd_diff_dot_true_left': [rd_dot_product],
             's_diff': [s_dist],
             't_diff': [t_dist],
         }
