@@ -309,6 +309,12 @@ class DSpaceSimulation(RacingSimulation):
                     print(f"  Warning: Could not set lateral position: {e}")
             
             self._ego_created = True
+
+            # 5) Set route for ego using same logic as fellows (if Route is available)
+            try:
+                self._set_fellow_route_via_sequence(seq, obj)
+            except Exception as e:
+                print(f"  [Route] Could not set route for ego: {e}")
             return ego_maneuver
             
         except Exception as e:
@@ -508,29 +514,66 @@ class DSpaceSimulation(RacingSimulation):
             # Configure route based on track segment
             route_sel = seq.Route
             
-            # Determine route based on Scenic placement
-            track_segment = self.detectTrackSegment((scenic_obj.position.x, scenic_obj.position.y))
-            if track_segment == 'pitLane':
-                route_name = "PitLane"  # Adjust based on actual route names
-            else:
-                route_name = "IMS_Main"  # Adjust based on actual route names
-            
+            # Determine track segment robustly
+            try:
+                pos_xy = (float(scenic_obj.position.x), float(scenic_obj.position.y))
+            except Exception:
+                pos_xy = None
+            track_segment = None
+            try:
+                if pos_xy is not None:
+                    track_segment = self.detectTrackSegment(pos_xy)
+            except Exception:
+                track_segment = None
+
+            # Default to mainRacing when detection fails
+            if track_segment not in ('pitLane', 'mainRacing'):
+                track_segment = 'mainRacing'
+
+            # Map to desired route type and pick from available elements
+            desired_pref = (self.assignRoute(scenic_obj, track_segment) or 'Lap')
+            desired_is_pit = (desired_pref.lower().startswith('pit'))
+
+            chosen_route = None
+            available_names = []
+            try:
+                available = list(route_sel.AvailableElements)
+                # Coerce to strings for matching
+                available_names = [str(x) for x in available]
+                # Prefer names containing 'pit' for pit lane, otherwise avoid them
+                if desired_is_pit:
+                    pit_candidates = [n for n in available_names if 'pit' in n.lower()]
+                    if pit_candidates:
+                        chosen_route = pit_candidates[0]
+                else:
+                    non_pit = [n for n in available_names if 'pit' not in n.lower()]
+                    if non_pit:
+                        chosen_route = non_pit[0]
+                # Fallbacks
+                if chosen_route is None and available_names:
+                    chosen_route = available_names[0]
+            except Exception as e:
+                print(f"[ModelDesk] Could not enumerate AvailableElements: {e}")
+
+            # If still nothing, fallback to preference string
+            if not chosen_route:
+                chosen_route = desired_pref
+
             # Activate route
             try:
-                route_sel.Activate(route_name)
-                print(f"[ModelDesk] Set route '{route_name}' for {fellow_name}")
+                route_sel.Activate(chosen_route)
+                print(f"[ModelDesk] Set route '{chosen_route}' (from pref '{desired_pref}') for {fellow_name}")
             except Exception as e:
-                print(f"[ModelDesk] Failed to set route '{route_name}' for {fellow_name}: {e}")
-                # Try to list available routes
-                try:
-                    available_routes = list(route_sel.AvailableElements)
-                    print(f"[ModelDesk] Available routes: {available_routes}")
-                except:
-                    pass
+                print(f"[ModelDesk] Failed to set route '{chosen_route}' for {fellow_name}: {e}")
+                if available_names:
+                    print(f"[ModelDesk] Available routes: {available_names}")
             
             # Set direction (forward)
-            route_sel.Direction = 1
-            route_sel.UseExternal = True  # Enable external control for fellow vehicles
+            try:
+                route_sel.Direction = 1
+                route_sel.UseExternal = True  # Enable external control for fellow vehicles
+            except Exception:
+                pass
             
             # Store fellow reference for runtime control
             self._fellow_vehicles[fellow_name] = {
@@ -1571,5 +1614,144 @@ class DSpaceSimulation(RacingSimulation):
         }
 
         return {k: vals[k] for k in properties}
+
+    def getRacingControllers(self, agent):
+        """Get racing controllers optimized for dSPACE racing scenarios.
+        
+        dSPACE-specific racing controllers tuned for ModelDesk's physics
+        and control systems.
+        
+        Args:
+            agent: The racing agent (RacingCar, etc.)
+            
+        Returns:
+            A pair of controllers for throttle and steering respectively.
+        """
+        dt = self.timestep
+        
+        # dSPACE-specific racing controller tuning
+        # More aggressive than standard driving controllers
+        from scenic.domains.driving.controllers import PIDLongitudinalController, PIDLateralController
+        lon_controller = PIDLongitudinalController(K_P=0.8, K_D=0.15, K_I=0.9, dt=dt)
+        lat_controller = PIDLateralController(K_P=0.3, K_D=0.15, K_I=0.0, dt=dt)
+        
+        return lon_controller, lat_controller
+    
+    def getRacingLineControllers(self, agent):
+        """Get controllers optimized for following the racing line in dSPACE.
+        
+        Args:
+            agent: The racing agent
+            
+        Returns:
+            A pair of controllers for throttle and steering respectively.
+        """
+        dt = self.timestep
+        
+        # dSPACE racing line controllers - more aggressive for optimal lap times
+        from scenic.domains.driving.controllers import PIDLongitudinalController, PIDLateralController
+        lon_controller = PIDLongitudinalController(K_P=0.9, K_D=0.2, K_I=1.0, dt=dt)
+        lat_controller = PIDLateralController(K_P=0.4, K_D=0.2, K_I=0.0, dt=dt)
+        
+        return lon_controller, lat_controller
+    
+    def getPitLaneControllers(self, agent):
+        """Get controllers optimized for pit lane driving in dSPACE.
+        
+        Args:
+            agent: The racing agent
+            
+        Returns:
+            A pair of controllers for throttle and steering respectively.
+        """
+        dt = self.timestep
+        
+        # dSPACE pit lane controllers - precision over speed
+        from scenic.domains.driving.controllers import PIDLongitudinalController, PIDLateralController
+        lon_controller = PIDLongitudinalController(K_P=0.4, K_D=0.08, K_I=0.6, dt=dt)
+        lat_controller = PIDLateralController(K_P=0.15, K_D=0.08, K_I=0.0, dt=dt)
+        
+        return lon_controller, lat_controller
+    
+    def detectTrackSegment(self, position):
+        """Detect which track segment a position belongs to in dSPACE.
+        
+        Uses projection onto the road index and compares the projected road ID
+        against IDs provided by the racing domain params (pitLaneRoadIds and
+        mainRacingRoadIds).
+        """
+        try:
+            params = getattr(self.scene, "params", {}) or {}
+            pit_lane_ids = params.get('pitLaneRoadIds', [])
+            main_racing_ids = params.get('mainRacingRoadIds', [])
+            if not pit_lane_ids and not main_racing_ids:
+                return None
+            if not self._road_index:
+                return None
+            obj_x, obj_y = float(position[0]), float(position[1])
+            # Find projected road id using utilities
+            projected_road_id = dutils.find_road_id_for_position(self._road_index, obj_x, obj_y)
+            print(f"    [TrackSegment] pitLaneRoadIds={pit_lane_ids}, mainRacingRoadIds={main_racing_ids}, projected={projected_road_id}")
+            # If the projection returns an internal RD id (e.g., 0/1/2), try mapping to XODR id
+            try:
+                if projected_road_id is not None and hasattr(dutils, 'map_rd_to_xodr_road_id'):
+                    mapped = dutils.map_rd_to_xodr_road_id(self._road_index, projected_road_id)
+                    if mapped is not None:
+                        print(f"    [TrackSegment] Mapped RD id {projected_road_id} -> XODR id {mapped}")
+                        projected_road_id = mapped
+            except Exception as e:
+                print(f"    [TrackSegment] RD->XODR id mapping not available: {e}")
+            if projected_road_id is None:
+                return None
+            if str(projected_road_id) in pit_lane_ids:
+                return 'pitLane'
+            if str(projected_road_id) in main_racing_ids:
+                return 'mainRacing'
+            # Fallback: infer from road name if available
+            try:
+                if hasattr(dutils, 'get_road_name_for_id'):
+                    rname = dutils.get_road_name_for_id(self._road_index, projected_road_id)
+                else:
+                    rname = None
+                if rname:
+                    lname = str(rname).lower()
+                    if 'pit' in lname:
+                        print(f"    [TrackSegment] Fallback by name '{rname}' => pitLane")
+                        return 'pitLane'
+                    else:
+                        print(f"    [TrackSegment] Fallback by name '{rname}' => mainRacing")
+                        return 'mainRacing'
+            except Exception as e:
+                print(f"    [TrackSegment] Name fallback failed: {e}")
+            # Final heuristic: common RD ids 0/1/2 → assume 1 is pit, others main
+            try:
+                if isinstance(projected_road_id, int) and projected_road_id in (0, 1, 2):
+                    seg = 'pitLane' if projected_road_id == 1 else 'mainRacing'
+                    print(f"    [TrackSegment] Heuristic RD id {projected_road_id} => {seg}")
+                    return seg
+            except Exception:
+                pass
+            return None
+        except Exception as e:
+            print(f"    [TrackSegment] Detection error: {e}")
+            return None
+    
+    def assignRoute(self, agent, track_segment):
+        """Assign appropriate dSPACE route based on track segment.
+        
+        Args:
+            agent: The racing agent
+            track_segment: Track segment identifier ('mainRacing' or 'pitLane')
+            
+        Returns:
+            String indicating the route preference for dSPACE
+        """
+        # dSPACE-specific route assignment
+        if track_segment == 'pitLane':
+            return 'Pit'  # dSPACE pit lane route
+        elif track_segment == 'mainRacing':
+            return 'Lap'  # dSPACE main racing route
+        else:
+            return None
 
 

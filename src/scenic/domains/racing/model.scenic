@@ -54,17 +54,23 @@ param mainRacingRoadIds = [str(r.id) for r in track._mainRacingRoads] if track._
 
 ## Racing-specific regions
 
-#: The pit lane region (if track has a pit lane)
-pitLane: Region = track.pitLane.region if track.pitLane else nowhere
+## Racing regions (simplified per architecture):
+#
+# road          := entire drivable road surface
+# mainRacingRoad, pitLaneRoad are mutually exclusive and their union == road
 
-#: The main racing line region (excluding pit lane)
-racingLine: Region = road.difference(pitLane) if track.pitLane else road
+# Build pitLaneRoad region from identified pit lane road if available
+pitLaneRoad: Region = (
+    UnionRegion(*[lane for lane in track.pitLaneRoad.lanes])
+    if track.pitLaneRoad and track.pitLaneRoad.lanes and len(track.pitLaneRoad.lanes) > 1
+    else (track.pitLaneRoad.lanes[0] if track.pitLaneRoad and track.pitLaneRoad.lanes else nowhere)
+)
 
-#: Individual track segment regions (mutually exclusive)
-#: Main racing road includes all non-pit roads (main line + parallel tracks)
-mainRacingRoad: Region = track.mainRacingRoad if track.mainRacingRoad else road
-#: Pit lane road (separate from main racing circuit) - create proper region from road lanes
-pitLaneRoad: Region = UnionRegion(*[lane for lane in track.pitLaneRoad.lanes]) if track.pitLaneRoad and track.pitLaneRoad.lanes and len(track.pitLaneRoad.lanes) > 1 else (track.pitLaneRoad.lanes[0] if track.pitLaneRoad and track.pitLaneRoad.lanes else nowhere)
+# Main racing road is the rest of the road excluding pitLaneRoad
+mainRacingRoad: Region = road.difference(pitLaneRoad)
+
+# Keep racingLine as the TTL default (can be overridden by actions)
+racingLine: Region = track.racingLine.region if hasattr(track, 'racingLine') and track.racingLine else mainRacingRoad
 
 #: Start/finish line region
 # TODO: Create actual start/finish line region from track data
@@ -84,16 +90,11 @@ else:
 ## Racing-specific object types
 
 class RacingCar(Car):
-    """A configurable racing car based on Dallara AV-24 specifications.
+    """Abstract racing car class.
     
-    This single class can represent any type of racing vehicle through
-    configurable properties, making it suitable for autonomous racing scenarios.
-    
-    Default specifications based on Dallara AV-24:
-    - Engine: 2.0L Turbocharged Inline-4 (495 PS, 518 Nm)
-    - Weight: 748 kg
-    - Dimensions: 4.88m x 1.93m x 1.16m
-    - Wheelbase: 2.97m
+    This class defines the interface for racing cars but does not provide
+    concrete implementations of racing-specific systems. Simulators must
+    extend this class and implement the RacingSteers protocol.
     
     Properties:
         raceNumber: Car number for identification (1-999)
@@ -116,18 +117,13 @@ class RacingCar(Car):
     
     # Default racing properties
     speed: 25  # Higher default speed for racing (90 km/h)
-    position: new Point on racingLine
+    position: new Point on mainRacingRoad
     requireVisible: False
-    
-    # Dallara AV-24 specifications
-    width: 1.93  # AV-24 width
-    length: 4.88  # AV-24 length
-    height: 1.16  # AV-24 height
     
     # Racing identification
     raceNumber: Range(1, 999)
     team: None
-    carType: "Dallara AV-24"  # Default type
+    carType: "Racing Car"  # Default type
     
     # Performance characteristics (configurable)
     maxSpeed: 30.0  # ~108 km/h top speed
@@ -141,6 +137,15 @@ class RacingCar(Car):
     # Autonomous capabilities
     waypointTolerance: 2.5  # Distance tolerance for waypoint following
     controllerAggressiveness: 0.5  # Controller aggressiveness (0.0-1.0)
+    
+    # Minimal racing API needed by behaviors
+    ttl = racingLine  # Target line to drive on
+    
+    def setMaxSpeed(self, max_speed):
+        raise NotImplementedError("Simulator must implement setMaxSpeed or accept property assignment")
+    
+    def setTTL(self, ttl):
+        raise NotImplementedError("Simulator must implement setTTL or accept property assignment")
 
 ## Racing-specific utility functions
 

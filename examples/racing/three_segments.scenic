@@ -42,9 +42,9 @@ model scenic.simulators.dspace.racing_model
 # Vehicles on track segments - routes auto-detected from projection road ID
 ego = new RacingCar on pitLaneRoad
 opponent1 = new RacingCar ahead of ego by 20
-# opponent2 = new RacingCar on pitLaneRoad
-# opponent3 = new RacingCar on pitLaneRoad
-# opponent4 = new RacingCar on pitLaneRoad
-# opponent5 = new RacingCar on pitLaneRoad
-# opponent6 = new RacingCar on pitLaneRoad
+opponent2 = new RacingCar on pitLaneRoad
+opponent3 = new RacingCar on pitLaneRoad
+opponent4 = new RacingCar on pitLaneRoad
+opponent5 = new RacingCar on pitLaneRoad
+opponent6 = new RacingCar on pitLaneRoad
 
