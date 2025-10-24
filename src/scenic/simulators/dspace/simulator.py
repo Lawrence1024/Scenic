@@ -279,7 +279,7 @@ class DSpaceSimulation(DrivingSimulation):
         F = self.ts.Fellows.Add()
 
         # Set the scenario name for csv file
-        csv_filename = "scenic_runs_fellow2_left_by_2.csv"
+        csv_filename = "r_scenic_runs_fellow2_left_by_2.csv"
 
         # Set a unique name for relative positioning
         fellow_idx = len(self._object_positions) if hasattr(self, '_object_positions') else 0
@@ -301,7 +301,7 @@ class DSpaceSimulation(DrivingSimulation):
                 # Set CSV filename once
                 if not hasattr(self, '_csv_filename'):
                     scenario_name = "fellow2_left_by_2"
-                    self._csv_filename = f"scenic_runs_{scenario_name}.csv"
+                    self._csv_filename = f"r_scenic_runs_{scenario_name}.csv"
 
             elif fellow_idx == 2:
                 fellow2_df = self.fellow_coords_df(
@@ -352,7 +352,7 @@ class DSpaceSimulation(DrivingSimulation):
                     'scenic_x_diff':      analysis_df.iloc[0]['scenic_x_diff'],
                     'scenic_y_diff':      analysis_df.iloc[0]['scenic_y_diff'],
                     'scenic_diff_dot_true_left': analysis_df.iloc[0]['scenic_diff_dot_true_left'],
-                    'scenic_magnitude': analysis_df.iloc[0]['scenic_magnitude'],
+                    'scenic_diff_magnitude': analysis_df.iloc[0]['scenic_diff_magnitude'],
                     'scenic_diff_to_true_left_angle (radians)': analysis_df.iloc[0]['scenic_diff_to_true_left_angle (radians)'],
                     'rd_x_diff':          analysis_df.iloc[0]['rd_x_diff'],
                     'rd_y_diff':          analysis_df.iloc[0]['rd_y_diff'],
@@ -401,7 +401,7 @@ class DSpaceSimulation(DrivingSimulation):
         """
         # Calculate left unit vector (90 degrees counter-clockwise from heading)
         heading = obj.heading if hasattr(obj, 'heading') else 0
-        true_left_x = math.cos(heading + math.pi/2) 
+        true_left_x = -math.cos(heading + math.pi/2) 
         true_left_y = math.sin(heading + math.pi/2)   # sin(heading + π/2)
 
         coords = {
