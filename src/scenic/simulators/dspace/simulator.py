@@ -386,7 +386,7 @@ class DSpaceSimulation(DrivingSimulation):
 
         # Write the single row to CSV
         if self._csv_filename is None:
-            scenario_name = "final_left_2"
+            scenario_name = "final_ahead_2"
             self._csv_filename = f"st_test_{scenario_name}.csv"
 
         row_df = pd.DataFrame([row])
@@ -431,7 +431,7 @@ class DSpaceSimulation(DrivingSimulation):
         # true_behind_y = -math.cos(heading)
 
         coords = {
-            'scene_name': ['left of 2'],
+            'scene_name': ['ahead of 2'],
             'car_name': [f'fellow{fellow_idx}'],
             'scenic_vector_x': [scenic_x],
             'scenic_vector_y': [scenic_y],
