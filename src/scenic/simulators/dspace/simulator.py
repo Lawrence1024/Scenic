@@ -338,8 +338,8 @@ class DSpaceSimulation(DrivingSimulation):
         analysis_df = self.create_analysis(
             combined_df['scenic_vector_x'],
             combined_df['scenic_vector_y'],
-            combined_df['true_left_x'],
-            combined_df['true_left_y'],
+            combined_df['true_relative_x'],
+            combined_df['true_relative_y'],
             combined_df['rd_world_x'],
             combined_df['rd_world_y'],
             combined_df['road_s'],
@@ -352,8 +352,8 @@ class DSpaceSimulation(DrivingSimulation):
             'scene_name_f1':       f1_df.iloc[0]['scene_name'],
             'car_name_f1':         f1_df.iloc[0]['car_name'],
             'scenic_heading_f1':   f1_df.iloc[0]['scenic_heading'],
-            'true_left_x_f1':      f1_df.iloc[0]['true_left_x'],
-            'true_left_y_f1':      f1_df.iloc[0]['true_left_y'],
+            'true_relative_x_f1':      f1_df.iloc[0]['true_relative_x'],
+            'true_relative_y_f1':      f1_df.iloc[0]['true_relative_y'],
             'scenic_vector_x_f1':  f1_df.iloc[0]['scenic_vector_x'],
             'scenic_vector_y_f1':  f1_df.iloc[0]['scenic_vector_y'],
             'rd_world_x_f1':       f1_df.iloc[0]['rd_world_x'],
@@ -361,12 +361,9 @@ class DSpaceSimulation(DrivingSimulation):
             'road_s_f1':           f1_df.iloc[0]['road_s'],
             'road_t_f1':           f1_df.iloc[0]['road_t'],
 
-            # Fellow2 (columns 12-22) - Use f2_df
+            # Fellow2 (columns 12-19) - Use f2_df
             'scene_name_f2':       f2_df.iloc[0]['scene_name'],
             'car_name_f2':         f2_df.iloc[0]['car_name'],
-            'scenic_heading_f2':   f2_df.iloc[0]['scenic_heading'],
-            'true_left_x_f2':      f2_df.iloc[0]['true_left_x'],
-            'true_left_y_f2':      f2_df.iloc[0]['true_left_y'],
             'scenic_vector_x_f2':  f2_df.iloc[0]['scenic_vector_x'],
             'scenic_vector_y_f2':  f2_df.iloc[0]['scenic_vector_y'],
             'rd_world_x_f2':       f2_df.iloc[0]['rd_world_x'],
@@ -374,23 +371,23 @@ class DSpaceSimulation(DrivingSimulation):
             'road_s_f2':           f2_df.iloc[0]['road_s'],
             'road_t_f2':           f2_df.iloc[0]['road_t'],
 
-            # Analysis (columns 23-30) - Use analysis_df
+            # Analysis (columns 19-28) - Use analysis_df
             'scenic_x_diff':       analysis_df.iloc[0]['scenic_x_diff'],
             'scenic_y_diff':       analysis_df.iloc[0]['scenic_y_diff'],
-            'scenic_diff_dot_true_left': analysis_df.iloc[0]['scenic_diff_dot_true_left'],
+            'scenic_diff_dot_true_relative': analysis_df.iloc[0]['scenic_diff_dot_true_relative'],
             'scenic_diff_magnitude': analysis_df.iloc[0]['scenic_diff_magnitude'],
-            'scenic_diff_to_true_left_angle (radians)': analysis_df.iloc[0]['scenic_diff_to_true_left_angle (radians)'],
+            'scenic_diff_to_true_relative_angle (radians)': analysis_df.iloc[0]['scenic_diff_to_true_relative_angle (radians)'],
             'rd_x_diff':           analysis_df.iloc[0]['rd_x_diff'],
             'rd_y_diff':           analysis_df.iloc[0]['rd_y_diff'],
-            'rd_diff_dot_true_left':   analysis_df.iloc[0]['rd_diff_dot_true_left'],
+            'rd_diff_dot_true_relative':   analysis_df.iloc[0]['rd_diff_dot_true_relative'],
             's_diff':              analysis_df.iloc[0]['s_diff'],
             't_diff':              analysis_df.iloc[0]['t_diff']
         }
 
         # Write the single row to CSV
         if self._csv_filename is None:
-            scenario_name = "left_2"
-            self._csv_filename = f"st_test_final_{scenario_name}.csv"
+            scenario_name = "final_left_2"
+            self._csv_filename = f"st_test_{scenario_name}.csv"
 
         row_df = pd.DataFrame([row])
         
@@ -424,17 +421,23 @@ class DSpaceSimulation(DrivingSimulation):
         #                                               = (-cos(heading), -sin(heading))
 
         heading = obj.heading if hasattr(obj, 'heading') else 0
-        true_left_x = -math.cos(heading)
-        true_left_y = -math.sin(heading)
+        # true_left_x = -math.cos(heading)
+        # true_left_y = -math.sin(heading)
+        true_right_x = math.cos(heading)
+        true_right_y = math.sin(heading)
+        # true_ahead_x = -math.sin(heading)
+        # true_ahead_y = math.cos(heading)
+        # true_behind_x = math.sin(heading)
+        # true_behind_y = -math.cos(heading)
 
         coords = {
-            'scene_name': ['Left of 2'],
+            'scene_name': ['left of 2'],
             'car_name': [f'fellow{fellow_idx}'],
             'scenic_vector_x': [scenic_x],
             'scenic_vector_y': [scenic_y],
             'scenic_heading': [heading],
-            'true_left_x': [true_left_x],
-            'true_left_y': [true_left_y],
+            'true_relative_x': [true_right_x],
+            'true_relative_y': [true_right_y],
             'rd_world_x': [transformed_x],
             'rd_world_y': [transformed_y],
             'road_s': [s_val],
@@ -444,12 +447,12 @@ class DSpaceSimulation(DrivingSimulation):
         data_frame = pd.DataFrame(coords)
         return data_frame
     
-    def create_analysis(self, scenic_x, scenic_y, true_left_x, true_left_y, rd_world_x, rd_world_y, road_s, road_t):
+    def create_analysis(self, scenic_x, scenic_y, true_relative_x, true_relative_y, rd_world_x, rd_world_y, road_s, road_t):
         # scenic coordinates difference
         scenic_x_diff = scenic_x[1] - scenic_x[0]
         scenic_y_diff = scenic_y[1] - scenic_y[0]
 
-        scenic_diff_dot_true = scenic_x_diff * true_left_x[0] + scenic_y_diff * true_left_y[0]
+        scenic_diff_dot_true = scenic_x_diff * true_relative_x[0] + scenic_y_diff * true_relative_y[0]
         # should approximately be the defined relative distance + width of a car (2 by default) since ||true_left|| = 1, cos(theta) = 1
         # if dot > 0, then the fellow2 is to the left of fellow1
         # if dot = 0, then the fellow2 is directly ahead/behind fellow1
@@ -465,7 +468,7 @@ class DSpaceSimulation(DrivingSimulation):
         rd_x_diff = rd_world_x[1] - rd_world_x[0]
         rd_y_diff = rd_world_y[1] - rd_world_y[0]
 
-        rd_diff_dot_true = rd_x_diff * true_left_x[0] + rd_y_diff * true_left_y[0]    
+        rd_diff_dot_true = rd_x_diff * true_relative_x[0] + rd_y_diff * true_relative_y[0]    
         # should approximately be the distance defined in fellow_placing_road.scenic
 
         # s, t difference
@@ -475,12 +478,12 @@ class DSpaceSimulation(DrivingSimulation):
         analysis_data = {
             'scenic_x_diff': [scenic_x_diff],
             'scenic_y_diff': [scenic_y_diff],
-            'scenic_diff_dot_true_left': [scenic_diff_dot_true],
+            'scenic_diff_dot_true_relative': [scenic_diff_dot_true],
             'scenic_diff_magnitude': [scenic_diff_magnitude],
-            'scenic_diff_to_true_left_angle (radians)': [scenic_diff_to_true_angle],
+            'scenic_diff_to_true_relative_angle (radians)': [scenic_diff_to_true_angle],
             'rd_x_diff': [rd_x_diff],
             'rd_y_diff': [rd_y_diff],
-            'rd_diff_dot_true_left': [rd_diff_dot_true],
+            'rd_diff_dot_true_relative': [rd_diff_dot_true],
             's_diff': [s_diff],
             't_diff': [t_diff],
         }
