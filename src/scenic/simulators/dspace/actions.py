@@ -1,5 +1,12 @@
 from scenic.domains.driving.actions import Action
 
+
+# Marker mixin to identify dSPACE-backed vehicle agents (mirrors CARLA pattern)
+class _DSpaceVehicle:
+    # Used to avoid importing Scenic classes from model.scenic in Python modules.
+    # Action gating can check isinstance(agent, _DSpaceVehicle).
+    pass
+
 class SetVehicleControl(Action):
     """Set throttle, brake, and steering control for dSPACE vehicles.
     
@@ -21,7 +28,11 @@ class SetVehicleControl(Action):
     
     def canBeTakenBy(self, agent):
         """Check if agent can take this action."""
-        return hasattr(agent, "name") or True
+        # Prefer explicit dSPACE vehicle marker if present; otherwise allow for now.
+        try:
+            return isinstance(agent, _DSpaceVehicle)
+        except Exception:
+            return True
     
     def applyTo(self, obj, sim):
         """Apply control inputs to the vehicle in dSPACE."""

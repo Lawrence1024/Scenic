@@ -14,6 +14,7 @@ from scenic.core.simulators import SimulationCreationError
 
 from . import utils as dutils
 from .per_tick_control import PerTickController, ExternalControlManager
+from .controldesk import ControlDeskApp
 
 
 class DSpaceSimulator(RacingSimulator):
@@ -42,6 +43,7 @@ class DSpaceSimulation(RacingSimulation):
         self._modeldesk_app = None  # ModelDesk COM application
         self._per_tick_controller = PerTickController()  # Per-tick control controller
         self._fellow_vehicles = {}  # Track fellow vehicles for runtime control
+        self._cd = None  # ControlDesk app
         
         ts = kwargs.pop("timestep", None) or sim.timestep
         super().__init__(scene, timestep=ts, **kwargs)
@@ -190,6 +192,16 @@ class DSpaceSimulation(RacingSimulation):
             mc.Start(False)
         except Exception:
             pass
+
+        # 8) Connect ControlDesk and start measurement (optional)
+        try:
+            self._cd = ControlDeskApp().connect()
+            self._cd.go_online()
+            self._cd.start_measurement()
+            print("[ControlDesk] Online and measuring")
+        except Exception as e:
+            print(f"[ControlDesk] Not available: {e}")
+            self._cd = None
 
     def createObjectInSimulator(self, obj):
         """Place car (ego or fellow) by absolute (s,t) computed from (x,y) and XODR.
@@ -587,7 +599,27 @@ class DSpaceSimulation(RacingSimulation):
     
     def setVehicleControl(self, vehicle_name, throttle=None, brake=None, steering=None, velocity=None):
         """Set dynamic control inputs for a fellow vehicle using ControlDesk."""
-        return self._per_tick_controller.setVehicleControl(vehicle_name, throttle, brake, steering, velocity)
+        ok_pt = self._per_tick_controller.setVehicleControl(vehicle_name, throttle, brake, steering, velocity)
+
+        # Also write directly via ControlDesk if available
+        if self._cd:
+            def _cd_path_for(name: str, signal: str) -> str:
+                # Placeholder path pattern; replace with your model's actual variable paths
+                # Example: "Platform()://Model Root/Vehicles/F1/Throttle/Value"
+                return f"Platform()://Model Root/Vehicles/{name}/{signal}/Value"
+            try:
+                if throttle is not None:
+                    self._cd.set_var(_cd_path_for(vehicle_name, "Throttle"), float(throttle))
+                if brake is not None:
+                    self._cd.set_var(_cd_path_for(vehicle_name, "Brake"), float(brake))
+                if steering is not None:
+                    self._cd.set_var(_cd_path_for(vehicle_name, "Steering"), float(steering))
+                if velocity is not None:
+                    self._cd.set_var(_cd_path_for(vehicle_name, "TargetVelocity"), float(velocity))
+            except Exception as e:
+                print(f"[ControlDesk] Write failed for {vehicle_name}: {e}")
+
+        return ok_pt
     
     def startPerTickControl(self, vehicle_name, control_function=None, dt=0.01):
         """Start per-tick control loop for a vehicle."""
