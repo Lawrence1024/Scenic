@@ -193,12 +193,14 @@ class DSpaceSimulation(RacingSimulation):
         except Exception:
             pass
 
-        # 8) Connect ControlDesk and start measurement (optional)
+        # 8) Connect ControlDesk and initialize VesiInterface (optional)
         try:
             self._cd = ControlDeskApp().connect()
             self._cd.go_online()
             self._cd.start_measurement()
             print("[ControlDesk] Online and measuring")
+            # Initialize VesiInterface manual control
+            self._initializeVesiInterface()
         except Exception as e:
             print(f"[ControlDesk] Not available: {e}")
             self._cd = None
@@ -597,54 +599,135 @@ class DSpaceSimulation(RacingSimulation):
         except Exception as e:
             print(f"[ModelDesk] Error configuring fellow: {e}")
     
+    def _initializeVesiInterface(self):
+        """Initialize VesiInterface manual control interface.
+        
+        Sets all required master switches, race control configuration, and enable flags
+        to activate the VesiInterface manual control system.
+        """
+        if not self._cd:
+            print("[VesiInterface] ControlDesk not available, skipping initialization")
+            return
+        
+        print("[VesiInterface] Initializing manual control interface...")
+        
+        try:
+            # Step 1: VesiInterface Master Switches
+            print("[VesiInterface] Setting master switches...")
+            self._cd.set_var(
+                "Platform()://ASM_Traffic/Model Root/VesiInterface/Sw_Activate_CLIF[0|1]/Value",
+                0.0
+            )
+            self._cd.set_var(
+                "Platform()://ASM_Traffic/Model Root/VesiInterface/Sw_Manual_VESI_Overwrite[0|1]/Value",
+                1.0  # CRITICAL: Enable manual VESI control
+            )
+            print("[VesiInterface] Master switches set")
+            
+            # Step 2: Race Control Configuration
+            print("[VesiInterface] Configuring race control...")
+            self._cd.set_var(
+                "Platform()://ASM_Traffic/Model Root/RaceControl/Sw_RaceControl[0Intern|1Extern|2Orchestrator]/Value",
+                0.0  # Intern mode (required for manual control)
+            )
+            self._cd.set_var(
+                "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_sys_state/Value",
+                9  # CRITICAL: System state constant
+            )
+            self._cd.set_var(
+                "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_track_flag/Value",
+                1
+            )
+            self._cd.set_var(
+                "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_veh_flag/Value",
+                0
+            )
+            print("[VesiInterface] Race control configured")
+            
+            # Step 3: Enable Individual Control Channels
+            print("[VesiInterface] Enabling control channels...")
+            self._cd.set_var(
+                "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_enable_brake_cmd/Value",
+                1
+            )
+            self._cd.set_var(
+                "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_enable_gear_cmd/Value",
+                1
+            )
+            self._cd.set_var(
+                "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_enable_steering_cmd/Value",
+                1
+            )
+            self._cd.set_var(
+                "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_enable_throttle_cmd/Value",
+                1
+            )
+            print("[VesiInterface] Control channels enabled")
+            print("[VesiInterface] Initialization complete - manual control ready")
+            
+        except Exception as e:
+            print(f"[VesiInterface] ERROR - Initialization failed: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def setVehicleControl(self, vehicle_name, throttle=None, brake=None, steering=None, velocity=None):
-        """Set dynamic control inputs for a fellow vehicle using ControlDesk."""
+        """Set dynamic control inputs for a vehicle using VesiInterface manual control."""
         print(f"\n[setVehicleControl] Called for {vehicle_name}: throttle={throttle}, brake={brake}, steering={steering}, velocity={velocity}")
         
         ok_pt = self._per_tick_controller.setVehicleControl(vehicle_name, throttle, brake, steering, velocity)
 
-        # Also write directly via ControlDesk if available
+        # Write directly via ControlDesk using VesiInterface if available
         if self._cd:
-            print(f"[setVehicleControl] Writing to ControlDesk...")
-            # ExternalUserData control keys (Platform_2)
-            KEY_STEER = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Angle_SteeringWheel[deg]/Value"
-            KEY_THROTTLE = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Pos_AccPedal[%]/Value"
-            KEY_BRAKE = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Pos_BrakePedal[%]/Value"
-            # Optional velocity target if model supports it
-            KEY_VREF = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/v_Vehicle_Ref[m|s]/Value"
+            print(f"[setVehicleControl] Writing to ControlDesk (VesiInterface)...")
+            # VesiInterface manual control keys (Platform_2)
+            KEY_THROTTLE = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_throttle_cmd/Value"
+            KEY_BRAKE_FRONT = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_front/Value"
+            KEY_BRAKE_REAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_rear/Value"
+            KEY_STEERING = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_steering_cmd/Value"
+            
             try:
-                # Scale: Scenic actions use 0..1 for throttle/brake; convert to percent
+                # Throttle: Scenic uses 0-1, VesiInterface expects 0-100+ (typically 0-100)
                 if throttle is not None:
-                    throttle_pct = float(max(0.0, min(1.0, throttle)) * 100.0)
-                    print(f"  [ControlDesk] Setting throttle: {throttle} -> {throttle_pct}%")
-                    self._cd.set_var(KEY_THROTTLE, throttle_pct)
+                    throttle_val = float(max(0.0, min(1.0, throttle)) * 100.0)
+                    print(f"  [ControlDesk] Setting throttle: {throttle} -> {throttle_val}")
+                    self._cd.set_var(KEY_THROTTLE, throttle_val)
                     print(f"  [ControlDesk] OK - Throttle written successfully")
+                
+                # Brake: Scenic uses 0-1, apply to both front and rear
+                # Note: For unified brake, apply same value to front and rear
                 if brake is not None:
-                    brake_pct = float(max(0.0, min(1.0, brake)) * 100.0)
-                    print(f"  [ControlDesk] Setting brake: {brake} -> {brake_pct}%")
-                    self._cd.set_var(KEY_BRAKE, brake_pct)
-                    print(f"  [ControlDesk] OK - Brake written successfully")
+                    brake_val = float(max(0.0, min(1.0, brake)) * 100.0)  # Scale for VesiInterface
+                    print(f"  [ControlDesk] Setting brake: {brake} -> front={brake_val}, rear={brake_val}")
+                    self._cd.set_var(KEY_BRAKE_FRONT, brake_val)
+                    self._cd.set_var(KEY_BRAKE_REAR, brake_val)
+                    print(f"  [ControlDesk] OK - Brake (front/rear) written successfully")
+                
+                # Steering: Scenic uses -1 to 1, VesiInterface expects degrees or normalized
+                # Map -1..1 to degrees (±25 deg default, same as ExternalUserData)
                 if steering is not None:
-                    # Map -1..1 to degrees (±25 deg default)
-                    steer_deg = float(max(-1.0, min(1.0, steering)) * 25.0)
-                    print(f"  [ControlDesk] Setting steering: {steering} -> {steer_deg} deg")
-                    self._cd.set_var(KEY_STEER, steer_deg)
+                    steer_val = float(max(-1.0, min(1.0, steering)) * 25.0)
+                    print(f"  [ControlDesk] Setting steering: {steering} -> {steer_val} deg")
+                    self._cd.set_var(KEY_STEERING, steer_val)
                     print(f"  [ControlDesk] OK - Steering written successfully")
+                
+                # Note: Velocity control not available in VesiInterface manual control
                 if velocity is not None:
-                    print(f"  [ControlDesk] Setting velocity: {velocity} m/s")
-                    self._cd.set_var(KEY_VREF, float(velocity))
-                    print(f"  [ControlDesk] OK - Velocity written successfully")
+                    print(f"  [ControlDesk] WARNING - Velocity control not supported in VesiInterface")
+                    
             except Exception as e:
                 print(f"[ControlDesk] ERROR - Write failed for {vehicle_name}: {e}")
+                import traceback
+                traceback.print_exc()
 
         return ok_pt
     
     def setVehicleGear(self, vehicle_name, gear):
-        """Set gear for a vehicle using ControlDesk (one-shot action)."""
+        """Set gear for a vehicle using VesiInterface manual control (one-shot action)."""
         print(f"\n[setVehicleGear] Called for {vehicle_name}: gear={gear}")
         
         if self._cd:
-            KEY_GEAR = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Gear[]/Value"
+            # Use VesiInterface gear control
+            KEY_GEAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_gear_cmd/Value"
             try:
                 gear_int = int(gear)
                 print(f"  [ControlDesk] Setting gear: {gear_int}")
@@ -652,21 +735,31 @@ class DSpaceSimulation(RacingSimulation):
                 print(f"  [ControlDesk] OK - Gear written successfully")
             except Exception as e:
                 print(f"[ControlDesk] ERROR - Gear write failed for {vehicle_name}: {e}")
+                import traceback
+                traceback.print_exc()
     
     def setVehicleClutch(self, vehicle_name, clutch):
-        """Set clutch pedal position for a vehicle using ControlDesk (one-shot action)."""
+        """Set clutch pedal position for a vehicle using ControlDesk (one-shot action).
+        
+        Note: VesiInterface does not support clutch control, so we use ExternalUserData
+        for clutch operations. This is acceptable as clutch is only used for starting
+        from neutral, which is a separate operation from the main control loop.
+        """
         print(f"\n[setVehicleClutch] Called for {vehicle_name}: clutch={clutch}")
         
         if self._cd:
+            # VesiInterface doesn't have clutch, use ExternalUserData
             KEY_CLUTCH = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Pos_ClutchPedal[%]/Value"
             try:
                 # Convert 0-1 to 0-100%
                 clutch_pct = float(clutch * 100.0)
-                print(f"  [ControlDesk] Setting clutch: {clutch} -> {clutch_pct}%")
+                print(f"  [ControlDesk] Setting clutch: {clutch} -> {clutch_pct}% (using ExternalUserData)")
                 self._cd.set_var(KEY_CLUTCH, clutch_pct)
                 print(f"  [ControlDesk] OK - Clutch written successfully")
             except Exception as e:
                 print(f"[ControlDesk] ERROR - Clutch write failed for {vehicle_name}: {e}")
+                import traceback
+                traceback.print_exc()
     
     def startPerTickControl(self, vehicle_name, control_function=None, dt=0.01):
         """Start per-tick control loop for a vehicle."""

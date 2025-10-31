@@ -348,6 +348,70 @@ def list_subtree_external_userdata(plat_obj, disp: str, max_items: int, probe_wr
     visit(grp, prefix='', remaining=[max_items])
 
 
+def list_subtree_vesi_interface(plat_obj, disp: str, max_items: int, probe_writable: bool):
+    vdesc = get_prop(plat_obj, 'ActiveVariableDescription', None)
+    root = get_prop(vdesc, 'RootGroup', None) if vdesc is not None else None
+    if root is None:
+        return
+    # Path to VesiInterface/VESIResultData_Manual/vehicle_inputs
+    path_segs = [
+        'Model Root',
+        'VesiInterface',
+        'VESIResultData_Manual',
+        'vehicle_inputs',
+    ]
+    grp = _find_group_by_path(root, path_segs)
+    if grp is None:
+        warn(f"{disp}: VesiInterface/VESIResultData_Manual/vehicle_inputs path not found")
+        return
+    info(f"Listing {disp}/{'/'.join(path_segs)} (up to {max_items})")
+
+    def visit(node, prefix: str, remaining: List[int]):
+        if remaining[0] <= 0:
+            return
+        # Variables / Items at this node
+        for cont_name in ("Variables", "Items", "Children"):
+            cont = safe_get(node, cont_name, None)
+            if cont is None:
+                continue
+            for it in _enum_collection(cont):
+                if remaining[0] <= 0:
+                    return
+                name = safe_get(it, 'Name', None)
+                if not isinstance(name, str):
+                    continue
+                # If this is a variable-like item, print value
+                val = safe_get(it, 'ValueConverted', safe_get(it, 'Value', None))
+                if val is not None or cont_name != 'Children':
+                    extra = ""
+                    if probe_writable and isinstance(val, (int, float)):
+                        try:
+                            if hasattr(it, 'ValueConverted'):
+                                it.ValueConverted = val
+                            elif hasattr(it, 'Value'):
+                                it.Value = val
+                            extra = " (writable)"
+                        except Exception:
+                            extra = " (read-only)"
+                    info(f"  {prefix}{name} = {val}{extra}")
+                    remaining[0] -= 1
+                # Recurse into children nodes
+                child_groups = safe_get(it, 'Groups', None)
+                if child_groups is not None and remaining[0] > 0:
+                    visit(it, prefix + name + '/', remaining)
+
+        # Also explicit 'Groups' on current node
+        groups = safe_get(node, 'Groups', None)
+        if groups is not None and remaining[0] > 0:
+            for child in _enum_collection(groups):
+                if remaining[0] <= 0:
+                    return
+                cname = safe_get(child, 'Name', '<group>')
+                visit(child, prefix + cname + '/', remaining)
+
+    visit(grp, prefix='', remaining=[max_items])
+
+
 # ----------------------------- Write Helpers --------------------------------
 
 def try_set_pos_acc_pedal_maneuver(app, platform_inner_name: str, new_value: float) -> bool:
@@ -436,58 +500,78 @@ def try_set_pos_acc_pedal_maneuver(app, platform_inner_name: str, new_value: flo
 
 def coerce_value(text: str):
     t = text.strip().lower()
-    if t in ("true", "t", "yes", "y", "1"):
-        return True
-    if t in ("false", "f", "no", "n", "0"):
-        return False
+    # First try to parse as number (important for numeric variables)
     try:
-        if "." in t:
-            return float(t)
-        return int(t)
+        if "." in text.strip():  # Check original string, not lowercased
+            return float(text.strip())
+        return int(text.strip())
     except Exception:
-        return text
+        pass
+    # Then check for boolean strings
+    if t in ("true", "t", "yes", "y"):
+        return True
+    if t in ("false", "f", "no", "n"):
+        return False
+    return text
 
 
-def read_write_by_key_path(app, platform_inner_name: str, key_path: str, set_value_text: Optional[str]) -> bool:
+def read_write_by_key_path(app, platform_inner_name: Optional[str], key_path: str, set_value_text: Optional[str]) -> bool:
+    """Try to access key_path on specified platform, or all platforms if platform_inner_name is None."""
     try:
         exp = get_prop(app, "ActiveExperiment", None)
         plats = get_prop(exp, "Platforms", None)
         count = safe_get(plats, 'Count', None)
         outer = plats.Item(0) if isinstance(count, int) and count > 0 else list(plats)[0]
         inner_plats = get_prop(outer, 'Platforms', None)
-        inner = inner_plats.Item(platform_inner_name)
-        vdesc = get_prop(inner, 'ActiveVariableDescription', None)
-        vars_obj = get_prop(vdesc, 'Variables', None)
-        if vars_obj is None:
-            warn(f"{platform_inner_name}: Variables is None; cannot access key path")
-            return False
+        
+        # Build list of platforms to try
+        platforms_to_try = []
+        if platform_inner_name:
+            platforms_to_try = [(platform_inner_name, inner_plats.Item(platform_inner_name))]
+        else:
+            # Try all nested platforms
+            inner_list = coll_to_list(inner_plats)
+            for inner in inner_list:
+                name = safe_get(inner, 'Name', None)
+                if isinstance(name, str):
+                    platforms_to_try.append((name, inner))
+        
+        for plat_name, inner in platforms_to_try:
+            vdesc = get_prop(inner, 'ActiveVariableDescription', None)
+            vars_obj = get_prop(vdesc, 'Variables', None)
+            if vars_obj is None:
+                warn(f"{plat_name}: Variables is None; skipping")
+                continue
 
-        info(f"Access by key: {key_path}")
-        try:
-            item = vars_obj[key_path]
-        except Exception as e:
-            err(f"Key lookup failed: {e}")
-            return False
+            info(f"Trying {plat_name}: Access by key: {key_path}")
+            try:
+                item = vars_obj[key_path]
+            except Exception as e:
+                info(f"{plat_name}: Key lookup failed: {e}")
+                continue
 
-        current = safe_get(item, 'ValueConverted', safe_get(item, 'Value', None))
-        info(f"READ OK: {key_path} -> {current}")
+            current = safe_get(item, 'ValueConverted', safe_get(item, 'Value', None))
+            info(f"{plat_name}: READ OK: {key_path} -> {current}")
 
-        if set_value_text is None:
-            return True
+            if set_value_text is None:
+                return True
 
-        new_val = coerce_value(set_value_text)
-        info(f"Attempt write: {key_path} -> {new_val}")
-        try:
-            if hasattr(item, 'ValueConverted'):
-                item.ValueConverted = new_val
-            elif hasattr(item, 'Value'):
-                item.Value = new_val
-            readback = safe_get(item, 'ValueConverted', safe_get(item, 'Value', None))
-            info(f"WRITE OK: {key_path} -> {readback}")
-            return True
-        except Exception as e:
-            err(f"WRITE FAIL: {e}")
-            return False
+            new_val = coerce_value(set_value_text)
+            info(f"{plat_name}: Attempt write: {key_path} -> {new_val}")
+            try:
+                if hasattr(item, 'ValueConverted'):
+                    item.ValueConverted = new_val
+                elif hasattr(item, 'Value'):
+                    item.Value = new_val
+                readback = safe_get(item, 'ValueConverted', safe_get(item, 'Value', None))
+                info(f"{plat_name}: WRITE OK: {key_path} -> {readback}")
+                return True
+            except Exception as e:
+                err(f"{plat_name}: WRITE FAIL: {e}")
+                continue
+        
+        err("Key-path access failed on all platforms")
+        return False
     except Exception as e:
         err(f"Key-path helper error: {e}")
         return False
@@ -513,6 +597,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--key-path", type=str, default=None, help="Variables[] key path to read/write (e.g. Platform()://.../Value)")
     parser.add_argument("--set-by-key", type=str, default=None, help="Value to set for --key-path (bools as true/false, numbers ok)")
     parser.add_argument("--focus-external-userdata", action="store_true", help="List variables under Maneuver/PlantModel/ExternalUserData on Platform_2")
+    parser.add_argument("--focus-vesi-interface", action="store_true", help="List variables under VesiInterface/VESIResultData_Manual/vehicle_inputs on Platform_2")
+    parser.add_argument("--focus-racecontrol", action="store_true", help="List variables under RaceControl/race_control on Platform_2")
     parser.add_argument("--probe-writable", action="store_true", help="Attempt no-op write to detect writable variables when listing")
     parser.add_argument("--max-list", type=int, default=200, help="Max variables to list when focusing a subtree")
     args = parser.parse_args(argv)
@@ -533,31 +619,54 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if not nested:
             warn("No nested platforms found")
 
-        report_variables_availability(nested)
-        scan_keywords(nested, args.keywords, args.max)
-        traverse_rootgroup_for_keywords(nested, args.keywords, max_depth=6, max_hits=args.max)
+        # Commented out unnecessary searches
+        # report_variables_availability(nested)
+        # scan_keywords(nested, args.keywords, args.max)
+        # traverse_rootgroup_for_keywords(nested, args.keywords, max_depth=6, max_hits=args.max)
 
-        if args.focus_external_userdata:
-            # Find Platform_2 entry
-            plat2 = None
+        # if args.focus_external_userdata:
+        #     # Find Platform_2 entry
+        #     plat2 = None
+        #     for plat_obj, disp in nested:
+        #         if disp.endswith('/Platform_2'):
+        #             plat2 = (plat_obj, disp)
+        #             break
+        #     if plat2 is None:
+        #         warn("Platform_2 not found among nested platforms")
+        #     else:
+        #         list_subtree_external_userdata(plat2[0], plat2[1], max_items=args.max_list, probe_writable=args.probe_writable)
+
+        if args.focus_vesi_interface:
+            # Check all nested platforms for VesiInterface
+            found_any = False
             for plat_obj, disp in nested:
-                if disp.endswith('/Platform_2'):
-                    plat2 = (plat_obj, disp)
-                    break
-            if plat2 is None:
-                warn("Platform_2 not found among nested platforms")
-            else:
-                list_subtree_external_userdata(plat2[0], plat2[1], max_items=args.max_list, probe_writable=args.probe_writable)
+                info(f"Checking {disp} for VesiInterface...")
+                vdesc = get_prop(plat_obj, 'ActiveVariableDescription', None)
+                root = get_prop(vdesc, 'RootGroup', None) if vdesc is not None else None
+                if root is None:
+                    continue
+                path_segs = ['Model Root', 'VesiInterface', 'VESIResultData_Manual', 'vehicle_inputs']
+                grp = _find_group_by_path(root, path_segs)
+                if grp is not None:
+                    found_any = True
+                    list_subtree_vesi_interface(plat_obj, disp, max_items=args.max_list, probe_writable=args.probe_writable)
+            if not found_any:
+                warn("VesiInterface/VESIResultData_Manual/vehicle_inputs not found on any platform")
 
         # Optional write step: accelerator pedal
-        if args.set_acc_pedal is not None and args.set_acc_pedal >= 0:
-            success = try_set_pos_acc_pedal_maneuver(app, platform_inner_name="Platform_2", new_value=float(args.set_acc_pedal))
-            if not success:
-                warn("Setting Pos_AccPedal_Maneuver[%] did not succeed")
+        # if args.set_acc_pedal is not None and args.set_acc_pedal >= 0:
+        #     success = try_set_pos_acc_pedal_maneuver(app, platform_inner_name="Platform_2", new_value=float(args.set_acc_pedal))
+        #     if not success:
+        #         warn("Setting Pos_AccPedal_Maneuver[%] did not succeed")
 
         # Optional write step: direct key-path access
+        # Try all platforms if key_path doesn't specify, otherwise try specified platform
         if args.key_path is not None:
-            read_write_by_key_path(app, platform_inner_name="Platform_2", key_path=args.key_path, set_value_text=args.set_by_key)
+            # If key_path contains "Platform()://", try all platforms
+            if "Platform()://" in args.key_path:
+                read_write_by_key_path(app, platform_inner_name=None, key_path=args.key_path, set_value_text=args.set_by_key)
+            else:
+                read_write_by_key_path(app, platform_inner_name="Platform_2", key_path=args.key_path, set_value_text=args.set_by_key)
         return 0
     except Exception as e:
         err(f"Probe error: {e}")
