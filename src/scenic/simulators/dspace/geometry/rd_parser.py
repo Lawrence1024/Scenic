@@ -7,7 +7,7 @@ import math
 import xml.etree.ElementTree as ET
 from typing import Tuple, List, Optional
 
-# Import shared constants
+# Import shared constants from utils
 from .utils import MAIN_ROAD_NAMES
 
 NS = {'r': 'http://www.dspace.com/XMLSchema/ScenarioAccess/Scenario/Road'}
@@ -167,7 +167,7 @@ def build_rd_road_index(rd_path: str, step: float = 1.0) -> dict:
 
 
 # Note: RD geometry uses the same projection logic as XODR geometry
-# via the main project_world_to_st function in utils.py
+# via the main project_world_to_st function in projection.py
 
 
 if __name__ == "__main__":
@@ -192,8 +192,7 @@ if __name__ == "__main__":
     ]
     
     print("\nTest Projections:")
-    from . import utils as dutils
+    from . import projection as dutils
     for x, y in test_points:
         s, t = dutils.project_world_to_st(rd_index, (x, y))
         print(f"  ({x:7.2f}, {y:7.2f}) -> s={s:7.2f}m, t={t:5.2f}m")
-

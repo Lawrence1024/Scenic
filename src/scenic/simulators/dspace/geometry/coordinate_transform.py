@@ -34,8 +34,8 @@ def build_coordinate_transform(xodr_path: str, rd_path: str, num_samples: int = 
         - 'scale': Scale factor (x, y)
         - 'calibration_points': List of (s, xodr_x, xodr_y, rd_x, rd_y) tuples
     """
-    from .rd_geometry import parse_rd_geometry
-    from . import utils as dutils
+    from .rd_parser import parse_rd_geometry
+    from .xodr_parser import build_xodr_sec_points
     
     print("\n" + "="*80)
     print("BUILDING AUTOMATIC COORDINATE TRANSFORMATION")
@@ -51,8 +51,9 @@ def build_coordinate_transform(xodr_path: str, rd_path: str, num_samples: int = 
     print(f"   RD: {len(rd_points)} points, length={rd_main['total_length']:.1f}m")
     
     # Parse XODR file
-    xodr_index = dutils.build_xodr_sec_points(xodr_path)
-    xodr_main = xodr_index['roads']['main_road']
+    xodr_index = build_xodr_sec_points(xodr_path)
+    # Get the longest road from XODR
+    xodr_main = max(xodr_index['roads'].values(), key=lambda r: r['length'])
     xodr_points = xodr_main['sec_points'][0]  # List of (x, y, s)
     print(f"   XODR: {len(xodr_points)} points")
     
@@ -271,9 +272,6 @@ if __name__ == "__main__":
     rd_path = os.path.join(os.path.dirname(__file__), '../../../assets/maps/dSPACE/Laguna_Seca.rd')
     
     # Build transform
-    from scenic.simulators.dspace.rd_geometry import parse_rd_geometry
-    from scenic.simulators.dspace import utils as dutils
-    
     transform = build_coordinate_transform(xodr_path, rd_path, num_samples=100)
     
     # Test some points

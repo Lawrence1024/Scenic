@@ -13,9 +13,8 @@ from scenic.domains.racing.simulators import RacingSimulator, RacingSimulation
 from scenic.core.simulators import SimulationCreationError
 
 from . import utils as dutils
-from .per_tick_control import PerTickController, ExternalControlManager
-from .controldesk import ControlDeskApp
-
+from .controldesk.per_tick_control import PerTickController, ExternalControlManager
+from .controldesk.connection import ControlDeskApp
 
 class DSpaceSimulator(RacingSimulator):
     def __init__(self, *, scenario_src="LagunaSeca_ExternalControl",
@@ -28,7 +27,6 @@ class DSpaceSimulator(RacingSimulator):
 
     def createSimulation(self, scene, **kwargs):
         return DSpaceSimulation(scene, self, **kwargs)
-
 
 class DSpaceSimulation(RacingSimulation):
     def __init__(self, scene, sim: DSpaceSimulator, **kwargs):
@@ -47,7 +45,6 @@ class DSpaceSimulation(RacingSimulation):
         
         ts = kwargs.pop("timestep", None) or sim.timestep
         super().__init__(scene, timestep=ts, **kwargs)
-    
 
     def _get_scx_map_path(self):
         # Scenic param set in your script:
@@ -123,7 +120,7 @@ class DSpaceSimulation(RacingSimulation):
                 # BEST CASE: We have both XODR and RD files
                 # Build automatic transformation from XODR coords → RD coords
                 try:
-                    from . import coordinate_transform
+                    from .geometry import coordinate_transform
                     
                     # Check if cached transform exists
                     cache_path = rd_path.replace('.rd', '_transform.json')
@@ -139,8 +136,8 @@ class DSpaceSimulation(RacingSimulation):
                         coordinate_transform.save_transform(self._coordinate_transform, cache_path)
                     
                     # Use RD geometry for projection (after transformation)
-                    from . import rd_geometry
-                    self._road_index = rd_geometry.build_rd_road_index(rd_path, step=0.5)
+                    from .geometry.rd_parser import build_rd_road_index
+                    self._road_index = build_rd_road_index(rd_path, step=0.5)
                     print(f"[Geometry] Using RD geometry for accurate (s,t) projection")
                     print(f"[Status] ✅ Full coordinate transformation pipeline active")
                     
@@ -239,8 +236,8 @@ class DSpaceSimulation(RacingSimulation):
             
             # Apply coordinate transformation if available
             if self._coordinate_transform is not None:
-                from . import coordinate_transform
-                transformed_x, transformed_y = coordinate_transform.apply_coordinate_transform(
+                from .geometry.coordinate_transform import apply_coordinate_transform
+                transformed_x, transformed_y = apply_coordinate_transform(
                     self._coordinate_transform, (scenic_x, scenic_y)
                 )
                 print(f"  Scenic coords ({scenic_x:.3f}, {scenic_y:.3f}) -> "
@@ -284,7 +281,6 @@ class DSpaceSimulation(RacingSimulation):
             
             # 4) Configure ego vehicle position and properties
             print(f"  Setting ego position: s={s_val:.1f}, t={t_val:.3f}, velocity={base_v:.1f}")
-            
             # Set starting position (s-coordinate)
             seq.StartPosition = float(s_val)
             
@@ -349,8 +345,8 @@ class DSpaceSimulation(RacingSimulation):
             
             # Apply coordinate transformation if available (XODR→RD correction)
             if self._coordinate_transform is not None:
-                from . import coordinate_transform
-                transformed_x, transformed_y = coordinate_transform.apply_coordinate_transform(
+                from .geometry.coordinate_transform import apply_coordinate_transform
+                transformed_x, transformed_y = apply_coordinate_transform(
                     self._coordinate_transform, (scenic_x, scenic_y)
                 )
                 print(f"Scenic coords ({scenic_x:.3f}, {scenic_y:.3f}) -> "
@@ -451,8 +447,7 @@ class DSpaceSimulation(RacingSimulation):
         except Exception as e:
             print(f"[ModelDesk] Failed to connect: {e}")
             return False
-    
-    
+
     def _authorScenarioInModelDesk(self):
         """Author scenario in ModelDesk using COM automation.
         
@@ -496,8 +491,7 @@ class DSpaceSimulation(RacingSimulation):
         # This integrates with your existing setup() logic
         # The scenario is already saved and activated in setup()
         print(f"[ModelDesk] Using existing scenario: {self.ts.Name}")
-    
-    
+
     def _configureFellowInModelDesk(self, scenic_obj):
         """Configure a fellow vehicle in ModelDesk scenario.
         
@@ -768,8 +762,7 @@ class DSpaceSimulation(RacingSimulation):
     def stopPerTickControl(self, vehicle_name):
         """Stop per-tick control loop for a vehicle."""
         return self._per_tick_controller.stopPerTickControl(vehicle_name)
-    
-    
+
     def getVehicleState(self, vehicle_name):
         """Get current state of a fellow vehicle.
         
@@ -836,8 +829,7 @@ class DSpaceSimulation(RacingSimulation):
         except Exception as e:
             print(f"    [Route] Auto-detection error: {e}")
             return None
-    
-    
+
     def detectTrackSegment(self, position):
         """Detect which track segment a position belongs to using actual road projection.
         
@@ -884,12 +876,10 @@ class DSpaceSimulation(RacingSimulation):
             print(f"    [TrackSegment] Detection error: {e}")
             return None
 
-
     def assignRoute(self, agent, track_segment):
         """Assign appropriate route based on track segment (dSPACE-specific).
         
         Maps track segments to dSPACE ModelDesk route names.
-        
         Args:
             agent: The racing agent
             track_segment: Track segment identifier ('mainRacing' or 'pitLane')
@@ -1103,7 +1093,6 @@ class DSpaceSimulation(RacingSimulation):
                 
         except Exception as e:
             print(f"    [WARN] Could not set route via sequence: {e}")
-    
 
     def executeActions(self, allActions):
         """Execute actions selected by agents and apply accumulated control state.
@@ -1196,152 +1185,54 @@ class DSpaceSimulation(RacingSimulation):
         }
         return {k: vals[k] for k in properties}
 
-
-
-        seqs = F.Sequences
-
-        dutils.clear_collection(seqs)
-
-        S1 = seqs.Add() if hasattr(seqs, "Add") else seqs.Item(0)
-
-        segs = dutils.ensure_two_segments(S1)
-
-
-
-        # 4) seg0 = ABSOLUTE pose: Position = s, Deviation(Absolute) = t
-
-        dutils.configure_seg0_absolute_pose(segs, s=float(s_val), t=float(t_val))
-
-
-
-        # 5) seg1 = Velocity + Endless; keep lateral "Continue"
-
-        # Set velocity to 0 for static scenarios
-
-        base_v = 0.0  # Force velocity to 0 for all vehicles
-
-        dutils.configure_seg1_motion(segs, v=float(base_v), t=float(t_val))
-
-        dutils.make_endless_transition(segs)
-
-
-
-        # 6) Set Route via FellowSequence.Route (per updated fellow_starting.md)
-
-        self._set_fellow_route_via_sequence(S1, obj)
-
-
-
-        return F
-
-    
-
     def _detect_route_from_road_segment(self, obj):
-
         """Auto-detect route preference using racing domain abstract methods.
-
         
-
         Uses the abstract detectTrackSegment() and assignRoute() methods
-
         to determine the appropriate route for the object.
-
         
-
         Args:
-
             obj: The Scenic object
-
             
-
         Returns:
-
             String route preference ('Pit' or 'Lap') or None
-
         """
-
         try:
-
             # Get object position
-
             obj_pos = obj.position
-
             position = (float(obj_pos.x), float(obj_pos.y))
-
-            
-
             # Use abstract method to detect track segment
-
             track_segment = self.detectTrackSegment(position)
-
             if track_segment is None:
-
                 return None
-
-            
-
             # Use abstract method to assign route
-
             route_preference = self.assignRoute(obj, track_segment)
-
             return route_preference
-
-                
-
         except Exception as e:
-
             print(f"    [Route] Auto-detection error: {e}")
-
             return None
 
-    
-
-    
-
     def detectTrackSegment(self, position):
-
         """Detect which track segment a position belongs to using actual road projection.
         
-
         Uses the road index to determine which road the position actually projects onto,
         rather than distance-based heuristics.
         
-
         Args:
-
             position: (x, y) world coordinates
-
             
-
         Returns:
-
             String indicating the track segment: 'mainRacing', 'pitLane', or None
-
         """
-
         try:
-
             # Get the racing track regions from params (set by racing/model.scenic)
-
             params = getattr(self.scene, "params", {}) or {}
-
             pit_lane_ids = params.get('pitLaneRoadIds', [])
-
             main_racing_ids = params.get('mainRacingRoadIds', [])
-
-            
-
             if not pit_lane_ids and not main_racing_ids:
-
                 # Not a racing scenario
-
                 return None
-
-            
-
             obj_x, obj_y = float(position[0]), float(position[1])
-
-            
 
             # Use actual road projection to determine which road the position is on
             if self._road_index:
@@ -1358,506 +1249,235 @@ class DSpaceSimulation(RacingSimulation):
                     elif str(projected_road_id) in main_racing_ids:
                         return 'mainRacing'
 
-            
             # If projection fails, return None (no fallback)
             return None
-                
-
         except Exception as e:
-
             print(f"    [TrackSegment] Detection error: {e}")
-
             return None
-
-
-
 
     def assignRoute(self, agent, track_segment):
-
         """Assign appropriate route based on track segment (dSPACE-specific).
-
         
-
         Maps track segments to dSPACE ModelDesk route names.
-
         
-
         Args:
-
             agent: The racing agent
-
             track_segment: Track segment identifier ('mainRacing' or 'pitLane')
-
             
-
         Returns:
-
             String indicating the route preference for dSPACE
-
         """
-
         if track_segment == 'pitLane':
-
             return 'Pit'
-
         elif track_segment == 'mainRacing':
-
             return 'Lap'
-
         else:
-
             return None
 
-    
-
     def _set_fellow_route_via_sequence(self, sequence, obj):
-
         """Set the ModelDesk route for a fellow vehicle via FellowSequence.Route.
-
         
-
         Automatically detects appropriate route based on road segment placement.
-
         Falls back to explicit dspace_route attribute if auto-detection fails.
-
         
-
         Args:
-
             sequence: The fellow's sequence object (FellowSequence)
-
             obj: The Scenic object (vehicle)
-
         """
-
         try:
-
             # Access Route property on the sequence
-
             if not hasattr(sequence, 'Route'):
-
                 print(f"    [INFO] Sequence has no Route property, skipping route assignment")
-
                 return
-
-            
-
             route_sel = sequence.Route
-
             print(f"    [Route] Accessed FellowSequence.Route successfully")
-
-            
-
             # Determine route preference
-
             route_preference = None
-
-            
-
             # Priority 1: Auto-detect from road segment (clean design)
-
             route_preference = self._detect_route_from_road_segment(obj)
-
             if route_preference:
-
                 print(f"    [Route] Auto-detected from placement: {route_preference}")
-
             # Priority 2: Explicit attribute (backward compatibility)
-
             elif hasattr(obj, 'dspace_route'):
-
                 route_preference = obj.dspace_route
-
                 print(f"    [Route] Using explicit attribute: {route_preference}")
-
             else:
-
                 print(f"    [Route] No route preference determined")
-
-            
-
             # Check available routes - try multiple methods
-
             available_routes = []
-
-            
-
             # Method 1: Try AvailableElements directly
-
             if hasattr(route_sel, 'AvailableElements'):
-
                 try:
-
                     available = route_sel.AvailableElements
-
                     if available is not None:
-
                         # Try to iterate even if Count doesn't work
-
                         if hasattr(available, 'Count'):
-
                             try:
-
                                 count = available.Count
-
                                 print(f"    [Route] Available routes via AvailableElements: {count}")
-
-                                
-
                                 for i in range(count):
-
                                     try:
-
                                         route = available.Item(i)
-
                                         if route:
-
                                             name = route.Name if hasattr(route, 'Name') else f"Route{i}"
-
                                             available_routes.append((i, name, route))
-
                                             print(f"      Route {i}: {name}")
-
                                     except Exception as e:
-
                                         print(f"      Route {i}: (error: {e})")
-
                             except Exception as e:
-
                                 print(f"    [WARN] Could not get Count from AvailableElements: {e}")
-
-                        
-
                         # Try iteration without Count
-
                         if not available_routes:
-
                             try:
-
                                 for i, route in enumerate(available):
-
                                     if route:
-
                                         name = route.Name if hasattr(route, 'Name') else f"Route{i}"
-
                                         available_routes.append((i, name, route))
-
                                         print(f"      Route {i}: {name} (via iteration)")
-
                             except Exception as e:
-
                                 print(f"    [INFO] Could not iterate AvailableElements: {e}")
-
                     else:
-
                         print(f"    [INFO] AvailableElements is None")
-
                 except Exception as e:
-
                     print(f"    [WARN] Error accessing AvailableElements: {e}")
-
-            
-
             # Method 2: Try getting current ActiveElement to see if routes exist
-
             if not available_routes and hasattr(route_sel, 'ActiveElement'):
-
                 try:
-
                     active = route_sel.ActiveElement
-
                     if active:
-
                         name = active.Name if hasattr(active, 'Name') else "Unknown"
-
                         print(f"    [INFO] Found ActiveElement: {name}")
-
                         print(f"    [INFO] Routes exist but AvailableElements not accessible")
-
                         print(f"    [INFO] Will try to activate by name directly")
-
                 except Exception as e:
-
                     print(f"    [INFO] Could not access ActiveElement: {e}")
-
-            
-
             # If still no routes found, give helpful message but continue
-
             if not available_routes:
-
                 print(f"    [INFO] Could not enumerate routes via AvailableElements")
-
                 print(f"    [INFO] Will attempt direct activation by route name")
-
                 # Continue anyway - try to activate by name even if we can't list them
-
-            
-
             # Try to activate the route
-
             if not hasattr(route_sel, 'Activate'):
-
                 print(f"    [INFO] RouteSelection does not support Activate method")
-
                 return
-
-            
-
             # Try to activate the route
-
             activated = False
-
-            
-
             # If we have enumerated routes, use smart matching
-
             if available_routes and route_preference:
-
                 # Strategy 1: Exact match
-
                 matching_route = None
-
                 for idx, name, route in available_routes:
-
                     if name.lower() == route_preference.lower():
-
                         matching_route = (idx, name, route)
-
                         print(f"    [Match] Found exact match: {name}")
-
                         break
-
-                
-
                 # Strategy 2: Pattern matching
-
                 if not matching_route:
-
                     pref_lower = route_preference.lower()
-
                     for idx, name, route in available_routes:
-
                         name_lower = name.lower()
-
                         if pref_lower in name_lower or name_lower in pref_lower:
-
                             matching_route = (idx, name, route)
-
                             print(f"    [Match] Found pattern match: {name}")
-
                             break
-
-                
-
                 # Strategy 3: Heuristic matching by index
-
                 # Common ModelDesk convention: Route0 = Pit, Route1 = Main/Lap
-
                 if not matching_route and len(available_routes) >= 2:
-
                     pref_lower = route_preference.lower()
-
                     if pref_lower in ['pit', 'pitlane']:
-
                         # Prefer Route0 for pit
-
                         for idx, name, route in available_routes:
-
                             if 'route0' in name.lower() or idx == 0:
-
                                 matching_route = (idx, name, route)
-
                                 print(f"    [Match] Heuristic match for pit: {name} (index {idx})")
-
                                 break
-
                     elif pref_lower in ['lap', 'main', 'race']:
-
                         # Prefer Route1 for main/lap
-
                         for idx, name, route in available_routes:
-
                             if 'route1' in name.lower() or idx == 1:
-
                                 matching_route = (idx, name, route)
-
                                 print(f"    [Match] Heuristic match for lap: {name} (index {idx})")
-
                                 break
-
-                
-
                 # Activate matched route
-
                 if matching_route:
-
                     idx, name, route = matching_route
-
-                    
-
                     # Try multiple activation methods
-
                     activation_methods = [
-
                         ('by index', lambda: route_sel.Activate(idx)),
-
                         ('by name', lambda: route_sel.Activate(name)),
-
                         ('by route object', lambda: route_sel.Activate(route)),
-
                         ('set ActiveElement', lambda: setattr(route_sel, 'ActiveElement', route)),
-
                     ]
-
-                    
-
                     for method_name, activate_fn in activation_methods:
-
                         try:
-
                             activate_fn()
-
                             print(f"    [OK] Activated route '{name}' (index {idx}) {method_name}")
-
                             activated = True
-
                             break
-
                         except Exception as e:
-
                             print(f"    [DEBUG] Activation {method_name} failed: {e}")
-
                             continue
-
-            
-
             # If no enumerated routes, try direct activation with common names
-
             if not activated and route_preference:
-
                 # Try common route name variations
-
                 names_to_try = [
-
                     route_preference,  # Try preference as-is
-
                 ]
-
-                
-
                 # Add variations
-
                 pref_lower = route_preference.lower()
-
                 if pref_lower in ['pit', 'pitlane']:
-
                     names_to_try.extend(['Pit', 'PitLane', 'Pit Lane', 'pit', 'pitlane', 'Route_1'])
-
                 elif pref_lower in ['lap', 'main', 'race']:
-
                     names_to_try.extend(['Lap', 'Main', 'MainRoute', 'Main Route', 'lap', 'main', 'Route_2'])
-
-                
-
                 print(f"    [INFO] Trying direct activation with name variants...")
-
                 for name in names_to_try:
-
                     try:
-
                         route_sel.Activate(name)
-
                         print(f"    [OK] Successfully activated route: '{name}'")
-
                         activated = True
-
                         break
-
                     except Exception as e:
-
                         print(f"    [DEBUG] Could not activate '{name}': {e}")
-
                         continue
-
-            
-
             # Verify final activation status
-
             if activated:
-
                 try:
-
                     if hasattr(route_sel, 'ActiveElement') and route_sel.ActiveElement:
-
                         active_name = route_sel.ActiveElement.Name if hasattr(route_sel.ActiveElement, 'Name') else "Unknown"
-
                         print(f"    [OK] Active route confirmed: '{active_name}'")
-
                 except:
-
                     pass
-
             else:
-
                 print(f"    [WARN] Could not activate any route for preference: {route_preference}")
-
-                
-
         except Exception as e:
-
             print(f"    [WARN] Could not set route via sequence: {e}")
-
-    
-
-
-
 
     def step(self):
 
         time.sleep(self.timestep)
 
-
-
     def getProperties(self, obj, properties):
 
         b = getattr(obj, "_backend", None)
-
         pos = getattr(b, "position", Vector(0, 0, 0))
-
         vel = getattr(b, "linvel",   Vector(0, 0, 0))
-
         ang = getattr(b, "angvel",   Vector(0, 0, 0))
-
         yaw = getattr(b, "heading",  0.0)
-
         vals = {
-
             "position":        pos,
-
             "velocity":        vel,
-
             "speed":           vel.norm(),
-
             "angularVelocity": ang,
-
             "angularSpeed":    ang.norm(),
-
             "yaw":             float(yaw),
-
             "pitch":           0.0,
-
             "roll":            0.0,
-
             "elevation":       float(pos.z),
-
         }
-
         return {k: vals[k] for k in properties}
 
     def getRacingControllers(self, agent):
         """Get racing controllers optimized for dSPACE racing scenarios.
-        
         dSPACE-specific racing controllers tuned for ModelDesk's physics
         and control systems.
         
@@ -1879,7 +1499,6 @@ class DSpaceSimulation(RacingSimulation):
     
     def getRacingLineControllers(self, agent):
         """Get controllers optimized for following the racing line in dSPACE.
-        
         Args:
             agent: The racing agent
             
@@ -1897,7 +1516,6 @@ class DSpaceSimulation(RacingSimulation):
     
     def getPitLaneControllers(self, agent):
         """Get controllers optimized for pit lane driving in dSPACE.
-        
         Args:
             agent: The racing agent
             
@@ -1993,5 +1611,3 @@ class DSpaceSimulation(RacingSimulation):
             return 'Lap'  # dSPACE main racing route
         else:
             return None
-
-
