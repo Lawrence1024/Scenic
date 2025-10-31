@@ -599,27 +599,74 @@ class DSpaceSimulation(RacingSimulation):
     
     def setVehicleControl(self, vehicle_name, throttle=None, brake=None, steering=None, velocity=None):
         """Set dynamic control inputs for a fellow vehicle using ControlDesk."""
+        print(f"\n[setVehicleControl] Called for {vehicle_name}: throttle={throttle}, brake={brake}, steering={steering}, velocity={velocity}")
+        
         ok_pt = self._per_tick_controller.setVehicleControl(vehicle_name, throttle, brake, steering, velocity)
 
         # Also write directly via ControlDesk if available
         if self._cd:
-            def _cd_path_for(name: str, signal: str) -> str:
-                # Placeholder path pattern; replace with your model's actual variable paths
-                # Example: "Platform()://Model Root/Vehicles/F1/Throttle/Value"
-                return f"Platform()://Model Root/Vehicles/{name}/{signal}/Value"
+            print(f"[setVehicleControl] Writing to ControlDesk...")
+            # ExternalUserData control keys (Platform_2)
+            KEY_STEER = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Angle_SteeringWheel[deg]/Value"
+            KEY_THROTTLE = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Pos_AccPedal[%]/Value"
+            KEY_BRAKE = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Pos_BrakePedal[%]/Value"
+            # Optional velocity target if model supports it
+            KEY_VREF = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/v_Vehicle_Ref[m|s]/Value"
             try:
+                # Scale: Scenic actions use 0..1 for throttle/brake; convert to percent
                 if throttle is not None:
-                    self._cd.set_var(_cd_path_for(vehicle_name, "Throttle"), float(throttle))
+                    throttle_pct = float(max(0.0, min(1.0, throttle)) * 100.0)
+                    print(f"  [ControlDesk] Setting throttle: {throttle} -> {throttle_pct}%")
+                    self._cd.set_var(KEY_THROTTLE, throttle_pct)
+                    print(f"  [ControlDesk] OK - Throttle written successfully")
                 if brake is not None:
-                    self._cd.set_var(_cd_path_for(vehicle_name, "Brake"), float(brake))
+                    brake_pct = float(max(0.0, min(1.0, brake)) * 100.0)
+                    print(f"  [ControlDesk] Setting brake: {brake} -> {brake_pct}%")
+                    self._cd.set_var(KEY_BRAKE, brake_pct)
+                    print(f"  [ControlDesk] OK - Brake written successfully")
                 if steering is not None:
-                    self._cd.set_var(_cd_path_for(vehicle_name, "Steering"), float(steering))
+                    # Map -1..1 to degrees (±25 deg default)
+                    steer_deg = float(max(-1.0, min(1.0, steering)) * 25.0)
+                    print(f"  [ControlDesk] Setting steering: {steering} -> {steer_deg} deg")
+                    self._cd.set_var(KEY_STEER, steer_deg)
+                    print(f"  [ControlDesk] OK - Steering written successfully")
                 if velocity is not None:
-                    self._cd.set_var(_cd_path_for(vehicle_name, "TargetVelocity"), float(velocity))
+                    print(f"  [ControlDesk] Setting velocity: {velocity} m/s")
+                    self._cd.set_var(KEY_VREF, float(velocity))
+                    print(f"  [ControlDesk] OK - Velocity written successfully")
             except Exception as e:
-                print(f"[ControlDesk] Write failed for {vehicle_name}: {e}")
+                print(f"[ControlDesk] ERROR - Write failed for {vehicle_name}: {e}")
 
         return ok_pt
+    
+    def setVehicleGear(self, vehicle_name, gear):
+        """Set gear for a vehicle using ControlDesk (one-shot action)."""
+        print(f"\n[setVehicleGear] Called for {vehicle_name}: gear={gear}")
+        
+        if self._cd:
+            KEY_GEAR = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Gear[]/Value"
+            try:
+                gear_int = int(gear)
+                print(f"  [ControlDesk] Setting gear: {gear_int}")
+                self._cd.set_var(KEY_GEAR, gear_int)
+                print(f"  [ControlDesk] OK - Gear written successfully")
+            except Exception as e:
+                print(f"[ControlDesk] ERROR - Gear write failed for {vehicle_name}: {e}")
+    
+    def setVehicleClutch(self, vehicle_name, clutch):
+        """Set clutch pedal position for a vehicle using ControlDesk (one-shot action)."""
+        print(f"\n[setVehicleClutch] Called for {vehicle_name}: clutch={clutch}")
+        
+        if self._cd:
+            KEY_CLUTCH = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Pos_ClutchPedal[%]/Value"
+            try:
+                # Convert 0-1 to 0-100%
+                clutch_pct = float(clutch * 100.0)
+                print(f"  [ControlDesk] Setting clutch: {clutch} -> {clutch_pct}%")
+                self._cd.set_var(KEY_CLUTCH, clutch_pct)
+                print(f"  [ControlDesk] OK - Clutch written successfully")
+            except Exception as e:
+                print(f"[ControlDesk] ERROR - Clutch write failed for {vehicle_name}: {e}")
     
     def startPerTickControl(self, vehicle_name, control_function=None, dt=0.01):
         """Start per-tick control loop for a vehicle."""
@@ -965,8 +1012,76 @@ class DSpaceSimulation(RacingSimulation):
             print(f"    [WARN] Could not set route via sequence: {e}")
     
 
+    def executeActions(self, allActions):
+        """Execute actions selected by agents and apply accumulated control state.
+        
+        This method is called by Scenic's simulation framework after behaviors
+        determine what actions to take. We:
+        1. Call super() to apply actions via their applyTo() methods (stores in _control_state)
+        2. Apply the accumulated control state to ControlDesk variables
+        3. Clear the control state for next timestep
+        """
+        print(f"\n[executeActions] Called with {len(allActions)} actions")
+        for agent, action in allActions.items():
+            print(f"  Agent: {agent}, Action: {action.__class__.__name__}")
+        
+        # First, let actions apply themselves (this calls setThrottle, setSteering, etc.)
+        super().executeActions(allActions)
+        
+        # Now apply accumulated control state to ControlDesk
+        print(f"[executeActions] Applying control state to ControlDesk (cd available: {self._cd is not None})")
+        if self._cd:
+            for obj in self.scene.objects:
+                print(f"  Checking object: {obj}, has _control_state: {hasattr(obj, '_control_state')}")
+                if hasattr(obj, '_control_state'):
+                    print(f"    _control_state contents: {obj._control_state}")
+                
+                # Determine vehicle name
+                if obj is self.scene.egoObject:
+                    vehicle_name = "Ego"
+                elif hasattr(obj, 'raceNumber'):
+                    vehicle_name = f"F{obj.raceNumber}"
+                else:
+                    vehicle_name = f"F{id(obj) % 100}"
+                
+                # Apply continuous controls (throttle, brake, steering)
+                if hasattr(obj, '_control_state') and obj._control_state:
+                    control = obj._control_state
+                    print(f"  [executeActions] Applying control to {vehicle_name}: {control}")
+                    
+                    try:
+                        self.setVehicleControl(
+                            vehicle_name=vehicle_name,
+                            throttle=control.get('throttle'),
+                            brake=control.get('braking'),
+                            steering=control.get('steering')
+                        )
+                    except Exception as e:
+                        print(f"[dSPACE] Failed to apply control for {vehicle_name}: {e}")
+                    
+                    # Clear control state after applying
+                    obj._control_state = {}
+                
+                # Apply one-shot actions (gear, clutch)
+                if hasattr(obj, '_oneshot_actions') and obj._oneshot_actions:
+                    print(f"  [executeActions] Applying one-shot actions to {vehicle_name}: {obj._oneshot_actions}")
+                    
+                    for action_type, value in obj._oneshot_actions:
+                        try:
+                            if action_type == 'gear':
+                                self.setVehicleGear(vehicle_name, value)
+                            elif action_type == 'clutch':
+                                self.setVehicleClutch(vehicle_name, value)
+                        except Exception as e:
+                            print(f"[dSPACE] Failed to apply {action_type} for {vehicle_name}: {e}")
+                    
+                    # Clear one-shot actions after applying
+                    obj._oneshot_actions = []
+        else:
+            print("[executeActions] ControlDesk not available, skipping control application")
 
     def step(self):
+        """Execute one simulation step (advance physics simulation)."""
         time.sleep(self.timestep)
 
     def getProperties(self, obj, properties):

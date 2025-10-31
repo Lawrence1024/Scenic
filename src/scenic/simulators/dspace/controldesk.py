@@ -13,8 +13,12 @@ from typing import Any
 
 
 class ControlDeskApp:
-    def __init__(self, prog_id: str = "ControlDeskNG.Application"):
+    def __init__(self, prog_id: str = "ControlDeskNG.Application",
+                 outer_platform_name: str = "Platform",
+                 inner_platform_name: str = "Platform_2"):
         self._prog_id = prog_id
+        self._outer_platform_name = outer_platform_name
+        self._inner_platform_name = inner_platform_name
         self.app = None
 
     def connect(self):
@@ -39,14 +43,27 @@ class ControlDeskApp:
         self.app.MeasurementDataManagement.Stop()
 
     # Variable access
+    def _get_variables(self):
+        exp = self.app.ActiveExperiment
+        plats = exp.Platforms
+        try:
+            outer = plats.Item(self._outer_platform_name)
+        except Exception:
+            outer = plats[0]
+        try:
+            inner_plats = outer.Platforms
+            inner = inner_plats.Item(self._inner_platform_name)
+        except Exception:
+            inner = outer
+        vdesc = inner.ActiveVariableDescription
+        return vdesc.Variables
+
     def get_var(self, path: str) -> Any:
-        plat = self.app.ActiveExperiment.Platforms[0]
-        vdesc = plat.ActiveVariableDescription
-        return vdesc.Variables[path].ValueConverted
+        vars_obj = self._get_variables()
+        return vars_obj[path].ValueConverted
 
     def set_var(self, path: str, value: Any):
-        plat = self.app.ActiveExperiment.Platforms[0]
-        vdesc = plat.ActiveVariableDescription
-        vdesc.Variables[path].ValueConverted = value
+        vars_obj = self._get_variables()
+        vars_obj[path].ValueConverted = value
 
 

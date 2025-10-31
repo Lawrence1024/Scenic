@@ -19,6 +19,7 @@ Example::
 from scenic.domains.driving.model import *
 from scenic.domains.racing.tracks import RacingTrack, createRacingTrack
 from scenic.domains.racing.behaviors import *
+from scenic.domains.racing.actions import *
 from scenic.core.regions import UnionRegion
 
 ## Racing-specific parameters

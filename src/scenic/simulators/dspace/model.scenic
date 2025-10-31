@@ -1,19 +1,24 @@
-from scenic.domains.driving.model import *
-from scenic.domains.driving.actions import *
-from scenic.domains.driving.behaviors import *
+"""dSPACE-specific racing model.
 
-# Try to import dSPACE simulator and action markers
-try:
-    import scenic.simulators.dspace as dspace
-    from scenic.simulators.dspace.actions import _DSpaceVehicle
-except Exception:
-    # Fallbacks so scenarios can compile without full dSPACE backend available
-    from scenic.core.simulators import SimulatorInterfaceWarning as _SIW
-    import warnings as _warnings
-    _warnings.warn('dSPACE backend not fully available; running without dynamic control', _SIW)
+This model extends the racing domain with dSPACE/ModelDesk simulator support.
+It implements the abstract racing protocols defined in the racing domain.
 
-    class _DSpaceVehicle: pass
+Usage::
 
+    param map = localPath('../../assets/maps/dSPACE/LagunaSeca.xodr')
+    param use2DMap = True
+    param trackDirection = 'counterclockwise'
+    model scenic.simulators.dspace.racing_model
+"""
+
+# Import racing domain model (which imports driving domain)
+from scenic.domains.racing.model import *
+from scenic.domains.racing.actions import SetMaxSpeedAction, SetTTLAction, HasManualTransmission
+
+# Import dSPACE-specific components
+import scenic.simulators.dspace as dspace
+from scenic.simulators.dspace.actions import _DSpaceVehicle
+from scenic.domains.driving.actions import Steers
 
 # dSPACE ModelDesk parameters
 param scenario_src = "LagunaSeca_ExternalControl"
@@ -22,52 +27,90 @@ param timestep = 0.1
 
 # Configure the dSPACE simulator
 simulator dspace.DSpaceSimulator(
-    scenario_src=scenario_src,
-    scenario_name=scenario_name,
-    timestep=float(timestep),
+    scenario_src=globalParameters.scenario_src,
+    scenario_name=globalParameters.scenario_name,
+    timestep=globalParameters.timestep,
 )
 
-
-class DSpaceActor(DrivingObject):
-    """Base class for dSPACE-backed Scenic objects.
-
-    Provides storage for desired control values which the dSPACE simulator
-    can consume each tick (or via external control).
+# dSPACE-specific racing car implementation
+class DSPACERacingCar(RacingCar, _DSpaceVehicle, Steers, HasManualTransmission):
+    """dSPACE implementation of racing car with racing-specific systems.
+    
+    This class implements:
+    - RacingCar: Racing domain car with racing-specific behaviors
+    - _DSpaceVehicle: Marker for dSPACE-specific actions
+    - Steers: Protocol for standard driving domain steering actions
+    - HasManualTransmission: Protocol for gear and clutch control
     """
-    # Common properties used in dSPACE naming conventions
-    name: None
-    raceNumber: None   # optional racing number (F1/F2...)
-
-    # Internal desired control state (used by actions/behaviors)
-    _desiredThrottle: 0.0
-    _desiredBrake: 0.0
-    _desiredSteer: 0.0
-    _desiredVelocity: None
-
-
-class Vehicle(Vehicle, DSpaceActor, Steers, _DSpaceVehicle):
-    """Steerable vehicle backed by dSPACE.
-
-    Multiple inheritance composes:
-    - Driving-domain Vehicle (semantics/geometry/eligibility for behaviors)
-    - DSpaceActor (simulator binding and desired control storage)
-    - Steers (declares steering/throttle/brake capabilities for actions)
-    - _DSpaceVehicle (Python-side marker for action dispatch)
-    """
-
+    
+    # dSPACE-specific properties
+    dspaceActor: None  # Link to dSPACE internal representation
+    routeId: None      # dSPACE route identifier
+    
+    # Racing-specific methods
+    def setMaxSpeed(self, max_speed):
+        # Persist on object for behaviors and simulator control loop
+        self.maxSpeed = max_speed
+        if hasattr(self, 'dspaceActor') and self.dspaceActor:
+            self.dspaceActor.set_control({'max_speed': float(max_speed)})
+    
+    def setTTL(self, ttl):
+        # Persist on object for behaviors and control computation
+        self.ttl = ttl
+        if hasattr(self, 'dspaceActor') and self.dspaceActor:
+            # TTL is a Scenic-side concept; we forward a named handle if needed
+            self.dspaceActor.set_control({'ttl_set': True})
+    
+    # Steers protocol implementation (for driving domain actions)
     def setThrottle(self, throttle):
-        self._desiredThrottle = float(throttle)
-
+        """Set throttle using driving domain protocol."""
+        print(f"[DSPACERacingCar.setThrottle] Called with throttle={throttle}")
+        # Store for later application via simulator
+        if not hasattr(self, '_control_state'):
+            self._control_state = {}
+        self._control_state['throttle'] = float(throttle)
+        print(f"[DSPACERacingCar.setThrottle] Stored in _control_state: {self._control_state}")
+    
     def setSteering(self, steering):
-        self._desiredSteer = float(steering)
-
+        """Set steering using driving domain protocol."""
+        print(f"[DSPACERacingCar.setSteering] Called with steering={steering}")
+        if not hasattr(self, '_control_state'):
+            self._control_state = {}
+        self._control_state['steering'] = float(steering)
+        print(f"[DSPACERacingCar.setSteering] Stored in _control_state: {self._control_state}")
+    
     def setBraking(self, braking):
-        self._desiredBrake = float(braking)
-
-    def setReverse(self, reverse):
-        # Placeholder for future gearbox integration via ControlDesk/ModelDesk
+        """Set braking using driving domain protocol."""
+        print(f"[DSPACERacingCar.setBraking] Called with braking={braking}")
+        if not hasattr(self, '_control_state'):
+            self._control_state = {}
+        self._control_state['braking'] = float(braking)
+        print(f"[DSPACERacingCar.setBraking] Stored in _control_state: {self._control_state}")
+    
+    def setHandbrake(self, handbrake):
+        """Set handbrake (not implemented in dSPACE yet)."""
         pass
+    
+    def setReverse(self, reverse):
+        """Set reverse gear (not implemented in dSPACE yet)."""
+        pass
+    
+    # HasManualTransmission protocol implementation (for racing domain actions)
+    def setGear(self, gear):
+        """Set gear using racing domain protocol."""
+        print(f"[DSPACERacingCar.setGear] Called with gear={gear}")
+        # Store as one-shot action for immediate application
+        if not hasattr(self, '_oneshot_actions'):
+            self._oneshot_actions = []
+        self._oneshot_actions.append(('gear', int(gear)))
+    
+    def setClutch(self, clutch):
+        """Set clutch using racing domain protocol."""
+        print(f"[DSPACERacingCar.setClutch] Called with clutch={clutch}")
+        # Store as one-shot action for immediate application
+        if not hasattr(self, '_oneshot_actions'):
+            self._oneshot_actions = []
+        self._oneshot_actions.append(('clutch', float(clutch)))
 
-    @property
-    def isCar(self):
-        return True
+# Replace the abstract RacingCar with dSPACE implementation
+RacingCar = DSPACERacingCar

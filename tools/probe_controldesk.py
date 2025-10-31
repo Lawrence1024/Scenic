@@ -1,495 +1,566 @@
 # -*- coding: utf-8 -*-
-"""Disposable script to probe ControlDesk COM and enumerate variables.
+"""ControlDesk variable probe (clean version).
 
-Run with your venv's Python while ControlDesk is connected to VEOS.
+Purpose:
+- Connect to ControlDesk via COM
+- Ensure online calibration/measurement is running
+- Enumerate top-level and nested platforms
+- For each nested platform, report whether ActiveVariableDescription.Variables exists
+- Optionally scan for keywords (e.g. throttle/steer/brake) and print current values
+
+Usage (PowerShell):
+  venv\Scripts\python.exe Scenic\tools\probe_controldesk.py --keywords throttle steer brake --max 50
+
+Notes:
+- Read values using ValueConverted when available
+- This script is read-focused; it does not write variables
 """
 
+from __future__ import annotations
+
+import argparse
 import sys
-import traceback
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 
-def log(msg: str):
-    sys.stdout.write(msg + "\n")
+# ----------------------------- Logging -------------------------------------
+
+def log(level: str, msg: str):
+    sys.stdout.write(f"[{level}] {msg}\n")
     sys.stdout.flush()
 
 
-def try_connect(prog_id: str = "ControlDeskNG.Application"):
+def info(msg: str):
+    log("INFO", msg)
+
+
+def warn(msg: str):
+    log("WARN", msg)
+
+
+def err(msg: str):
+    log("ERROR", msg)
+
+
+# ----------------------------- COM Helpers ---------------------------------
+
+def com_connect(prog_id: str = "ControlDeskNG.Application"):
     import pythoncom
     from win32com.client import Dispatch
+
     pythoncom.CoInitialize()
     return Dispatch(prog_id)
 
 
-def safe_getattr(obj, name, default=None):
+def safe_get(obj, name: str, default=None):
     try:
         return getattr(obj, name)
     except Exception:
         return default
 
 
-def get_prop(obj, name, default=None):
-    """Get COM property; if callable, attempt to invoke without args."""
+def get_prop(obj, name: str, default=None):
     try:
         val = getattr(obj, name)
     except Exception:
         return default
-    # If the property is a zero-arg callable, try calling it
     try:
         if callable(val):
             return val()
     except Exception:
-        pass
+        return val
     return val
 
 
-def dump_com_object(title: str, obj, max_items: int = 200):
-    log(f"[introspect] {title} type={type(obj)}")
-    # Try COM property map
-    prop_map = safe_getattr(obj, "_prop_map_get_", None)
-    if isinstance(prop_map, dict) and prop_map:
-        names = list(prop_map.keys())[:max_items]
-        log(f"[introspect] {title} _prop_map_get_ keys ({len(prop_map)}):")
-        for n in names:
-            log(f"  - {n}")
-    # Fallback: dir()
+def coll_to_list(coll) -> List:
     try:
-        names = [n for n in dir(obj) if not n.startswith('_')]
-        names = names[:max_items]
-        if names:
-            log(f"[introspect] {title} dir() sample:")
-            for n in names:
-                log(f"  - {n}")
+        count = safe_get(coll, "Count", None)
+        if isinstance(count, int) and count > 0:
+            return [coll.Item(i) for i in range(count)]
     except Exception:
         pass
-
-
-def enumerate_variables(variables_obj, max_items=500):
-    """Try multiple enumeration strategies; yield (index, name, obj_or_value)."""
-    yielded = 0
-
-    # Strategy 1: Use Count + Item(i)
-    count = safe_getattr(variables_obj, "Count", None)
-    if isinstance(count, int) and count > 0:
-        log(f"[enum] Using Count/Item for {count} variables")
-        for i in range(count):
-            if yielded >= max_items:
-                return
-            try:
-                item = variables_obj.Item(i)
-            except Exception:
-                continue
-            name = safe_getattr(item, "Name", None)
-            if name is None:
-                try:
-                    name = str(item)
-                except Exception:
-                    name = f"<item_{i}>"
-            yield (i, name, item)
-            yielded += 1
-        return
-
-    # Strategy 2: Direct iteration
     try:
-        log("[enum] Attempting direct iteration over Variables")
-        for i, item in enumerate(variables_obj):
-            if yielded >= max_items:
-                return
-            name = safe_getattr(item, "Name", None)
-            if name is None:
-                try:
-                    name = str(item)
-                except Exception:
-                    name = f"<item_{i}>"
-            yield (i, name, item)
-            yielded += 1
-        return
+        return list(coll)
     except Exception:
-        pass
+        return []
 
-    # Strategy 3: Keys/Items dict-like
-    keys = safe_getattr(variables_obj, "Keys", None)
-    if keys is not None:
-        log("[enum] Attempting Keys-based enumeration")
+
+# ----------------------------- Core Logic ----------------------------------
+
+def list_platforms(app) -> Tuple[List, List[Tuple[object, str]]]:
+    """Return (top_level_platforms, nested_entries[(plat_obj, disp_name)])."""
+    exp = get_prop(app, "ActiveExperiment", None)
+    if exp is None:
+        err("No ActiveExperiment. Open one in ControlDesk.")
+        return [], []
+    plats = get_prop(exp, "Platforms", None)
+    if plats is None:
+        err("ActiveExperiment has no Platforms.")
+        return [], []
+
+    top = coll_to_list(plats)
+    top_names = [safe_get(p, "Name", "<Platform>") for p in top]
+    info("Top-level Platforms: " + ", ".join(top_names) if top_names else "Top-level Platforms: <none>")
+
+    nested: List[Tuple[object, str]] = []
+    for p in top:
+        pname = safe_get(p, "Name", "<Platform>")
+        inner_plats = safe_get(p, "Platforms", None)
+        if inner_plats is None:
+            continue
+        inner = coll_to_list(inner_plats)
+        inner_names = [safe_get(ip, "Name", "<Inner>") for ip in inner]
+        if inner_names:
+            info(f"Nested Platforms under '{pname}': {', '.join(inner_names)}")
+        for ip in inner:
+            iname = safe_get(ip, "Name", "<Inner>")
+            nested.append((ip, f"{pname}/{iname}"))
+    return top, nested
+
+
+def report_variables_availability(nested_entries: Sequence[Tuple[object, str]]):
+    for plat_obj, disp in nested_entries:
+        vdesc = get_prop(plat_obj, "ActiveVariableDescription", None)
+        if vdesc is None:
+            warn(f"{disp}: no ActiveVariableDescription")
+            continue
+        # Try to ensure content is fresh
         try:
-            for i, k in enumerate(keys):
-                if yielded >= max_items:
-                    return
-                try:
-                    item = variables_obj[k]
-                except Exception:
-                    item = None
-                yield (i, str(k), item)
-                yielded += 1
-            return
+            if hasattr(vdesc, "Reload"):
+                vdesc.Reload()
+        except Exception:
+            pass
+        try:
+            if hasattr(vdesc, "CheckSourceForChanges"):
+                vdesc.CheckSourceForChanges()
         except Exception:
             pass
 
-    log("[enum] Could not enumerate variables with known strategies")
+        vars_obj = get_prop(vdesc, "Variables", None)
+        if vars_obj is None:
+            info(f"{disp}: Variables = None")
+            continue
+
+        count = safe_get(vars_obj, "Count", None)
+        count_s = str(count) if isinstance(count, int) else "<unknown>"
+        info(f"{disp}: Variables available (Count={count_s})")
 
 
-def _enum_collection(obj, label: str, max_items=200):
-    """Yield items from a COM collection using multiple strategies."""
-    yielded = 0
-    count = safe_getattr(obj, 'Count', None)
-    if isinstance(count, int) and count > 0:
-        log(f"[enum] {label}: Count={count}")
-        for i in range(count):
-            if yielded >= max_items:
-                return
-            try:
-                it = obj.Item(i)
-            except Exception:
-                continue
-            yield i, it
-            yielded += 1
+def scan_keywords(nested_entries: Sequence[Tuple[object, str]], keywords: Sequence[str], max_items: int):
+    if not keywords:
         return
+    kw_lower = [k.lower() for k in keywords]
+    for plat_obj, disp in nested_entries:
+        vdesc = get_prop(plat_obj, "ActiveVariableDescription", None)
+        vars_obj = get_prop(vdesc, "Variables", None) if vdesc is not None else None
+        if vars_obj is None:
+            continue
+
+        info(f"Scanning {disp} for keywords: {', '.join(keywords)}")
+        hits = 0
+        try:
+            count = safe_get(vars_obj, "Count", None)
+            iterator: Iterable[Tuple[int, object]]
+            if isinstance(count, int) and count > 0:
+                iterator = ((i, vars_obj.Item(i)) for i in range(count))
+            else:
+                iterator = enumerate(vars_obj)
+
+            for i, item in iterator:
+                name = safe_get(item, "Name", None)
+                if not isinstance(name, str):
+                    continue
+                low = name.lower()
+                if any(k in low for k in kw_lower):
+                    value = safe_get(item, "ValueConverted", safe_get(item, "Value", None))
+                    info(f"  [hit] {disp} idx={i} name={name} value={value}")
+                    hits += 1
+                    if hits >= max_items:
+                        break
+        except Exception as e:
+            warn(f"{disp}: scan error: {e}")
+
+
+def start_online_and_measurement(app):
     try:
-        for i, it in enumerate(obj):
-            if yielded >= max_items:
-                return
-            yield i, it
-            yielded += 1
+        app.CalibrationManagement.StartOnlineCalibration()
+        app.MeasurementDataManagement.Start()
+        info("Online calibration + measurement started")
+    except Exception as e:
+        warn(f"Could not start online/measurement: {e}")
+
+
+# ------------------------- RootGroup Traversal ------------------------------
+
+def _enum_collection(coll) -> Iterable[object]:
+    try:
+        count = safe_get(coll, 'Count', None)
+        if isinstance(count, int) and count > 0:
+            for i in range(count):
+                try:
+                    yield coll.Item(i)
+                except Exception:
+                    continue
+            return
     except Exception:
         pass
+    try:
+        for it in coll:
+            yield it
+    except Exception:
+        return
 
 
-def traverse_root_group(root, max_depth=3, max_print=500):
-    """Traverse RootGroup hierarchy to find variables with ValueConverted."""
-    log("[cd] Traversing RootGroup...")
-    printed = 0
+def traverse_rootgroup_for_keywords(nested_entries: Sequence[Tuple[object, str]], keywords: Sequence[str], max_depth: int, max_hits: int):
+    if not keywords:
+        return
+    kw_lower = [k.lower() for k in keywords]
 
-    def visit(node, depth):
-        nonlocal printed
-        if depth > max_depth or printed >= max_print:
+    def visit(node, disp_path: str, depth: int, hits_left: List[int]):
+        if hits_left[0] <= 0 or depth < 0:
             return
-        name = safe_getattr(node, 'Name', '<group>')
-        log(f"  [grp] {'  '*depth}{name}")
+        name = safe_get(node, 'Name', '<group>')
+        here = f"{disp_path}/{name}" if disp_path else str(name)
 
-        # Try child variables
-        for cont_name in ('Variables', 'Items', 'Children'):
-            cont = safe_getattr(node, cont_name, None)
+        # Variables under this node (common containers: Variables, Items, Children)
+        for cont_name in ("Variables", "Items", "Children"):
+            cont = safe_get(node, cont_name, None)
             if cont is None:
                 continue
-            for i, it in _enum_collection(cont, f"{name}.{cont_name}"):
-                it_name = safe_getattr(it, 'Name', f'<{cont_name}_{i}>')
-                val = safe_getattr(it, 'ValueConverted', None)
-                log(f"    [var] {'  '*depth}{it_name} = {val}")
-                printed += 1
-                if printed >= max_print:
-                    return
+            for it in _enum_collection(cont):
+                var_name = safe_get(it, 'Name', None)
+                if not isinstance(var_name, str):
+                    continue
+                low = var_name.lower()
+                if any(k in low for k in kw_lower):
+                    full_path = f"{here}/{var_name}" if here else var_name
+                    val = safe_get(it, 'ValueConverted', safe_get(it, 'Value', None))
+                    info(f"  [rootgroup-hit] {full_path} = {val}")
+                    hits_left[0] -= 1
+                    if hits_left[0] <= 0:
+                        return
 
-        # Try sub-groups
-        for grp_name in ('Groups', 'Children'):
-            groups = safe_getattr(node, grp_name, None)
+        # Recurse into groups
+        for grp_name in ("Groups", "Children"):
+            groups = safe_get(node, grp_name, None)
             if groups is None:
                 continue
-            for i, child in _enum_collection(groups, f"{name}.{grp_name}"):
-                visit(child, depth + 1)
+            for child in _enum_collection(groups):
+                if hits_left[0] <= 0:
+                    return
+                visit(child, here, depth - 1, hits_left)
 
-    visit(root, 0)
+    for plat_obj, disp in nested_entries:
+        vdesc = get_prop(plat_obj, 'ActiveVariableDescription', None)
+        root = get_prop(vdesc, 'RootGroup', None) if vdesc is not None else None
+        if root is None:
+            continue
+        info(f"Traversing RootGroup on {disp} for keywords: {', '.join(keywords)}")
+        visit(root, disp_path=disp, depth=max_depth, hits_left=[max_hits])
 
 
-def main():
-    try:
-        app = try_connect()
-        log("[cd] Connected to ControlDesk application")
-
-        exp = app.ActiveExperiment
-        if not exp:
-            log("[cd] No ActiveExperiment; please open one in ControlDesk")
-            return 1
-        log(f"[cd] ActiveExperiment: {safe_getattr(exp, 'Name', 'Unknown')}")
-
-        # Try to go online and start measurement to ensure variables are populated
-        try:
-            app.CalibrationManagement.StartOnlineCalibration()
-            app.MeasurementDataManagement.Start()
-            log("[cd] Online calibration + measurement started")
-        except Exception as e:
-            log(f"[cd] Could not start online/measurement: {e}")
-
-        plats = safe_getattr(exp, "Platforms", None)
-        if plats is None:
-            log("[cd] No Platforms collection available")
-            return 1
-
-        # Iterate platforms until one yields variables
-        def try_platform(plat):
-            plat_name = safe_getattr(plat, "Name", "<Platform>")
-            log(f"[cd] Using platform: {plat_name}")
-
-            vdesc = get_prop(plat, "ActiveVariableDescription", None)
-            vars_obj = get_prop(vdesc, "Variables", None) if vdesc is not None else None
-
-            # If no active variables, try to select a variable description
-            if vars_obj is None:
-                vdescs = safe_getattr(plat, "VariableDescriptions", None)
-                if vdescs is None:
-                    log("[cd] No VariableDescriptions available; cannot enumerate variables")
-                    dump_com_object("Platform object", plat)
-                    return None, None, plat
-
-                # Try Count/Item to pick one
-                picked = None
-                count = safe_getattr(vdescs, "Count", None)
-                if isinstance(count, int) and count > 0:
-                    for i in range(count):
-                        try:
-                            cand = vdescs.Item(i)
-                            name = safe_getattr(cand, "Name", f"VD_{i}")
-                            log(f"[cd] Found VariableDescription[{i}]: {name}")
-                            if picked is None:
-                                picked = cand
-                        except Exception:
-                            continue
-                else:
-                    try:
-                        for i, cand in enumerate(vdescs):
-                            name = safe_getattr(cand, "Name", f"VD_{i}")
-                            log(f"[cd] Found VariableDescription[{i}]: {name}")
-                            if picked is None:
-                                picked = cand
-                    except Exception:
-                        pass
-
-                if picked is None:
-                    log("[cd] Could not pick a VariableDescription")
-                    return None, None, plat
-
-                # Activate it (try multiple APIs)
-                activated = False
-                last_err = None
-                try:
-                    if hasattr(vdescs, 'Activate'):
-                        vdescs.Activate(picked)
-                        activated = True
-                except Exception as e:
-                    last_err = e
-                if not activated:
-                    try:
-                        if hasattr(picked, 'Activate'):
-                            picked.Activate()
-                            activated = True
-                    except Exception as e:
-                        last_err = e
-                if not activated:
-                    try:
-                        plat.ActiveVariableDescription = picked
-                        activated = True
-                    except Exception as e:
-                        last_err = e
-
-                if not activated:
-                    log(f"[cd] Failed to activate VariableDescription via known methods: {last_err}")
-                    return None, None, plat
-
-                vdesc = get_prop(plat, "ActiveVariableDescription", picked)
-                # Try to force-load content
-                try:
-                    if hasattr(vdesc, 'Reload'):
-                        vdesc.Reload()
-                except Exception:
-                    pass
-                try:
-                    if hasattr(vdesc, 'CheckSourceForChanges'):
-                        vdesc.CheckSourceForChanges()
-                except Exception:
-                    pass
-                vars_obj = get_prop(vdesc, "Variables", None)
-                log(f"[cd] Activated VariableDescription: {safe_getattr(vdesc, 'Name', 'Unknown')}")
-                if vars_obj is None:
-                    dump_com_object("ActiveVariableDescription", vdesc)
-
-            return vdesc, vars_obj, plat
-
-        # Try each platform
-        plat_list = []
-        try:
-            count = safe_getattr(plats, 'Count', None)
-            if isinstance(count, int) and count > 0:
-                plat_list = [plats.Item(i) for i in range(count)]
-            else:
-                plat_list = list(plats)
-        except Exception:
-            try:
-                plat_list = [plats[0]]
-            except Exception:
-                plat_list = []
-
-        vdesc = None
-        vars_obj = None
-        plat_used = None
-        for plat in plat_list:
-            vdesc, vars_obj, plat_used = try_platform(plat)
-            if vars_obj is not None:
-                break
-
-        if vars_obj is None:
-            log("[cd] Could not access any variable container on available platforms")
-            # Try path-based access on the last platform examined
-            if plat_used is None and plat_list:
-                plat_used = plat_list[0]
-            if plat_used is None:
-                return 1
-            vdesc_try = get_prop(plat_used, "ActiveVariableDescription", None)
-            vars_try = get_prop(vdesc_try, "Variables", None)
-            if vars_try is None:
-                # Try RootGroup traversal
-                root = get_prop(vdesc_try, 'RootGroup', None) if vdesc_try else None
-                if root is not None:
-                    traverse_root_group(root)
-                else:
-                    log("[cd] No RootGroup available to traverse")
-                dump_com_object("Platform object (failure path)", plat_used)
-                if vdesc_try:
-                    dump_com_object("ActiveVariableDescription (failure path)", vdesc_try)
-                log("[cd] Variables container unavailable; cannot test path-based access")
-                return 1
-            any_ok = False
-            test_paths = [
-                "Platform()://Model Root/BatteryVoltage[V]/Value",
-                "Platform()://Model Root/Vehicles/Ego/Throttle/Value",
-                "Platform()://Model Root/Vehicles/F1/Throttle/Value",
-                "Platform()://Model Root/Vehicles/F1/Steering/Value",
-                "Platform()://Model Root/Vehicles/F1/Brake/Value",
-            ]
-            for p in test_paths:
-                try:
-                    val = vars_try[p].ValueConverted
-                    log(f"[cd] READ OK: {p} = {val}")
-                    any_ok = True
-                except Exception as e:
-                    log(f"[cd] READ FAIL: {p}  ({e})")
-            return 0 if any_ok else 1
-            if vdescs is None:
-                log("[cd] No VariableDescriptions available; cannot enumerate variables")
-                return 1
-
-            # Try Count/Item to pick one
-            picked = None
-            count = safe_getattr(vdescs, "Count", None)
-            if isinstance(count, int) and count > 0:
-                for i in range(count):
-                    try:
-                        cand = vdescs.Item(i)
-                        name = safe_getattr(cand, "Name", f"VD_{i}")
-                        log(f"[cd] Found VariableDescription[{i}]: {name}")
-                        if picked is None:
-                            picked = cand
-                    except Exception:
-                        continue
-            else:
-                try:
-                    for i, cand in enumerate(vdescs):
-                        name = safe_getattr(cand, "Name", f"VD_{i}")
-                        log(f"[cd] Found VariableDescription[{i}]: {name}")
-                        if picked is None:
-                            picked = cand
-                except Exception:
-                    pass
-
-            if picked is None:
-                log("[cd] Could not pick a VariableDescription")
-                return 1
-
-            # Activate it (try multiple APIs)
-            activated = False
-            last_err = None
-            try:
-                # Some APIs expose 'Activate' on the collection
-                if hasattr(vdescs, 'Activate'):
-                    vdescs.Activate(picked)
-                    activated = True
-            except Exception as e:
-                last_err = e
-            if not activated:
-                try:
-                    # Some expose 'Activate' on the item itself
-                    if hasattr(picked, 'Activate'):
-                        picked.Activate()
-                        activated = True
-                except Exception as e:
-                    last_err = e
-            if not activated:
-                try:
-                    # Fallback: assign if property is settable
-                    plat0.ActiveVariableDescription = picked
-                    activated = True
-                except Exception as e:
-                    last_err = e
-
-            if not activated:
-                log(f"[cd] Failed to activate VariableDescription via known methods: {last_err}")
-                return 1
-
-            vdesc = safe_getattr(plat0, "ActiveVariableDescription", picked)
-            vars_obj = safe_getattr(vdesc, "Variables", None)
-            log(f"[cd] Activated VariableDescription: {safe_getattr(vdesc, 'Name', 'Unknown')}")
-
-        if vars_obj is None:
-            log("[cd] vdesc.Variables still not available after activation; probing alternates...")
-            candidates = [
-                "Variables", "Variables2", "Channels", "Measures", "Parameters",
-                "Signals", "Items", "Children", "Groups", "Measurements"
-            ]
-            for name in candidates:
-                obj = safe_getattr(vdesc, name, None)
-                if obj is not None:
-                    log(f"[cd] Trying container '{name}'")
-                    vars_obj = obj
+def _find_group_by_path(root, segments: Sequence[str]):
+    node = root
+    for seg in segments:
+        if not seg:
+            continue
+        next_node = None
+        # Try through 'Groups' then 'Children'
+        for coll_name in ("Groups", "Children"):
+            coll = safe_get(node, coll_name, None)
+            if coll is None:
+                continue
+            for child in _enum_collection(coll):
+                name = safe_get(child, 'Name', None)
+                if name == seg:
+                    next_node = child
                     break
+            if next_node is not None:
+                break
+        if next_node is None:
+            return None
+        node = next_node
+    return node
+
+
+def list_subtree_external_userdata(plat_obj, disp: str, max_items: int, probe_writable: bool):
+    vdesc = get_prop(plat_obj, 'ActiveVariableDescription', None)
+    root = get_prop(vdesc, 'RootGroup', None) if vdesc is not None else None
+    if root is None:
+        return
+    # Path under Model Root
+    path_segs = [
+        'Model Root',
+        'Environment',
+        'Maneuver',
+        'PlantModel',
+        'ExternalUserData',
+    ]
+    grp = _find_group_by_path(root, path_segs)
+    if grp is None:
+        warn(f"{disp}: ExternalUserData path not found")
+        return
+    info(f"Listing {disp}/{'/'.join(path_segs)} (up to {max_items})")
+
+    def visit(node, prefix: str, remaining: List[int]):
+        if remaining[0] <= 0:
+            return
+        # Variables / Items at this node
+        for cont_name in ("Variables", "Items", "Children"):
+            cont = safe_get(node, cont_name, None)
+            if cont is None:
+                continue
+            for it in _enum_collection(cont):
+                if remaining[0] <= 0:
+                    return
+                name = safe_get(it, 'Name', None)
+                if not isinstance(name, str):
+                    continue
+                # If this is a variable-like item, print value
+                val = safe_get(it, 'ValueConverted', safe_get(it, 'Value', None))
+                if val is not None or cont_name != 'Children':
+                    extra = ""
+                    if probe_writable and isinstance(val, (int, float)):
+                        try:
+                            if hasattr(it, 'ValueConverted'):
+                                it.ValueConverted = val
+                            elif hasattr(it, 'Value'):
+                                it.Value = val
+                            extra = " (writable)"
+                        except Exception:
+                            extra = " (read-only)"
+                    info(f"  {prefix}{name} = {val}{extra}")
+                    remaining[0] -= 1
+                # Recurse into children nodes
+                child_groups = safe_get(it, 'Groups', None)
+                if child_groups is not None and remaining[0] > 0:
+                    visit(it, prefix + name + '/', remaining)
+
+        # Also explicit 'Groups' on current node
+        groups = safe_get(node, 'Groups', None)
+        if groups is not None and remaining[0] > 0:
+            for child in _enum_collection(groups):
+                if remaining[0] <= 0:
+                    return
+                cname = safe_get(child, 'Name', '<group>')
+                visit(child, prefix + cname + '/', remaining)
+
+    visit(grp, prefix='', remaining=[max_items])
+
+
+# ----------------------------- Write Helpers --------------------------------
+
+def try_set_pos_acc_pedal_maneuver(app, platform_inner_name: str, new_value: float) -> bool:
+    """Try to set one of several accelerator pedal variables to new_value.
+
+    Strategy:
+      1) Look for exact candidate Names in priority order and attempt write
+      2) If none succeed, try fuzzy matches containing 'AccPedal' and 'Pos' or 'Request' or 'Ctrl'
+    """
+    try:
+        exp = get_prop(app, "ActiveExperiment", None)
+        plats = get_prop(exp, "Platforms", None)
+        # First outer platform by index
+        count = safe_get(plats, 'Count', None)
+        outer = plats.Item(0) if isinstance(count, int) and count > 0 else list(plats)[0]
+        inner_plats = get_prop(outer, 'Platforms', None)
+        inner = inner_plats.Item(platform_inner_name)
+        vdesc = get_prop(inner, 'ActiveVariableDescription', None)
+        vars_obj = get_prop(vdesc, 'Variables', None)
         if vars_obj is None:
-            log("[cd] No variable container found on ActiveVariableDescription")
-            # As a fallback, try direct path-based access on Platforms[0].ActiveVariableDescription.Variables
-            test_paths = [
-                "Platform()://Model Root/BatteryVoltage[V]/Value",
-                "Platform()://Model Root/Vehicles/Ego/Throttle/Value",
-                "Platform()://Model Root/Vehicles/F1/Throttle/Value",
-                "Platform()://Model Root/Vehicles/F1/Steering/Value",
-                "Platform()://Model Root/Vehicles/F1/Brake/Value",
-            ]
-            vdesc_try = safe_getattr(plat0, "ActiveVariableDescription", None)
-            vars_try = safe_getattr(vdesc_try, "Variables", None)
-            if vars_try is None:
-                log("[cd] Variables container unavailable; cannot test path-based access")
-                return 1
-            any_ok = False
-            for p in test_paths:
+            warn(f"{platform_inner_name}: Variables is None; cannot write")
+            return False
+
+        candidates_priority = [
+            "Pos_AccPedal_Maneuver[%]",
+            "Pos_AccPedal_Request[%]",
+            "Pos_AccPedal_Ctrl[%]",
+            "Pos_AccPedal_Driver_Des[%]",
+            "Pos_AccPedal_Driver[%]",
+            "Pos_AccPedal[%]",
+        ]
+
+        # Build an index of Name -> (idx, item)
+        name_to_item = {}
+        count = safe_get(vars_obj, 'Count', None)
+        iterator = ((i, vars_obj.Item(i)) for i in range(count)) if isinstance(count, int) and count > 0 else enumerate(vars_obj)
+        for i, item in iterator:
+            nm = safe_get(item, 'Name', None)
+            if isinstance(nm, str):
+                # Keep first occurrence only
+                name_to_item.setdefault(nm, (i, item))
+
+        # Step 1: exact candidates
+        for cand in candidates_priority:
+            if cand in name_to_item:
+                i, item = name_to_item[cand]
+                info(f"Attempt write (exact): idx={i} name={cand} -> {new_value}")
                 try:
-                    val = vars_try[p].ValueConverted
-                    log(f"[cd] READ OK: {p} = {val}")
-                    any_ok = True
+                    if hasattr(item, 'ValueConverted'):
+                        item.ValueConverted = new_value
+                    elif hasattr(item, 'Value'):
+                        item.Value = new_value
+                    readback = safe_get(item, 'ValueConverted', safe_get(item, 'Value', None))
+                    info(f"WRITE OK idx={i} name={cand} -> {readback}")
+                    return True
                 except Exception as e:
-                    log(f"[cd] READ FAIL: {p}  ({e})")
-            return 0 if any_ok else 1
+                    warn(f"WRITE FAIL idx={i} name={cand}: {e}")
 
-        log("[cd] Enumerating variables (up to 500 items)...")
-        found = []
-        for idx, name, item in enumerate_variables(vars_obj, max_items=500):
-            # Try to read a converted value if available and item supports it
-            value_preview = None
+        # Step 2: fuzzy matches
+        info("Trying fuzzy matches for accelerator pedal variables...")
+        fuzz_candidates: List[Tuple[str, Tuple[int, object]]] = []
+        for nm, pair in name_to_item.items():
+            l = nm.lower()
+            if "accpedal" in l and ("pos" in l or "request" in l or "ctrl" in l):
+                fuzz_candidates.append((nm, pair))
+
+        for nm, (i, item) in fuzz_candidates:
+            info(f"Attempt write (fuzzy): idx={i} name={nm} -> {new_value}")
             try:
-                value_preview = safe_getattr(item, "ValueConverted", None)
-            except Exception:
-                value_preview = None
-            log(f"  [{idx}] {name}  value={value_preview}")
-            found.append(name)
+                if hasattr(item, 'ValueConverted'):
+                    item.ValueConverted = new_value
+                elif hasattr(item, 'Value'):
+                    item.Value = new_value
+                readback = safe_get(item, 'ValueConverted', safe_get(item, 'Value', None))
+                info(f"WRITE OK idx={i} name={nm} -> {readback}")
+                return True
+            except Exception as e:
+                warn(f"WRITE FAIL idx={i} name={nm}: {e}")
 
-        if not found:
-            log("[cd] No variables enumerated. Try switching the Variable Description or different ProgID.")
-        else:
-            # Heuristic: filter likely vehicle-related signals
-            wanted = [n for n in found if any(k in n.lower() for k in ("throttle", "steer", "brake", "velocity", "speed"))]
-            if wanted:
-                log("[cd] Candidate control variable names:")
-                for n in wanted:
-                    log(f"    - {n}")
-
-        return 0
-
+        warn("No writable accelerator pedal variable found")
+        return False
     except Exception as e:
-        log(f"[cd] Probe error: {e}")
-        traceback.print_exc()
+        err(f"Write helper error: {e}")
+        return False
+
+
+def coerce_value(text: str):
+    t = text.strip().lower()
+    if t in ("true", "t", "yes", "y", "1"):
+        return True
+    if t in ("false", "f", "no", "n", "0"):
+        return False
+    try:
+        if "." in t:
+            return float(t)
+        return int(t)
+    except Exception:
+        return text
+
+
+def read_write_by_key_path(app, platform_inner_name: str, key_path: str, set_value_text: Optional[str]) -> bool:
+    try:
+        exp = get_prop(app, "ActiveExperiment", None)
+        plats = get_prop(exp, "Platforms", None)
+        count = safe_get(plats, 'Count', None)
+        outer = plats.Item(0) if isinstance(count, int) and count > 0 else list(plats)[0]
+        inner_plats = get_prop(outer, 'Platforms', None)
+        inner = inner_plats.Item(platform_inner_name)
+        vdesc = get_prop(inner, 'ActiveVariableDescription', None)
+        vars_obj = get_prop(vdesc, 'Variables', None)
+        if vars_obj is None:
+            warn(f"{platform_inner_name}: Variables is None; cannot access key path")
+            return False
+
+        info(f"Access by key: {key_path}")
+        try:
+            item = vars_obj[key_path]
+        except Exception as e:
+            err(f"Key lookup failed: {e}")
+            return False
+
+        current = safe_get(item, 'ValueConverted', safe_get(item, 'Value', None))
+        info(f"READ OK: {key_path} -> {current}")
+
+        if set_value_text is None:
+            return True
+
+        new_val = coerce_value(set_value_text)
+        info(f"Attempt write: {key_path} -> {new_val}")
+        try:
+            if hasattr(item, 'ValueConverted'):
+                item.ValueConverted = new_val
+            elif hasattr(item, 'Value'):
+                item.Value = new_val
+            readback = safe_get(item, 'ValueConverted', safe_get(item, 'Value', None))
+            info(f"WRITE OK: {key_path} -> {readback}")
+            return True
+        except Exception as e:
+            err(f"WRITE FAIL: {e}")
+            return False
+    except Exception as e:
+        err(f"Key-path helper error: {e}")
+        return False
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="ControlDesk variable probe (clean)")
+    parser.add_argument("--prog-id", default="ControlDeskNG.Application", help="COM ProgID for ControlDesk")
+    parser.add_argument("--max", type=int, default=50, help="Max hits to print per platform when scanning keywords")
+    parser.add_argument(
+        "--keywords",
+        nargs="*",
+        default=[
+            "brake",
+            "braking",
+            "front",
+            "rear",
+            "pedal",
+        ],
+        help="Keywords to scan for (brake-related by default)",
+    )
+    parser.add_argument("--set-acc-pedal", type=float, default=None, help="If provided, set Pos_AccPedal_Maneuver[%] on Platform_2 to this value")
+    parser.add_argument("--key-path", type=str, default=None, help="Variables[] key path to read/write (e.g. Platform()://.../Value)")
+    parser.add_argument("--set-by-key", type=str, default=None, help="Value to set for --key-path (bools as true/false, numbers ok)")
+    parser.add_argument("--focus-external-userdata", action="store_true", help="List variables under Maneuver/PlantModel/ExternalUserData on Platform_2")
+    parser.add_argument("--probe-writable", action="store_true", help="Attempt no-op write to detect writable variables when listing")
+    parser.add_argument("--max-list", type=int, default=200, help="Max variables to list when focusing a subtree")
+    args = parser.parse_args(argv)
+
+    try:
+        app = com_connect(args.prog_id)
+        info("Connected to ControlDesk application")
+
+        exp = get_prop(app, "ActiveExperiment", None)
+        if exp is None:
+            err("No ActiveExperiment; please open one in ControlDesk")
+            return 1
+        info(f"ActiveExperiment: {safe_get(exp, 'Name', 'Unknown')}")
+
+        start_online_and_measurement(app)
+
+        top, nested = list_platforms(app)
+        if not nested:
+            warn("No nested platforms found")
+
+        report_variables_availability(nested)
+        scan_keywords(nested, args.keywords, args.max)
+        traverse_rootgroup_for_keywords(nested, args.keywords, max_depth=6, max_hits=args.max)
+
+        if args.focus_external_userdata:
+            # Find Platform_2 entry
+            plat2 = None
+            for plat_obj, disp in nested:
+                if disp.endswith('/Platform_2'):
+                    plat2 = (plat_obj, disp)
+                    break
+            if plat2 is None:
+                warn("Platform_2 not found among nested platforms")
+            else:
+                list_subtree_external_userdata(plat2[0], plat2[1], max_items=args.max_list, probe_writable=args.probe_writable)
+
+        # Optional write step: accelerator pedal
+        if args.set_acc_pedal is not None and args.set_acc_pedal >= 0:
+            success = try_set_pos_acc_pedal_maneuver(app, platform_inner_name="Platform_2", new_value=float(args.set_acc_pedal))
+            if not success:
+                warn("Setting Pos_AccPedal_Maneuver[%] did not succeed")
+
+        # Optional write step: direct key-path access
+        if args.key_path is not None:
+            read_write_by_key_path(app, platform_inner_name="Platform_2", key_path=args.key_path, set_value_text=args.set_by_key)
+        return 0
+    except Exception as e:
+        err(f"Probe error: {e}")
         return 2
 
 
