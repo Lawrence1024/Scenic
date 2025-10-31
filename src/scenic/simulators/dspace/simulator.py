@@ -292,10 +292,16 @@ class DSpaceSimulation(RacingSimulation):
             #   0.0 = aligned with road
             #   positive = counter-clockwise rotation from road direction
             #   negative = clockwise rotation from road direction
-            # For now, default to 0.0 to align with road
-            # TODO: Compute relative angle if obj has specific heading requirements
-            seq.VehicleOrientation = 0.0
-            print(f"  Set orientation: 0.0 degrees (aligned with road)")
+            # Scenic uses yaw=0 for +Y direction, but OpenDRIVE/dSPACE uses yaw=0 for +X direction
+            # Need to convert: dSPACE_orientation = scenic_heading - π/2
+            if hasattr(obj, 'heading'):
+                import math
+                dspace_orientation = obj.heading - math.pi / 2
+                seq.VehicleOrientation = dspace_orientation
+                print(f"  Set orientation: {math.degrees(dspace_orientation):.1f} degrees (from Scenic heading {math.degrees(obj.heading):.1f})")
+            else:
+                seq.VehicleOrientation = 0.0
+                print(f"  Set orientation: 0.0 degrees (aligned with road)")
             
             # Optionally set lateral position through segments if t != 0
             if abs(t_val) > 0.1:
@@ -402,6 +408,19 @@ class DSpaceSimulation(RacingSimulation):
         base_v = 0.0  # Force velocity to 0 for all vehicles
         dutils.configure_seg1_motion(segs, v=float(base_v), t=float(t_val))
         dutils.make_endless_transition(segs)
+
+        # Set orientation (if sequence supports it)
+        # Scenic uses yaw=0 for +Y direction, but OpenDRIVE/dSPACE uses yaw=0 for +X direction
+        # Need to convert: dSPACE_orientation = scenic_heading - π/2
+        if hasattr(obj, 'heading'):
+            try:
+                import math
+                dspace_orientation = obj.heading - math.pi / 2
+                if hasattr(S1, 'VehicleOrientation'):
+                    S1.VehicleOrientation = dspace_orientation
+                    print(f"    Set orientation: {math.degrees(dspace_orientation):.1f} degrees (from Scenic heading {math.degrees(obj.heading):.1f})")
+            except Exception as e:
+                print(f"    Note: Cannot set orientation for Fellow (not supported or error: {e})")
 
         # 6) Set Route via FellowSequence.Route (per updated fellow_starting.md)
         self._set_fellow_route_via_sequence(S1, obj)

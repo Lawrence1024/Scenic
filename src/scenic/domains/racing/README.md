@@ -1,25 +1,67 @@
-# Racing Domain Library Reference
+# Racing Domain - Complete Reference
 
 ## Overview
 
-The Scenic Racing Domain (`@racing/`) extends the Driving Domain (`@driving/`) with racing-specific objects, behaviors, and actions. This document provides a comprehensive reference of all racing-specific components that are **additional** to the driving domain.
+The Scenic Racing Domain (`@racing/`) extends the Driving Domain (`@driving/`) with racing-specific objects, behaviors, and actions for closed-circuit race tracks. This document provides a comprehensive reference to all racing-specific components that are **additional** to the driving domain.
+
+### Key Features
+
+- **Closed-loop circuits** with defined direction (clockwise/counterclockwise)
+- **Pit lanes** separate from racing lanes with automatic detection
+- **Sectors** for timing and performance analysis (auto-divided into 3 sectors)
+- **Starting grids** for race starts
+- **Racing-specific controllers** optimized for track performance
+- **Minimal but extensible API** that simulators can implement
 
 ## Table of Contents
 
-1. [Racing Objects](#racing-objects)
-2. [Racing Actions](#racing-actions)
-3. [Racing Behaviors](#racing-behaviors)
-4. [Racing Regions](#racing-regions)
-5. [Racing Protocols](#racing-protocols)
+1. [Quick Start](#quick-start)
+2. [Racing Objects](#racing-objects)
+3. [Racing Actions](#racing-actions)
+4. [Racing Behaviors](#racing-behaviors)
+5. [Racing Regions](#racing-regions)
 6. [Racing Track Features](#racing-track-features)
 7. [Global Parameters](#global-parameters)
-8. [File Structure](#file-structure)
+8. [Architecture](#architecture)
+9. [Usage Examples](#usage-examples)
+10. [Implementation Status](#implementation-status)
+11. [API Reference](#api-reference)
+12. [Simulator Implementation](#simulator-implementation)
+
+---
+
+## Quick Start
+
+### Basic Setup
+
+```scenic
+param map = localPath('LagunaSeca.xodr')
+param use2DMap = True
+param trackDirection = 'counterclockwise'
+model scenic.domains.racing.model
+
+# Create cars on starting grid
+ego = new RacingCar at startingGrid[0]
+opponent = new RacingCar at startingGrid[1]
+```
+
+### With Behaviors
+
+```scenic
+param map = localPath('LagunaSeca.xodr')
+param use2DMap = True
+model scenic.domains.racing.model
+
+ego = new RacingCar at startingGrid[0], \
+    with behavior FollowRacingLineBehavior(target_speed=30)
+```
 
 ---
 
 ## Racing Objects
 
 ### `RacingCar`
+
 **Location**: `src/scenic/domains/racing/model.scenic`
 
 **Inheritance**: `Car` (from driving domain)
@@ -28,7 +70,26 @@ The Scenic Racing Domain (`@racing/`) extends the Driving Domain (`@driving/`) w
 - `carType`: "Racing Car"
 - `position`: on `mainRacingRoad`
 - `ttl`: default `racingLine` (target line to drive on)
-- `maxSpeed`: numeric (m/s)
+- `speed`: 25 m/s (higher default for racing)
+- `maxSpeed`: 30.0 m/s (~108 km/h)
+
+**Racing Identification**:
+- `raceNumber`: Range(1, 999) - Car number for identification
+- `team`: str | None - Team name or identifier
+- `carType`: str - Vehicle type for reference
+
+**Performance Characteristics** (configurable):
+- `maxSpeed`: float - Maximum speed in m/s (default: 30.0)
+- `acceleration`: float - Acceleration capability in m/s² (default: 8.0)
+- `braking`: float - Braking capability in m/s² (default: -12.0)
+
+**State Properties**:
+- `fuelLevel`: Range(0.0, 1.0), default Range(0.5, 1.0)
+- `tireWear`: Range(0.0, 1.0), default 0.0 (0=new, 1=worn)
+
+**Autonomous Capabilities**:
+- `waypointTolerance`: float - Distance tolerance for waypoint following (default: 2.5)
+- `controllerAggressiveness`: Range(0.0, 1.0) - Controller aggressiveness (default: 0.5)
 
 **Minimal Racing API** (implemented by simulators or stored as properties):
 ```python
@@ -36,19 +97,24 @@ def setMaxSpeed(self, max_speed: float) -> None: ...
 def setTTL(self, ttl) -> None: ...  # ttl is a Region-like line with signedDistanceTo
 ```
 
+**Note**: Specialized car types (FormulaCar, GTCar, PrototypeCar) are **not** implemented in the base domain. Simulators may extend `RacingCar` to provide these.
+
 ### `RacingTrack`
-**Location**: `src/scenic/domains/racing/model.scenic`
+
+**Location**: `src/scenic/domains/racing/tracks.py`
 
 **Purpose**: Central racing track object that manages all track features
 
 **Key Properties**:
-- `network`: The underlying road network
-- `pitLane`: Region representing pit lane
-- `racingLine`: Region representing optimal racing line
-- `mainRacingRoad`: Region representing main racing track
-- `pitLaneRoad`: Region representing pit lane road
-- `sectors`: List of track sectors
-- `startingGrid`: Optional starting grid positions
+- `network`: The underlying road Network
+- `direction`: 'clockwise' or 'counterclockwise'
+- `pitLane`: Optional `PitLane` object (if pit lane detected)
+- `pitLaneRoad`: Optional Road object for pit lane
+- `mainRacingRoad`: Union of all non-pit roads
+- `racingLine`: Optional `RacingLine` object (defaults to `mainRacingRoad`)
+- `sectors`: List of track sectors (auto-generated, default 3)
+- `startingGrid`: List of starting grid positions
+- `trackLength`: Total track length in meters
 
 ---
 
@@ -56,49 +122,100 @@ def setTTL(self, ttl) -> None: ...  # ttl is a Region-like line with signedDista
 
 **Location**: `src/scenic/domains/racing/actions.py`
 
-The racing action surface is intentionally minimal:
+The racing action surface is intentionally minimal, focusing on core functionality:
 
 ### `SetMaxSpeedAction`
+
 Set the maximum allowed speed (m/s) for a racing car.
 
 ```python
 class SetMaxSpeedAction(Action):
     def __init__(self, max_speed: float): ...
     def applyTo(self, obj, sim):
-        if hasattr(obj, 'setMaxSpeed'): obj.setMaxSpeed(max_speed)
-        else: obj.maxSpeed = max_speed
+        if hasattr(obj, 'setMaxSpeed'): 
+            obj.setMaxSpeed(max_speed)
+        else: 
+            obj.maxSpeed = max_speed
 ```
 
-Usage: `take SetMaxSpeedAction(35)`
+**Usage**: `take SetMaxSpeedAction(35)`
 
 ### `SetTTLAction`
-Set the car's TTL (target line to drive on). The TTL is a Region-like object
-supporting `signedDistanceTo`, e.g., a lane centerline or racing line.
+
+Set the car's TTL (target line to drive on). The TTL is a Region-like object supporting `signedDistanceTo`, such as a lane centerline or racing line.
 
 ```python
 class SetTTLAction(Action):
     def __init__(self, ttl): ...
     def applyTo(self, obj, sim):
-        if hasattr(obj, 'setTTL'): obj.setTTL(ttl)
-        else: obj.ttl = ttl
+        if hasattr(obj, 'setTTL'): 
+            obj.setTTL(ttl)
+        else: 
+            obj.ttl = ttl
 ```
 
-Usage: `take SetTTLAction(racingLine)`
+**Usage**: `take SetTTLAction(racingLine)`
 
----
+### `SetGearAction`
 
-## dSPACE Example (Implementation Notes)
+Set gear to a specific value (0-6). Racing domain action for manual transmission control.
 
-**Location**: `src/scenic/simulators/dspace/racing_model.scenic`, `simulator.py`
+```python
+class SetGearAction(Action):
+    def __init__(self, gear: int): ...
+    def applyTo(self, obj, sim):
+        if hasattr(obj, 'setGear'): 
+            obj.setGear(gear)
+        else: 
+            obj.gear = gear
+```
 
-- `DSPACERacingCar` implements:
-  - `setMaxSpeed(max_speed)`: stores and forwards to control API
-  - `setTTL(ttl)`: stores TTL for controllers/behaviors
-- Route assignment (ModelDesk):
-  - Detects segment via projection and compares to `pitLaneRoadIds` / `mainRacingRoadIds`
-  - Maps segment to route preference: Pit → Route0, Lap → Route1
-  - Activates the matching route (with fallbacks if COM index/name activation fails)
-- Ego uses the same route selection path as fellows (via `_set_fellow_route_via_sequence`).
+- `gear`: 0 = Neutral, 1-6 = Gears
+- **Note**: For starting from neutral (gear 0 → gear 1), use `PressClutchAction` first
+
+**Usage**: `take SetGearAction(2)`
+
+### `PressClutchAction`
+
+Press clutch pedal (one-shot action).
+
+**Primary use case**: Starting from neutral (gear 0 → gear 1)
+- Press clutch when in neutral
+- Use `SetGearAction(1)` to engage 1st gear
+- Release clutch to start moving
+
+**Usage**: `take PressClutchAction()`
+
+### `ReleaseClutchAction`
+
+Release clutch pedal (one-shot action).
+
+**Primary use case**: Completing the start from neutral
+- After pressing clutch and engaging 1st gear
+- Release clutch to begin moving
+
+**Usage**: `take ReleaseClutchAction()`
+
+### `HasManualTransmission` Protocol
+
+Mixin protocol for agents with manual transmission control. Simulators should implement these methods:
+
+```python
+class HasManualTransmission:
+    def setGear(self, gear: int) -> None: ...
+    def setClutch(self, clutch: float) -> None: ...  # 0.0=released, 1.0=pressed
+```
+
+### Actions Referenced But Not Implemented
+
+The following actions are referenced in behaviors but are **not** implemented in `actions.py`. Simulators may need to provide their own implementations:
+
+- `PitLimiterAction` - Speed limiter for pit lane
+- `DRSAction` - Drag Reduction System
+- `ERSDeployAction` - Energy Recovery System deployment
+- `TractionControlAction` - Traction control adjustment
+- `BrakeBiasAction` - Brake balance adjustment
+- `DifferentialAction` - Differential settings
 
 ---
 
@@ -107,19 +224,21 @@ Usage: `take SetTTLAction(racingLine)`
 **Location**: `src/scenic/domains/racing/behaviors.scenic`
 
 ### `FollowRacingLineBehavior`
-**Purpose**: Follow the car's TTL (target line) using controllers, respecting max speed
 
+**Purpose**: Follow the car's TTL (target line) using PID controllers, respecting max speed.
+
+**Implementation**:
 ```scenic
 behavior FollowRacingLineBehavior(target_speed=30):
     # Ensure TTL/max speed set; default TTL is racingLine or mainRacingRoad
     if not hasattr(self, 'ttl') or self.ttl is None:
-        take SetTTLAction(racingLine)
+        take SetTTLAction(track.racingLine if hasattr(track, 'racingLine') and track.racingLine else mainRacingRoad)
     take SetMaxSpeedAction(target_speed)
     _lon_controller, _lat_controller = simulation().getRacingControllers(self)
     past_steer_angle = 0
     while True:
         current_speed = (self.speed if self.speed is not None else 0)
-        line = (self.ttl if hasattr(self, 'ttl') and self.ttl is not None else racingLine)
+        line = (self.ttl if hasattr(self, 'ttl') and self.ttl is not None else (track.racingLine if hasattr(track, 'racingLine') and track.racingLine else mainRacingRoad))
         cte = line.signedDistanceTo(self.position)
         speed_error = min(self.maxSpeed, target_speed) - current_speed
         throttle = _lon_controller.run_step(speed_error)
@@ -131,14 +250,16 @@ behavior FollowRacingLineBehavior(target_speed=30):
 **Usage**: `do FollowRacingLineBehavior(target_speed=35)`
 
 ### `PitStopBehavior`
-**Purpose**: Execute a complete pit stop sequence
 
+**Purpose**: Execute a pit stop sequence.
+
+**Implementation**:
 ```scenic
 behavior PitStopBehavior():
     """Execute a pit stop using racing-specific systems."""
     
     # Enter pit lane with speed limiter
-    take PitLimiterAction(activate=True)
+    take PitLimiterAction(activate=True)  # ⚠️ Not implemented - simulator must provide
     do FollowRacingLineBehavior(target_speed=20)
     
     # Stop for pit stop
@@ -146,14 +267,18 @@ behavior PitStopBehavior():
     wait  # Simulate pit stop time
     
     # Exit pit lane
-    take PitLimiterAction(activate=False)
+    take PitLimiterAction(activate=False)  # ⚠️ Not implemented - simulator must provide
 ```
 
 **Usage**: `do PitStopBehavior()`
 
-### `OvertakingBehavior`
-**Purpose**: Execute overtaking maneuvers using racing systems
+**Note**: This behavior references `PitLimiterAction` which is not implemented in the base domain. Simulators must provide their own implementation.
 
+### `OvertakingBehavior`
+
+**Purpose**: Execute overtaking maneuvers using racing systems.
+
+**Implementation**:
 ```scenic
 behavior OvertakingBehavior(target_car, aggressive=False):
     """Attempt to overtake target car using racing systems.
@@ -169,8 +294,8 @@ behavior OvertakingBehavior(target_car, aggressive=False):
     
     # Execute overtake with racing systems
     if aggressive:
-        take ERSDeployAction(mode='overtake', amount=1.0)
-        take DRSAction(activate=True)
+        take ERSDeployAction(mode='overtake', amount=1.0)  # ⚠️ Not implemented
+        take DRSAction(activate=True)  # ⚠️ Not implemented
     
     # Move to side and accelerate
     take SetThrottleAction(1.0)
@@ -184,22 +309,28 @@ behavior OvertakingBehavior(target_car, aggressive=False):
 
 **Usage**: `do OvertakingBehavior(opponent_car, aggressive=True)`
 
-### `DefensiveBehavior`
-**Purpose**: Defend position using racing-specific systems
+**Note**: This behavior references `ERSDeployAction` and `DRSAction` which are not implemented in the base domain.
 
+### `DefensiveBehavior`
+
+**Purpose**: Defend position using racing-specific systems.
+
+**Implementation**:
 ```scenic
 behavior DefensiveBehavior():
     """Defend position using racing-specific systems."""
     
     # Adjust racing systems for defense
-    take TractionControlAction(level=8)  # More conservative TC
-    take BrakeBiasAction(bias=0.6)  # More front bias for stability
+    take TractionControlAction(level=8)  # ⚠️ Not implemented
+    take BrakeBiasAction(bias=0.6)  # ⚠️ Not implemented
     
     # Follow racing line defensively
     do FollowRacingLineBehavior(target_speed=25)
 ```
 
 **Usage**: `do DefensiveBehavior()`
+
+**Note**: This behavior references `TractionControlAction` and `BrakeBiasAction` which are not implemented in the base domain.
 
 ---
 
@@ -210,11 +341,12 @@ behavior DefensiveBehavior():
 There are exactly three regions of interest:
 
 - `road`: Entire drivable surface (from driving domain)
-- `pitLaneRoad`: Region for pit lane lanes
+- `pitLaneRoad`: Region for pit lane lanes (if pit lane detected)
 - `mainRacingRoad`: Complement of `pitLaneRoad` in `road`
 
-Invariant: `mainRacingRoad` and `pitLaneRoad` are mutually exclusive and
-`mainRacingRoad ∪ pitLaneRoad = road`.
+**Invariant**: `mainRacingRoad` and `pitLaneRoad` are mutually exclusive and `mainRacingRoad ∪ pitLaneRoad = road`.
+
+The `racingLine` region defaults to `mainRacingRoad` if no explicit racing line is defined.
 
 ---
 
@@ -223,51 +355,74 @@ Invariant: `mainRacingRoad` and `pitLaneRoad` are mutually exclusive and
 **Location**: `src/scenic/domains/racing/tracks.py`
 
 ### `Sector`
-**Purpose**: Represents track sectors for timing and analysis
+
+Represents track sectors for timing and analysis. Tracks are automatically divided into 3 equal sectors by default.
 
 ```python
+@attr.s(auto_attribs=True, kw_only=True, eq=False)
 class Sector:
-    def __init__(self, start_s: float, end_s: float, name: str = None):
-        self.start_s = start_s
-        self.end_s = end_s
-        self.name = name
+    number: int
+    startDistance: float  # Distance along track in meters
+    endDistance: float
+    region: PolygonalRegion
+    name: Optional[str] = None
+    
+    @property
+    def length(self) -> float:
+        return self.endDistance - self.startDistance
 ```
 
 ### `PitLane`
-**Purpose**: Represents pit lane features
+
+Represents pit lane features with speed limits and pit boxes.
 
 ```python
+@attr.s(auto_attribs=True, kw_only=True, eq=False)
 class PitLane:
-    def __init__(self, road: Road):
-        self.road = road
-        self.pit_boxes = []  # List of pit box regions
+    lane: Lane
+    speedLimit: float = 22.0  # ~80 km/h default
+    entryPoint: Optional[Vector] = None
+    exitPoint: Optional[Vector] = None
+    pitBoxes: List[PolygonalRegion] = []
+    
+    @property
+    def region(self) -> PolygonalRegion:
+        return self.lane.polygon
 ```
 
 ### `RacingLine`
-**Purpose**: Represents the optimal racing line
+
+Represents the optimal racing line through a section of track.
 
 ```python
+@attr.s(auto_attribs=True, kw_only=True, eq=False)
 class RacingLine:
-    def __init__(self, track: 'RacingTrack'):
-        self.track = track
-        self.points = []  # Racing line points
+    path: PolylineRegion
+    section: str = "general"
+    speedProfile: List[Tuple[float, float]] = []
 ```
 
 ### `RacingTrack`
-**Purpose**: Main track management class
 
+Main track management class extending the driving domain's Network.
+
+**Key Methods**:
+- `distanceAlongTrack(position) → float` - Calculate distance from start/finish (TODO: currently placeholder)
+- `getSectorAt(position) → Sector` - Get sector containing position
+- `isOnPitLane(position) → bool` - Check if position is on pit lane
+- `enforceTrackDirection(heading, position) → bool` - Validate heading matches track direction
+- `generateStartingGrid(numPositions, spacing) → List[Lane]` - Generate grid positions
+
+**Initialization**:
 ```python
-class RacingTrack:
-    def __init__(self, network: Network, **kwargs):
-        self.network = network
-        self.pit_lane = None
-        self.racing_line = None
-        self.sectors = []
-        self.starting_grid = None
-    
-    def calculate_track_length(self) -> float: ...
-    def identify_track_features(self) -> None: ...
-    def generate_starting_grid(self, num_cars: int) -> List[Point]: ...
+track = createRacingTrack(
+    mapFile: str,
+    direction: str = 'counterclockwise',
+    pitLaneRoadId: Optional[str] = None,
+    pitLaneRoadName: Optional[str] = None,
+    mainLineRoadId: Optional[str] = None,
+    **map_options
+)
 ```
 
 ---
@@ -277,86 +432,125 @@ class RacingTrack:
 **Location**: `src/scenic/domains/racing/model.scenic`
 
 ### Track Configuration
+
 ```scenic
-param trackDirection = 'clockwise'  # or 'counterclockwise'
+param trackDirection = 'counterclockwise'  # or 'clockwise'
 param generateStartingGrid = True
-param pitLaneRoadId = None  # Auto-detected if None
-param racingLineOffset = 0.0  # Offset from center line
+param startingGridPositions = 20
+param startingGridSpacing = 8.0  # meters between grid positions
 ```
 
-### Track Analysis
+### Track Segment Identification (Optional)
+
 ```scenic
-param sectorCount = 3  # Number of sectors to generate
-param enableDRS = True  # Enable DRS zones
-param enableERS = True  # Enable ERS deployment
+param pitLaneRoadId = None  # OpenDRIVE road ID (e.g., "1545702203" for Laguna Seca)
+param pitLaneRoadName = "pit"  # Pattern to match pit lane name
+param mainLineRoadId = None  # OpenDRIVE road ID (e.g., "2117817291" for Laguna Seca)
 ```
 
 ---
 
-## File Structure
+## Architecture
+
+### Inheritance Hierarchy
 
 ```
-src/scenic/domains/racing/
-├── __init__.py              # Domain initialization
-├── README.md               # Domain overview and usage
-├── OVERVIEW.md             # Detailed domain overview
-├── model.scenic            # Racing world model
-├── actions.py              # Racing-specific actions
-├── behaviors.scenic        # Racing-specific behaviors
-├── tracks.py               # Track analysis and management
-├── simulators.py           # Racing simulator interfaces
-└── __pycache__/            # Python cache files
+Scenic Core
+    ↓
+Driving Domain (roads, vehicles, driving behaviors)
+    ↓
+Racing Domain (tracks, racing cars, racing behaviors)
+    ↓
+Simulator-specific implementations (e.g., dSPACE racing model)
 ```
 
----
+### Class Relationships
 
-## Key Differences from Driving Domain
+```
+Network (driving)
+    ↓
+RacingTrack (racing)
+    ├── PitLane
+    ├── Sector (multiple, auto-generated)
+    └── RacingLine (optional, defaults to mainRacingRoad)
 
-### Objects
-- **Driving**: `Car`, `NPCCar`, `Pedestrian`
-- **Racing**: `RacingCar` (extends `Car` with racing systems)
+Vehicle (driving)
+    ↓
+RacingCar (racing)
+    └── Simulator-specific extensions (e.g., DSPACERacingCar)
+```
 
-### Actions
-- **Driving**: Basic vehicle control (`SetThrottleAction`, `SetSteerAction`, etc.)
-- **Racing**: Racing-specific systems (`DRSAction`, `ERSDeployAction`, `PitLimiterAction`, etc.)
+### Design Principles
 
-### Behaviors
-- **Driving**: `FollowLaneBehavior`, `DriveAvoidingCollisions`, etc.
-- **Racing**: `FollowRacingLineBehavior`, `PitStopBehavior`, `OvertakingBehavior`, etc.
-
-### Regions
-- **Driving**: `road`, `curb`, `sidewalk`, `intersection`
-- **Racing**: `pitLane`, `racingLine`, `mainRacingRoad`, `pitLaneRoad`
-
-### Track Features
-- **Driving**: Basic road network
-- **Racing**: Sectors, pit lanes, racing lines, starting grids
+1. **Simulator Independence**: Abstract protocols that simulators implement
+2. **Extensibility**: Easy to add simulator-specific features
+3. **Compatibility**: Inherits all driving domain functionality
+4. **Minimal Surface Area**: Core actions and behaviors only
 
 ---
 
 ## Usage Examples
 
-### Basic Racing Scenario
+### Basic Grid Start
+
 ```scenic
+param map = localPath('LagunaSeca.xodr')
+param use2DMap = True
+param trackDirection = 'counterclockwise'
 model scenic.domains.racing.model
 
-# Create racing cars
-ego = new RacingCar on mainRacingRoad
-opponent = new RacingCar ahead of ego by 50
+# Cars automatically placed on grid
+ego = new RacingCar at startingGrid[0]
+opponent1 = new RacingCar at startingGrid[1]
+opponent2 = new RacingCar at startingGrid[2]
+```
 
-# Assign racing behaviors
-ego.behavior = FollowRacingLineBehavior(target_speed=35)
-opponent.behavior = DefensiveBehavior()
+### With Behaviors
+
+```scenic
+param map = localPath('LagunaSeca.xodr')
+param use2DMap = True
+model scenic.domains.racing.model
+
+# Ego on grid with racing behavior
+ego = new RacingCar at startingGrid[0], \
+    with behavior FollowRacingLineBehavior(target_speed=30)
+
+# Opponent with defensive behavior
+opponent = new RacingCar at startingGrid[1], \
+    with behavior DefensiveBehavior()
 ```
 
 ### Pit Stop Scenario
+
 ```scenic
-# Create car that needs to pit
-racing_car = new RacingCar on mainRacingRoad
-racing_car.behavior = PitStopBehavior()
+param map = localPath('LagunaSeca.xodr')
+param use2DMap = True
+model scenic.domains.racing.model
+
+# Car on track with low fuel
+ego = new RacingCar on mainRacingRoad, \
+    with fuelLevel 0.15, \
+    with behavior PitStopBehavior()
+```
+
+**Note**: `PitStopBehavior` references `PitLimiterAction` which is not yet implemented in the base domain.
+
+### Manual Transmission Control
+
+```scenic
+# Start from neutral
+take PressClutchAction()
+take SetGearAction(1)
+take ReleaseClutchAction()
+
+# Change gears while moving (no clutch needed)
+take SetGearAction(2)
+take SetGearAction(3)
 ```
 
 ### Overtaking Scenario
+
 ```scenic
 # Create cars for overtaking
 leader = new RacingCar on mainRacingRoad
@@ -368,27 +562,276 @@ chaser.behavior = OvertakingBehavior(leader, aggressive=True)
 
 ---
 
-## Simulator Implementation Requirements
+## Implementation Status
+
+### ✅ Fully Implemented
+
+- Track direction enforcement
+- Starting grid generation
+- Racing car objects with proper properties
+- 4 racing behaviors (basic functionality)
+- 5 racing actions (max speed, TTL, gear/clutch)
+- dSPACE integration (via `racing_model.scenic`)
+- Sector-based organization (auto-generated 3 sectors)
+- Pit lane identification (via road ID or name pattern)
+- Racing simulator interface (`RacingSimulator`, `RacingSimulation`)
+- Manual transmission protocol (`HasManualTransmission`)
+- Racing controllers (optimized PID for different scenarios)
+
+### ⚠️ Partially Implemented
+
+- **Behaviors reference missing actions**: `PitStopBehavior`, `OvertakingBehavior`, and `DefensiveBehavior` reference actions that are not implemented in `actions.py`:
+  - `PitLimiterAction`
+  - `DRSAction`
+  - `ERSDeployAction`
+  - `TractionControlAction`
+  - `BrakeBiasAction`
+  
+  These behaviors will work only if simulators provide these actions.
+
+- **Racing line**: Defaults to `mainRacingRoad` but explicit racing line calculation is not implemented.
+
+- **Track distance calculation**: `distanceAlongTrack()` method exists but returns placeholder (0.0).
+
+- **Utility functions**: `isOnRacingLine()` returns placeholder (always True).
+
+### ❌ Not Implemented
+
+These features are referenced in documentation or behaviors but are **not** in the codebase:
+
+- Specialized car types: `FormulaCar`, `GTCar`, `PrototypeCar`
+- Personnel objects: `PitCrew`, `TrackMarshal`
+- Additional behaviors: `QualifyingLapBehavior`, `FormationLapBehavior`, `RaceStartBehavior`, `ConserveFuelBehavior`, `TrafficManagementBehavior`
+- Racing system actions: `DRSAction`, `ERSDeployAction`, `TractionControlAction`, `BrakeBiasAction`, `DifferentialAction`, `PitLimiterAction`
+- Advanced racing actions: `FormationHoldAction`, `OvertakeAction`, `DefendPositionAction`, `SlipstreamAction`
+- Automatic DRS zones
+- Track limits detection
+- Tire temperature simulation
+- Weather conditions
+- Safety car behavior
+- Flag system (yellow, red, blue)
+
+---
+
+## API Reference
+
+### Track Methods
+
+```python
+track.distanceAlongTrack(position: Vector) -> Optional[float]  # TODO: Returns placeholder
+track.getSectorAt(position: Vector) -> Optional[Sector]
+track.isOnPitLane(position: Vector) -> bool
+track.enforceTrackDirection(heading: float, position: Vector) -> bool
+track.generateStartingGrid(numPositions: int, spacing: float, offset: float = 0.0) -> List[Lane]
+```
+
+### Utility Functions
+
+```python
+carsInFormation(positions: List) -> List[RacingCar]
+isOnRacingLine(car: RacingCar, tolerance: float = 2.0) -> bool  # Placeholder implementation
+distanceToSectorEnd(car: RacingCar) -> Optional[float]
+carsAheadInSector(car: RacingCar, sector: Optional[Sector] = None) -> List[RacingCar]
+```
+
+### Racing Car Properties
+
+```python
+RacingCar:
+    # Identification
+    raceNumber: Range(1, 999)
+    team: str | None
+    carType: str  # default "Racing Car"
+    
+    # Performance
+    maxSpeed: float  # m/s, default 30.0
+    acceleration: float  # m/s², default 8.0
+    braking: float  # m/s², default -12.0
+    
+    # State
+    fuelLevel: Range(0.0, 1.0)  # default Range(0.5, 1.0)
+    tireWear: Range(0.0, 1.0)  # default 0.0
+    
+    # Racing API
+    ttl: Region  # Target line, default racingLine
+    setMaxSpeed(max_speed: float) -> None
+    setTTL(ttl: Region) -> None
+```
+
+### Racing Actions
+
+```python
+SetMaxSpeedAction(max_speed: float)
+SetTTLAction(ttl: Region)
+SetGearAction(gear: int)  # 0-6
+PressClutchAction()
+ReleaseClutchAction()
+```
+
+### Racing Behaviors
+
+```scenic
+FollowRacingLineBehavior(target_speed=30)
+PitStopBehavior()  # May require simulator-specific PitLimiterAction
+OvertakingBehavior(target_car, aggressive=False)  # May require simulator-specific actions
+DefensiveBehavior()  # May require simulator-specific actions
+```
+
+### Racing Controllers (from `RacingSimulation`)
+
+```python
+getRacingControllers(agent) -> Tuple[PIDLongitudinalController, PIDLateralController]
+getRacingLineControllers(agent) -> Tuple[PIDLongitudinalController, PIDLateralController]
+getPitLaneControllers(agent) -> Tuple[PIDLongitudinalController, PIDLateralController]
+getOvertakingControllers(agent) -> Tuple[PIDLongitudinalController, PIDLateralController]
+```
+
+---
+
+## Simulator Implementation
 
 To implement the racing domain, simulators must:
 
-1. **Implement `RacingSteers` Protocol**: Provide concrete implementations for all racing system methods
-2. **Provide Racing Controllers**: Implement `getRacingControllers()`, `getRacingLineControllers()`, `getPitLaneControllers()`
-3. **Support Track Detection**: Implement `detectTrackSegment()` and `assignRoute()`
-4. **Handle Racing Actions**: Process all racing-specific actions correctly
+### 1. Extend Base Classes
 
-See `src/scenic/simulators/dspace/racing_model.scenic` for a complete implementation example.
+```python
+from scenic.domains.racing.simulators import RacingSimulator, RacingSimulation
+
+class MyRacingSimulator(RacingSimulator):
+    def createSimulation(self, ...):
+        return MyRacingSimulation(...)
+
+class MyRacingSimulation(RacingSimulation):
+    # Implement required methods
+    pass
+```
+
+### 2. Implement Racing Car Protocol
+
+Extend `RacingCar` and implement required methods:
+
+```python
+class MyRacingCar(RacingCar):
+    def setMaxSpeed(self, max_speed: float):
+        # Store and forward to control API
+        self.maxSpeed = max_speed
+        self.simulator.setMaxSpeed(self, max_speed)
+    
+    def setTTL(self, ttl):
+        # Store TTL for controllers/behaviors
+        self.ttl = ttl
+        # Optionally forward to simulator
+```
+
+### 3. Implement Manual Transmission (Optional)
+
+If supporting gear/clutch actions:
+
+```python
+class MyRacingCar(RacingCar, HasManualTransmission):
+    def setGear(self, gear: int):
+        self.gear = gear
+        self.simulator.setGear(self, gear)
+    
+    def setClutch(self, clutch: float):
+        self.clutch = clutch
+        self.simulator.setClutch(self, clutch)
+```
+
+### 4. Provide Racing Controllers
+
+Implement or override controller methods:
+
+```python
+def getRacingControllers(self, agent):
+    # Return optimized PID controllers for racing
+    return lon_controller, lat_controller
+```
+
+### 5. Track Segment Detection and Route Assignment
+
+Implement track segment detection and route mapping:
+
+```python
+def detectTrackSegment(self, position):
+    # Detect if position is on pit lane or main racing road
+    return 'pitLane' or 'mainRacing'
+
+def assignRoute(self, agent, track_segment):
+    # Map track segments to simulator routes
+    if track_segment == 'pitLane':
+        return 'Pit'  # or simulator-specific route name
+    elif track_segment == 'mainRacing':
+        return 'Lap'
+```
+
+### 6. Implement Missing Actions (Optional)
+
+If behaviors need them, implement missing actions:
+
+```python
+# In simulator-specific code
+class PitLimiterAction(Action):
+    def applyTo(self, obj, sim):
+        obj.pitLimiter = self.activate
+        sim.setPitLimiter(obj, self.activate)
+```
+
+### dSPACE Example
+
+See `src/scenic/simulators/dspace/racing_model.scenic` and `simulator.py` for a complete implementation:
+
+- `DSPACERacingCar` implements `setMaxSpeed()` and `setTTL()`
+- Route assignment via `pitLaneRoadIds` / `mainRacingRoadIds`
+- Maps segments to routes: Pit → Route0, Lap → Route1
+- Ego uses same route selection as fellows
+
+---
+
+## File Structure
+
+```
+src/scenic/domains/racing/
+├── __init__.py              # Domain documentation & initialization
+├── tracks.py                # RacingTrack, PitLane, Sector, RacingLine classes
+├── model.scenic             # Racing objects, regions, utilities
+├── behaviors.scenic          # Racing behaviors
+├── actions.py               # Racing actions
+├── simulators.py            # Racing simulator interfaces
+├── README.md                 # This file (complete reference)
+└── __pycache__/             # Python cache files
+
+src/scenic/simulators/dspace/
+└── racing_model.scenic      # dSPACE+Racing integration
+```
+
+---
+
+## Key Differences from Driving Domain
+
+| Feature | Driving Domain | Racing Domain |
+|---------|----------------|---------------|
+| **Traffic** | Bidirectional, intersections | One-way circuit |
+| **Focus** | Safety, navigation | Speed, performance |
+| **Lanes** | Regular roads | Racing line + pit lane |
+| **Start** | Anywhere on road | Starting grid |
+| **Properties** | Basic vehicle | Fuel, tires, race number |
+| **Behaviors** | Lane following | Racing line, pit stops |
+| **Actions** | Basic control | Max speed, TTL, gear/clutch |
+| **Controllers** | Standard PID | Racing-optimized PID |
 
 ---
 
 ## Summary
 
-The Racing Domain provides a comprehensive set of racing-specific components that extend the Driving Domain:
+The Racing Domain provides a **minimal but functional** foundation for racing scenarios:
 
-- **1 New Object Type**: `RacingCar` with racing systems
-- **5 New Action Types**: DRS, ERS, Pit Limiter, Traction Control, Brake Bias
-- **4 New Behaviors**: Racing Line Following, Pit Stops, Overtaking, Defense
-- **4 New Regions**: Pit Lane, Racing Line, Main Racing Road, Pit Lane Road
-- **Multiple Track Features**: Sectors, Pit Lanes, Racing Lines, Starting Grids
+- **1 Object Type**: `RacingCar` with racing systems
+- **5 Actions**: Max speed, TTL, gear, clutch (press/release)
+- **4 Behaviors**: Racing line following, pit stops, overtaking, defense
+- **3 Regions**: Main racing road, pit lane road, racing line
+- **Multiple Track Features**: Sectors, pit lanes, racing lines, starting grids
 
-This architecture enables simulator-independent racing scenarios while providing rich racing-specific functionality through abstract protocols that simulators must implement.
+The implementation is intentionally lean, focusing on core racing functionality that simulators can build upon. The domain is **production-ready** for basic racing scenarios but may require simulator-specific extensions for advanced features.
+
+For questions or contributions, see the main Scenic documentation or contact the development team.
