@@ -41,7 +41,17 @@ class DSPACERacingCar(RacingCar, _DSpaceVehicle, Steers, HasManualTransmission):
     - _DSpaceVehicle: Marker for dSPACE-specific actions
     - Steers: Protocol for standard driving domain steering actions
     - HasManualTransmission: Protocol for gear and clutch control
+    
+    Based on the IAC AV-24 (Dallara AV chassis) specifications:
+    - Length: 4.80 m (189 inches)
+    - Width: 1.93 m (76 inches)
+    - Height: 0.97 m (38 inches)
     """
+    
+    # IAC AV-24 physical dimensions
+    length: 4.80  # meters (189 inches)
+    width: 1.93   # meters (76 inches)
+    height: 0.97  # meters (38 inches)
     
     # dSPACE-specific properties
     dspaceActor: None  # Link to dSPACE internal representation
