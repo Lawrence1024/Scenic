@@ -687,10 +687,10 @@ class DSpaceSimulation(RacingSimulation):
             KEY_CLUTCH = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Pos_ClutchPedal[%]/Value"
             
             self._cd.set_var(KEY_THROTTLE, 0.0)
-            self._cd.set_var(KEY_BRAKE_FRONT, 0.0)
-            self._cd.set_var(KEY_BRAKE_REAR, 0.0)
-            self._cd.set_var(KEY_STEERING, 0.0)
-            self._cd.set_var(KEY_GEAR, 0)
+            self._cd.set_var(KEY_BRAKE_FRONT, 0.1)
+            self._cd.set_var(KEY_BRAKE_REAR, 0.1)
+            self._cd.set_var(KEY_STEERING, 0)
+            self._cd.set_var(KEY_GEAR, 0.0)
             self._cd.set_var(KEY_CLUTCH, 0.0)
             print("[VesiInterface] All control values initialized to 0")
             
@@ -717,27 +717,27 @@ class DSpaceSimulation(RacingSimulation):
             KEY_STEERING = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_steering_cmd/Value"
             
             try:
-                # Throttle: Scenic uses 0-1, VesiInterface expects 0-100+ (typically 0-100)
+                # Throttle: Scenic uses 0-1, ControlDesk expects 0-100 command range
                 if throttle is not None:
                     throttle_val = float(max(0.0, min(1.0, throttle)) * 100.0)
                     print(f"  [ControlDesk] Setting throttle: {throttle} -> {throttle_val}")
                     self._cd.set_var(KEY_THROTTLE, throttle_val)
                     print(f"  [ControlDesk] OK - Throttle written successfully")
                 
-                # Brake: Scenic uses 0-1, apply to both front and rear
-                # Note: For unified brake, apply same value to front and rear
+                # Brake: Scenic uses 0-1, ControlDesk expects 0-100 command range
+                # Apply same value to both front and rear
                 if brake is not None:
-                    brake_val = float(max(0.0, min(1.0, brake)) * 100.0)  # Scale for VesiInterface
+                    brake_val = float(max(0.0, min(1.0, brake)) * 100.0)
                     print(f"  [ControlDesk] Setting brake: {brake} -> front={brake_val}, rear={brake_val}")
                     self._cd.set_var(KEY_BRAKE_FRONT, brake_val)
                     self._cd.set_var(KEY_BRAKE_REAR, brake_val)
                     print(f"  [ControlDesk] OK - Brake (front/rear) written successfully")
                 
-                # Steering: Scenic uses -1 to 1, VesiInterface expects degrees or normalized
-                # Map -1..1 to degrees (±25 deg default, same as ExternalUserData)
+                # Steering: Scenic uses -1 to 1, ControlDesk expects -70 to +70 (right to left)
+                # Map -1..1 to -70..+70 command range
                 if steering is not None:
-                    steer_val = float(max(-1.0, min(1.0, steering)) * 25.0)
-                    print(f"  [ControlDesk] Setting steering: {steering} -> {steer_val} deg")
+                    steer_val = -float(max(-1.0, min(1.0, steering)) * 70.0)
+                    print(f"  [ControlDesk] Setting steering: {steering} -> {steer_val}")
                     self._cd.set_var(KEY_STEERING, steer_val)
                     print(f"  [ControlDesk] OK - Steering written successfully")
                 
@@ -753,7 +753,10 @@ class DSpaceSimulation(RacingSimulation):
         return ok_pt
     
     def setVehicleGear(self, vehicle_name, gear):
-        """Set gear for a vehicle using VesiInterface manual control (one-shot action)."""
+        """Set gear for a vehicle using VesiInterface manual control (one-shot action).
+        
+        Gear range: 0 (neutral) to 6.
+        """
         print(f"\n[setVehicleGear] Called for {vehicle_name}: gear={gear}")
         
         if self._cd:
@@ -761,6 +764,8 @@ class DSpaceSimulation(RacingSimulation):
             KEY_GEAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_gear_cmd/Value"
             try:
                 gear_int = int(gear)
+                # Clamp gear to valid range: 0 (neutral) to 6
+                gear_int = max(0, min(6, gear_int))
                 print(f"  [ControlDesk] Setting gear: {gear_int}")
                 self._cd.set_var(KEY_GEAR, gear_int)
                 print(f"  [ControlDesk] OK - Gear written successfully")
@@ -926,50 +931,50 @@ class DSpaceSimulation(RacingSimulation):
             
             print(f"\n[ControlDesk Values] Reading variable values:")
             
-            # Read throttle (0-100)
+            # Read throttle (0-100 command range)
             try:
                 throttle_val = self._cd.get_var(KEY_THROTTLE)
                 throttle_scenic = throttle_val / 100.0  # Convert back to 0-1 range
-                print(f"  Throttle: {throttle_val}% ({throttle_scenic:.3f})")
+                print(f"  Throttle: {throttle_val} ({throttle_scenic:.3f} normalized)")
             except Exception as e:
                 print(f"  Throttle: [Error reading: {e}]")
             
-            # Read brake front (0-100)
+            # Read brake front (0-100 command range)
             try:
                 brake_front_val = self._cd.get_var(KEY_BRAKE_FRONT)
                 brake_front_scenic = brake_front_val / 100.0  # Convert back to 0-1 range
-                print(f"  Brake (Front): {brake_front_val}% ({brake_front_scenic:.3f})")
+                print(f"  Brake (Front): {brake_front_val} ({brake_front_scenic:.3f} normalized)")
             except Exception as e:
                 print(f"  Brake (Front): [Error reading: {e}]")
             
-            # Read brake rear (0-100)
+            # Read brake rear (0-100 command range)
             try:
                 brake_rear_val = self._cd.get_var(KEY_BRAKE_REAR)
                 brake_rear_scenic = brake_rear_val / 100.0  # Convert back to 0-1 range
-                print(f"  Brake (Rear): {brake_rear_val}% ({brake_rear_scenic:.3f})")
+                print(f"  Brake (Rear): {brake_rear_val} ({brake_rear_scenic:.3f} normalized)")
             except Exception as e:
                 print(f"  Brake (Rear): [Error reading: {e}]")
             
-            # Read steering (degrees, typically ±25)
+            # Read steering (-70 to +70 command range, -70=right to 70=left)
             try:
                 steering_val = self._cd.get_var(KEY_STEERING)
-                steering_scenic = steering_val / 25.0  # Convert back to -1 to 1 range
-                print(f"  Steering: {steering_val}° ({steering_scenic:.3f})")
+                steering_scenic = -steering_val / 70.0  # Convert back to -1 to 1 range
+                print(f"  Steering: {steering_val} ({steering_scenic:.3f} normalized)")
             except Exception as e:
                 print(f"  Steering: [Error reading: {e}]")
             
-            # Read gear (integer)
+            # Read gear (0-6 integer, 0 = neutral)
             try:
                 gear_val = self._cd.get_var(KEY_GEAR)
                 print(f"  Gear: {gear_val}")
             except Exception as e:
                 print(f"  Gear: [Error reading: {e}]")
             
-            # Read clutch (0-100%)
+            # Read clutch (0-100 command range, managed automatically with gear)
             try:
                 clutch_val = self._cd.get_var(KEY_CLUTCH)
                 clutch_scenic = clutch_val / 100.0  # Convert back to 0-1 range
-                print(f"  Clutch: {clutch_val}% ({clutch_scenic:.3f})")
+                print(f"  Clutch: {clutch_val} ({clutch_scenic:.3f} normalized)")
             except Exception as e:
                 print(f"  Clutch: [Error reading: {e}]")
                 

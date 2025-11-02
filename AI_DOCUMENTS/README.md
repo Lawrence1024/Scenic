@@ -32,6 +32,13 @@ This directory contains comprehensive technical documentation for the Scenic-dSP
   - Real-time control mechanisms
   - Synchronization patterns
 
+- **[CONTROLDESK_JOYSTICK_INTEGRATION.md](./CONTROLDESK_JOYSTICK_INTEGRATION.md)** ⭐ **NEW**
+  - ControlDesk instrument script for joystick input
+  - Mapping raw joystick values to ControlDesk variables
+  - Steering, throttle, and brake axis handling
+  - Real-time manual control integration
+  - Calibration and troubleshooting guide
+
 ### 📍 Coordinate Systems
 
 - **[DSPACE_COORDINATE_TRANSFORMATION.md](./DSPACE_COORDINATE_TRANSFORMATION.md)** (20KB, 695 lines) ⭐ **NEW**
@@ -59,6 +66,9 @@ This directory contains comprehensive technical documentation for the Scenic-dSP
 ### For COM Automation Details
 → Review **[DSPACE_CONTROL_INTERFACES.md](./DSPACE_CONTROL_INTERFACES.md)**
 
+### For Joystick Integration
+→ Consult **[CONTROLDESK_JOYSTICK_INTEGRATION.md](./CONTROLDESK_JOYSTICK_INTEGRATION.md)**
+
 ## Document Relationships
 
 ```
@@ -82,6 +92,11 @@ DSPACE_CONTROL_INTERFACES.md
   ├─ Used by simulator structure
   └─ Real-time control mechanisms
 
+CONTROLDESK_JOYSTICK_INTEGRATION.md
+  ├─ Joystick to ControlDesk mapping
+  ├─ Instrument script implementation
+  └─ Real-time manual control
+
 DSPACE_COORDINATE_TRANSFORMATION.md
   ├─ Independent transformation pipeline
   ├─ Used by simulator for positioning
@@ -103,6 +118,7 @@ DSPACE_COORDINATE_TRANSFORMATION.md
 - Manual transmission protocol
 - dSPACE COM automation
 - Action application lifecycle
+- Joystick integration via ControlDesk instruments
 
 ### Simulator Integration
 - COM automation setup
@@ -124,6 +140,7 @@ These documents are maintained in sync with the codebase. When significant chang
 - Control protocols → Update VEHICLE_CONTROL_IMPLEMENTATION.md
 - Simulator structure → Update DSPACE_SIMULATOR_STRUCTURE.md
 - Architecture patterns → Update SCENIC_DOMAIN_ARCHITECTURE_COMPLETE_GUIDE.md
+- Joystick integration → Update CONTROLDESK_JOYSTICK_INTEGRATION.md
 
 ## Contributing
 
