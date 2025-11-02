@@ -676,6 +676,24 @@ class DSpaceSimulation(RacingSimulation):
                 1
             )
             print("[VesiInterface] Control channels enabled")
+            
+            # Step 4: Initialize all control values to 0
+            print("[VesiInterface] Initializing control values to 0...")
+            KEY_THROTTLE = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_throttle_cmd/Value"
+            KEY_BRAKE_FRONT = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_front/Value"
+            KEY_BRAKE_REAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_rear/Value"
+            KEY_STEERING = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_steering_cmd/Value"
+            KEY_GEAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_gear_cmd/Value"
+            KEY_CLUTCH = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Pos_ClutchPedal[%]/Value"
+            
+            self._cd.set_var(KEY_THROTTLE, 0.0)
+            self._cd.set_var(KEY_BRAKE_FRONT, 0.0)
+            self._cd.set_var(KEY_BRAKE_REAR, 0.0)
+            self._cd.set_var(KEY_STEERING, 0.0)
+            self._cd.set_var(KEY_GEAR, 0)
+            self._cd.set_var(KEY_CLUTCH, 0.0)
+            print("[VesiInterface] All control values initialized to 0")
+            
             print("[VesiInterface] Initialization complete - manual control ready")
             
         except Exception as e:
@@ -828,20 +846,21 @@ class DSpaceSimulation(RacingSimulation):
         2. Apply the accumulated control state to ControlDesk variables
         3. Clear the control state for next timestep
         """
-        print(f"\n[executeActions] Called with {len(allActions)} actions")
-        for agent, action in allActions.items():
-            print(f"  Agent: {agent}, Action: {action.__class__.__name__}")
+        # Commented out action logging
+        # print(f"\n[executeActions] Called with {len(allActions)} actions")
+        # for agent, action in allActions.items():
+        #     print(f"  Agent: {agent}, Action: {action.__class__.__name__}")
         
         # First, let actions apply themselves (this calls setThrottle, setSteering, etc.)
         super().executeActions(allActions)
         
         # Now apply accumulated control state to ControlDesk
-        print(f"[executeActions] Applying control state to ControlDesk (cd available: {self._cd is not None})")
+        # print(f"[executeActions] Applying control state to ControlDesk (cd available: {self._cd is not None})")
         if self._cd:
             for obj in self.scene.objects:
-                print(f"  Checking object: {obj}, has _control_state: {hasattr(obj, '_control_state')}")
-                if hasattr(obj, '_control_state'):
-                    print(f"    _control_state contents: {obj._control_state}")
+                # print(f"  Checking object: {obj}, has _control_state: {hasattr(obj, '_control_state')}")
+                # if hasattr(obj, '_control_state'):
+                #     print(f"    _control_state contents: {obj._control_state}")
                 
                 # Determine vehicle name
                 if obj is self.scene.egoObject:
@@ -854,7 +873,7 @@ class DSpaceSimulation(RacingSimulation):
                 # Apply continuous controls (throttle, brake, steering)
                 if hasattr(obj, '_control_state') and obj._control_state:
                     control = obj._control_state
-                    print(f"  [executeActions] Applying control to {vehicle_name}: {control}")
+                    # print(f"  [executeActions] Applying control to {vehicle_name}: {control}")
                     
                     try:
                         self.setVehicleControl(
@@ -871,7 +890,7 @@ class DSpaceSimulation(RacingSimulation):
                 
                 # Apply one-shot actions (gear, clutch)
                 if hasattr(obj, '_oneshot_actions') and obj._oneshot_actions:
-                    print(f"  [executeActions] Applying one-shot actions to {vehicle_name}: {obj._oneshot_actions}")
+                    # print(f"  [executeActions] Applying one-shot actions to {vehicle_name}: {obj._oneshot_actions}")
                     
                     for action_type, value in obj._oneshot_actions:
                         try:
@@ -884,8 +903,80 @@ class DSpaceSimulation(RacingSimulation):
                     
                     # Clear one-shot actions after applying
                     obj._oneshot_actions = []
+            
+            # Read and print ControlDesk variable values
+            self._readAndPrintControlDeskValues()
         else:
-            print("[executeActions] ControlDesk not available, skipping control application")
+            # print("[executeActions] ControlDesk not available, skipping control application")
+            pass
+
+    def _readAndPrintControlDeskValues(self):
+        """Read ControlDesk variable values and print them out."""
+        if not self._cd:
+            return
+        
+        try:
+            # VesiInterface manual control variable paths
+            KEY_THROTTLE = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_throttle_cmd/Value"
+            KEY_BRAKE_FRONT = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_front/Value"
+            KEY_BRAKE_REAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_rear/Value"
+            KEY_STEERING = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_steering_cmd/Value"
+            KEY_GEAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_gear_cmd/Value"
+            KEY_CLUTCH = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Pos_ClutchPedal[%]/Value"
+            
+            print(f"\n[ControlDesk Values] Reading variable values:")
+            
+            # Read throttle (0-100)
+            try:
+                throttle_val = self._cd.get_var(KEY_THROTTLE)
+                throttle_scenic = throttle_val / 100.0  # Convert back to 0-1 range
+                print(f"  Throttle: {throttle_val}% ({throttle_scenic:.3f})")
+            except Exception as e:
+                print(f"  Throttle: [Error reading: {e}]")
+            
+            # Read brake front (0-100)
+            try:
+                brake_front_val = self._cd.get_var(KEY_BRAKE_FRONT)
+                brake_front_scenic = brake_front_val / 100.0  # Convert back to 0-1 range
+                print(f"  Brake (Front): {brake_front_val}% ({brake_front_scenic:.3f})")
+            except Exception as e:
+                print(f"  Brake (Front): [Error reading: {e}]")
+            
+            # Read brake rear (0-100)
+            try:
+                brake_rear_val = self._cd.get_var(KEY_BRAKE_REAR)
+                brake_rear_scenic = brake_rear_val / 100.0  # Convert back to 0-1 range
+                print(f"  Brake (Rear): {brake_rear_val}% ({brake_rear_scenic:.3f})")
+            except Exception as e:
+                print(f"  Brake (Rear): [Error reading: {e}]")
+            
+            # Read steering (degrees, typically ±25)
+            try:
+                steering_val = self._cd.get_var(KEY_STEERING)
+                steering_scenic = steering_val / 25.0  # Convert back to -1 to 1 range
+                print(f"  Steering: {steering_val}° ({steering_scenic:.3f})")
+            except Exception as e:
+                print(f"  Steering: [Error reading: {e}]")
+            
+            # Read gear (integer)
+            try:
+                gear_val = self._cd.get_var(KEY_GEAR)
+                print(f"  Gear: {gear_val}")
+            except Exception as e:
+                print(f"  Gear: [Error reading: {e}]")
+            
+            # Read clutch (0-100%)
+            try:
+                clutch_val = self._cd.get_var(KEY_CLUTCH)
+                clutch_scenic = clutch_val / 100.0  # Convert back to 0-1 range
+                print(f"  Clutch: {clutch_val}% ({clutch_scenic:.3f})")
+            except Exception as e:
+                print(f"  Clutch: [Error reading: {e}]")
+                
+        except Exception as e:
+            print(f"[ControlDesk Values] Error reading variables: {e}")
+            import traceback
+            traceback.print_exc()
 
     def step(self):
         """Execute one simulation step (advance physics simulation)."""
