@@ -116,6 +116,10 @@ def initialize_vesi_interface():
         cd.set_var(KEY_GEAR, 0.0)
         cd.set_var(KEY_CLUTCH, 0.0)
         print("[OK] All control values initialized")
+
+        
+
+
         
         print("\n" + "=" * 70)
         print("[VesiInterface] ✅ Initialization complete - manual control ready")
