@@ -271,14 +271,16 @@ class DSpaceSimulation(RacingSimulation):
             self._cd = None
             self._vehicle_controller = None
 
-        # 10) NOW start the maneuver (AFTER VesiInterface is fully initialized)
-        print("[ModelDesk] Starting maneuver (VesiInterface initialized)...")
-        try:
-            mc = self.exp.ManeuverControl
-            mc.Start(False)
-            print("[Maneuver] ✅ Started - VesiInterface controls active")
-        except Exception as e:
-            print(f"[Maneuver] ❌ Failed to start: {e}")
+        # 10) NOW start the maneuver via ControlDesk (AFTER VesiInterface is fully initialized)
+        if self._cd:
+            print("[ControlDesk] Starting maneuver (VesiInterface initialized)...")
+            try:
+                self._cd.start_maneuver()
+                print("[Maneuver] ✅ Started via ControlDesk - VesiInterface controls active")
+            except Exception as e:
+                print(f"[Maneuver] ❌ Failed to start: {e}")
+        else:
+            print("[Maneuver] ⚠️  Skipping start - ControlDesk not available")
 
     def createObjectInSimulator(self, obj):
         """Place car (ego or fellow) by absolute (s,t) computed from (x,y) and XODR.

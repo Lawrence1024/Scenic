@@ -66,4 +66,23 @@ class ControlDeskApp:
         vars_obj = self._get_variables()
         vars_obj[path].ValueConverted = value
 
+    # Maneuver control
+    def start_maneuver(self):
+        """Start the active experiment's maneuver."""
+        exp = self.app.ActiveExperiment
+        mc = exp.ManeuverControl
+        mc.Start(False)
+
+    def stop_maneuver(self):
+        """Stop the active experiment's maneuver."""
+        exp = self.app.ActiveExperiment
+        mc = exp.ManeuverControl
+        mc.Stop()
+
+    def reset_maneuver(self):
+        """Reset the active experiment's maneuver."""
+        exp = self.app.ActiveExperiment
+        mc = exp.ManeuverControl
+        mc.Reset()
+
 
