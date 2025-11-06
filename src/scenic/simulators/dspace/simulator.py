@@ -15,6 +15,54 @@ from scenic.core.simulators import SimulationCreationError
 from . import utils as dutils
 from .controldesk.per_tick_control import PerTickController, ExternalControlManager
 from .controldesk.connection import ControlDeskApp
+from .vehicle import VehiclePhysicsState, VehicleController
+
+
+class DSpaceVehicleActor:
+    """Internal representation of a vehicle in the dSPACE simulator.
+    
+    This class stores the current state of a vehicle as read from ControlDesk,
+    providing a bridge between the dSPACE simulation and Scenic's object model.
+    
+    Attributes:
+        scenic_obj: Reference to the parent Scenic object
+        position: Current position as Vector(x, y, z) in meters
+        linvel: Linear velocity as Vector(vx, vy, vz) in m/s
+        angvel: Angular velocity as Vector(wx, wy, wz) in rad/s
+        heading: Heading angle (yaw) in radians
+    """
+    
+    def __init__(self, scenic_obj):
+        """Initialize dSPACE actor for a vehicle.
+        
+        Args:
+            scenic_obj: The parent Scenic vehicle object
+        """
+        self.scenic_obj = scenic_obj
+        self.position = Vector(0, 0, 0)
+        self.linvel = Vector(0, 0, 0)
+        self.angvel = Vector(0, 0, 0)
+        self.heading = 0.0
+        
+        # Initialize physics model for kinematic control (used for fellow vehicles)
+        self.physics = VehiclePhysicsState(
+            initial_velocity=0.0,
+            initial_deviation=0.0
+        )
+    
+    def set_control(self, control_dict):
+        """Set control parameters (used by setMaxSpeed, setTTL, etc.).
+        
+        This method is called by the vehicle's control methods to pass
+        control information to the simulator.
+        
+        Args:
+            control_dict: Dictionary of control parameters
+        """
+        # Store control parameters for potential future use
+        if not hasattr(self, '_control_params'):
+            self._control_params = {}
+        self._control_params.update(control_dict)
 
 class DSpaceSimulator(RacingSimulator):
     def __init__(self, *, scenario_src="LagunaSeca_ExternalControl",
@@ -42,6 +90,7 @@ class DSpaceSimulation(RacingSimulation):
         self._per_tick_controller = PerTickController()  # Per-tick control controller
         self._fellow_vehicles = {}  # Track fellow vehicles for runtime control
         self._cd = None  # ControlDesk app
+        self._vehicle_controller = None  # VehicleController (initialized after ControlDesk connection)
         
         ts = kwargs.pop("timestep", None) or sim.timestep
         super().__init__(scene, timestep=ts, **kwargs)
@@ -175,32 +224,61 @@ class DSpaceSimulation(RacingSimulation):
             print("[dSPACE] Dynamic control detected - authoring scenario in ModelDesk")
             self._authorScenarioInModelDesk()
 
-        # 7) Persist and (optionally) run
+        # 7) Save and Download All to simulator
+        print("[ModelDesk] Saving and downloading scenario...")
         try:
             self.ts.Save()
-            self.ts.Download()
+            self.ts.Download()  # Download all to simulator
+            print("[ModelDesk] Download complete")
+        except Exception as e:
+            print(f"[ModelDesk] Save/Download failed: {e}")
 
+        # 8) Reset maneuver (but do NOT start yet)
+        print("[ModelDesk] Resetting maneuver...")
+        try:
             mc = self.exp.ManeuverControl
-            try: mc.Stop()
-            except Exception: pass
+            try: 
+                mc.Stop()
+            except Exception: 
+                pass
             time.sleep(0.2)
-            mc.Reset()
+            mc.Reset()  # Reset to initial state
             time.sleep(0.2)
-            mc.Start(False)
-        except Exception:
-            pass
+            print("[ModelDesk] Reset complete - maneuver ready (not started)")
+        except Exception as e:
+            print(f"[ModelDesk] Reset failed: {e}")
 
-        # 8) Connect ControlDesk and initialize VesiInterface (optional)
+        # 9) Connect ControlDesk and initialize VesiInterface BEFORE starting maneuver
+        print("[ControlDesk] Connecting and initializing VesiInterface...")
         try:
             self._cd = ControlDeskApp().connect()
             self._cd.go_online()
             self._cd.start_measurement()
             print("[ControlDesk] Online and measuring")
-            # Initialize VesiInterface manual control
+            
+            # Initialize VehicleController for applying controls
+            self._vehicle_controller = VehicleController(self)
+            print("[VehicleController] Initialized")
+            
+            # Pause simulation initially for step-by-step control
+            self._pauseSimulation()
+            
+            # Initialize VesiInterface manual control BEFORE starting maneuver
             self._initializeVesiInterface()
+            print("[VesiInterface] ✅ Initialization complete - ready for manual control")
         except Exception as e:
-            print(f"[ControlDesk] Not available: {e}")
+            print(f"[ControlDesk] ⚠️  Not available: {e}")
             self._cd = None
+            self._vehicle_controller = None
+
+        # 10) NOW start the maneuver (AFTER VesiInterface is fully initialized)
+        print("[ModelDesk] Starting maneuver (VesiInterface initialized)...")
+        try:
+            mc = self.exp.ManeuverControl
+            mc.Start(False)
+            print("[Maneuver] ✅ Started - VesiInterface controls active")
+        except Exception as e:
+            print(f"[Maneuver] ❌ Failed to start: {e}")
 
     def createObjectInSimulator(self, obj):
         """Place car (ego or fellow) by absolute (s,t) computed from (x,y) and XODR.
@@ -212,6 +290,9 @@ class DSpaceSimulation(RacingSimulation):
         The ego vehicle is handled through the Maneuver API, while other vehicles
         are created as Fellows.
         """
+        # Initialize dSPACE actor representation for this vehicle
+        self._initializeDSpaceActor(obj)
+        
         # Check if this is the ego object
         is_ego = (obj is self.scene.egoObject)
         
@@ -643,6 +724,27 @@ class DSpaceSimulation(RacingSimulation):
                 "Platform()://ASM_Traffic/Model Root/RaceControl/Sw_RaceControl[0Intern|1Extern|2Orchestrator]/Value",
                 0.0  # Intern mode (required for manual control)
             )
+
+            # This is for controlling the values for fellow
+            write_d_Fellows_External = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/External_Signals/Const_d_Fellows_External[m]/Value[0]"
+            write_v_Fellows_External = 'Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/External_Signals/Const_v_Fellows_External[km|h]/Value[0]'
+            read_x_Fellows_External = 'Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer/x[0]'
+            read_y_Fellows_External_value = 'Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer/y[0]'
+            read_z_Fellows_External_value = 'Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer/z[0]'
+            read_yaw_Fellows_External_value = 'Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer/yaw_deg_out[0]'
+            read_v_Fellows_External_value = 'Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer/v_Fellows[0]'
+            read_w_Fellows_External_value = 'Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer/w_Fellows[0]'
+            read_angle_wheel_degree_Fellows_External_value = 'Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer/angle_wheel_deg[0]'
+            
+            # This is for controlling the simulation timestep    
+            Application.PlatformManagement.Platforms.Item(0).SimulationTimeOptions.SingleStepTime = '0.01'
+
+            Application.PlatformManagement.Platforms.Item(0).RealTimeApplications.Item(0).SingleStep()
+            Application.PlatformManagement.Platforms.Item(0).RealTimeApplications.Item(0).Pause()
+            Application.PlatformManagement.Platforms.Item(0).RealTimeApplications.Item(0).Start()
+            Application.PlatformManagement.Platforms.Item(0).RealTimeApplications.Item(0).Stop()
+
+
             self._cd.set_var(
                 "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_sys_state/Value",
                 9  # CRITICAL: System state constant
@@ -848,72 +950,35 @@ class DSpaceSimulation(RacingSimulation):
         This method is called by Scenic's simulation framework after behaviors
         determine what actions to take. We:
         1. Call super() to apply actions via their applyTo() methods (stores in _control_state)
-        2. Apply the accumulated control state to ControlDesk variables
+        2. Apply the accumulated control state to ControlDesk variables via VehicleController
+           - Ego: VesiInterface (throttle/brake/steering)
+           - Fellows: External signals (velocity/deviation computed from physics model)
         3. Clear the control state for next timestep
         """
-        # Commented out action logging
-        # print(f"\n[executeActions] Called with {len(allActions)} actions")
-        # for agent, action in allActions.items():
-        #     print(f"  Agent: {agent}, Action: {action.__class__.__name__}")
-        
         # First, let actions apply themselves (this calls setThrottle, setSteering, etc.)
         super().executeActions(allActions)
         
-        # Now apply accumulated control state to ControlDesk
-        # print(f"[executeActions] Applying control state to ControlDesk (cd available: {self._cd is not None})")
-        if self._cd:
+        # Now apply accumulated control state to ControlDesk using VehicleController
+        if self._vehicle_controller:
             for obj in self.scene.objects:
-                # print(f"  Checking object: {obj}, has _control_state: {hasattr(obj, '_control_state')}")
-                # if hasattr(obj, '_control_state'):
-                #     print(f"    _control_state contents: {obj._control_state}")
+                # Determine if this is ego or fellow
+                is_ego = (obj is self.scene.egoObject)
                 
-                # Determine vehicle name
-                if obj is self.scene.egoObject:
-                    vehicle_name = "Ego"
-                elif hasattr(obj, 'raceNumber'):
-                    vehicle_name = f"F{obj.raceNumber}"
+                if is_ego:
+                    # Ego: Use VesiInterface physics-based control
+                    self._vehicle_controller.apply_ego_control(obj)
                 else:
-                    vehicle_name = f"F{id(obj) % 100}"
+                    # Fellow: Use kinematic control with physics model
+                    self._vehicle_controller.apply_fellow_control(obj)
                 
-                # Apply continuous controls (throttle, brake, steering)
-                if hasattr(obj, '_control_state') and obj._control_state:
-                    control = obj._control_state
-                    # print(f"  [executeActions] Applying control to {vehicle_name}: {control}")
-                    
-                    try:
-                        self.setVehicleControl(
-                            vehicle_name=vehicle_name,
-                            throttle=control.get('throttle'),
-                            brake=control.get('braking'),
-                            steering=control.get('steering')
-                        )
-                    except Exception as e:
-                        print(f"[dSPACE] Failed to apply control for {vehicle_name}: {e}")
-                    
-                    # Clear control state after applying
+                # Clear control state after applying
+                if hasattr(obj, '_control_state'):
                     obj._control_state = {}
-                
-                # Apply one-shot actions (gear, clutch)
-                if hasattr(obj, '_oneshot_actions') and obj._oneshot_actions:
-                    # print(f"  [executeActions] Applying one-shot actions to {vehicle_name}: {obj._oneshot_actions}")
-                    
-                    for action_type, value in obj._oneshot_actions:
-                        try:
-                            if action_type == 'gear':
-                                self.setVehicleGear(vehicle_name, value)
-                            elif action_type == 'clutch':
-                                self.setVehicleClutch(vehicle_name, value)
-                        except Exception as e:
-                            print(f"[dSPACE] Failed to apply {action_type} for {vehicle_name}: {e}")
-                    
-                    # Clear one-shot actions after applying
+                if hasattr(obj, '_oneshot_actions'):
                     obj._oneshot_actions = []
             
             # Read and print ControlDesk variable values
             self._readAndPrintControlDeskValues()
-        else:
-            # print("[executeActions] ControlDesk not available, skipping control application")
-            pass
 
     def _readAndPrintControlDeskValues(self):
         """Read ControlDesk variable values and print them out."""
@@ -982,17 +1047,270 @@ class DSpaceSimulation(RacingSimulation):
             print(f"[ControlDesk Values] Error reading variables: {e}")
             import traceback
             traceback.print_exc()
+    
+    def _pauseSimulation(self):
+        """Pause the dSPACE simulation for step-by-step control.
+        
+        This should be called once during setup to put the simulation into
+        a paused state where it can be advanced step-by-step.
+        """
+        try:
+            # Access the ControlDesk application
+            app = self._cd.app
+            
+            # Navigate to Platform management
+            platforms = app.PlatformManagement.Platforms
+            platform = platforms.Item(0)
+            
+            # Pause the simulation
+            rta = platform.RealTimeApplications.Item(0)
+            rta.Pause()
+            
+            print("[_pauseSimulation] Simulation paused for step-by-step control")
+            
+        except Exception as e:
+            print(f"[_pauseSimulation] Error: {e}")
+            # Don't raise - this is not critical
+    
+    def _advanceSimulationStep(self):
+        """Advance the dSPACE simulation by one timestep.
+        
+        Uses ControlDesk COM interface to execute a single simulation step.
+        This should be called after control variables have been written.
+        """
+        try:
+            # Access the ControlDesk application
+            app = self._cd.app
+            
+            # Navigate to Platform management
+            platforms = app.PlatformManagement.Platforms
+            platform = platforms.Item(0)
+            
+            # Execute single step
+            rta = platform.RealTimeApplications.Item(0)
+            rta.SingleStep()
+            
+        except Exception as e:
+            print(f"[_advanceSimulationStep] Error: {e}")
+            raise
+    
+    def _initializeDSpaceActor(self, obj):
+        """Initialize dSPACE actor representation for a vehicle object.
+        
+        Creates or updates the dspaceActor attribute to store the vehicle's state
+        (position, velocity, etc.) that will be updated each timestep by reading
+        from ControlDesk.
+        
+        Args:
+            obj: The Scenic object (vehicle) to initialize
+        """
+        if not hasattr(obj, 'dspaceActor') or obj.dspaceActor is None:
+            # Create dSPACE actor representation
+            obj.dspaceActor = DSpaceVehicleActor(obj)
+            
+            # Initialize with object's initial position if available
+            if hasattr(obj, 'position'):
+                obj.dspaceActor.position = obj.position
+            if hasattr(obj, 'heading'):
+                obj.dspaceActor.heading = obj.heading
+    
+    def _readVehicleStateFromControlDesk(self, obj):
+        """Read vehicle state from ControlDesk and update dspaceActor.
+        
+        Reads position, velocity, heading from ControlDesk variables and
+        updates the object's dspaceActor state.
+        
+        Args:
+            obj: The Scenic object (vehicle) to read state for
+            
+        Returns:
+            True if state was successfully read, False otherwise
+        """
+        if not self._cd:
+            return False
+        
+        try:
+            # Ensure dspaceActor exists
+            self._initializeDSpaceActor(obj)
+            
+            # Determine vehicle index based on whether it's ego or fellow
+            is_ego = (obj is self.scene.egoObject)
+            
+            if is_ego:
+                # Read ego vehicle state
+                return self._readEgoStateFromControlDesk(obj)
+            else:
+                # Read fellow vehicle state
+                return self._readFellowStateFromControlDesk(obj)
+                
+        except Exception as e:
+            print(f"[_readVehicleStateFromControlDesk] Error: {e}")
+            return False
+    
+    def _readEgoStateFromControlDesk(self, obj):
+        """Read ego vehicle state from ControlDesk.
+        
+        Args:
+            obj: The ego vehicle object
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Ego vehicle paths (adapt from fellow paths)
+            # These paths may need adjustment based on actual ControlDesk structure
+            base_path = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel"
+            
+            # Try to read ego position and state
+            try:
+                x = self._cd.get_var(f"{base_path}/Ego_x/Value")
+                y = self._cd.get_var(f"{base_path}/Ego_y/Value")
+                z = self._cd.get_var(f"{base_path}/Ego_z/Value")
+                yaw_deg = self._cd.get_var(f"{base_path}/Ego_yaw/Value")
+                velocity = self._cd.get_var(f"{base_path}/Ego_velocity/Value")
+                
+                # Update dspaceActor state
+                obj.dspaceActor.position = Vector(float(x), float(y), float(z))
+                obj.dspaceActor.heading = float(yaw_deg) * (3.14159265 / 180.0)  # Convert to radians
+                obj.dspaceActor.linvel = Vector(float(velocity), 0, 0)  # Simplified
+                
+                return True
+            except Exception:
+                # Fallback: Keep current state if can't read from ControlDesk
+                return False
+                
+        except Exception as e:
+            print(f"[_readEgoStateFromControlDesk] Error: {e}")
+            return False
+    
+    def _readFellowStateFromControlDesk(self, obj):
+        """Read fellow vehicle state from ControlDesk.
+        
+        Args:
+            obj: The fellow vehicle object
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Determine fellow index
+            fellow_index = self._getFellowIndex(obj)
+            if fellow_index is None:
+                return False
+            
+            # Fellow vehicle state paths (from lines 650-656)
+            base_path = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer"
+            
+            try:
+                x = self._cd.get_var(f"{base_path}/x[{fellow_index}]")
+                y = self._cd.get_var(f"{base_path}/y[{fellow_index}]")
+                z = self._cd.get_var(f"{base_path}/z[{fellow_index}]")
+                yaw_deg = self._cd.get_var(f"{base_path}/yaw_deg_out[{fellow_index}]")
+                v = self._cd.get_var(f"{base_path}/v_Fellows[{fellow_index}]")
+                w = self._cd.get_var(f"{base_path}/w_Fellows[{fellow_index}]")
+                
+                # Update dspaceActor state
+                import math
+                obj.dspaceActor.position = Vector(float(x), float(y), float(z))
+                obj.dspaceActor.heading = float(yaw_deg) * (math.pi / 180.0)  # Convert to radians
+                
+                # Convert velocity to vector (assuming v is speed, w is angular velocity)
+                yaw_rad = obj.dspaceActor.heading
+                obj.dspaceActor.linvel = Vector(
+                    float(v) * math.cos(yaw_rad),
+                    float(v) * math.sin(yaw_rad),
+                    0
+                )
+                obj.dspaceActor.angvel = Vector(0, 0, float(w))
+                
+                return True
+            except Exception as e:
+                print(f"[_readFellowStateFromControlDesk] Failed to read state for fellow {fellow_index}: {e}")
+                return False
+                
+        except Exception as e:
+            print(f"[_readFellowStateFromControlDesk] Error: {e}")
+            return False
+    
+    def _getFellowIndex(self, obj):
+        """Get the fellow index for a vehicle object.
+        
+        Args:
+            obj: The fellow vehicle object
+            
+        Returns:
+            Fellow index (0-based) or None if not found
+        """
+        try:
+            # Try to get from raceNumber
+            if hasattr(obj, 'raceNumber'):
+                return int(obj.raceNumber) - 1  # Convert to 0-based index
+            
+            # Try to find in fellow_vehicles dict
+            for name, vehicle_data in self._fellow_vehicles.items():
+                if vehicle_data.get('scenic_object') is obj:
+                    # Extract index from name (e.g., "F1" -> 0, "F2" -> 1)
+                    if name.startswith('F'):
+                        try:
+                            return int(name[1:]) - 1
+                        except ValueError:
+                            pass
+            
+            # Fallback: Use position in objects list (excluding ego)
+            fellow_objects = [o for o in self.objects if o is not self.scene.egoObject]
+            if obj in fellow_objects:
+                return fellow_objects.index(obj)
+            
+            return None
+        except Exception as e:
+            print(f"[_getFellowIndex] Error: {e}")
+            return None
 
     def step(self):
-        """Execute one simulation step (advance physics simulation)."""
-        time.sleep(self.timestep)
+        """Execute one simulation step (advance physics simulation).
+        
+        This advances the dSPACE simulation by one timestep using ControlDesk.
+        Control variables should already be written by executeActions() before this is called.
+        """
+        if self._cd:
+            try:
+                # Advance simulation by one step using ControlDesk COM interface
+                self._advanceSimulationStep()
+            except Exception as e:
+                print(f"[step] Warning: Failed to advance simulation step: {e}")
+                # Fallback to sleep
+                time.sleep(self.timestep)
+        else:
+            # No ControlDesk connection, just sleep
+            time.sleep(self.timestep)
 
     def getProperties(self, obj, properties):
-        b = getattr(obj, "_backend", None)
-        pos = getattr(b, "position", Vector(0, 0, 0))
-        vel = getattr(b, "linvel",   Vector(0, 0, 0))
-        ang = getattr(b, "angvel",   Vector(0, 0, 0))
-        yaw = getattr(b, "heading",  0.0)
+        """Read the values of the given properties of the object from the simulator.
+        
+        This method reads vehicle state from ControlDesk and updates the
+        dspaceActor representation, then returns the requested properties.
+        
+        Args:
+            obj: Scenic object in question
+            properties: Set of names of properties to read from the simulator
+            
+        Returns:
+            A dict mapping each of the given properties to its current value
+        """
+        # Initialize dspaceActor if it doesn't exist
+        self._initializeDSpaceActor(obj)
+        
+        # Try to read fresh state from ControlDesk
+        self._readVehicleStateFromControlDesk(obj)
+        
+        # Get state from dspaceActor
+        actor = obj.dspaceActor
+        pos = actor.position
+        vel = actor.linvel
+        ang = actor.angvel
+        yaw = actor.heading
+        
+        # Build property values dictionary
         vals = {
             "position":        pos,
             "velocity":        vel,
@@ -1004,7 +1322,9 @@ class DSpaceSimulation(RacingSimulation):
             "roll":            0.0,
             "elevation":       float(pos.z),
         }
-        return {k: vals[k] for k in properties}
+        
+        # Return only requested properties
+        return {k: vals[k] for k in properties if k in vals}
 
     def getRacingControllers(self, agent):
         """Get racing controllers optimized for dSPACE racing scenarios.

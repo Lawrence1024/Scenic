@@ -1,8 +1,11 @@
 import math
 import pyxodr
+from pyxodr.road_objects.network import RoadNetwork
 
-dir(pyxodr)
+
 
 # obtain OpenDrive File
-#network = pyxodr.OpenDrive("Scenic/examples/racing/road.xodr")
+network = RoadNetwork("../../assets/maps/dSPACE/LagunaSeca.xodr")
+
+
 

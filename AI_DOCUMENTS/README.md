@@ -12,11 +12,15 @@ This directory contains comprehensive technical documentation for the Scenic-dSP
   - Abstract vs concrete implementations
   - Best practices for domain design
 
-- **[DSPACE_SIMULATOR_STRUCTURE.md](./DSPACE_SIMULATOR_STRUCTURE.md)** (16KB, 538 lines)
-  - dSPACE simulator class hierarchy
-  - COM automation interfaces
-  - ModelDesk integration patterns
-  - Simulation lifecycle and state management
+- **[DSPACE_COMPREHENSIVE_GUIDE.md](./DSPACE_COMPREHENSIVE_GUIDE.md)** ⭐ **NEW - CONSOLIDATED**
+  - Complete dSPACE simulator documentation in one place
+  - Directory structure and core components
+  - Vehicle control module (physics & controller)
+  - Control interfaces (VesiInterface, ExternalUserData)
+  - Coordinate transformation pipeline (XODR→RD)
+  - Integration points and configuration
+  - Comprehensive troubleshooting guide
+  - **Replaces**: DSPACE_SIMULATOR_STRUCTURE.md, DSPACE_CONTROL_INTERFACES.md, DSPACE_COORDINATE_TRANSFORMATION.md
 
 ### 🎮 Control & Actions
 
@@ -26,45 +30,23 @@ This directory contains comprehensive technical documentation for the Scenic-dSP
   - Manual transmission protocol (gear, clutch)
   - Action storage and application
 
-- **[DSPACE_CONTROL_INTERFACES.md](./DSPACE_CONTROL_INTERFACES.md)** (12KB, 245 lines)
-  - dSPACE COM automation API
-  - Control input/output interfaces
-  - Real-time control mechanisms
-  - Synchronization patterns
-
-- **[CONTROLDESK_JOYSTICK_INTEGRATION.md](./CONTROLDESK_JOYSTICK_INTEGRATION.md)** ⭐ **NEW**
+- **[CONTROLDESK_JOYSTICK_INTEGRATION.md](./CONTROLDESK_JOYSTICK_INTEGRATION.md)**
   - ControlDesk instrument script for joystick input
   - Mapping raw joystick values to ControlDesk variables
   - Steering, throttle, and brake axis handling
   - Real-time manual control integration
   - Calibration and troubleshooting guide
 
-### 📍 Coordinate Systems
-
-- **[DSPACE_COORDINATE_TRANSFORMATION.md](./DSPACE_COORDINATE_TRANSFORMATION.md)** (20KB, 695 lines) ⭐ **NEW**
-  - Complete coordinate transformation pipeline
-  - XODR → RD coordinate system conversion
-  - Geometric projection to (s,t) road coordinates
-  - Orientation conversion (Scenic → dSPACE)
-  - Calibration parameters and troubleshooting
-  - **Essential for debugging positioning issues**
-
 ## Quick Reference
 
-### For Debugging Vehicle Positioning
-→ Start with **[DSPACE_COORDINATE_TRANSFORMATION.md](./DSPACE_COORDINATE_TRANSFORMATION.md)**
+### For ALL dSPACE Topics
+→ **[DSPACE_COMPREHENSIVE_GUIDE.md](./DSPACE_COMPREHENSIVE_GUIDE.md)** - Single comprehensive reference
 
 ### For Understanding Domain Architecture
 → Read **[SCENIC_DOMAIN_ARCHITECTURE_COMPLETE_GUIDE.md](./SCENIC_DOMAIN_ARCHITECTURE_COMPLETE_GUIDE.md)**
 
 ### For Implementing Vehicle Control
 → Consult **[VEHICLE_CONTROL_IMPLEMENTATION.md](./VEHICLE_CONTROL_IMPLEMENTATION.md)**
-
-### For dSPACE Simulator Integration
-→ Study **[DSPACE_SIMULATOR_STRUCTURE.md](./DSPACE_SIMULATOR_STRUCTURE.md)**
-
-### For COM Automation Details
-→ Review **[DSPACE_CONTROL_INTERFACES.md](./DSPACE_CONTROL_INTERFACES.md)**
 
 ### For Joystick Integration
 → Consult **[CONTROLDESK_JOYSTICK_INTEGRATION.md](./CONTROLDESK_JOYSTICK_INTEGRATION.md)**
@@ -77,30 +59,24 @@ SCENIC_DOMAIN_ARCHITECTURE_COMPLETE_GUIDE.md
   ├─ Protocol definitions
   └─ Design patterns
 
-DSPACE_SIMULATOR_STRUCTURE.md
-  ├─ Simulator implementation
-  ├─ Inherits from architecture patterns
-  └─ COM integration details
+DSPACE_COMPREHENSIVE_GUIDE.md ⭐ CONSOLIDATED
+  ├─ Complete dSPACE reference (all topics)
+  ├─ Simulator structure & components
+  ├─ Vehicle control module (physics & controller)
+  ├─ Control interfaces (VesiInterface, ExternalUserData)
+  ├─ Coordinate transformation pipeline (XODR→RD)
+  ├─ Integration & configuration
+  └─ Troubleshooting guide
 
 VEHICLE_CONTROL_IMPLEMENTATION.md
   ├─ Control protocol implementations
   ├─ Extends domain protocols
   └─ Action storage/applying
 
-DSPACE_CONTROL_INTERFACES.md
-  ├─ COM automation specifics
-  ├─ Used by simulator structure
-  └─ Real-time control mechanisms
-
 CONTROLDESK_JOYSTICK_INTEGRATION.md
   ├─ Joystick to ControlDesk mapping
   ├─ Instrument script implementation
   └─ Real-time manual control
-
-DSPACE_COORDINATE_TRANSFORMATION.md
-  ├─ Independent transformation pipeline
-  ├─ Used by simulator for positioning
-  └─ Bridges Scenic ↔ dSPACE coordinates
 ```
 
 ## Key Topics Covered
@@ -136,9 +112,8 @@ DSPACE_COORDINATE_TRANSFORMATION.md
 ## Maintenance
 
 These documents are maintained in sync with the codebase. When significant changes are made to:
-- Coordinate transformation logic → Update DSPACE_COORDINATE_TRANSFORMATION.md
+- **ANY dSPACE topics** → Update DSPACE_COMPREHENSIVE_GUIDE.md (single source of truth)
 - Control protocols → Update VEHICLE_CONTROL_IMPLEMENTATION.md
-- Simulator structure → Update DSPACE_SIMULATOR_STRUCTURE.md
 - Architecture patterns → Update SCENIC_DOMAIN_ARCHITECTURE_COMPLETE_GUIDE.md
 - Joystick integration → Update CONTROLDESK_JOYSTICK_INTEGRATION.md
 
