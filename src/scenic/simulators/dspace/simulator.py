@@ -271,11 +271,13 @@ class DSpaceSimulation(RacingSimulation):
             self._vehicle_controller = VehicleController(self)
             print("[VehicleController] Initialized")
             
-            # Pause simulation initially for step-by-step control
-            self._pauseSimulation()
             
             # Initialize VesiInterface manual control BEFORE starting maneuver
             self._initializeVesiInterface()
+
+            self._setSimulationStep(0.01)
+            
+
             print("[VesiInterface] ✅ Initialization complete - ready for manual control")
         except Exception as e:
             print(f"[ControlDesk] ⚠️  Not available: {e}")
@@ -292,6 +294,9 @@ class DSpaceSimulation(RacingSimulation):
                 print(f"[Maneuver] ❌ Failed to start: {e}")
         else:
             print("[Maneuver] ⚠️  Skipping start - ControlDesk not available")
+        
+        # Pause simulation initially for step-by-step control
+        self._pauseSimulation()
 
     def createObjectInSimulator(self, obj):
         """Place car (ego or fellow) by absolute (s,t) computed from (x,y) and XODR.
@@ -750,12 +755,12 @@ class DSpaceSimulation(RacingSimulation):
             read_angle_wheel_degree_Fellows_External_value = 'Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer/angle_wheel_deg[0]'
             
             # This is for controlling the simulation timestep    
-            Application.PlatformManagement.Platforms.Item(0).SimulationTimeOptions.SingleStepTime = '0.01'
+            # Application.PlatformManagement.Platforms.Item(0).SimulationTimeOptions.SingleStepTime = '0.01'
 
-            Application.PlatformManagement.Platforms.Item(0).RealTimeApplications.Item(0).SingleStep()
-            Application.PlatformManagement.Platforms.Item(0).RealTimeApplications.Item(0).Pause()
-            Application.PlatformManagement.Platforms.Item(0).RealTimeApplications.Item(0).Start()
-            Application.PlatformManagement.Platforms.Item(0).RealTimeApplications.Item(0).Stop()
+            # Application.PlatformManagement.Platforms.Item(0).RealTimeApplications.Item(0).SingleStep()
+            # Application.PlatformManagement.Platforms.Item(0).RealTimeApplications.Item(0).Pause()
+            # Application.PlatformManagement.Platforms.Item(0).RealTimeApplications.Item(0).Start()
+            # Application.PlatformManagement.Platforms.Item(0).RealTimeApplications.Item(0).Stop()
 
 
             self._cd.set_var(
@@ -1060,6 +1065,21 @@ class DSpaceSimulation(RacingSimulation):
             print(f"[ControlDesk Values] Error reading variables: {e}")
             import traceback
             traceback.print_exc()
+
+    def _setSimulationStep(self, step=0.01):
+        """Wet the simulation time step"""
+        try:
+            # Access the ControlDesk application
+            app = self._cd.app
+            
+            # Navigate to Platform management
+            platform = app.PlatformManagement.Platforms.Item(0)
+            platform.SimulationTimeOptions.SingleStepTime = str(step)
+            
+            print(f"[_setSimulationStep] Simulation step set for {step} seconds")
+            
+        except Exception as e:
+            print(f"[_setSimulationStep] Error: {e}")
     
     def _pauseSimulation(self):
         """Pause the dSPACE simulation for step-by-step control.
@@ -1077,7 +1097,7 @@ class DSpaceSimulation(RacingSimulation):
             
             # Pause the simulation
             rta = platform.RealTimeApplications.Item(0)
-            assert False, "Manual assert to not pause simulation"
+            # assert False, "Manual assert to not pause simulation"
             rta.Pause()
             
             print("[_pauseSimulation] Simulation paused for step-by-step control")
@@ -1102,7 +1122,7 @@ class DSpaceSimulation(RacingSimulation):
             
             # Execute single step
             rta = platform.RealTimeApplications.Item(0)
-            assert False, "Manual assert to not step simulation"
+            # assert False, "Manual assert to not step simulation"
             rta.SingleStep()
             
         except Exception as e:

@@ -82,6 +82,7 @@ class ControlDeskApp:
         self.set_var(maneuver_start_path, 1.0)
         time.sleep(0.1)
         self.set_var(maneuver_start_path, 0.0)
+        print("[ControlDesk] Maneuver started")
 
     def stop_maneuver(self):
         """Stop the active experiment's maneuver."""
