@@ -13,7 +13,7 @@ Usage::
 
 # Import racing domain model (which imports driving domain)
 from scenic.domains.racing.model import *
-from scenic.domains.racing.actions import SetMaxSpeedAction, SetTTLAction, HasManualTransmission
+from scenic.domains.racing.actions import SetMaxSpeedAction, SetTTLAction, HasManualTransmission, RacingSteers
 
 # Import dSPACE-specific components
 import scenic.simulators.dspace as dspace
@@ -33,7 +33,7 @@ simulator dspace.DSpaceSimulator(
 )
 
 # dSPACE-specific racing car implementation
-class DSPACERacingCar(RacingCar, _DSpaceVehicle, Steers, HasManualTransmission):
+class DSPACERacingCar(RacingCar, _DSpaceVehicle, Steers, HasManualTransmission, RacingSteers):
     """dSPACE implementation of racing car with racing-specific systems.
     
     This class implements:
@@ -41,6 +41,7 @@ class DSPACERacingCar(RacingCar, _DSpaceVehicle, Steers, HasManualTransmission):
     - _DSpaceVehicle: Marker for dSPACE-specific actions
     - Steers: Protocol for standard driving domain steering actions
     - HasManualTransmission: Protocol for gear and clutch control
+    - RacingSteers: Protocol for racing decision tree actions
     
     Based on the IAC AV-24 (Dallara AV chassis) specifications:
     - Length: 4.80 m (189 inches)
@@ -121,6 +122,69 @@ class DSPACERacingCar(RacingCar, _DSpaceVehicle, Steers, HasManualTransmission):
         if not hasattr(self, '_oneshot_actions'):
             self._oneshot_actions = []
         self._oneshot_actions.append(('clutch', float(clutch)))
+    
+    # RacingSteers protocol implementation (for decision tree actions)
+    def setSpeedLimit(self, speed_limit):
+        """Set speed limit using RacingSteers protocol."""
+        print(f"[DSPACERacingCar.setSpeedLimit] Called with speed_limit={speed_limit}")
+        # Store speed limit and update maxSpeed
+        self.maxSpeed = float(speed_limit)
+        if hasattr(self, 'dspaceActor') and self.dspaceActor:
+            self.dspaceActor.speed_limit = float(speed_limit)
+            self.dspaceActor.set_control({'speed_limit': float(speed_limit)})
+    
+    def setTTLSelection(self, selection):
+        """Set TTL selection using RacingSteers protocol."""
+        print(f"[DSPACERacingCar.setTTLSelection] Called with selection={selection}")
+        # Store TTL selection in dspaceActor
+        if hasattr(self, 'dspaceActor') and self.dspaceActor:
+            self.dspaceActor.ttl_selection = selection
+            self.dspaceActor.set_control({'ttl_selection': selection})
+        
+        # Map selection to actual TTL region (requires track context)
+        # This is a simplified version - full implementation would need track TTL indices
+        # For now, we store the selection and let behaviors handle the mapping
+        self.ttl_selection = selection
+    
+    def setTargetGap(self, gap):
+        """Set target gap using RacingSteers protocol."""
+        print(f"[DSPACERacingCar.setTargetGap] Called with gap={gap}")
+        # Store target gap in dspaceActor
+        if hasattr(self, 'dspaceActor') and self.dspaceActor:
+            self.dspaceActor.target_gap = float(gap)
+            self.dspaceActor.set_control({'target_gap': float(gap)})
+    
+    def setStrategy(self, strategy_type):
+        """Set strategy using RacingSteers protocol."""
+        print(f"[DSPACERacingCar.setStrategy] Called with strategy_type={strategy_type}")
+        # Store strategy type in dspaceActor
+        if hasattr(self, 'dspaceActor') and self.dspaceActor:
+            self.dspaceActor.strategy_type = strategy_type
+            self.dspaceActor.set_control({'strategy_type': strategy_type})
+    
+    def setPowertrainMode(self, mode):
+        """Set powertrain mode using RacingSteers protocol."""
+        print(f"[DSPACERacingCar.setPowertrainMode] Called with mode={mode}")
+        # Store powertrain mode in dspaceActor
+        if hasattr(self, 'dspaceActor') and self.dspaceActor:
+            self.dspaceActor.powertrain_mode = mode
+            self.dspaceActor.set_control({'powertrain_mode': mode})
+    
+    def setScaleFactor(self, scale_factor):
+        """Set scale factor using RacingSteers protocol."""
+        print(f"[DSPACERacingCar.setScaleFactor] Called with scale_factor={scale_factor}")
+        # Store scale factor in dspaceActor
+        if hasattr(self, 'dspaceActor') and self.dspaceActor:
+            self.dspaceActor.scale_factor = float(scale_factor)
+            self.dspaceActor.set_control({'scale_factor': float(scale_factor)})
+    
+    def setPush2Pass(self, active):
+        """Set push2pass using RacingSteers protocol."""
+        print(f"[DSPACERacingCar.setPush2Pass] Called with active={active}")
+        # Store push2pass state in dspaceActor
+        if hasattr(self, 'dspaceActor') and self.dspaceActor:
+            self.dspaceActor.push2pass_active = bool(active)
+            self.dspaceActor.set_control({'push2pass_active': bool(active)})
 
 # Replace the abstract RacingCar with dSPACE implementation
 RacingCar = DSPACERacingCar

@@ -68,10 +68,20 @@ class ControlDeskApp:
 
     # Maneuver control
     def start_maneuver(self):
-        """Start the active experiment's maneuver."""
-        exp = self.app.ActiveExperiment
-        mc = exp.ManeuverControl
-        mc.Start(False)
+        """Start the active experiment's maneuver.
+        
+        Pulses the MANEUVER_START variable: sets it to 1, waits briefly, then resets to 0.
+        """
+        import time
+        
+        maneuver_start_path = (
+            "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/"
+            "UserInterface/PAR_Plant/ManeuverControl/MANEUVER_START/MDLDCtrl_ManeuverStart"
+        )
+        
+        self.set_var(maneuver_start_path, 1.0)
+        time.sleep(0.1)
+        self.set_var(maneuver_start_path, 0.0)
 
     def stop_maneuver(self):
         """Stop the active experiment's maneuver."""

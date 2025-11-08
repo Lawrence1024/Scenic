@@ -49,6 +49,17 @@ class DSpaceVehicleActor:
             initial_velocity=0.0,
             initial_deviation=0.0
         )
+        
+        # Decision tree state variables
+        self.speed_limit = None  # Current speed limit (m/s)
+        self.speed_type = None  # "stop", "pit_crawl", "pit_lane", "yellow", "green", etc.
+        self.ttl_selection = None  # "left", "right", "race", "optimal", "pit"
+        self.target_gap = None  # Target following gap (meters)
+        self.gap_type = None  # "no_gap", "attacker_preparing", "attacker_attacking", etc.
+        self.strategy_type = "cruise_control"  # "cruise_control" or "follow_mode"
+        self.scale_factor = 1.0  # Speed scale factor (0.0-1.0)
+        self.powertrain_mode = "nominal"  # "pit_lane", "quiet", "nominal", "race", "overboost"
+        self.push2pass_active = False  # Push2Pass activation state
     
     def set_control(self, control_dict):
         """Set control parameters (used by setMaxSpeed, setTTL, etc.).
@@ -1066,6 +1077,7 @@ class DSpaceSimulation(RacingSimulation):
             
             # Pause the simulation
             rta = platform.RealTimeApplications.Item(0)
+            assert False, "Manual assert to not pause simulation"
             rta.Pause()
             
             print("[_pauseSimulation] Simulation paused for step-by-step control")
@@ -1090,6 +1102,7 @@ class DSpaceSimulation(RacingSimulation):
             
             # Execute single step
             rta = platform.RealTimeApplications.Item(0)
+            assert False, "Manual assert to not step simulation"
             rta.SingleStep()
             
         except Exception as e:
