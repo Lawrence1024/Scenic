@@ -96,4 +96,129 @@ class ControlDeskApp:
         mc = exp.ManeuverControl
         mc.Reset()
 
+    # Simulation control
+    def set_simulation_step(self, step=0.01):
+        """Set the simulation time step."""
+        try:
+            platform = self.app.PlatformManagement.Platforms.Item(0)
+            platform.SimulationTimeOptions.SingleStepTime = str(step)
+            print(f"[ControlDesk] Simulation step set to {step} seconds")
+        except Exception as e:
+            print(f"[ControlDesk] Error setting simulation step: {e}")
+
+    def pause_simulation(self):
+        """Pause the dSPACE simulation for step-by-step control.
+        
+        This should be called once during setup to put the simulation into
+        a paused state where it can be advanced step-by-step.
+        """
+        try:
+            platforms = self.app.PlatformManagement.Platforms
+            platform = platforms.Item(0)
+            rta = platform.RealTimeApplications.Item(0)
+            rta.Pause()
+            print("[ControlDesk] Simulation paused for step-by-step control")
+        except Exception as e:
+            print(f"[ControlDesk] Error pausing simulation: {e}")
+
+    def advance_simulation_step(self):
+        """Advance the dSPACE simulation by one timestep.
+        
+        Uses ControlDesk COM interface to execute a single simulation step.
+        This should be called after control variables have been written.
+        """
+        try:
+            platforms = self.app.PlatformManagement.Platforms
+            platform = platforms.Item(0)
+            rta = platform.RealTimeApplications.Item(0)
+            rta.SingleStep()
+        except Exception as e:
+            print(f"[ControlDesk] Error advancing simulation step: {e}")
+            raise
+
+    def initialize_vesi_interface(self):
+        """Initialize VesiInterface manual control interface.
+        
+        Sets all required master switches, race control configuration, and enable flags
+        to activate the VesiInterface manual control system.
+        """
+        print("[ControlDesk] Initializing VesiInterface manual control interface...")
+        
+        try:
+            # Step 1: VesiInterface Master Switches
+            print("[ControlDesk] Setting master switches...")
+            self.set_var(
+                "Platform()://ASM_Traffic/Model Root/VesiInterface/Sw_Activate_CLIF[0|1]/Value",
+                0.0
+            )
+            self.set_var(
+                "Platform()://ASM_Traffic/Model Root/VesiInterface/Sw_Manual_VESI_Overwrite[0|1]/Value",
+                1.0  # CRITICAL: Enable manual VESI control
+            )
+            print("[ControlDesk] Master switches set")
+            
+            # Step 2: Race Control Configuration
+            print("[ControlDesk] Configuring race control...")
+            self.set_var(
+                "Platform()://ASM_Traffic/Model Root/RaceControl/Sw_RaceControl[0Intern|1Extern|2Orchestrator]/Value",
+                0.0  # Intern mode (required for manual control)
+            )
+            self.set_var(
+                "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_sys_state/Value",
+                9  # CRITICAL: System state constant
+            )
+            self.set_var(
+                "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_track_flag/Value",
+                1
+            )
+            self.set_var(
+                "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_veh_flag/Value",
+                0
+            )
+            print("[ControlDesk] Race control configured")
+            
+            # Step 3: Enable Individual Control Channels
+            print("[ControlDesk] Enabling control channels...")
+            self.set_var(
+                "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_enable_brake_cmd/Value",
+                1
+            )
+            self.set_var(
+                "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_enable_gear_cmd/Value",
+                1
+            )
+            self.set_var(
+                "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_enable_steering_cmd/Value",
+                1
+            )
+            self.set_var(
+                "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_enable_throttle_cmd/Value",
+                1
+            )
+            print("[ControlDesk] Control channels enabled")
+            
+            # Step 4: Initialize all control values to 0
+            print("[ControlDesk] Initializing control values to 0...")
+            KEY_THROTTLE = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_throttle_cmd/Value"
+            KEY_BRAKE_FRONT = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_front/Value"
+            KEY_BRAKE_REAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_rear/Value"
+            KEY_STEERING = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_steering_cmd/Value"
+            KEY_GEAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_gear_cmd/Value"
+            KEY_CLUTCH = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Pos_ClutchPedal[%]/Value"
+            
+            self.set_var(KEY_THROTTLE, 0.0)
+            self.set_var(KEY_BRAKE_FRONT, 0.1)
+            self.set_var(KEY_BRAKE_REAR, 0.1)
+            self.set_var(KEY_STEERING, 0)
+            self.set_var(KEY_GEAR, 0.0)
+            self.set_var(KEY_CLUTCH, 0.0)
+            print("[ControlDesk] All control values initialized to 0")
+            
+            print("[ControlDesk] VesiInterface initialization complete - manual control ready")
+            
+        except Exception as e:
+            print(f"[ControlDesk] ERROR - VesiInterface initialization failed: {e}")
+            import traceback
+            traceback.print_exc()
+
 

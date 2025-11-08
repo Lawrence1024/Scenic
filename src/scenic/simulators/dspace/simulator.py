@@ -273,9 +273,9 @@ class DSpaceSimulation(RacingSimulation):
             
             
             # Initialize VesiInterface manual control BEFORE starting maneuver
-            self._initializeVesiInterface()
+            self._cd.initialize_vesi_interface()
 
-            self._setSimulationStep(0.01)
+            self._cd.set_simulation_step(0.01)
             
 
             print("[VesiInterface] ✅ Initialization complete - ready for manual control")
@@ -296,7 +296,8 @@ class DSpaceSimulation(RacingSimulation):
             print("[Maneuver] ⚠️  Skipping start - ControlDesk not available")
         
         # Pause simulation initially for step-by-step control
-        self._pauseSimulation()
+        if self._cd:
+            self._cd.pause_simulation()
 
     def createObjectInSimulator(self, obj):
         """Place car (ego or fellow) by absolute (s,t) computed from (x,y) and XODR.
@@ -711,116 +712,6 @@ class DSpaceSimulation(RacingSimulation):
         except Exception as e:
             print(f"[ModelDesk] Error configuring fellow: {e}")
     
-    def _initializeVesiInterface(self):
-        """Initialize VesiInterface manual control interface.
-        
-        Sets all required master switches, race control configuration, and enable flags
-        to activate the VesiInterface manual control system.
-        """
-        if not self._cd:
-            print("[VesiInterface] ControlDesk not available, skipping initialization")
-            return
-        
-        print("[VesiInterface] Initializing manual control interface...")
-        
-        try:
-            # Step 1: VesiInterface Master Switches
-            print("[VesiInterface] Setting master switches...")
-            self._cd.set_var(
-                "Platform()://ASM_Traffic/Model Root/VesiInterface/Sw_Activate_CLIF[0|1]/Value",
-                0.0
-            )
-            self._cd.set_var(
-                "Platform()://ASM_Traffic/Model Root/VesiInterface/Sw_Manual_VESI_Overwrite[0|1]/Value",
-                1.0  # CRITICAL: Enable manual VESI control
-            )
-            print("[VesiInterface] Master switches set")
-            
-            # Step 2: Race Control Configuration
-            print("[VesiInterface] Configuring race control...")
-            self._cd.set_var(
-                "Platform()://ASM_Traffic/Model Root/RaceControl/Sw_RaceControl[0Intern|1Extern|2Orchestrator]/Value",
-                0.0  # Intern mode (required for manual control)
-            )
-
-            # This is for controlling the values for fellow
-            write_d_Fellows_External = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/External_Signals/Const_d_Fellows_External[m]/Value[0]"
-            write_v_Fellows_External = 'Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/External_Signals/Const_v_Fellows_External[km|h]/Value[0]'
-            read_x_Fellows_External = 'Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer/x[0]'
-            read_y_Fellows_External_value = 'Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer/y[0]'
-            read_z_Fellows_External_value = 'Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer/z[0]'
-            read_yaw_Fellows_External_value = 'Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer/yaw_deg_out[0]'
-            read_v_Fellows_External_value = 'Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer/v_Fellows[0]'
-            read_w_Fellows_External_value = 'Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer/w_Fellows[0]'
-            read_angle_wheel_degree_Fellows_External_value = 'Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer/angle_wheel_deg[0]'
-            
-            # This is for controlling the simulation timestep    
-            # Application.PlatformManagement.Platforms.Item(0).SimulationTimeOptions.SingleStepTime = '0.01'
-
-            # Application.PlatformManagement.Platforms.Item(0).RealTimeApplications.Item(0).SingleStep()
-            # Application.PlatformManagement.Platforms.Item(0).RealTimeApplications.Item(0).Pause()
-            # Application.PlatformManagement.Platforms.Item(0).RealTimeApplications.Item(0).Start()
-            # Application.PlatformManagement.Platforms.Item(0).RealTimeApplications.Item(0).Stop()
-
-
-            self._cd.set_var(
-                "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_sys_state/Value",
-                9  # CRITICAL: System state constant
-            )
-            self._cd.set_var(
-                "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_track_flag/Value",
-                1
-            )
-            self._cd.set_var(
-                "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_veh_flag/Value",
-                0
-            )
-            print("[VesiInterface] Race control configured")
-            
-            # Step 3: Enable Individual Control Channels
-            print("[VesiInterface] Enabling control channels...")
-            self._cd.set_var(
-                "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_enable_brake_cmd/Value",
-                1
-            )
-            self._cd.set_var(
-                "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_enable_gear_cmd/Value",
-                1
-            )
-            self._cd.set_var(
-                "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_enable_steering_cmd/Value",
-                1
-            )
-            self._cd.set_var(
-                "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_enable_throttle_cmd/Value",
-                1
-            )
-            print("[VesiInterface] Control channels enabled")
-            
-            # Step 4: Initialize all control values to 0
-            print("[VesiInterface] Initializing control values to 0...")
-            KEY_THROTTLE = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_throttle_cmd/Value"
-            KEY_BRAKE_FRONT = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_front/Value"
-            KEY_BRAKE_REAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_rear/Value"
-            KEY_STEERING = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_steering_cmd/Value"
-            KEY_GEAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_gear_cmd/Value"
-            KEY_CLUTCH = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Pos_ClutchPedal[%]/Value"
-            
-            self._cd.set_var(KEY_THROTTLE, 0.0)
-            self._cd.set_var(KEY_BRAKE_FRONT, 0.1)
-            self._cd.set_var(KEY_BRAKE_REAR, 0.1)
-            self._cd.set_var(KEY_STEERING, 0)
-            self._cd.set_var(KEY_GEAR, 0.0)
-            self._cd.set_var(KEY_CLUTCH, 0.0)
-            print("[VesiInterface] All control values initialized to 0")
-            
-            print("[VesiInterface] Initialization complete - manual control ready")
-            
-        except Exception as e:
-            print(f"[VesiInterface] ERROR - Initialization failed: {e}")
-            import traceback
-            traceback.print_exc()
-    
     def setVehicleControl(self, vehicle_name, throttle=None, brake=None, steering=None, velocity=None):
         """Set dynamic control inputs for a vehicle using VesiInterface manual control."""
         print(f"\n[setVehicleControl] Called for {vehicle_name}: throttle={throttle}, brake={brake}, steering={steering}, velocity={velocity}")
@@ -1066,69 +957,6 @@ class DSpaceSimulation(RacingSimulation):
             import traceback
             traceback.print_exc()
 
-    def _setSimulationStep(self, step=0.01):
-        """Wet the simulation time step"""
-        try:
-            # Access the ControlDesk application
-            app = self._cd.app
-            
-            # Navigate to Platform management
-            platform = app.PlatformManagement.Platforms.Item(0)
-            platform.SimulationTimeOptions.SingleStepTime = str(step)
-            
-            print(f"[_setSimulationStep] Simulation step set for {step} seconds")
-            
-        except Exception as e:
-            print(f"[_setSimulationStep] Error: {e}")
-    
-    def _pauseSimulation(self):
-        """Pause the dSPACE simulation for step-by-step control.
-        
-        This should be called once during setup to put the simulation into
-        a paused state where it can be advanced step-by-step.
-        """
-        try:
-            # Access the ControlDesk application
-            app = self._cd.app
-            
-            # Navigate to Platform management
-            platforms = app.PlatformManagement.Platforms
-            platform = platforms.Item(0)
-            
-            # Pause the simulation
-            rta = platform.RealTimeApplications.Item(0)
-            # assert False, "Manual assert to not pause simulation"
-            rta.Pause()
-            
-            print("[_pauseSimulation] Simulation paused for step-by-step control")
-            
-        except Exception as e:
-            print(f"[_pauseSimulation] Error: {e}")
-            # Don't raise - this is not critical
-    
-    def _advanceSimulationStep(self):
-        """Advance the dSPACE simulation by one timestep.
-        
-        Uses ControlDesk COM interface to execute a single simulation step.
-        This should be called after control variables have been written.
-        """
-        try:
-            # Access the ControlDesk application
-            app = self._cd.app
-            
-            # Navigate to Platform management
-            platforms = app.PlatformManagement.Platforms
-            platform = platforms.Item(0)
-            
-            # Execute single step
-            rta = platform.RealTimeApplications.Item(0)
-            # assert False, "Manual assert to not step simulation"
-            rta.SingleStep()
-            
-        except Exception as e:
-            print(f"[_advanceSimulationStep] Error: {e}")
-            raise
-    
     def _initializeDSpaceActor(self, obj):
         """Initialize dSPACE actor representation for a vehicle object.
         
@@ -1310,7 +1138,7 @@ class DSpaceSimulation(RacingSimulation):
         if self._cd:
             try:
                 # Advance simulation by one step using ControlDesk COM interface
-                self._advanceSimulationStep()
+                self._cd.advance_simulation_step()
             except Exception as e:
                 print(f"[step] Warning: Failed to advance simulation step: {e}")
                 # Fallback to sleep
