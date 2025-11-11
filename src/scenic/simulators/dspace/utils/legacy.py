@@ -1,16 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Legacy compatibility layer for dSPACE utilities.
-All functions have been moved to dedicated modules:
-- Geometry functions: geometry/
-- ModelDesk functions: modeldesk/
-- ControlDesk functions: controldesk/
-
-This file re-exports for backward compatibility.
+Re-exports helpers which historically lived in utils.py.
 """
 
-# Re-export geometry functions for backward compatibility
-from .geometry import (
+from ..geometry import (
     clear_collection,
     ensure_two_segments,
     activate_type,
@@ -37,3 +31,5 @@ __all__ = [
     'project_world_to_st',
     'MAIN_ROAD_NAMES',
 ]
+
+

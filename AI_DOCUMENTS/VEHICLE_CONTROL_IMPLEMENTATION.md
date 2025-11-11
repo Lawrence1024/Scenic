@@ -183,8 +183,8 @@ class DSPACERacingCar(RacingCar, _DSpaceVehicle, Steers, HasManualTransmission):
 The simulator's `executeActions()` method:
 
 1. Calls `super().executeActions()` to process Scenic actions
-2. Applies continuous controls from `_control_state` via `setVehicleControl()`
-3. Applies one-shot actions from `_oneshot_actions` (gear/clutch) even if `_control_state` is empty for the tick (ensures early neutral→gear1 is honored)
+2. Applies continuous controls from `_control_state` via `VehicleController.apply_*` helpers
+3. Applies one-shot actions from `_oneshot_actions` (gear/clutch) even if `_control_state` is empty for the tick (ensures early neutral→gear1 is honored). This is implemented in `vehicle/controller.py: apply_ego_control()` which always processes one-shots.
 4. Clears `_control_state` and `_oneshot_actions` after application
 5. Applies kinematic control to fellows only if they have behaviors (otherwise they remain stationary)
 6. Fellows’ Segment 1 is configured as Velocity=0 (constant), Lateral=Continue (Endless), making them stationary by default
@@ -199,7 +199,14 @@ The simulator's `executeActions()` method:
 
 - `FollowRacingLineBehavior` and `FollowModeBehavior` support:
   - `use_waypoints=True`, `lookahead=20.0` → Find nearest TTL point and target a lookahead point; compute signed lateral error to local segment normal; fall back to region `signedDistanceTo` if waypoints absent
-  - `manage_gears=True` → Simple gear logic (neutral→1, up/down thresholds) only if the actor supports `setGear`
+  - `manage_gears=True` → Simple gear logic (neutral→1, up/down thresholds) only if the actor supports `setGear`. Fellows can disable by setting `manage_gears=False` per behavior.
+
+### Control Application Modules (where to look)
+
+- `vehicle/controller.py` → applies ego (VesiInterface) and fellow (External Signals) writes; processes one-shots unconditionally.
+- `controldesk/arrays.py` → warm-up gating and External Signals path/index probe.
+- `controldesk/session.py` → connect/start/pause/step helpers.
+- `controldesk/readback.py` → centralized ego/fellow plant reads used by `getProperties()`.
 
 ### ControlDesk Variable Mappings
 

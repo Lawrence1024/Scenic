@@ -4,6 +4,8 @@ This module handles the application of control commands to vehicles in the
 dSPACE simulation environment, including both ego and fellow vehicles.
 """
 
+from ..vehicle.physics import VehiclePhysicsState
+
 
 class VehicleController:
     """Controller for applying vehicle commands to ControlDesk.
@@ -127,6 +129,9 @@ class VehicleController:
         try:
             # Update physics model
             actor = obj.dspaceActor
+            # Ensure physics model exists for kinematic update
+            if getattr(actor, "physics", None) is None:
+                actor.physics = VehiclePhysicsState(initial_velocity=0.0, initial_deviation=0.0)
             new_velocity, new_deviation = actor.physics.update(
                 throttle=throttle,
                 brake=brake,
@@ -185,16 +190,21 @@ class VehicleController:
                 print(f"[Fellow {fellow_index}] ExternalSignals bulk write/read: v {v_prev}→{v_echo}, d {d_prev}→{d_echo} @ {v_path_bulk}[{eff_ext_index}]")
             except Exception as es_err:
                 print(f"[Fellow {fellow_index}] ExternalSignals bulk feedback read error (idx={eff_ext_index}): {es_err}")
-            # For the first fellow, also try to read plant pose if available
+            # For the first fellow, also try to read plant pose if available (bulk-safe)
             if fellow_index == 0:
                 try:
                     plant_base = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer"
-                    x = self.cd.get_var(f"{plant_base}/x[{eff_index}]")
-                    y = self.cd.get_var(f"{plant_base}/y[{eff_index}]")
-                    yaw = self.cd.get_var(f"{plant_base}/yaw_deg_out[{eff_index}]")
-                    print(f"[Fellow {fellow_index}] Plant pose: x={x}, y={y}, yaw_deg={yaw} (idx={eff_index})")
-                except Exception as fb_err:
-                    print(f"[Fellow {fellow_index}] Plant pose not available yet (idx={eff_index}): {fb_err}")
+                    x_arr = self.cd.get_var(f"{plant_base}/x")
+                    y_arr = self.cd.get_var(f"{plant_base}/y")
+                    yaw_arr = self.cd.get_var(f"{plant_base}/yaw_deg_out")
+                    x = x_arr[eff_index] if isinstance(x_arr, (list, tuple)) and len(x_arr) > eff_index else None
+                    y = y_arr[eff_index] if isinstance(y_arr, (list, tuple)) and len(y_arr) > eff_index else None
+                    yaw = yaw_arr[eff_index] if isinstance(yaw_arr, (list, tuple)) and len(yaw_arr) > eff_index else None
+                    if x is not None and y is not None and yaw is not None:
+                        print(f"[Fellow {fellow_index}] Plant pose: x={x}, y={y}, yaw_deg={yaw} (idx={eff_index})")
+                except Exception:
+                    # Silently ignore; arrays may not be ready in the first few ticks
+                    pass
             
             # Clear warning flag if we successfully wrote (arrays are now ready)
             if hasattr(obj, '_write_array_bounds_warning_shown'):

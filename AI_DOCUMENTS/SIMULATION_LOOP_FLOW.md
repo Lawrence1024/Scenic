@@ -6,11 +6,12 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │                         SETUP PHASE                              │
 │                                                                  │
-│  1. Connect ModelDesk + ControlDesk                             │
-│  2. Create vehicles (ego + fellows)                             │
-│  3. Initialize _backend for each vehicle                        │
-│  4. ⏸  PAUSE simulation (_pauseSimulation)                      │
-│  5. Initialize VesiInterface control                            │
+│  1. ModelDesk: save/activate scenario copy                      │
+│  2. Geometry: build road index + coord transform (geometry/pipeline.py) │
+│  3. Place vehicles (modeldesk/placement.py)                     │
+│  4. ControlDesk: connect/start measurement (controldesk/session.py) │
+│  5. ⏸  PAUSE simulation (controldesk/session.pause)            │
+│  6. Initialize VesiInterface control (controldesk/session.connect_and_prepare) │
 └─────────────────────────────────────────────────────────────────┘
                             │
                             ▼
@@ -30,6 +31,7 @@
                             ▼
         ┌───────────────────────────────────────┐
         │  2. executeActions()                  │
+        │     - Warm-up: ensure fellow arrays (controldesk/arrays.py) │
         │     - Write to ControlDesk:           │
         │       • Throttle → VesiInterface      │
         │       • Brake → VesiInterface         │
@@ -41,8 +43,7 @@
                             ▼
         ┌───────────────────────────────────────┐
         │  3. step() ⚙️                         │
-        │     - Call _advanceSimulationStep()   │
-        │     - ControlDesk: SingleStep()       │
+        │     - controldesk.session.step()      │
         │     - Physics advances Δt             │
         └───────────────────────────────────────┘
                             │
@@ -50,7 +51,7 @@
         ┌───────────────────────────────────────┐
         │  4. getProperties() 📖                │
         │     - For each vehicle:               │
-        │       • _readVehicleStateFromCD()     │
+        │       • controldesk.readback.read_*() │
         │         - x, y, z                     │
         │         - yaw_deg → yaw_rad           │
         │         - v, w → velocity vector      │
@@ -101,7 +102,7 @@ VesiInterface
 dSPACE Simulation
 ```
 
-### Read Path (ControlDesk → Scenic)
+### Read Path (ControlDesk → Scenic via readback)
 
 ```
 dSPACE Simulation
@@ -110,10 +111,11 @@ dSPACE Simulation
 ControlDesk Variables
       │
       ▼
-self._cd.get_var(path)
+controldesk.readback.read_ego_state(sim, obj)
+controldesk.readback.read_fellow_state(sim, obj, dutils)
       │
       ▼
-_readVehicleStateFromControlDesk()
+_readVehicleStateFromControlDesk()  # delegates to readback module
       │
       ▼
 obj.dspaceActor (internal state)
@@ -166,7 +168,7 @@ class DSpaceVehicleActor:
 
 ## ControlDesk Variable Access
 
-### Read Operations (getProperties)
+### Read Operations (getProperties, via readback)
 
 ```python
 # Fellow vehicle (index 0-based)
@@ -176,7 +178,7 @@ yaw_deg = self._cd.get_var("Platform()://.../yaw_deg_out[0]")
 v = self._cd.get_var("Platform()://.../v_Fellows[0]")
 ```
 
-### Write Operations (executeActions)
+### Write Operations (executeActions → VehicleController)
 
 ```python
 # VesiInterface control
@@ -194,7 +196,7 @@ step() called
     │                                  [Fallback mode]
     └─ Yes
         │
-        └─ _advanceSimulationStep()
+        └─ controldesk.session.step()
             │
             ├─ Success ──> Continue
             │

@@ -28,6 +28,58 @@ This directory is the living knowledge base for the Scenic ↔︎ dSPACE integra
 
 ---
 
+## 🗺️ Project Map (dSPACE folder)
+
+Authoritative module map for `src/scenic/simulators/dspace/`. Use it to locate code by responsibility.
+
+```
+dspace/
+├─ simulator.py            # Orchestrator: setup, object creation, action loop
+│
+├─ actions.py              # dSPACE-specific actions (marker + SetVehicleControl)
+├─ model.scenic            # Binds DSPACERacingCar and simulator params
+├─ racing_model.scenic     # Racing integration (inherits domain protocols)
+│
+├─ utils/
+│  ├─ log.py               # Tiny logging shim (toggle DEBUG_ENABLED)
+│  └─ legacy.py            # TEMP compatibility surface (old utils.py)
+│
+├─ ttl/
+│  └─ loader.py            # TTL config/resolve, CSV parse, attach_to_ego()
+│
+├─ vehicle/
+│  ├─ actor.py             # DSpaceVehicleActor + ensure_actor(obj)
+│  ├─ physics.py           # VehiclePhysicsState for fellows (kinematic)
+│  ├─ controller.py        # Applies ego (VesiInterface) and fellow controls
+│  └─ indexing.py          # get_fellow_index(sim, obj)
+│
+├─ controldesk/
+│  ├─ connection.py        # COM wrapper
+│  ├─ session.py           # connect/start/pause/step helpers
+│  ├─ arrays.py            # warm-up and External Signals path/index probing
+│  ├─ readback.py          # ego/fellow state reads from plant
+│  └─ per_tick_control.py  # enable flags / external control toggles
+│
+├─ geometry/
+│  ├─ pipeline.py          # Build road index + coordinate transform
+│  ├─ coordinate_transform.py
+│  ├─ projection.py
+│  ├─ rd_parser.py, xodr_parser.py
+│  ├─ route_mapping.py     # pitLane/mainRacing detection + mapping
+│  └─ params.py            # Map path lookup from scene params
+│
+└─ modeldesk/
+   ├─ authoring.py         # Author scenario (fellows, external use)
+   ├─ placement.py         # Ego/fellow placement helpers
+   └─ routes.py            # Route activation helper
+```
+
+Notes:
+- The old `utils.py` was removed; use `utils/` modules. `utils/legacy.py` temporarily re-exports the prior surface.
+- `blueprints.py` was removed as unused.
+
+---
+
 ## 🎮 Control & Actions
 
 - **[VEHICLE_CONTROL_IMPLEMENTATION.md](./VEHICLE_CONTROL_IMPLEMENTATION.md)**  
@@ -44,7 +96,7 @@ This directory is the living knowledge base for the Scenic ↔︎ dSPACE integra
 
 ## 🔧 Runtime & Data Flow
 
-- **[SIMULATION_LOOP_ \_FLOW.md](./SIMULATION_LOOP_FLOW.md)**  
+- **[SIMULATION_LOOP_FLOW.md](./SIMULATION_LOOP_FLOW.md)**  
   How `executeActions → step → getProperties` orchestrates control and sensing:
   - dSPACE `SingleStep` timing & Online Calibration
   - `dspaceActor` state flow (position/velocity/yaw)
@@ -60,7 +112,7 @@ This directory is the living knowledge base for the Scenic ↔︎ dSPACE integra
 - **[DSPACEACTOR_REFACTORING.md](./DSPACEACTOR_REFACTORING.md)**  
   Design notes and refactoring details for consolidating internal state into `DSpaceVehicleActor`.
 
-- **[DECISION_TREE_IMPLEMENTATION_ \_SUMMARY.md](./DECISION_TREE_IMPLEMENTATION_SUMMARY.md)**  
+- **[DECISION_TREE_IMPLEMENTATION_SUMMARY.md](./DECISION_TREE_IMPLEMENTATION_SUMMARY.md)**  
   Overview of racing decision logic (e.g., follow mode, TTL selection) and how it integrates with `RacingSteers` actions.
 
 ---

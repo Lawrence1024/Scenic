@@ -355,17 +355,43 @@ racingLine: Region = road.difference(pitLane)
 
 ### Step-by-Step Guide
 
-#### 1. Create Simulator Structure
+#### 1. Create Simulator Structure (dSPACE — current)
 
 ```
-scenic/simulators/{simulator_name}/
-├── __init__.py
-├── simulator.py       # Simulator and Simulation classes
-├── model.scenic       # Domain + simulator integration
-├── actions.py         # Simulator-specific actions only
-├── behaviors.scenic   # Simulator-specific behaviors (optional)
-├── blueprints.py      # Simulator assets (optional)
-└── utils/            # Utilities (coordinate conversion, etc.)
+scenic/simulators/dspace/
+├── simulator.py             # Orchestrator; delegates to submodules
+├── actions.py               # dSPACE-specific actions (marker + convenience)
+├── model.scenic, racing_model.scenic  # Domain integration
+│
+├── utils/
+│   ├── log.py               # simple logging shim
+│   └── legacy.py            # TEMP re-export, replacing old utils.py
+│
+├── ttl/loader.py            # TTL config/resolve + attach_to_ego()
+│
+├── vehicle/
+│   ├── actor.py             # DSpaceVehicleActor, ensure_actor()
+│   ├── controller.py        # Applies ego/fellow controls
+│   ├── physics.py           # Fellow kinematic physics
+│   └── indexing.py          # get_fellow_index(sim, obj)
+│
+├── controldesk/
+│   ├── connection.py        # COM wrapper
+│   ├── session.py           # connect/start/pause/step helpers
+│   ├── arrays.py            # external signals warm-up / path probe
+│   ├── readback.py          # plant state read helpers
+│   └── per_tick_control.py  # enable flags / external toggles
+│
+├── geometry/
+│   ├── pipeline.py          # build road index + transform
+│   ├── projection.py, coordinate_transform.py
+│   ├── route_mapping.py     # pitLane/mainRacing detection + mapping
+│   └── params.py            # map path from scene params
+│
+└── modeldesk/
+    ├── authoring.py         # author scenario + external control
+    ├── placement.py         # ego/fellow placement
+    └── routes.py            # route activation
 ```
 
 #### 2. Implement Actions (actions.py)
@@ -396,16 +422,17 @@ class {Simulator}SpecificAction(Action):
 from scenic.domains.{domain}.model import *
 
 # Import simulator components
-from scenic.simulators.{simulator}.actions import _{Simulator}Vehicle
+from scenic.simulators.dspace.actions import _DSpaceVehicle
 from scenic.domains.driving.actions import Steers
 
 # Simulator-specific base class
-class {Simulator}Actor({DomainObject}):
-    simulatorActor: None  # Link to simulator's internal object
+class DSPACERacingCar(RacingCar, _DSpaceVehicle, Steers):
+    dspaceActor: None  # Link to simulator's internal object
     
-    def setPosition(self, pos, elevation):
-        # Convert and apply to simulator
-        self.simulatorActor.set_position(...)
+    # Protocol implementations store control for the simulator loop
+    def setThrottle(self, throttle): self._control_state['throttle'] = float(throttle)
+    def setSteering(self, steering): self._control_state['steering'] = float(steering)
+    def setBraking(self, braking): self._control_state['braking'] = float(braking)
 
 # Implement protocols
 class Vehicle(Vehicle, {Simulator}Actor, Steers, _{Simulator}Vehicle):
@@ -438,12 +465,11 @@ class {Simulator}Simulator({Domain}Simulator):
     def createSimulation(self, scene, **kwargs):
         return {Simulator}Simulation(scene, self, **kwargs)
 
-class {Simulator}Simulation({Domain}Simulation):
+class DSpaceSimulation(RacingSimulation):
     def createObjectInSimulator(self, obj):
-        # Create simulator's internal representation
-        simulatorActor = self.spawn_object(obj.position, obj.heading, ...)
-        obj.simulatorActor = simulatorActor  # ← Link
-        return simulatorActor
+        # Ensure dspace actor and place via ModelDesk
+        vehicle_actor.ensure_actor(obj)
+        return self.createEgoInSimulator(obj) if obj is self.scene.egoObject else self.createFellowInSimulator(obj)
     
     def step(self):
         # Apply any pending control state
@@ -452,7 +478,20 @@ class {Simulator}Simulation({Domain}Simulation):
                 self.applyControlToSimulator(obj, obj._control_state)
         
         # Step simulator
-        self.simulator_connection.step()
+        cd_session.step(self._cd, self.timestep)
+```
+
+#### 5. Import Patterns and Boundaries
+
+Use narrow imports by responsibility. Examples:
+
+```python
+from scenic.simulators.dspace.vehicle.controller import VehicleController         # apply controls
+from scenic.simulators.dspace.controldesk.session import connect_and_prepare     # CD lifecycle
+from scenic.simulators.dspace.controldesk.readback import read_fellow_state      # plant reads
+from scenic.simulators.dspace.modeldesk.placement import place_ego, place_fellow # placement
+from scenic.simulators.dspace.geometry.pipeline import build_road_index_and_transform
+from scenic.simulators.dspace.ttl.loader import attach_to_ego                    # TTL
 ```
 
 ---

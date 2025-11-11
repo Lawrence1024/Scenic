@@ -43,41 +43,54 @@ The dSPACE simulator integration provides a comprehensive interface between Scen
 
 ---
 
-## Directory Structure
+## Directory Structure (current)
 
 ```
 src/scenic/simulators/dspace/
 ├── __init__.py                 # Main exports
-├── simulator.py               # Core simulator (1673 lines, 78.7 KB)
-├── utils.py                   # Legacy compatibility utilities
-├── actions.py                 # dSPACE-specific actions
-├── blueprints.py              # Vehicle model definitions
+├── simulator.py               # Orchestrator; delegates to modules below
+├── actions.py                 # dSPACE-specific actions (marker and convenience)
 ├── model.scenic               # Base dSPACE model
 ├── racing_model.scenic        # Racing-specific model
 │
-├── vehicle/                   # Vehicle control module ⭐ NEW
-│   ├── __init__.py
-│   ├── physics.py             # VehiclePhysicsState (131 lines)
-│   └── controller.py          # VehicleController (222 lines)
+├── utils/                     # Utilities package
+│   ├── __init__.py            # Exposes log + legacy surface
+│   ├── log.py                 # Tiny logging shim (toggle DEBUG_ENABLED)
+│   └── legacy.py              # TEMP re-exports for old utils surface
 │
-├── controldesk/               # Runtime control interface
+├── ttl/                       # Target Trajectory Line (TTL) loading
+│   └── loader.py              # get_ttl_config, load_ttl_region, attach_to_ego
+│
+├── vehicle/                   # Vehicle control and state
+│   ├── __init__.py
+│   ├── actor.py               # DSpaceVehicleActor + ensure_actor
+│   ├── physics.py             # VehiclePhysicsState
+│   ├── controller.py          # VehicleController (ego + fellow control)
+│   └── indexing.py            # get_fellow_index(sim, obj)
+│
+├── controldesk/               # ControlDesk runtime integration
 │   ├── __init__.py
 │   ├── connection.py          # ControlDesk COM wrapper
-│   └── per_tick_control.py    # Per-tick control implementation
+│   ├── session.py             # connect/start/pause/step helpers
+│   ├── arrays.py              # external signals warm-up/probe helpers
+│   ├── readback.py            # read ego/fellow state from plant
+│   └── per_tick_control.py    # Per-tick control (enable external, flags)
 │
-├── geometry/                  # Coordinate system handling
+├── geometry/                  # Road geometry + transforms
 │   ├── __init__.py
 │   ├── coordinate_transform.py # XODR→RD transformation
 │   ├── projection.py          # World-to-road projection
 │   ├── rd_parser.py           # RD geometry parser
-│   ├── utils.py               # COM helper utilities
+│   ├── pipeline.py            # Build road index + transform
+│   ├── params.py              # Map path fetch from scene params
+│   ├── route_mapping.py       # pitLane/mainRacing detection + mapping
 │   └── xodr_parser.py         # XODR geometry parser
 │
-├── modeldesk/                 # Scenario authoring
+├── modeldesk/                 # ModelDesk authoring
 │   ├── __init__.py
-│   ├── connection.py          # ModelDesk COM connection
-│   ├── scenario.py            # Scenario management
-│   └── vehicle_placement.py   # Vehicle positioning logic
+│   ├── authoring.py           # Author scenario (fellows, external use)
+│   ├── placement.py           # Ego/fellow placement helpers
+│   └── routes.py              # Route activation helper
 │
 ├── converters/                # Format conversion utilities
 │   ├── __init__.py
@@ -88,6 +101,10 @@ src/scenic/simulators/dspace/
     ├── __init__.py
     └── aurelion.py            # Aurelion sensor hub
 ```
+
+Notes:
+- The old `utils.py` has been removed; a compatibility layer exists at `utils/legacy.py`. Prefer importing specific helpers from the owning modules listed above.
+- `blueprints.py` has been removed as unused.
 
 ---
 
