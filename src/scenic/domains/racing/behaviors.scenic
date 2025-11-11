@@ -8,10 +8,10 @@ must implement.
 from scenic.domains.driving.behaviors import *
 from scenic.domains.driving.controllers import PIDLateralController, PIDLongitudinalController
 from scenic.domains.driving.actions import SetThrottleAction, SetBrakeAction, SetSteerAction
-from scenic.domains.racing.actions import SetMaxSpeedAction, SetTTLAction, SetSpeedLimitAction, SetTTLSelectionAction, SetTargetGapAction, SetStrategyAction, SetPowertrainModeAction, SetScaleFactorAction, SetPush2PassAction, StopCarAction
+from scenic.domains.racing.actions import SetMaxSpeedAction, SetTTLAction, SetSpeedLimitAction, SetTTLSelectionAction, SetTargetGapAction, SetStrategyAction, SetPowertrainModeAction, SetScaleFactorAction, SetPush2PassAction, StopCarAction, SetGearAction
 import scenic.domains.racing.model as _racing
 
-behavior FollowRacingLineBehavior(target_speed=30):
+behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoints=True, lookahead=20.0):
     """Follow the car's TTL using controllers and respecting max speed.
     
     The car should be given a TTL (target line to drive on). This behavior
@@ -26,14 +26,108 @@ behavior FollowRacingLineBehavior(target_speed=30):
     # Get controllers
     _lon_controller, _lat_controller = simulation().getRacingControllers(self)
     past_steer_angle = 0
+    gear_up_thresholds = [0.0, 12.0, 22.0, 32.0, 42.0, 52.0]   # m/s thresholds for shifting up (gears 1-6)
+    gear_down_thresholds = [0.0, 9.0, 18.0, 28.0, 38.0, 48.0]  # m/s thresholds for shifting down
+    
+    # Waypoint state (nearest index), used only if waypoints are available
+    wp_last_idx = 0
     
     while True:
         current_speed = (self.speed if self.speed is not None else 0)
         line = (self.ttl if hasattr(self, 'ttl') and self.ttl is not None else (track.racingLine if hasattr(track, 'racingLine') and track.racingLine else mainRacingRoad))
-        
-        # Cross-track error to TTL
-        cte = line.signedDistanceTo(self.position)
+
+        # Compute cross-track error:
+        # - If waypoints are available and enabled, use waypoint lookahead targeting
+        # - Otherwise, fall back to region signedDistanceTo
+        cte = None
+        wp_list = (self.waypoints if hasattr(self, 'waypoints') else None)
+        if use_waypoints and wp_list and len(wp_list) >= 2:
+            # Current position
+            px = float(self.position.x); py = float(self.position.y)
+            # Find nearest waypoint (linear scan; small lists are fine)
+            nearest_idx = 0
+            best_d2 = 1e18
+            for i in range(max(0, wp_last_idx - 25), min(len(wp_list), wp_last_idx + 26)):
+                wx, wy = float(wp_list[i][0]), float(wp_list[i][1])
+                dx = px - wx; dy = py - wy
+                d2 = dx*dx + dy*dy
+                if d2 < best_d2:
+                    best_d2 = d2; nearest_idx = i
+            wp_last_idx = nearest_idx
+            # Determine a lookahead target by walking forward along the polyline
+            Ld = float(lookahead)
+            tgt_idx = nearest_idx
+            rem = Ld
+            j = nearest_idx
+            while rem > 0.0 and j < len(wp_list) - 1:
+                x0, y0 = float(wp_list[j][0]), float(wp_list[j][1])
+                x1, y1 = float(wp_list[j+1][0]), float(wp_list[j+1][1])
+                seg_dx = x1 - x0; seg_dy = y1 - y0
+                seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                if seg_len <= 1e-6:
+                    j += 1
+                    continue
+                if rem <= seg_len:
+                    # Interpolate within this segment
+                    u = rem / seg_len
+                    tgt_x = x0 + u * seg_dx
+                    tgt_y = y0 + u * seg_dy
+                    # Compute lateral error as signed distance to the local segment
+                    # Project current pos to this segment
+                    wx = px - x0; wy = py - y0
+                    u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
+                    if u_proj < 0.0: u_proj = 0.0
+                    if u_proj > 1.0: u_proj = 1.0
+                    qx = x0 + u_proj * seg_dx; qy = y0 + u_proj * seg_dy
+                    # Left normal
+                    nx = -seg_dy / seg_len; ny = seg_dx / seg_len
+                    cte = (px - qx)*nx + (py - qy)*ny
+                    break
+                else:
+                    rem -= seg_len
+                    j += 1
+                    tgt_idx = j
+            if cte is None:
+                # Fallback if interpolation did not produce a cte (e.g., short list)
+                # Use final segment normal
+                k0 = max(0, min(len(wp_list)-2, wp_last_idx))
+                x0, y0 = float(wp_list[k0][0]), float(wp_list[k0][1])
+                x1, y1 = float(wp_list[k0+1][0]), float(wp_list[k0+1][1])
+                seg_dx = x1 - x0; seg_dy = y1 - y0
+                seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                if seg_len <= 1e-6:
+                    cte = 0.0
+                else:
+                    wx = px - x0; wy = py - y0
+                    u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
+                    if u_proj < 0.0: u_proj = 0.0
+                    if u_proj > 1.0: u_proj = 1.0
+                    qx = x0 + u_proj * seg_dx; qy = y0 + u_proj * seg_dy
+                    nx = -seg_dy / seg_len; ny = seg_dx / seg_len
+                    cte = (px - qx)*nx + (py - qy)*ny
+        if cte is None:
+            # Region-based fallback
+            cte = (line.signedDistanceTo(self.position)
+                   if hasattr(line, 'signedDistanceTo')
+                   else ((1 if line.contains(self.position) else -1) * line.distanceTo(self.position)))
         speed_error = min(self.maxSpeed, target_speed) - current_speed
+
+        # Simple gear management to avoid flooring throttle in neutral
+        if manage_gears and hasattr(self, 'setGear'):
+            current_gear = getattr(self, 'gear', None)
+            if current_gear is None or current_gear < 1:
+                take SetGearAction(1)
+                self.gear = 1
+                current_gear = 1
+            elif current_speed is not None:
+                if current_gear < 6 and current_speed > gear_up_thresholds[current_gear]:
+                    take SetGearAction(current_gear + 1)
+                    self.gear = current_gear + 1
+                    current_gear = self.gear
+                elif current_gear > 1 and current_speed < gear_down_thresholds[current_gear - 1]:
+                    take SetGearAction(current_gear - 1)
+                    self.gear = current_gear - 1
+                    current_gear = self.gear
         
         throttle = _lon_controller.run_step(speed_error)
         steer = _lat_controller.run_step(cte)
@@ -41,7 +135,7 @@ behavior FollowRacingLineBehavior(target_speed=30):
         take RegulatedControlAction(throttle, steer, past_steer_angle)
         past_steer_angle = steer
 
-behavior PitStopBehavior():
+behavior PitStopBehavior(manage_gears=True):
     """Execute a pit stop using racing-specific systems.
     
     This behavior demonstrates the use of racing-specific actions like
@@ -50,7 +144,7 @@ behavior PitStopBehavior():
     
     # Enter pit lane with speed limiter
     take PitLimiterAction(activate=True)
-    do FollowRacingLineBehavior(target_speed=20)
+    do FollowRacingLineBehavior(target_speed=20, manage_gears=manage_gears)
     
     # Stop for pit stop
     take SetBrakeAction(1.0)
@@ -104,7 +198,7 @@ behavior DefensiveBehavior():
 
 ## Decision tree behaviors (for race decision engine integration)
 
-behavior FlagBasedSpeedBehavior(speed_type="green", speed_limit=None):
+behavior FlagBasedSpeedBehavior(speed_type="green", speed_limit=None, manage_gears=True):
     """Set speed based on flag type (decision tree behavior).
     
     This behavior sets the speed limit based on race flags (yellow, green, etc.)
@@ -133,10 +227,10 @@ behavior FlagBasedSpeedBehavior(speed_type="green", speed_limit=None):
     take SetSpeedLimitAction(speed_limit=speed_limit, speed_type=speed_type)
     
     # Apply speed limit via FollowRacingLineBehavior
-    do FollowRacingLineBehavior(target_speed=speed_limit)
+    do FollowRacingLineBehavior(target_speed=speed_limit, manage_gears=manage_gears)
 
 
-behavior LaneSelectionBehavior(ttl_selection="race"):
+behavior LaneSelectionBehavior(ttl_selection="race", manage_gears=True):
     """Select TTL based on attacker/defender flags (decision tree behavior).
     
     This behavior selects the appropriate TTL (left for defender, right for attacker,
@@ -150,9 +244,9 @@ behavior LaneSelectionBehavior(ttl_selection="race"):
     
     # Set speed based on selection (green speed for racing, slower for pit)
     if ttl_selection == "pit":
-        do FlagBasedSpeedBehavior(speed_type="pit_lane", speed_limit=20.0)
+        do FlagBasedSpeedBehavior(speed_type="pit_lane", speed_limit=20.0, manage_gears=manage_gears)
     else:
-        do FlagBasedSpeedBehavior(speed_type="green", speed_limit=120.0)
+        do FlagBasedSpeedBehavior(speed_type="green", speed_limit=120.0, manage_gears=manage_gears)
 
 
 behavior StopBehavior(stop_type="safe"):
@@ -168,7 +262,7 @@ behavior StopBehavior(stop_type="safe"):
     take SetTargetGapAction(gap=0.0, gap_type="no_gap")
 
 
-behavior FollowModeBehavior(target_car, target_gap=31.0):
+behavior FollowModeBehavior(target_car, target_gap=31.0, manage_gears=True, use_waypoints=True, lookahead=20.0):
     """Follow another car maintaining target gap (decision tree behavior).
     
     This behavior implements follow mode strategy where the car maintains
@@ -185,6 +279,11 @@ behavior FollowModeBehavior(target_car, target_gap=31.0):
     # Get controllers
     _lon_controller, _lat_controller = simulation().getRacingControllers(self)
     past_steer_angle = 0
+    gear_up_thresholds = [0.0, 12.0, 22.0, 32.0, 42.0, 52.0]
+    gear_down_thresholds = [0.0, 9.0, 18.0, 28.0, 38.0, 48.0]
+    
+    # Waypoint state (nearest index), used only if waypoints are available
+    wp_last_idx = 0
     
     while True:
         # Compute gap to target car
@@ -207,10 +306,77 @@ behavior FollowModeBehavior(target_car, target_gap=31.0):
         # Get TTL to follow
         line = (self.ttl if hasattr(self, 'ttl') and self.ttl is not None else (track.racingLine if hasattr(track, 'racingLine') and track.racingLine else mainRacingRoad))
         
-        # Cross-track error to TTL
-        cte = line.signedDistanceTo(self.position)
+        # Cross-track error (waypoint-targeted if available)
+        cte = None
+        wp_list = (self.waypoints if hasattr(self, 'waypoints') else None)
+        if use_waypoints and wp_list and len(wp_list) >= 2:
+            px = float(self.position.x); py = float(self.position.y)
+            nearest_idx = 0; best_d2 = 1e18
+            for i in range(max(0, wp_last_idx - 25), min(len(wp_list), wp_last_idx + 26)):
+                wx, wy = float(wp_list[i][0]), float(wp_list[i][1])
+                dx = px - wx; dy = py - wy
+                d2 = dx*dx + dy*dy
+                if d2 < best_d2:
+                    best_d2 = d2; nearest_idx = i
+            wp_last_idx = nearest_idx
+            Ld = float(lookahead)
+            tgt_idx = nearest_idx; rem = Ld; j = nearest_idx
+            while rem > 0.0 and j < len(wp_list) - 1:
+                x0, y0 = float(wp_list[j][0]), float(wp_list[j][1])
+                x1, y1 = float(wp_list[j+1][0]), float(wp_list[j+1][1])
+                seg_dx = x1 - x0; seg_dy = y1 - y0
+                seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                if seg_len <= 1e-6:
+                    j += 1; continue
+                if rem <= seg_len:
+                    u = rem / seg_len
+                    # projection for signed error
+                    wx = px - x0; wy = py - y0
+                    u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
+                    if u_proj < 0.0: u_proj = 0.0
+                    if u_proj > 1.0: u_proj = 1.0
+                    qx = x0 + u_proj * seg_dx; qy = y0 + u_proj * seg_dy
+                    nx = -seg_dy / seg_len; ny = seg_dx / seg_len
+                    cte = (px - qx)*nx + (py - qy)*ny
+                    break
+                else:
+                    rem -= seg_len; j += 1; tgt_idx = j
+            if cte is None:
+                k0 = max(0, min(len(wp_list)-2, wp_last_idx))
+                x0, y0 = float(wp_list[k0][0]), float(wp_list[k0][1])
+                x1, y1 = float(wp_list[k0+1][0]), float(wp_list[k0+1][1])
+                seg_dx = x1 - x0; seg_dy = y1 - y0
+                seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                if seg_len <= 1e-6:
+                    cte = 0.0
+                else:
+                    wx = px - x0; wy = py - y0
+                    u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
+                    if u_proj < 0.0: u_proj = 0.0
+                    if u_proj > 1.0: u_proj = 1.0
+                    qx = x0 + u_proj * seg_dx; qy = y0 + u_proj * seg_dy
+                    nx = -seg_dy / seg_len; ny = seg_dx / seg_len
+                    cte = (px - qx)*nx + (py - qy)*ny
+        if cte is None:
+            cte = line.signedDistanceTo(self.position)
         current_speed = (self.speed if self.speed is not None else 0)
         speed_error = target_speed - current_speed
+
+        if manage_gears and hasattr(self, 'setGear'):
+            current_gear = getattr(self, 'gear', None)
+            if current_gear is None or current_gear < 1:
+                take SetGearAction(1)
+                self.gear = 1
+                current_gear = 1
+            elif current_speed is not None:
+                if current_gear < 6 and current_speed > gear_up_thresholds[current_gear]:
+                    take SetGearAction(current_gear + 1)
+                    self.gear = current_gear + 1
+                    current_gear = self.gear
+                elif current_gear > 1 and current_speed < gear_down_thresholds[current_gear - 1]:
+                    take SetGearAction(current_gear - 1)
+                    self.gear = current_gear - 1
+                    current_gear = self.gear
         
         throttle = _lon_controller.run_step(speed_error)
         steer = _lat_controller.run_step(cte)
@@ -219,7 +385,7 @@ behavior FollowModeBehavior(target_car, target_gap=31.0):
         past_steer_angle = steer
 
 
-behavior PitLaneBehavior():
+behavior PitLaneBehavior(manage_gears=True):
     """Handle pit lane speeds (decision tree behavior).
     
     This behavior implements pit lane speed limits: pit crawl (10 m/s),
@@ -233,4 +399,4 @@ behavior PitLaneBehavior():
     take SetTargetGapAction(gap=0.0, gap_type="no_gap")
     
     # Apply pit lane speed
-    do FollowRacingLineBehavior(target_speed=20.0)
+    do FollowRacingLineBehavior(target_speed=20.0, manage_gears=manage_gears)

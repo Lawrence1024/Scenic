@@ -43,10 +43,7 @@ class VehicleController:
             3. Write to VesiInterface manual control variables
             4. Apply one-shot actions (gear, clutch)
         """
-        if not hasattr(obj, '_control_state') or not obj._control_state:
-            return
-        
-        control = obj._control_state
+        control = getattr(obj, '_control_state', None)
         
         try:
             # VesiInterface manual control variable paths
@@ -56,18 +53,18 @@ class VehicleController:
             KEY_STEERING = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_steering_cmd/Value"
             
             # Apply throttle (0-1 → 0-100 command range)
-            if 'throttle' in control and control['throttle'] is not None:
+            if control and 'throttle' in control and control['throttle'] is not None:
                 throttle_val = float(max(0.0, min(1.0, control['throttle'])) * 100.0)
                 self.cd.set_var(KEY_THROTTLE, throttle_val)
             
             # Apply brake (0-1 → 0-100 command range, front and rear)
-            if 'braking' in control and control['braking'] is not None:
+            if control and 'braking' in control and control['braking'] is not None:
                 brake_val = float(max(0.0, min(1.0, control['braking'])) * 100.0)
                 self.cd.set_var(KEY_BRAKE_FRONT, brake_val)
                 self.cd.set_var(KEY_BRAKE_REAR, brake_val)
             
             # Apply steering (-1 to 1 → -70 to +70 command range)
-            if 'steering' in control and control['steering'] is not None:
+            if control and 'steering' in control and control['steering'] is not None:
                 steer_val = -float(max(-1.0, min(1.0, control['steering'])) * 70.0)
                 self.cd.set_var(KEY_STEERING, steer_val)
                 

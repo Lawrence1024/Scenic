@@ -11,6 +11,7 @@ from win32com.client import Dispatch
 from scenic.core.vectors import Vector
 from scenic.domains.racing.simulators import RacingSimulator, RacingSimulation
 from scenic.core.simulators import SimulationCreationError
+from scenic.core.regions import PolylineRegion
 
 from . import utils as dutils
 from .controldesk.per_tick_control import ExternalControlManager
@@ -112,6 +113,64 @@ class DSpaceSimulation(RacingSimulation):
         
         ts = kwargs.pop("timestep", None) or sim.timestep
         super().__init__(scene, timestep=ts, **kwargs)
+
+    # --- TTL (Target Trajectory Line) loading utilities ---
+    def _get_ttl_config(self):
+        """Read TTL configuration from scene params or use defaults.
+        
+        Returns:
+            (ttl_folder, ttl_index, dx, dy)
+        """
+        import os
+        params = getattr(self.scene, "params", {}) or {}
+        # Defaults
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+        default_folder = os.path.join(repo_root, "assets", "ttls", "LS_ENU_TTL_CSV", "usable")
+        ttl_folder = params.get("ttlFolder", default_folder)
+        ttl_index = int(params.get("ttlIndex", 17))  # 1-based; default to 17
+        # Global coarse alignment for all TTLs (common offset)
+        dx = float(params.get("ttlDX", -53.6))
+        dy = float(params.get("ttlDY", -15.7))
+        return ttl_folder, ttl_index, dx, dy
+
+    def _load_ttl_region(self):
+        """Load a TTL CSV as a PolylineRegion, applying global transform (dx,dy)."""
+        import os, csv
+        ttl_folder, ttl_index, dx, dy = self._get_ttl_config()
+        try:
+            # Support either numbered ttl_N.csv or explicit original names already renamed to ttl_N.csv
+            ttl_path = os.path.join(ttl_folder, f"ttl_{ttl_index}.csv")
+            if not os.path.exists(ttl_path):
+                print(f"[TTL] File not found: {ttl_path}")
+                return None
+            pts = []
+            with open(ttl_path, newline="") as f:
+                r = csv.reader(f)
+                # skip metadata
+                try:
+                    next(r)
+                except StopIteration:
+                    pass
+                for row in r:
+                    if not row or len(row) < 2:
+                        continue
+                    try:
+                        x = float(row[0]) + dx
+                        y = float(row[1]) + dy
+                        pts.append((x, y))
+                    except Exception:
+                        continue
+            if len(pts) < 2:
+                print(f"[TTL] Not enough points in {ttl_path}")
+                return None
+            region = PolylineRegion(pts)
+            print(f"[TTL] Loaded {len(pts)} points from {ttl_path} with offset ({dx}, {dy})")
+            # Keep a copy of transformed points for optional waypoint usage
+            self._ttl_points_loaded = pts
+            return region
+        except Exception as e:
+            print(f"[TTL] Error loading TTL: {e}")
+            return None
 
     def _get_scx_map_path(self):
         # Scenic param set in your script:
@@ -449,6 +508,19 @@ class DSpaceSimulation(RacingSimulation):
             import traceback
             traceback.print_exc()
             return None
+        finally:
+            # Assign TTL to ego if available
+            try:
+                ttl_region = self._load_ttl_region()
+                if ttl_region is not None:
+                    setattr(obj, "ttl", ttl_region)
+                    print(f"[TTL] Assigned TTL PolylineRegion to ego vehicle")
+                    # Optional: also attach waypoints sampled from TTL (for behaviors/tools)
+                    if hasattr(self, "_ttl_points_loaded") and self._ttl_points_loaded:
+                        setattr(obj, "waypoints", list(self._ttl_points_loaded))
+                        print(f"[TTL] Attached {len(self._ttl_points_loaded)} TTL waypoints to ego")
+            except Exception as _e:
+                print(f"[TTL] Could not assign TTL to ego: {_e}")
     
     def createFellowInSimulator(self, obj):
         """Create a Fellow vehicle (non-ego) using the Fellows API.
@@ -514,33 +586,12 @@ class DSpaceSimulation(RacingSimulation):
         # 4) seg0 = ABSOLUTE pose: Position = s, Deviation(Absolute) = t
         dutils.configure_seg0_absolute_pose(segs, s=float(s_val), t=float(t_val))
 
-        # 5) seg1 = set both longitudinal and lateral to "Continue", then make segment endless
-        # Use 'Continue' for longitudinal and lateral (do not force constant velocity or lateral)
+        # 5) seg1 = set Longitudinal to constant Velocity = 0, Lateral = Continue; then make segment endless
         try:
-            seg1 = segs.Item(1) if hasattr(segs, "Item") else (segs[1] if len(segs) > 1 else None)
-            if seg1 and hasattr(seg1, "Activity"):
-                act = seg1.Activity
-                # Prefer using helper to activate enum-like types, fallback to string if needed
-                try:
-                    if hasattr(act, "LongitudinalType"):
-                        dutils.activate_type(act.LongitudinalType, "Continue")
-                except Exception:
-                    try:
-                        setattr(act, "LongitudinalType", "Continue")
-                    except Exception:
-                        pass
-                # Ensure lateral is also 'Continue'
-                try:
-                    if hasattr(act, "LateralType"):
-                        dutils.activate_type(act.LateralType, "Continue")
-                except Exception:
-                    try:
-                        if hasattr(act, "LateralType"):
-                            setattr(act, "LateralType", "Continue")
-                    except Exception:
-                        pass
+            # Force fellows to remain stationary unless externally controlled
+            dutils.configure_seg1_motion(segs, v=0.0, t=0.0)
         except Exception as e:
-            print(f"    Warning: could not set seg1 Continue modes: {e}")
+            print(f"    Warning: could not set seg1 Velocity(0)/Continue: {e}")
         # Ensure the segment is endless so external velocity can drive motion
         try:
             dutils.make_endless_transition(segs)
@@ -620,8 +671,18 @@ class DSpaceSimulation(RacingSimulation):
             # Use existing save_as logic from setup()
             self._setupModelDeskScenario()
             
-            # Configure fellows based on Scenic objects
+            # Configure fellows based on Scenic objects (skip ego and already-created fellows)
             for scenic_obj in self.scene.objects:
+                # Skip EGO: ego is configured via Maneuver API, not Fellows
+                if scenic_obj is self.scene.egoObject:
+                    continue
+                # Skip if this Scenic object already has a Fellow created during placement
+                try:
+                    exists = any(v.get('scenic_object') is scenic_obj for v in self._fellow_vehicles.values())
+                except Exception:
+                    exists = False
+                if exists:
+                    continue
                 if hasattr(scenic_obj, 'raceNumber'):  # It's a racing car
                     self._configureFellowInModelDesk(scenic_obj)
             
@@ -917,8 +978,9 @@ class DSpaceSimulation(RacingSimulation):
                     # Ego: Use VesiInterface physics-based control
                     self._vehicle_controller.apply_ego_control(obj)
                 else:
-                    # Fellow: Use kinematic control with physics model
-                    self._vehicle_controller.apply_fellow_control(obj)
+                    # Fellow: Only drive if a behavior exists; otherwise leave stationary
+                    if getattr(obj, 'behavior', None):
+                        self._vehicle_controller.apply_fellow_control(obj)
                 
                 # Clear control state after applying
                 if hasattr(obj, '_control_state'):
