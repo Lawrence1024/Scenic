@@ -53,6 +53,18 @@ This document summarizes the implementation of Actions and Behaviors for executi
 - **FollowModeBehavior**: Follow another car maintaining target gap
 - **PitLaneBehavior**: Handle pit lane speeds
 
+#### 6. Waypoints + Lookahead Steering (New)
+- dSPACE TTL loader assigns transformed TTL points to `ego.waypoints`
+- `FollowRacingLineBehavior` and `FollowModeBehavior` accept:
+  - `use_waypoints=True` and `lookahead=20.0` (meters)
+  - If waypoints exist, behaviors target a lookahead point along the TTL polyline and compute signed lateral error to the local segment normal; otherwise they fall back to region-based `signedDistanceTo`.
+- Effect: reduced steering saturation when frames are slightly offset; smoother progress along TTL.
+
+#### 7. Gear Management Parameter (New)
+- Behaviors accept `manage_gears=True`:
+  - Shift to gear 1 if neutral; up/down with simple speed thresholds
+  - Applies only when the actor supports `setGear`; pass `manage_gears=False` for fellows or non-manual vehicles.
+
 ## Usage Example
 
 ```scenic
@@ -128,6 +140,10 @@ Simulator Control Loop
 - All actions follow the protocol pattern (actions call protocol methods, simulators implement them)
 - State is stored in `dspaceActor` for access by simulator control loop
 - Behaviors compose actions and can call other behaviors
+- TTL loader (dSPACE) defaults to `ttl_17.csv` and applies a global offset; it assigns both `ego.ttl` (PolylineRegion) and `ego.waypoints` (list of transformed points).
+- dSPACE authoring avoids creating duplicate Fellows (skips ego and already-placed fellows), and the simulator only drives fellows that actually have behaviors assigned.
+- Fellows’ Segment 1 is configured to Velocity=0 (constant) and Lateral=Continue (Endless), making them stationary unless explicitly controlled.
+- VesiInterface gear/clutch one-shot actions are applied even if no throttle/brake/steer were set in the same tick.
 - Implementation is extensible - new actions/behaviors can be added following the same pattern
 
 ## Files Modified
@@ -135,7 +151,9 @@ Simulator Control Loop
 1. `src/scenic/simulators/dspace/simulator.py`: Extended `DSpaceVehicleActor`
 2. `src/scenic/domains/racing/actions.py`: Added `RacingSteers` protocol and new actions
 3. `src/scenic/simulators/dspace/model.scenic`: Implemented `RacingSteers` protocol methods
-4. `src/scenic/domains/racing/behaviors.scenic`: Added decision tree behaviors
+4. `src/scenic/domains/racing/behaviors.scenic`: Added decision tree behaviors; waypoint lookahead and gear management parameter
+5. `src/scenic/simulators/dspace/vehicle/controller.py`: Apply gear/clutch one-shots even without throttle/brake/steer that tick
+6. `src/scenic/simulators/dspace/simulator.py`: Avoid duplicate Fellows; drive only fellows with behaviors; fellows seg1 Velocity=0; TTL loader default and assignments
 
 ## Testing
 
@@ -151,6 +169,6 @@ Example test scenario:
 model scenic.simulators.dspace.model
 
 ego = new RacingCar on mainRacingRoad, with raceNumber 1
-ego.behavior = FlagBasedSpeedBehavior(speed_type="green", speed_limit=120.0)
+ego.behavior = FlagBasedSpeedBehavior(speed_type="green", speed_limit=120.0, manage_gears=True)
 ```
 

@@ -184,8 +184,22 @@ The simulator's `executeActions()` method:
 
 1. Calls `super().executeActions()` to process Scenic actions
 2. Applies continuous controls from `_control_state` via `setVehicleControl()`
-3. Applies one-shot actions from `_oneshot_actions` via `setVehicleGear()` and `setVehicleClutch()`
+3. Applies one-shot actions from `_oneshot_actions` (gear/clutch) even if `_control_state` is empty for the tick (ensures early neutral→gear1 is honored)
 4. Clears `_control_state` and `_oneshot_actions` after application
+5. Applies kinematic control to fellows only if they have behaviors (otherwise they remain stationary)
+6. Fellows’ Segment 1 is configured as Velocity=0 (constant), Lateral=Continue (Endless), making them stationary by default
+
+### TTL Loader and Waypoints
+
+- TTL CSVs in `assets/ttls/LS_ENU_TTL_CSV/usable` are loaded with a global offset (default index 17). The loader assigns:
+  - `ego.ttl` (PolylineRegion for region-based cross-track error)
+  - `ego.waypoints` (list of transformed TTL points for waypoint lookahead)
+
+### Behaviors: Waypoint Lookahead and Gear Management
+
+- `FollowRacingLineBehavior` and `FollowModeBehavior` support:
+  - `use_waypoints=True`, `lookahead=20.0` → Find nearest TTL point and target a lookahead point; compute signed lateral error to local segment normal; fall back to region `signedDistanceTo` if waypoints absent
+  - `manage_gears=True` → Simple gear logic (neutral→1, up/down thresholds) only if the actor supports `setGear`
 
 ### ControlDesk Variable Mappings
 
