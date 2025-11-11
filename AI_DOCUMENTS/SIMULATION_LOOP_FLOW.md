@@ -311,6 +311,17 @@ def getProperties(self, obj, properties):
 
 **Key Improvement**: Uses existing `dspaceActor` attribute from `DSPACERacingCar` class instead of creating separate `_backend`, providing better integration with the vehicle model architecture.
 
+### 2025‑11: Warm‑Up Gating & External Signals Path
+
+To handle initialization timing and model‑specific External Signals:
+
+- The simulation now performs a short “warm‑up” phase at start. `executeActions` defers behavior execution until the plant’s `FellowMovement/FELLOW_POS_VEL/*` bulk arrays (e.g., `x[ ]/y[ ]/yaw_deg_out[ ]`) report non‑zero values, ensuring fellows are spawned and the plant is publishing state.
+- Fellow longitudinal and lateral control are now applied via bulk updates to `Environment/Traffic/PlantModel/FellowMovement/External_Signals`:
+  - `.../Const_v_Fellows_External[km|h]/Value[<idx>]` (km/h) and
+  - `.../Const_d_Fellows_External[m]/Value[<idx>]`.
+- The simulator performs a one‑time probe to determine the correct External Signals path (`km/h` vs `km|h`) and array base (0‑ vs 1‑based), writes to the proper index, and reads back the same element to verify the write.
+- The fellow’s second segment is configured to `"Continue"` for both `LongitudinalType` and `LateralType`, and marked `Endless`, so external velocity/deviation drive motion without being overridden by a fixed profile.
+
 ## Testing Checklist
 
 - [ ] Simulation advances correctly with ControlDesk

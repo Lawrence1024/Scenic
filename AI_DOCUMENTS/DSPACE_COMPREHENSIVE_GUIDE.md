@@ -881,4 +881,29 @@ The dSPACE simulator provides a comprehensive, production-ready integration betw
 - No coordinate clustering
 - Control commands responding properly
 
+---
+
+## 2025‑11 Update Highlights (External Control & Initialization)
+
+This release refines fellow vehicle control and startup robustness:
+
+- **Warm‑Up Gating of Behaviors**  
+  `executeActions` now defers behavior execution until the plant’s fellow pose arrays (`FellowMovement/FELLOW_POS_VEL/FellowTrailer/x|y|yaw_deg_out`) are present and contain non‑zero values. This avoids writing controls before the fellow is actually spawned in the plant.
+
+- **Bulk External Signals Write with Auto‑Probe**  
+  Instead of relying on element addressing (which can be 0‑based or 1‑based, or not exposed via COM in some projects), the simulator writes to External Signals in bulk:  
+  `Environment/Traffic/PlantModel/FellowMovement/External_Signals/Const_v_Fellows_External[km|h]/Value` and `.../Const_d_Fellows_External[m]/Value`.  
+  A one‑time probe determines the correct velocity unit token (`km/h` vs `km|h`) and array base; the control then updates the relevant element in the bulk array and writes the whole vector back, followed by a readback of the same slot for verification.
+
+- **Segment Configuration for External Velocity/Deviation**  
+  In `createFellowInSimulator`, the second segment’s `Activity.LongitudinalType` and `Activity.LateralType` are set to `"Continue"` and the segment is marked `Endless`, allowing external velocity/deviation to take effect. Ensure `Route.UseExternal = True` is enabled in the ModelDesk route so the plant consumes External Signals.
+
+- **Reduced Startup Noise**  
+  Initialization no longer spams “index out of bounds” logs; the simulator silently single‑steps until the bulk arrays are present. Only a single readiness log is printed.
+
+See also:
+
+- `SIMULATION_LOOP_FLOW.md` → “Warm‑Up Gating & External Signals Path”
+- `VEHICLE_CONTROL_IMPLEMENTATION.md` → “2025‑11 Updates: External Control & Warm‑Up”
+
 

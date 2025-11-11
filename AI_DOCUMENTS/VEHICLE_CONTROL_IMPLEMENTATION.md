@@ -389,6 +389,27 @@ From `full_control_test.scenic`:
 - ✅ ControlDesk writes successful
 - ✅ Value conversions correct (0.5 → 50%, -0.3 → -7.5°)
 
+### 2025‑11 Updates: External Control & Warm‑Up
+
+To improve robustness and align with dSPACE’s External Signals model:
+
+- ✅ Switched fellow control writes to a safe, model‑agnostic pattern:
+  - We now perform a one‑time probe to determine the correct External Signals path (`km/h` vs `km|h`) and whether arrays are 0‑ or 1‑based.
+  - Continuous controls for fellows (velocity and lateral deviation) are written via bulk array updates to `Environment/Traffic/PlantModel/FellowMovement/External_Signals/*`:
+    - `Const_v_Fellows_External[km|h]/Value[<idx>]` (km/h)
+    - `Const_d_Fellows_External[m]/Value[<idx>]` (meters)
+  - We perform a readback from the same ExternalSignals arrays and log `v` and `d` to verify writes immediately.
+
+- ✅ Robust fellow state reads:
+  - Fellow positions and kinematics are read from `FellowMovement/FELLOW_POS_VEL/FellowTrailer/*` using bulk array gets (e.g., `x[ ]`, `y[ ]`, `yaw_deg_out[ ]`, `v_Fellows[ ]`, `w_Fellows[ ]`). This avoids indexing issues with uninitialized or 1‑based arrays.
+  - We gate behavior execution until these bulk arrays return non‑zero values to ensure the fellow is spawned and the plant has initialized.
+
+- ✅ Segment configuration for external control:
+  - In `createFellowInDbSpace`, we now set the second segment’s `Activity.LongitudinalType` and `Activity.LateralType` to `"Continue"` and mark the segment `Endless`, so external velocity/deviation can drive motion without being overridden by a fixed `Const_*` profile.
+  - Ensure `Route.UseExternal = True` in ModelDesk for each fellow so External Signals are consumed by the plant (this is enabled during ModelDesk authoring).
+
+These changes reduce coupling to specific ASM enum names/indices and improve resilience when ControlDesk arrays aren’t immediately initialized.
+
 ---
 
 ## Implementation Files

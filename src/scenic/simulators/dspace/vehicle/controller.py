@@ -109,11 +109,16 @@ class VehicleController:
         if not hasattr(obj, '_control_state') or not obj._control_state:
             return
         
+        # Ensure fellow arrays are initialized before attempting to write
+        self.simulation._ensureFellowArraysInitialized()
+        
         # Get fellow index
         fellow_index = self.get_fellow_index(obj)
         if fellow_index is None:
             print(f"[VehicleController:FellowControl] Could not determine index for {obj}")
             return
+        # Adjust for base (0-based vs 1-based arrays) for writing
+        eff_index = fellow_index + (self.simulation._fellow_index_base or 0)
         
         control = obj._control_state
         
@@ -132,34 +137,89 @@ class VehicleController:
                 dt=self.simulation.timestep
             )
             
-            # Write to ControlDesk external signals with correct indexing
-            base_path = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/External_Signals"
+            # Write to ControlDesk external signals using bulk arrays (robust when element addressing is not supported)
+            self.simulation._probe_external_index_base()
+            v_path_bulk = self.simulation._ext_v_path
+            d_path_bulk = self.simulation._ext_d_path
+            ext_base = self.simulation._ext_index_base or 0
+            eff_ext_index = fellow_index + ext_base
+
+            # Read current arrays (bulk), extend if needed
+            try:
+                v_arr = self.cd.get_var(v_path_bulk)
+            except Exception:
+                v_arr = None
+            try:
+                d_arr = self.cd.get_var(d_path_bulk)
+            except Exception:
+                d_arr = None
+
+            if not isinstance(v_arr, list):
+                v_arr = list(v_arr) if isinstance(v_arr, tuple) else []
+            if not isinstance(d_arr, list):
+                d_arr = list(d_arr) if isinstance(d_arr, tuple) else []
+
+            need_len = eff_ext_index + 1
+            if len(v_arr) < need_len:
+                v_arr.extend([0.0] * (need_len - len(v_arr)))
+            if len(d_arr) < need_len:
+                d_arr.extend([0.0] * (need_len - len(d_arr)))
+
+            # Update slots
+            v_value = float(new_velocity * 3.6)  # m/s → km/h
+            d_value = float(new_deviation)       # meters
+            v_prev = v_arr[eff_ext_index]
+            d_prev = d_arr[eff_ext_index]
+            v_arr[eff_ext_index] = v_value
+            d_arr[eff_ext_index] = d_value
+
+            # Bulk write back
+            self.cd.set_var(v_path_bulk, v_arr)
+            self.cd.set_var(d_path_bulk, d_arr)
+
+            # Read-back verification (bulk) for the element we just updated
+            try:
+                v_back_arr = self.cd.get_var(v_path_bulk)
+                d_back_arr = self.cd.get_var(d_path_bulk)
+                v_echo = v_back_arr[eff_ext_index] if isinstance(v_back_arr, (list, tuple)) and len(v_back_arr) > eff_ext_index else None
+                d_echo = d_back_arr[eff_ext_index] if isinstance(d_back_arr, (list, tuple)) and len(d_back_arr) > eff_ext_index else None
+                print(f"[Fellow {fellow_index}] Controls: throttle={throttle:.2f}, brake={brake:.2f}, steering={steering:.2f}")
+                print(f"[Fellow {fellow_index}] → v={new_velocity:.2f} m/s ({v_value:.1f} km/h), d={d_value:.2f} m (eff_idx={eff_ext_index})")
+                print(f"[Fellow {fellow_index}] ExternalSignals bulk write/read: v {v_prev}→{v_echo}, d {d_prev}→{d_echo} @ {v_path_bulk}[{eff_ext_index}]")
+            except Exception as es_err:
+                print(f"[Fellow {fellow_index}] ExternalSignals bulk feedback read error (idx={eff_ext_index}): {es_err}")
+            # For the first fellow, also try to read plant pose if available
+            if fellow_index == 0:
+                try:
+                    plant_base = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer"
+                    x = self.cd.get_var(f"{plant_base}/x[{eff_index}]")
+                    y = self.cd.get_var(f"{plant_base}/y[{eff_index}]")
+                    yaw = self.cd.get_var(f"{plant_base}/yaw_deg_out[{eff_index}]")
+                    print(f"[Fellow {fellow_index}] Plant pose: x={x}, y={y}, yaw_deg={yaw} (idx={eff_index})")
+                except Exception as fb_err:
+                    print(f"[Fellow {fellow_index}] Plant pose not available yet (idx={eff_index}): {fb_err}")
             
-            # Velocity (m/s → km/h conversion)
-            v_path = f"{base_path}/Const_v_Fellows_External[km|h]/Value[{fellow_index}]"
-            self.cd.set_var(v_path, new_velocity * 3.6)  # m/s to km/h
-            
-            # Lateral deviation (meters)
-            d_path = f"{base_path}/Const_d_Fellows_External[m]/Value[{fellow_index}]"
-            self.cd.set_var(d_path, new_deviation)
-            
-            print(f"[Fellow {fellow_index}] Controls: throttle={throttle:.2f}, brake={brake:.2f}, steering={steering:.2f}")
-            print(f"[Fellow {fellow_index}] → v={new_velocity:.2f} m/s ({new_velocity*3.6:.1f} km/h), d={new_deviation:.2f} m")
+            # Clear warning flag if we successfully wrote (arrays are now ready)
+            if hasattr(obj, '_write_array_bounds_warning_shown'):
+                delattr(obj, '_write_array_bounds_warning_shown')
             
         except Exception as e:
-            print(f"[VehicleController:FellowControl] Fellow {fellow_index} error: {e}")
-            import traceback
-            traceback.print_exc()
+            error_msg = str(e)
+            if "Index was outside the bounds" in error_msg or "bounds of the array" in error_msg:
+                # Array bounds error - arrays may not be initialized yet
+                if not hasattr(obj, '_write_array_bounds_warning_shown'):
+                    print(f"[VehicleController:FellowControl] Warning: Fellow {fellow_index} array not ready yet (arrays may not be initialized)")
+                    obj._write_array_bounds_warning_shown = True
+            else:
+                print(f"[VehicleController:FellowControl] Fellow {fellow_index} error: {e}")
+                import traceback
+                traceback.print_exc()
     
     def get_fellow_index(self, obj):
         """Get the array index for a fellow vehicle (0-based).
         
-        Fellow vehicles are numbered F1, F2, F3, etc. by their raceNumber.
-        ControlDesk arrays are 0-indexed, so this method converts:
-        - F1 (raceNumber=1) → index 0
-        - F2 (raceNumber=2) → index 1
-        - F3 (raceNumber=3) → index 2
-        - etc.
+        Uses the simulation's _getFellowIndex method which properly handles
+        index calculation from fellow_vehicles dict, not from raceNumber.
         
         Args:
             obj: The fellow vehicle object
@@ -167,11 +227,8 @@ class VehicleController:
         Returns:
             int: 0-based index for ControlDesk arrays, or None if not found
         """
-        if hasattr(obj, 'raceNumber'):
-            # Fellow vehicles are numbered F1, F2, F3...
-            # ControlDesk arrays are 0-indexed, so F1→index 0, F2→index 1, etc.
-            return obj.raceNumber - 1
-        return None
+        # Delegate to simulation's method which has proper logic
+        return self.simulation._getFellowIndex(obj)
     
     def read_fellow_state(self, obj):
         """Read fellow vehicle state from ControlDesk external signals with correct indexing.

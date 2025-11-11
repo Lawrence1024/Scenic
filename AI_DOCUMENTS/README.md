@@ -1,132 +1,91 @@
-# Scenic-dSPACE AI Documentation
+# Scenic–dSPACE Documentation Hub
 
-This directory contains comprehensive technical documentation for the Scenic-dSPACE simulator integration, created to aid AI assistants and developers in understanding the codebase.
+This directory is the living knowledge base for the Scenic ↔︎ dSPACE integration. It consolidates architecture, control, runtime, and operations guidance for engineers and AI assistants.
 
-## Document Index
+> Tip: Start with the two overview guides below, then dive into Control, Runtime, or Deep‑Dive sections as needed. Where guidance overlaps, prefer the “2025‑11 Updates” sections for the latest behavior.
 
-### 🏗️ Architecture & Structure
+---
 
-- **[SCENIC_DOMAIN_ARCHITECTURE_COMPLETE_GUIDE.md](./SCENIC_DOMAIN_ARCHITECTURE_COMPLETE_GUIDE.md)** (33KB, 1020 lines)
-  - Complete overview of Scenic domain architecture
-  - Racing domain structure and protocols
-  - Abstract vs concrete implementations
-  - Best practices for domain design
+## 📚 Overview & Architecture
 
-- **[DSPACE_COMPREHENSIVE_GUIDE.md](./DSPACE_COMPREHENSIVE_GUIDE.md)** ⭐ **NEW - CONSOLIDATED**
-  - Complete dSPACE simulator documentation in one place
-  - Directory structure and core components
-  - Vehicle control module (physics & controller)
-  - Control interfaces (VesiInterface, ExternalUserData)
-  - Coordinate transformation pipeline (XODR→RD)
-  - Integration points and configuration
-  - Comprehensive troubleshooting guide
-  - **Replaces**: DSPACE_SIMULATOR_STRUCTURE.md, DSPACE_CONTROL_INTERFACES.md, DSPACE_COORDINATE_TRANSFORMATION.md
+### 🏗️ Core Architecture
+- **[SCENIC_DOMAIN_ARCHITECTURE_COMPLETE_GUIDE.md](./SCENIC_DOMAIN_ARCHITECTURE_COMPLETE_GUIDE.md)**  
+  Comprehensive description of Scenic’s domain model and patterns:
+  - Domain layering (core → driving → racing → simulators)
+  - Protocols (`Steers`, `HasManualTransmission`), actions, and behaviors
+  - “Extend, don’t replace” design
 
-### 🎮 Control & Actions
+### 🧰 dSPACE Integration (Single Source of Truth)
+- **[DSPACE_COMPREHENSIVE_GUIDE.md](./DSPACE_COMPREHENSIVE_GUIDE.md)**  
+  End‑to‑end reference for the dSPACE simulator integration:
+  - Simulator structure & components (ModelDesk/ControlDesk/VEOS)
+  - Vehicle control module (ego via VesiInterface, fellow via External Signals)
+  - XODR → RD coordinate transform & geometry pipeline
+  - ModelDesk authoring flow & ControlDesk initialization
+  - Troubleshooting & ops checklist
+  - ▶︎ 2025‑11 Updates: warm‑up gating, bulk ExternalSignals write/readback, segment “Continue”, reduced startup noise
+  - Supersedes: DSPACE_SIMULATOR_STRUCTURE.md, DSPACE_CONTROL_INTERFACES.md, DSPACE_COORDINATE_TRANSFORMATION.md
 
-- **[VEHICLE_CONTROL_IMPLEMENTATION.md](./VEHICLE_CONTROL_IMPLEMENTATION.md)** (15KB, 447 lines)
-  - Control protocol implementations
-  - Steers protocol (throttle, steering, braking)
-  - Manual transmission protocol (gear, clutch)
-  - Action storage and application
+---
 
-- **[CONTROLDESK_JOYSTICK_INTEGRATION.md](./CONTROLDESK_JOYSTICK_INTEGRATION.md)**
-  - ControlDesk instrument script for joystick input
-  - Mapping raw joystick values to ControlDesk variables
-  - Steering, throttle, and brake axis handling
-  - Real-time manual control integration
-  - Calibration and troubleshooting guide
+## 🎮 Control & Actions
 
-## Quick Reference
+- **[VEHICLE_CONTROL_IMPLEMENTATION.md](./VEHICLE_CONTROL_IMPLEMENTATION.md)**  
+  Domain‑level control and dSPACE mapping:
+  - `Steers` (throttle/steer/brake) & `HasManualTransmission` (gear/clutch)
+  - Action accumulation & one‑shot vs continuous controls
+  - VesiInterface and External Signals paths & unit conversions
+  - ▶︎ 2025‑11 Updates: bulk ExternalSignals write/readback, index/unit probing, warm‑up gating, seg1 “Continue”
 
-### For ALL dSPACE Topics
-→ **[DSPACE_COMPREHENSIVE_GUIDE.md](./DSPACE_COMPREHENSIVE_GUIDE.md)** - Single comprehensive reference
+- **[CONTROLDESK_JOYSTICK_INTEGRATION.md](./CONTROLDESK_JOYSTICK_INTEGRATION.md)**  
+  Configure ControlDesk to drive the car manually; tips for axes, scaling, and calibration.
 
-### For Understanding Domain Architecture
-→ Read **[SCENIC_DOMAIN_ARCHITECTURE_COMPLETE_GUIDE.md](./SCENIC_DOMAIN_ARCHITECTURE_COMPLETE_GUIDE.md)**
+---
 
-### For Implementing Vehicle Control
-→ Consult **[VEHICLE_CONTROL_IMPLEMENTATION.md](./VEHICLE_CONTROL_IMPLEMENTATION.md)**
+## 🔧 Runtime & Data Flow
 
-### For Joystick Integration
-→ Consult **[CONTROLDESK_JOYSTICK_INTEGRATION.md](./CONTROLDESK_JOYSTICK_INTEGRATION.md)**
+- **[SIMULATION_LOOP_ \_FLOW.md](./SIMULATION_LOOP_FLOW.md)**  
+  How `executeActions → step → getProperties` orchestrates control and sensing:
+  - dSPACE `SingleStep` timing & Online Calibration
+  - `dspaceActor` state flow (position/velocity/yaw)
+  - ▶︎ 2025‑11 Updates: behavior deferral until plant arrays publish non‑zero data; ExternalSignals path probe; bulk reads for fellow pose
 
-## Document Relationships
+---
 
-```
-SCENIC_DOMAIN_ARCHITECTURE_COMPLETE_GUIDE.md
-  ├─ Overview of domain abstraction
-  ├─ Protocol definitions
-  └─ Design patterns
+## 🤿 Deep Dives & Change Notes
 
-DSPACE_COMPREHENSIVE_GUIDE.md ⭐ CONSOLIDATED
-  ├─ Complete dSPACE reference (all topics)
-  ├─ Simulator structure & components
-  ├─ Vehicle control module (physics & controller)
-  ├─ Control interfaces (VesiInterface, ExternalUserData)
-  ├─ Coordinate transformation pipeline (XODR→RD)
-  ├─ Integration & configuration
-  └─ Troubleshooting guide
+- **[STEP_AND_GETPROPERTIES_FIX.md](./STEP_AND_GETPROPERTIES_FIX.md)** (historical deep dive)  
+  Rationale and implementation of `step()`/`getProperties()` refactor using `DSpaceVehicleActor` (superseded by the runtime guide but kept for reference).
 
-VEHICLE_CONTROL_IMPLEMENTATION.md
-  ├─ Control protocol implementations
-  ├─ Extends domain protocols
-  └─ Action storage/applying
+- **[DSPACEACTOR_REFACTORING.md](./DSPACEACTOR_REFACTORING.md)**  
+  Design notes and refactoring details for consolidating internal state into `DSpaceVehicleActor`.
 
-CONTROLDESK_JOYSTICK_INTEGRATION.md
-  ├─ Joystick to ControlDesk mapping
-  ├─ Instrument script implementation
-  └─ Real-time manual control
-```
+- **[DECISION_TREE_IMPLEMENTATION_ \_SUMMARY.md](./DECISION_TREE_IMPLEMENTATION_SUMMARY.md)**  
+  Overview of racing decision logic (e.g., follow mode, TTL selection) and how it integrates with `RacingSteers` actions.
 
-## Key Topics Covered
+---
 
-### Coordinate Systems
-- Scenic world coordinates → ModelDesk (s,t)
-- XODR and RD coordinate transformations
-- Geometric projection algorithms
-- Orientation conversions
-- Calibration parameters
+## ✅ Quick Start
 
-### Protocols & Interfaces
-- Abstract racing protocols
-- Steers protocol implementation
-- Manual transmission protocol
-- dSPACE COM automation
-- Action application lifecycle
-- Joystick integration via ControlDesk instruments
+- New to this repo? → Read **DSPACE_COMPREHENSIVE_GUIDE** and **SCENIC_DOMAIN_ARCHITECTURE_COMPLETE_GUIDE**
+- Implementing or debugging controls? → **VEHICLE_CONTROL_IMPLEMENTATION** (see 2025‑11 updates)
+- Tracing the timestep and data flow? → **SIMULATION_LOOP_FLOW**
+- Using ControlDesk joystick? → **CONTROLDESK_JOYSTICK_INTEGRATION**
 
-### Simulator Integration
-- COM automation setup
-- Object creation workflow
-- Control state management
-- Route detection and assignment
-- Track segment identification
+---
 
-### Architecture Patterns
-- Domain abstraction layers
-- Protocol-based design
-- Simulator-specific implementations
-- Separation of concerns
+## 🔄 Maintenance
 
-## Maintenance
+Keep these docs in sync with code changes:
+- dSPACE runtime, External Signals, ModelDesk/ControlDesk → update **DSPACE_COMPREHENSIVE_GUIDE** and **SIMULATION_LOOP_FLOW**
+- Protocols/actions & control mapping → update **VEHICLE_CONTROL_IMPLEMENTATION**
+- Model & domain architecture → update **SCENIC_DOMAIN_ARCHITECTURE_COMPLETE_GUIDE**
+- Joystick tooling → update **CONTROLDESK_JOYSTICK_INTEGRATION**
 
-These documents are maintained in sync with the codebase. When significant changes are made to:
-- **ANY dSPACE topics** → Update DSPACE_COMPREHENSIVE_GUIDE.md (single source of truth)
-- Control protocols → Update VEHICLE_CONTROL_IMPLEMENTATION.md
-- Architecture patterns → Update SCENIC_DOMAIN_ARCHITECTURE_COMPLETE_GUIDE.md
-- Joystick integration → Update CONTROLDESK_JOYSTICK_INTEGRATION.md
+---
 
-## Contributing
+## 🤝 Contributing & Questions
 
-When adding new documentation:
-1. Use clear, hierarchical markdown structure
-2. Include code locations (file:line references)
-3. Add examples and diagrams where helpful
-4. Cross-reference related documents
-5. Update this README index
-
-## Questions or Issues
-
-For clarification on any document, search the document first, then check referenced code locations. These documents are designed to be comprehensive references for AI assistants and developers working with the Scenic-dSPACE codebase.
-
+- Use clear headings, include code paths (e.g., `scenic/simulators/dspace/simulator.py: _ensureFellowArraysInitialized`).
+- Cross‑link related sections across documents.
+- Open a PR or issue for gaps/updates. For quick answers, search within this folder first.

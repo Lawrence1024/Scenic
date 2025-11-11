@@ -13,7 +13,7 @@ from scenic.domains.racing.simulators import RacingSimulator, RacingSimulation
 from scenic.core.simulators import SimulationCreationError
 
 from . import utils as dutils
-from .controldesk.per_tick_control import PerTickController, ExternalControlManager
+from .controldesk.per_tick_control import ExternalControlManager
 from .controldesk.connection import ControlDeskApp
 from .vehicle import VehiclePhysicsState, VehicleController
 
@@ -98,10 +98,17 @@ class DSpaceSimulation(RacingSimulation):
         
         # dSPACE two-phase architecture
         self._modeldesk_app = None  # ModelDesk COM application
-        self._per_tick_controller = PerTickController()  # Per-tick control controller
         self._fellow_vehicles = {}  # Track fellow vehicles for runtime control
         self._cd = None  # ControlDesk app
         self._vehicle_controller = None  # VehicleController (initialized after ControlDesk connection)
+        self._fellow_arrays_initialized = False
+        self._initializing_fellow_arrays = False
+        self._fellow_index_base = 0  # 0 for 0-based arrays, 1 for 1-based arrays
+        # External signals (write-back) probing cache
+        self._ext_probe_done = False
+        self._ext_v_path = None
+        self._ext_d_path = None
+        self._ext_index_base = 0
         
         ts = kwargs.pop("timestep", None) or sim.timestep
         super().__init__(scene, timestep=ts, **kwargs)
@@ -298,6 +305,10 @@ class DSpaceSimulation(RacingSimulation):
         # Pause simulation initially for step-by-step control
         if self._cd:
             self._cd.pause_simulation()
+            # Immediately try to warm-up fellow arrays so first read/write won't warn
+            self._ensureFellowArraysInitialized()
+            # Optional: small additional delay to give ModelDesk time to spawn fellows fully
+            # time.sleep(self.timestep)
 
     def createObjectInSimulator(self, obj):
         """Place car (ego or fellow) by absolute (s,t) computed from (x,y) and XODR.
@@ -503,11 +514,38 @@ class DSpaceSimulation(RacingSimulation):
         # 4) seg0 = ABSOLUTE pose: Position = s, Deviation(Absolute) = t
         dutils.configure_seg0_absolute_pose(segs, s=float(s_val), t=float(t_val))
 
-        # 5) seg1 = Velocity + Endless; keep lateral "Continue"
-        # Set velocity to 0 for static scenarios
-        base_v = 0.0  # Force velocity to 0 for all vehicles
-        dutils.configure_seg1_motion(segs, v=float(base_v), t=float(t_val))
-        dutils.make_endless_transition(segs)
+        # 5) seg1 = set both longitudinal and lateral to "Continue", then make segment endless
+        # Use 'Continue' for longitudinal and lateral (do not force constant velocity or lateral)
+        try:
+            seg1 = segs.Item(1) if hasattr(segs, "Item") else (segs[1] if len(segs) > 1 else None)
+            if seg1 and hasattr(seg1, "Activity"):
+                act = seg1.Activity
+                # Prefer using helper to activate enum-like types, fallback to string if needed
+                try:
+                    if hasattr(act, "LongitudinalType"):
+                        dutils.activate_type(act.LongitudinalType, "Continue")
+                except Exception:
+                    try:
+                        setattr(act, "LongitudinalType", "Continue")
+                    except Exception:
+                        pass
+                # Ensure lateral is also 'Continue'
+                try:
+                    if hasattr(act, "LateralType"):
+                        dutils.activate_type(act.LateralType, "Continue")
+                except Exception:
+                    try:
+                        if hasattr(act, "LateralType"):
+                            setattr(act, "LateralType", "Continue")
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"    Warning: could not set seg1 Continue modes: {e}")
+        # Ensure the segment is endless so external velocity can drive motion
+        try:
+            dutils.make_endless_transition(segs)
+        except Exception:
+            pass
 
         # Set orientation (if sequence supports it)
         # Scenic uses yaw=0 for +Y direction, but OpenDRIVE/dSPACE uses yaw=0 for +X direction
@@ -526,11 +564,13 @@ class DSpaceSimulation(RacingSimulation):
         self._set_fellow_route_via_sequence(S1, obj)
 
         # Store fellow vehicle reference for dynamic control
+        # Use the ModelDesk-assigned name (e.g., "Fellow_1", "F1", etc.)
         self._fellow_vehicles[F.Name] = {
             'fellow_object': F,
             'sequence': S1,
             'segments': segs,
-            'scenic_object': obj
+            'scenic_object': obj,
+            'index': self.ts.Fellows.Count - 1  # Store the actual 0-based index
         }
 
         return F
@@ -715,8 +755,6 @@ class DSpaceSimulation(RacingSimulation):
     def setVehicleControl(self, vehicle_name, throttle=None, brake=None, steering=None, velocity=None):
         """Set dynamic control inputs for a vehicle using VesiInterface manual control."""
         print(f"\n[setVehicleControl] Called for {vehicle_name}: throttle={throttle}, brake={brake}, steering={steering}, velocity={velocity}")
-        
-        ok_pt = self._per_tick_controller.setVehicleControl(vehicle_name, throttle, brake, steering, velocity)
 
         # Write directly via ControlDesk using VesiInterface if available
         if self._cd:
@@ -760,8 +798,9 @@ class DSpaceSimulation(RacingSimulation):
                 print(f"[ControlDesk] ERROR - Write failed for {vehicle_name}: {e}")
                 import traceback
                 traceback.print_exc()
-
-        return ok_pt
+                return False
+        
+        return True
     
     def setVehicleGear(self, vehicle_name, gear):
         """Set gear for a vehicle using VesiInterface manual control (one-shot action).
@@ -808,14 +847,6 @@ class DSpaceSimulation(RacingSimulation):
                 import traceback
                 traceback.print_exc()
     
-    def startPerTickControl(self, vehicle_name, control_function=None, dt=0.01):
-        """Start per-tick control loop for a vehicle."""
-        return self._per_tick_controller.startPerTickControl(vehicle_name, control_function, dt)
-    
-    def stopPerTickControl(self, vehicle_name):
-        """Stop per-tick control loop for a vehicle."""
-        return self._per_tick_controller.stopPerTickControl(vehicle_name)
-
     def getVehicleState(self, vehicle_name):
         """Get current state of a fellow vehicle.
         
@@ -858,12 +889,21 @@ class DSpaceSimulation(RacingSimulation):
         
         This method is called by Scenic's simulation framework after behaviors
         determine what actions to take. We:
-        1. Call super() to apply actions via their applyTo() methods (stores in _control_state)
-        2. Apply the accumulated control state to ControlDesk variables via VehicleController
+        1. Ensure fellow arrays are initialized before executing behaviors; if not, skip this tick
+        2. Call super() to apply actions via their applyTo() methods (stores in _control_state)
+        3. Apply the accumulated control state to ControlDesk variables via VehicleController
            - Ego: VesiInterface (throttle/brake/steering)
            - Fellows: External signals (velocity/deviation computed from physics model)
-        3. Clear the control state for next timestep
+        4. Clear the control state for next timestep
         """
+        if not self._fellow_arrays_initialized:
+            self._ensureFellowArraysInitialized()
+            if not self._fellow_arrays_initialized:
+                # Skip this tick to give ControlDesk time to produce fellow arrays
+                # Behaviors will run again next tick once arrays are ready
+                # (avoids losing one-shot actions)
+                return
+        
         # First, let actions apply themselves (this calls setThrottle, setSteering, etc.)
         super().executeActions(allActions)
         
@@ -886,76 +926,83 @@ class DSpaceSimulation(RacingSimulation):
                 if hasattr(obj, '_oneshot_actions'):
                     obj._oneshot_actions = []
             
-            # Read and print ControlDesk variable values
-            self._readAndPrintControlDeskValues()
+            # Read and print ControlDesk variable values (commented out - focus on fellow feedback)
+            # self._readAndPrintControlDeskValues()
 
     def _readAndPrintControlDeskValues(self):
-        """Read ControlDesk variable values and print them out."""
-        if not self._cd:
-            return
+        """Read ControlDesk variable values and print them out.
         
-        try:
-            # VesiInterface manual control variable paths
-            KEY_THROTTLE = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_throttle_cmd/Value"
-            KEY_BRAKE_FRONT = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_front/Value"
-            KEY_BRAKE_REAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_rear/Value"
-            KEY_STEERING = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_steering_cmd/Value"
-            KEY_GEAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_gear_cmd/Value"
-            KEY_CLUTCH = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Pos_ClutchPedal[%]/Value"
-            
-            print(f"\n[ControlDesk Values] Reading variable values:")
-            
-            # Read throttle (0-100 command range)
-            try:
-                throttle_val = self._cd.get_var(KEY_THROTTLE)
-                throttle_scenic = throttle_val / 100.0  # Convert back to 0-1 range
-                print(f"  Throttle: {throttle_val} ({throttle_scenic:.3f} normalized)")
-            except Exception as e:
-                print(f"  Throttle: [Error reading: {e}]")
-            
-            # Read brake front (0-100 command range)
-            try:
-                brake_front_val = self._cd.get_var(KEY_BRAKE_FRONT)
-                brake_front_scenic = brake_front_val / 100.0  # Convert back to 0-1 range
-                print(f"  Brake (Front): {brake_front_val} ({brake_front_scenic:.3f} normalized)")
-            except Exception as e:
-                print(f"  Brake (Front): [Error reading: {e}]")
-            
-            # Read brake rear (0-100 command range)
-            try:
-                brake_rear_val = self._cd.get_var(KEY_BRAKE_REAR)
-                brake_rear_scenic = brake_rear_val / 100.0  # Convert back to 0-1 range
-                print(f"  Brake (Rear): {brake_rear_val} ({brake_rear_scenic:.3f} normalized)")
-            except Exception as e:
-                print(f"  Brake (Rear): [Error reading: {e}]")
-            
-            # Read steering (-70 to +70 command range, -70=right to 70=left)
-            try:
-                steering_val = self._cd.get_var(KEY_STEERING)
-                steering_scenic = -steering_val / 70.0  # Convert back to -1 to 1 range
-                print(f"  Steering: {steering_val} ({steering_scenic:.3f} normalized)")
-            except Exception as e:
-                print(f"  Steering: [Error reading: {e}]")
-            
-            # Read gear (0-6 integer, 0 = neutral)
-            try:
-                gear_val = self._cd.get_var(KEY_GEAR)
-                print(f"  Gear: {gear_val}")
-            except Exception as e:
-                print(f"  Gear: [Error reading: {e}]")
-            
-            # Read clutch (0-100 command range, managed automatically with gear)
-            try:
-                clutch_val = self._cd.get_var(KEY_CLUTCH)
-                clutch_scenic = clutch_val / 100.0  # Convert back to 0-1 range
-                print(f"  Clutch: {clutch_val} ({clutch_scenic:.3f} normalized)")
-            except Exception as e:
-                print(f"  Clutch: [Error reading: {e}]")
-                
-        except Exception as e:
-            print(f"[ControlDesk Values] Error reading variables: {e}")
-            import traceback
-            traceback.print_exc()
+        NOTE: Commented out to focus on fellow vehicle feedback instead of ego feedback.
+        This method reads VesiInterface control values which are for ego vehicle control.
+        """
+        # Commented out - focus on fellow feedback instead
+        return
+        
+        # if not self._cd:
+        #     return
+        # 
+        # try:
+        #     # VesiInterface manual control variable paths
+        #     KEY_THROTTLE = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_throttle_cmd/Value"
+        #     KEY_BRAKE_FRONT = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_front/Value"
+        #     KEY_BRAKE_REAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_rear/Value"
+        #     KEY_STEERING = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_steering_cmd/Value"
+        #     KEY_GEAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_gear_cmd/Value"
+        #     KEY_CLUTCH = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Pos_ClutchPedal[%]/Value"
+        #     
+        #     print(f"\n[ControlDesk Values] Reading variable values:")
+        #     
+        #     # Read throttle (0-100 command range)
+        #     try:
+        #         throttle_val = self._cd.get_var(KEY_THROTTLE)
+        #         throttle_scenic = throttle_val / 100.0  # Convert back to 0-1 range
+        #         print(f"  Throttle: {throttle_val} ({throttle_scenic:.3f} normalized)")
+        #     except Exception as e:
+        #         print(f"  Throttle: [Error reading: {e}]")
+        #     
+        #     # Read brake front (0-100 command range)
+        #     try:
+        #         brake_front_val = self._cd.get_var(KEY_BRAKE_FRONT)
+        #         brake_front_scenic = brake_front_val / 100.0  # Convert back to 0-1 range
+        #         print(f"  Brake (Front): {brake_front_val} ({brake_front_scenic:.3f} normalized)")
+        #     except Exception as e:
+        #         print(f"  Brake (Front): [Error reading: {e}]")
+        #     
+        #     # Read brake rear (0-100 command range)
+        #     try:
+        #         brake_rear_val = self._cd.get_var(KEY_BRAKE_REAR)
+        #         brake_rear_scenic = brake_rear_val / 100.0  # Convert back to 0-1 range
+        #         print(f"  Brake (Rear): {brake_rear_val} ({brake_rear_scenic:.3f} normalized)")
+        #     except Exception as e:
+        #         print(f"  Brake (Rear): [Error reading: {e}]")
+        #     
+        #     # Read steering (-70 to +70 command range, -70=right to 70=left)
+        #     try:
+        #         steering_val = self._cd.get_var(KEY_STEERING)
+        #         steering_scenic = -steering_val / 70.0  # Convert back to -1 to 1 range
+        #         print(f"  Steering: {steering_val} ({steering_scenic:.3f} normalized)")
+        #     except Exception as e:
+        #         print(f"  Steering: [Error reading: {e}]")
+        #     
+        #     # Read gear (0-6 integer, 0 = neutral)
+        #     try:
+        #         gear_val = self._cd.get_var(KEY_GEAR)
+        #         print(f"  Gear: {gear_val}")
+        #     except Exception as e:
+        #         print(f"  Gear: [Error reading: {e}]")
+        #     
+        #     # Read clutch (0-100 command range, managed automatically with gear)
+        #     try:
+        #         clutch_val = self._cd.get_var(KEY_CLUTCH)
+        #         clutch_scenic = clutch_val / 100.0  # Convert back to 0-1 range
+        #         print(f"  Clutch: {clutch_val} ({clutch_scenic:.3f} normalized)")
+        #     except Exception as e:
+        #         print(f"  Clutch: [Error reading: {e}]")
+        #         
+        # except Exception as e:
+        #     print(f"[ControlDesk Values] Error reading variables: {e}")
+        #     import traceback
+        #     traceback.print_exc()
 
     def _initializeDSpaceActor(self, obj):
         """Initialize dSPACE actor representation for a vehicle object.
@@ -1046,6 +1093,121 @@ class DSpaceSimulation(RacingSimulation):
             print(f"[_readEgoStateFromControlDesk] Error: {e}")
             return False
     
+    def _ensureFellowArraysInitialized(self):
+        """Advance the simulation a few steps to allow fellow arrays to initialize."""
+        if self._fellow_arrays_initialized:
+            return
+        if self._initializing_fellow_arrays:
+            return
+        if not self._cd:
+            return
+        base_path = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer"
+        array_path = f"{base_path}/x"
+        self._initializing_fellow_arrays = True
+        try:
+            for attempt in range(200):
+                x_arr = y_arr = yaw_arr = None
+                try:
+                    x_arr = self._cd.get_var(array_path)  # x array
+                except Exception:
+                    x_arr = None
+                try:
+                    y_arr = self._cd.get_var(f"{base_path}/y")
+                except Exception:
+                    y_arr = None
+                try:
+                    yaw_arr = self._cd.get_var(f"{base_path}/yaw_deg_out")
+                except Exception:
+                    yaw_arr = None
+
+                ready = False
+                if isinstance(x_arr, (list, tuple)) and len(x_arr) > 0:
+                    # consider arrays initialized only if we see at least one non-zero signal
+                    # (heuristic to wait for plant to publish real data)
+                    def has_signal(arr):
+                        try:
+                            for i in range(min(5, len(arr))):
+                                val = arr[i]
+                                if isinstance(val, (int, float)) and abs(val) > 1e-6:
+                                    return True
+                        except Exception:
+                            pass
+                        return False
+                    ready = has_signal(x_arr) or has_signal(y_arr or []) or has_signal(yaw_arr or [])
+
+                if ready:
+                    self._fellow_arrays_initialized = True
+                    self._fellow_index_base = 0  # bulk arrays appear 0-based
+                    if attempt > 0:
+                        print(f"[dSPACE] Fellow arrays populated after {attempt} warm-up step(s)")
+                    break
+
+                # Arrays not ready yet; advance simulation by one step
+                if attempt < 199:
+                    try:
+                        self._cd.advance_simulation_step()
+                    except Exception as step_err:
+                        print(f"[dSPACE] Unable to advance simulation during fellow array initialization: {step_err}")
+                        break
+                    time.sleep(self.timestep)
+            if not self._fellow_arrays_initialized:
+                print("[dSPACE] Fellow arrays still not initialized after warm-up steps")
+        finally:
+            self._initializing_fellow_arrays = False
+
+    def _probe_external_index_base(self):
+        """Probe ControlDesk External_Signals vector paths and index base.
+        Determines whether the Value arrays exist and whether indexing is 0-based or 1-based.
+        Caches the result on the simulation instance to avoid repeated COM calls.
+        """
+        if self._ext_probe_done:
+            return True
+        if not self._cd:
+            return False
+        base = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/External_Signals"
+        v_candidates = (
+            f"{base}/Const_v_Fellows_External[km|h]/Value",
+            f"{base}/Const_v_Fellows_External[km/h]/Value",
+        )
+        d_candidates = (
+            f"{base}/Const_d_Fellows_External[m]/Value",
+        )
+        for vpath in v_candidates:
+            try:
+                # Try bulk read (no index) to ensure the node exists and is an array
+                arr = self._cd.get_var(vpath)
+                if not isinstance(arr, (list, tuple)):
+                    continue
+                # Probe index base by trying to read element 0 then 1
+                for idx_base in (0, 1):
+                    try:
+                        _ = self._cd.get_var(f"{vpath}[{idx_base}]")
+                        self._ext_v_path = vpath
+                        # pick matching d_path from candidates (assume same unit m)
+                        self._ext_d_path = d_candidates[0]
+                        self._ext_index_base = idx_base
+                        self._ext_probe_done = True
+                        print(f"[dSPACE] ExternalSignals ready at {vpath}[{idx_base}]")
+                        return True
+                    except Exception:
+                        continue
+                # If element addressing not supported, still accept bulk-only mode
+                self._ext_v_path = vpath
+                self._ext_d_path = d_candidates[0]
+                self._ext_index_base = 0
+                self._ext_probe_done = True
+                print(f"[dSPACE] ExternalSignals available via bulk at {vpath} (no element addressing)")
+                return True
+            except Exception:
+                continue
+        # Fallback defaults; may still fail, but we log once
+        self._ext_v_path = v_candidates[0]
+        self._ext_d_path = d_candidates[0]
+        self._ext_index_base = 0
+        self._ext_probe_done = True
+        print("[dSPACE] ExternalSignals probe failed; using default paths")
+        return False
+    
     def _readFellowStateFromControlDesk(self, obj):
         """Read fellow vehicle state from ControlDesk.
         
@@ -1054,23 +1216,97 @@ class DSpaceSimulation(RacingSimulation):
             
         Returns:
             True if successful, False otherwise
+            
+        Note:
+            ControlDesk arrays may not be initialized until the simulation has started.
+            This method gracefully handles array bounds errors by returning False,
+            allowing the simulation to continue with the last known state.
         """
+        if not self._cd:
+            return False
+        
+        self._ensureFellowArraysInitialized()
+            
         try:
             # Determine fellow index
             fellow_index = self._getFellowIndex(obj)
             if fellow_index is None:
                 return False
+            # Adjust for base (0-based vs 1-based arrays)
+            eff_index = fellow_index + (self._fellow_index_base or 0)
             
-            # Fellow vehicle state paths (from lines 650-656)
+            # Fellow vehicle state paths
             base_path = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer"
             
             try:
-                x = self._cd.get_var(f"{base_path}/x[{fellow_index}]")
-                y = self._cd.get_var(f"{base_path}/y[{fellow_index}]")
-                z = self._cd.get_var(f"{base_path}/z[{fellow_index}]")
-                yaw_deg = self._cd.get_var(f"{base_path}/yaw_deg_out[{fellow_index}]")
-                v = self._cd.get_var(f"{base_path}/v_Fellows[{fellow_index}]")
-                w = self._cd.get_var(f"{base_path}/w_Fellows[{fellow_index}]")
+                # Prefer bulk array reads and index in Python (works in this environment)
+                try:
+                    x_arr = self._cd.get_var(f"{base_path}/x")
+                    if isinstance(x_arr, (list, tuple)):
+                        first = x_arr[0] if len(x_arr) > 0 else None
+                        at_idx = x_arr[eff_index] if isinstance(eff_index, int) and eff_index < len(x_arr) else None
+                        # print(f"[Fellow {fellow_index}] bulk x: len={len(x_arr)}, x[0]={first}, x[{eff_index}]={at_idx}")
+                        x = at_idx if at_idx is not None else (first if first is not None else 0.0)
+                    else:
+                        x = 0.0
+                except Exception as _e:
+                    print(f"[Fellow {fellow_index}] bulk x read failed: {_e}")
+                    x = 0.0
+                try:
+                    y_arr = self._cd.get_var(f"{base_path}/y")
+                    if isinstance(y_arr, (list, tuple)):
+                        first = y_arr[0] if len(y_arr) > 0 else None
+                        at_idx = y_arr[eff_index] if isinstance(eff_index, int) and eff_index < len(y_arr) else None
+                        # print(f"[Fellow {fellow_index}] bulk y: len={len(y_arr)}, y[0]={first}, y[{eff_index}]={at_idx}")
+                        y = at_idx if at_idx is not None else (first if first is not None else 0.0)
+                    else:
+                        y = 0.0
+                except Exception as _e:
+                    print(f"[Fellow {fellow_index}] bulk y read failed: {_e}")
+                    y = 0.0
+                try:
+                    z_arr = self._cd.get_var(f"{base_path}/z")
+                    if isinstance(z_arr, (list, tuple)):
+                        first = z_arr[0] if len(z_arr) > 0 else None
+                        at_idx = z_arr[eff_index] if isinstance(eff_index, int) and eff_index < len(z_arr) else None
+                        # keep z logging minimal
+                        z = at_idx if at_idx is not None else (first if first is not None else 0.0)
+                    else:
+                        z = 0.0
+                except Exception:
+                    z = 0.0
+                try:
+                    yaw_arr = self._cd.get_var(f"{base_path}/yaw_deg_out")
+                    if isinstance(yaw_arr, (list, tuple)):
+                        first = yaw_arr[0] if len(yaw_arr) > 0 else None
+                        at_idx = yaw_arr[eff_index] if isinstance(eff_index, int) and eff_index < len(yaw_arr) else None
+                        # print(f"[Fellow {fellow_index}] bulk yaw_deg_out: len={len(yaw_arr)}, [0]={first}, [{eff_index}]={at_idx}")
+                        yaw_deg = at_idx if at_idx is not None else (first if first is not None else 0.0)
+                    else:
+                        yaw_deg = 0.0
+                except Exception as _e:
+                    print(f"[Fellow {fellow_index}] bulk yaw_deg_out read failed: {_e}")
+                    yaw_deg = 0.0
+
+                # Optional: try bulk velocity/omega if available; otherwise leave defaults
+                v = 0.0
+                w = 0.0
+                try:
+                    v_arr = self._cd.get_var(f"{base_path}/v_Fellows")
+                    if isinstance(v_arr, (list, tuple)) and isinstance(eff_index, int) and eff_index < len(v_arr):
+                        v = v_arr[eff_index] if v_arr[eff_index] is not None else 0.0
+                except Exception:
+                    pass
+                try:
+                    w_arr = self._cd.get_var(f"{base_path}/w_Fellows")
+                    if isinstance(w_arr, (list, tuple)) and isinstance(eff_index, int) and eff_index < len(w_arr):
+                        w = w_arr[eff_index] if w_arr[eff_index] is not None else 0.0
+                except Exception:
+                    pass
+                
+                # Clear warning flag if we successfully read (arrays are now ready)
+                if hasattr(obj, '_array_bounds_warning_shown'):
+                    delattr(obj, '_array_bounds_warning_shown')
                 
                 # Update dspaceActor state
                 import math
@@ -1088,8 +1324,19 @@ class DSpaceSimulation(RacingSimulation):
                 
                 return True
             except Exception as e:
-                print(f"[_readFellowStateFromControlDesk] Failed to read state for fellow {fellow_index}: {e}")
-                return False
+                # Array bounds error - arrays may not be initialized yet
+                error_msg = str(e)
+                if "Index was outside the bounds" in error_msg or "bounds of the array" in error_msg:
+                    # Silently fail - arrays may not be ready yet, use last known state
+                    # Only print warning on first occurrence to avoid spam
+                    if not hasattr(obj, '_array_bounds_warning_shown'):
+                        print(f"[_readFellowStateFromControlDesk] Warning: Fellow {fellow_index} array not ready yet (arrays may not be initialized)")
+                        obj._array_bounds_warning_shown = True
+                    return False
+                else:
+                    # Other errors - print for debugging
+                    print(f"[_readFellowStateFromControlDesk] Failed to read state for fellow {fellow_index}: {e}")
+                    return False
                 
         except Exception as e:
             print(f"[_readFellowStateFromControlDesk] Error: {e}")
@@ -1102,31 +1349,65 @@ class DSpaceSimulation(RacingSimulation):
             obj: The fellow vehicle object
             
         Returns:
-            Fellow index (0-based) or None if not found
+            Fellow index (0-based integer) or None if not found
+            
+        Note:
+            ControlDesk arrays typically have limited size (10-20 fellow vehicles).
+            We prioritize the stored index from fellow_vehicles dict, which is the
+            actual ModelDesk-assigned index based on creation order.
+            raceNumber is NOT used as it's randomly assigned and doesn't correspond
+            to ControlDesk array indices.
         """
         try:
-            # Try to get from raceNumber
-            if hasattr(obj, 'raceNumber'):
-                return int(obj.raceNumber) - 1  # Convert to 0-based index
-            
-            # Try to find in fellow_vehicles dict
+            # Priority 1: Try to find in fellow_vehicles dict (most reliable)
+            # This has the actual ModelDesk-assigned index stored during creation
             for name, vehicle_data in self._fellow_vehicles.items():
                 if vehicle_data.get('scenic_object') is obj:
-                    # Extract index from name (e.g., "F1" -> 0, "F2" -> 1)
-                    if name.startswith('F'):
+                    # Use stored index if available (set during createFellowInSimulator)
+                    if 'index' in vehicle_data:
+                        index = int(vehicle_data['index'])  # Ensure integer
+                        if 0 <= index < 100:  # Validate bounds
+                            return index
+                    
+                    # Fallback: Extract index from name (handles "F1", "F2", "Fellow_1", etc.)
+                    # Try "F" prefix first (e.g., "F1" -> 0, "F2" -> 1)
+                    if name.startswith('F') and len(name) > 1:
                         try:
-                            return int(name[1:]) - 1
+                            # Check if it's "F" followed by digits (e.g., "F1", "F2")
+                            if name[1:].isdigit():
+                                index = int(name[1:]) - 1
+                                if 0 <= index < 100:
+                                    return index
+                        except ValueError:
+                            pass
+                    
+                    # Try "Fellow_" prefix (e.g., "Fellow_1" -> 0, "Fellow_2" -> 1)
+                    if name.startswith('Fellow_'):
+                        try:
+                            index = int(name[7:]) - 1  # "Fellow_".length = 7
+                            if 0 <= index < 100:
+                                return index
                         except ValueError:
                             pass
             
-            # Fallback: Use position in objects list (excluding ego)
-            fellow_objects = [o for o in self.objects if o is not self.scene.egoObject]
+            # Priority 2: Use position in objects list (excluding ego)
+            # This gives a sequential index based on creation order
+            fellow_objects = [o for o in self.scene.objects if o is not self.scene.egoObject]
             if obj in fellow_objects:
-                return fellow_objects.index(obj)
+                index = int(fellow_objects.index(obj))  # Ensure integer
+                # Validate bounds (ControlDesk arrays are typically limited)
+                if 0 <= index < 100:
+                    return index
             
+            # Do NOT use raceNumber - it's randomly assigned (1-999) and doesn't
+            # correspond to ControlDesk array indices
+            
+            print(f"[_getFellowIndex] Could not determine valid index for {obj}")
             return None
         except Exception as e:
             print(f"[_getFellowIndex] Error: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def step(self):
