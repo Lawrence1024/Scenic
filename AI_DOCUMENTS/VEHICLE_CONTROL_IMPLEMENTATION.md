@@ -426,7 +426,7 @@ To improve robustness and align with dSPACE’s External Signals model:
   - We gate behavior execution until these bulk arrays return non‑zero values to ensure the fellow is spawned and the plant has initialized.
 
 - ✅ Segment configuration for external control:
-  - In `createFellowInDbSpace`, we now set the second segment’s `Activity.LongitudinalType` and `Activity.LateralType` to `"Continue"` and mark the segment `Endless`, so external velocity/deviation can drive motion without being overridden by a fixed `Const_*` profile.
+  - In `configure_seg1_motion` (used by `place_fellow`), we now set the second segment's `Activity.LongitudinalType` to `"Velocity"` and `Activity.LateralType` to `"Lateral deviation"` (or `"Deviation"`). Both are configured with `SourceType='Extern'` (which sets the Type dropdown to "Extern" in the ModelDesk UI), enabling external control via ControlDesk External Signals. The segment is marked `Endless`, so external velocity/deviation can drive motion without being overridden by a fixed `Const_*` profile.
   - Ensure `Route.UseExternal = True` in ModelDesk for each fellow so External Signals are consumed by the plant (this is enabled during ModelDesk authoring).
 
 These changes reduce coupling to specific ASM enum names/indices and improve resilience when ControlDesk arrays aren’t immediately initialized.

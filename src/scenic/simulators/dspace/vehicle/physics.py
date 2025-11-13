@@ -41,7 +41,9 @@ class VehiclePhysicsState:
         self.deviation = initial_deviation  # m (lateral offset from centerline)
         
         # Longitudinal dynamics parameters (tunable)
-        self.max_acceleration = 10.0  # m/s² (0-100 km/h in ~3s)
+        # Increased from 10.0 to 20.0 m/s² for more realistic racing car acceleration
+        # (0-100 km/h in ~1.4s, which is aggressive but realistic for racing cars)
+        self.max_acceleration = 20.0  # m/s² (was 10.0)
         self.max_deceleration = 15.0  # m/s² (emergency braking)
         self.max_velocity = 100.0  # m/s (~360 km/h)
         self.min_velocity = 0.0  # m/s

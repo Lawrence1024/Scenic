@@ -913,7 +913,7 @@ This release refines fellow vehicle control and startup robustness:
   A one‑time probe determines the correct velocity unit token (`km/h` vs `km|h`) and array base; the control then updates the relevant element in the bulk array and writes the whole vector back, followed by a readback of the same slot for verification.
 
 - **Segment Configuration for External Velocity/Deviation**  
-  In `createFellowInSimulator`, the second segment’s `Activity.LongitudinalType` and `Activity.LateralType` are set to `"Continue"` and the segment is marked `Endless`, allowing external velocity/deviation to take effect. Ensure `Route.UseExternal = True` is enabled in the ModelDesk route so the plant consumes External Signals.
+  In `createFellowInSimulator` (via `configure_seg1_motion`), the second segment's `Activity.LongitudinalType` is set to `"Velocity"` and `Activity.LateralType` is set to `"Lateral deviation"` (or `"Deviation"`). Both are configured with `SourceType='Extern'` (which sets the Type dropdown to "Extern" in the ModelDesk UI), enabling external control via ControlDesk External Signals. The segment is marked `Endless`, allowing external velocity/deviation to take effect. Ensure `Route.UseExternal = True` is enabled in the ModelDesk route so the plant consumes External Signals.
 
 - **Reduced Startup Noise**  
   Initialization no longer spams “index out of bounds” logs; the simulator silently single‑steps until the bulk arrays are present. Only a single readiness log is printed.

@@ -32,7 +32,7 @@ from .geometry.params import get_map_path
 
 class DSpaceSimulator(RacingSimulator):
     def __init__(self, *, scenario_src="LagunaSeca_ExternalControl",
-                 scenario_name=None, timestep=0.1, save_as=True):
+                 scenario_name=None, timestep=1, save_as=True):
         super().__init__()
         self.scenario_src = scenario_src
         self.scenario_name = scenario_name
@@ -66,6 +66,7 @@ class DSpaceSimulation(RacingSimulation):
         self._ext_index_base = 0
         
         ts = kwargs.pop("timestep", None) or sim.timestep
+        print(f"[DSpaceSimulation] timestep: {ts}")
         super().__init__(scene, timestep=ts, **kwargs)
 
     # --- TTL (Target Trajectory Line) loading utilities ---
@@ -197,8 +198,6 @@ class DSpaceSimulation(RacingSimulation):
         if self._cd and cd_session.pause(self._cd):
             # Immediately try to warm-up fellow arrays so first read/write won't warn
             self._ensureFellowArraysInitialized()
-            # Optional: small additional delay to give ModelDesk time to spawn fellows fully
-            # time.sleep(self.timestep)
 
     def createObjectInSimulator(self, obj):
         """Place car (ego or fellow) by absolute (s,t) computed from (x,y) and XODR.

@@ -93,15 +93,51 @@ def configure_seg0_absolute_pose(segs, *, s: float, t: float):
     set_activity_constant(lat0, t)
 
 def configure_seg1_motion(segs, *, v: float, t: float):
-    # Longitudinal: Velocity (or Speed)
+    """Configure segment 1 with Velocity (longitudinal) and Lateral deviation (lateral),
+    both set to SourceType='Extern' for external control.
+    
+    This enables ControlDesk External Signals to control fellow vehicles at runtime.
+    The v and t parameters are kept for backward compatibility but are ignored when
+    Type='Extern' (external control takes precedence).
+    
+    Args:
+        segs: Segments collection (segs[1] will be configured)
+        v: Initial velocity value (ignored when Type='Extern', kept for compatibility)
+        t: Initial lateral deviation value (ignored when Type='Extern', kept for compatibility)
+    """
+    # Longitudinal: Velocity with SourceType='Extern'
     lt1 = segs[1].Activity.LongitudinalType
     if not activate_type(lt1, "Velocity"):
         activate_type(lt1, "Speed")
-    set_activity_constant(lt1, v)
-
-    # Lateral: Continue (don't change lane)
+    
+    # Set SourceType to "Extern" for longitudinal (this sets Type='Extern' in the UI)
+    long_elem = lt1.ActiveElement
+    if hasattr(long_elem, "SourceType"):
+        source_type = long_elem.SourceType
+        if hasattr(source_type, "Activate"):
+            if not activate_type(source_type, "Extern"):
+                activate_type(source_type, "External")  # Try alternative spelling
+    
+    # Lateral: Lateral deviation (or Deviation) with SourceType='Extern'
     lat1 = segs[1].Activity.LateralType
-    activate_type(lat1, "Continue")
+    lateral_activated = False
+    if activate_type(lat1, "Lateral deviation"):
+        lateral_activated = True
+    elif activate_type(lat1, "Deviation"):
+        lateral_activated = True
+    
+    if not lateral_activated:
+        # Fallback to Continue if Deviation not available (but can't set Extern on Continue)
+        activate_type(lat1, "Continue")
+        return  # Early return - Continue doesn't support external control
+    
+    # Set SourceType to "Extern" for lateral (this sets Type='Extern' in the UI)
+    lat_elem = lat1.ActiveElement
+    if hasattr(lat_elem, "SourceType"):
+        source_type = lat_elem.SourceType
+        if hasattr(source_type, "Activate"):
+            if not activate_type(source_type, "Extern"):
+                activate_type(source_type, "External")  # Try alternative spelling
 
 
 # Main road names for Laguna Seca (consistent across XODR and RD paths)

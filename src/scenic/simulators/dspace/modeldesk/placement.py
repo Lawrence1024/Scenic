@@ -143,11 +143,12 @@ def place_fellow(sim, obj):
     # seg0 = ABSOLUTE pose: Position = s, Deviation(Absolute) = t
     dutils.configure_seg0_absolute_pose(segs, s=float(s_val), t=float(t_val))
 
-    # seg1 = Longitudinal Velocity = 0, Lateral = Continue; make segment endless
+    # seg1 = Longitudinal Velocity (Extern), Lateral deviation (Extern); make segment endless
+    # Both are configured with SourceType='Extern' to enable external control via ControlDesk
     try:
         dutils.configure_seg1_motion(segs, v=0.0, t=0.0)
     except Exception as e:
-        print(f"    Warning: could not set seg1 Velocity(0)/Continue: {e}")
+        print(f"    Warning: could not set seg1 Velocity(Extern)/Lateral deviation(Extern): {e}")
     try:
         dutils.make_endless_transition(segs)
     except Exception:

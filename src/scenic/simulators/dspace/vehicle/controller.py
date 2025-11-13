@@ -132,6 +132,58 @@ class VehicleController:
             # Ensure physics model exists for kinematic update
             if getattr(actor, "physics", None) is None:
                 actor.physics = VehiclePhysicsState(initial_velocity=0.0, initial_deviation=0.0)
+            
+            # Sync physics model with actual velocity from ControlDesk
+            # Read velocity from v_Fellows (plant output, actual simulation velocity)
+            # This provides proper feedback from the simulator's physics engine
+            actual_speed = 0.0
+            read_source = "none"
+            
+            # First, try to read from plant output v_Fellows (actual simulation velocity)
+            try:
+                base_path = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer"
+                v_arr = self.cd.get_var(f"{base_path}/v_Fellows")
+                if isinstance(v_arr, (list, tuple)) and eff_index < len(v_arr):
+                    v_value = v_arr[eff_index]
+                    if v_value is not None:
+                        # v_Fellows is in km/h, convert to m/s
+                        actual_speed = float(v_value) / 3.6
+                        read_source = "v_Fellows"
+            except Exception:
+                pass
+            
+            # If v_Fellows read failed or was 0, try reading from External Signals (commanded velocity)
+            if actual_speed == 0.0 or read_source == "none":
+                try:
+                    self.simulation._probe_external_index_base()
+                    v_path_bulk = self.simulation._ext_v_path
+                    ext_base = self.simulation._ext_index_base or 0
+                    eff_ext_index = fellow_index + ext_base
+                    
+                    v_arr_ext = self.cd.get_var(v_path_bulk)
+                    if isinstance(v_arr_ext, (list, tuple)) and eff_ext_index < len(v_arr_ext):
+                        v_ext_value = v_arr_ext[eff_ext_index]
+                        if v_ext_value is not None:
+                            # External Signals are in km/h, convert to m/s
+                            actual_speed = float(v_ext_value) / 3.6
+                            read_source = "ExternalSignals"
+                except Exception:
+                    pass
+            
+            # Final fallback: use cached linvel
+            if actual_speed == 0.0 and hasattr(actor, 'linvel') and actor.linvel is not None:
+                try:
+                    actual_speed = float(actor.linvel.norm())
+                    read_source = "linvel"
+                except Exception:
+                    import math
+                    actual_speed = math.sqrt(actor.linvel.x**2 + actor.linvel.y**2 + actor.linvel.z**2)
+                    actual_speed = float(actual_speed)
+                    read_source = "linvel_manual"
+            
+            # Sync physics model's internal velocity with actual velocity from ControlDesk
+            actor.physics.velocity = actual_speed
+            
             new_velocity, new_deviation = actor.physics.update(
                 throttle=throttle,
                 brake=brake,

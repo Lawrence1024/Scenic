@@ -322,7 +322,7 @@ To handle initialization timing and model‑specific External Signals:
   - `.../Const_v_Fellows_External[km|h]/Value[<idx>]` (km/h) and
   - `.../Const_d_Fellows_External[m]/Value[<idx>]`.
 - The simulator performs a one‑time probe to determine the correct External Signals path (`km/h` vs `km|h`) and array base (0‑ vs 1‑based), writes to the proper index, and reads back the same element to verify the write.
-- The fellow’s second segment is configured to `"Continue"` for both `LongitudinalType` and `LateralType`, and marked `Endless`, so external velocity/deviation drive motion without being overridden by a fixed profile.
+- The fellow's second segment is configured with `LongitudinalType="Velocity"` and `LateralType="Lateral deviation"` (or `"Deviation"`), both with `SourceType='Extern'` (which sets Type='Extern' in the ModelDesk UI). The segment is marked `Endless`, so external velocity/deviation drive motion without being overridden by a fixed profile.
 
 ## Testing Checklist
 
