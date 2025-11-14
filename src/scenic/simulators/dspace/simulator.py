@@ -14,7 +14,7 @@ from scenic.core.simulators import SimulationCreationError
 from .utils import legacy as dutils
 from .controldesk.per_tick_control import ExternalControlManager
 from .vehicle import VehiclePhysicsState, VehicleController
-from .ttl.loader import get_ttl_config, load_ttl_region, attach_to_ego
+from .ttl.loader import get_ttl_config, load_ttl_region, attach_to_ego, attach_ttl
 from .controldesk.arrays import ensure_fellow_arrays_initialized, probe_external_index_base
 from .controldesk.readback import read_ego_state, read_fellow_state
 from .vehicle.actor import ensure_actor, DSpaceVehicleActor
@@ -236,7 +236,10 @@ class DSpaceSimulation(RacingSimulation):
     
     def createFellowInSimulator(self, obj):
         """Create a Fellow vehicle (non-ego) using the Fellows API."""
-        return place_fellow(self, obj)
+        result = place_fellow(self, obj)
+        # Assign TTL to fellow if available (same as ego)
+        attach_ttl(self, obj, vehicle_type="fellow")
+        return result
     
     def _needsDynamicControl(self):
         """Check if any Scenic objects need dynamic control (have behaviors with dSPACE actions)."""

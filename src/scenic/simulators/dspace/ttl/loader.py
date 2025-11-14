@@ -50,18 +50,65 @@ def load_ttl_region(ttl_folder, ttl_index, dx, dy, ttl_file_name=None):
     return PolylineRegion(pts), pts
 
 
-def attach_to_ego(sim, obj):
-    """Load TTL based on scene params and attach region/waypoints to ego object."""
+def attach_ttl(sim, obj, vehicle_type="vehicle"):
+    """Load TTL based on scene params or object properties and attach region/waypoints to object.
+    
+    Args:
+        sim: Simulation object
+        obj: Scenic object (ego or fellow) to attach TTL to
+        vehicle_type: String identifier for logging ("ego", "fellow", etc.)
+    
+    TTL configuration priority:
+    1. Object-specific properties (obj.ttlIndex, obj.ttlDX, obj.ttlDY, obj.ttlFolder, obj.ttlFileName)
+    2. Scene parameters (ttlIndex, ttlDX, ttlDY, ttlFolder, ttlFileName)
+    3. Default values (index=17, dx=-53.6, dy=-15.7)
+    """
     try:
-        ttl_folder, ttl_index, dx, dy, ttl_file = get_ttl_config(getattr(sim.scene, "params", {}) or {})
+        # Check for object-specific TTL configuration
+        scene_params = getattr(sim.scene, "params", {}) or {}
+        
+        # Priority 1: Object-specific properties
+        if hasattr(obj, 'ttlIndex') or hasattr(obj, 'ttlDX') or hasattr(obj, 'ttlDY') or \
+           hasattr(obj, 'ttlFolder') or hasattr(obj, 'ttlFileName'):
+            # Build config from object properties, falling back to scene params
+            ttl_folder = getattr(obj, 'ttlFolder', scene_params.get("ttlFolder", None))
+            ttl_index = getattr(obj, 'ttlIndex', scene_params.get("ttlIndex", 17))
+            dx = getattr(obj, 'ttlDX', scene_params.get("ttlDX", -53.6))
+            dy = getattr(obj, 'ttlDY', scene_params.get("ttlDY", -15.7))
+            ttl_file = getattr(obj, 'ttlFileName', scene_params.get("ttlFileName", None))
+            
+            # If folder not specified on object, use scene param or default
+            if ttl_folder is None:
+                repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+                ttl_folder = scene_params.get("ttlFolder", 
+                    os.path.join(repo_root, "assets", "ttls", "LS_ENU_TTL_CSV", "usable"))
+            
+            ttl_folder = str(ttl_folder)
+            ttl_index = int(ttl_index)
+            dx = float(dx)
+            dy = float(dy)
+            ttl_file = str(ttl_file) if ttl_file else None
+        else:
+            # Priority 2: Scene parameters (existing behavior)
+            ttl_folder, ttl_index, dx, dy, ttl_file = get_ttl_config(scene_params)
+        
         region, pts = load_ttl_region(ttl_folder, ttl_index, dx, dy, ttl_file)
         if region is not None:
             setattr(obj, "ttl", region)
             name = ttl_file if ttl_file else f"ttl_{ttl_index}.csv"
-            print(f"[TTL] Assigned TTL PolylineRegion to ego vehicle ({name})")
+            print(f"[TTL] Assigned TTL PolylineRegion to {vehicle_type} ({name})")
             if pts:
                 setattr(obj, "waypoints", list(pts))
-                print(f"[TTL] Attached {len(pts)} TTL waypoints to ego")
+                print(f"[TTL] Attached {len(pts)} TTL waypoints to {vehicle_type}")
     except Exception as e:
-        print(f"[TTL] Could not assign TTL to ego: {e}")
+        print(f"[TTL] Could not assign TTL to {vehicle_type}: {e}")
+
+
+def attach_to_ego(sim, obj):
+    """Load TTL based on scene params and attach region/waypoints to ego object.
+    
+    This is a convenience wrapper for backward compatibility.
+    For new code, use attach_ttl() directly.
+    """
+    attach_ttl(sim, obj, vehicle_type="ego")
 
