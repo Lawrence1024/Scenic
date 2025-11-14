@@ -400,3 +400,74 @@ behavior PitLaneBehavior(manage_gears=True):
     
     # Apply pit lane speed
     do FollowRacingLineBehavior(target_speed=20.0, manage_gears=manage_gears)
+
+
+behavior SimpleRaceBehavior(manage_gears=True, use_waypoints=True, lookahead=20.0, 
+                           out_of_bounds_tolerance=5.0):
+    """Simplified race decision tree behavior.
+    
+    Priority-based decision making:
+    1. Emergency stop (if out of bounds)
+    2. Pit lane behavior (if in pit lane)
+    3. Green flag behavior (normal racing)
+    
+    Args:
+        manage_gears: Whether to automatically manage gears
+        use_waypoints: Whether to use waypoint-based steering
+        lookahead: Lookahead distance for waypoint steering (meters)
+        out_of_bounds_tolerance: Distance tolerance for out-of-bounds check (meters)
+    """
+    
+    while True:
+        # ============================================================
+        # PRIORITY 1: Emergency Stop Check (Out of Bounds)
+        # ============================================================
+        
+        # Check if car is still within track bounds
+        # Option 1: Check if position is in road region
+        is_in_bounds = road.contains(self.position) if hasattr(road, 'contains') else True
+        
+        # Option 2: Check distance to road (more lenient)
+        if not is_in_bounds:
+            # Check if we're close enough to road (within tolerance)
+            distance_to_road = road.distanceTo(self.position) if hasattr(road, 'distanceTo') else 0.0
+            is_in_bounds = distance_to_road <= out_of_bounds_tolerance
+        
+        # Emergency stop if out of bounds
+        if not is_in_bounds:
+            take StopCarAction(stop_type="emergency")
+            take SetTargetGapAction(gap=0.0, gap_type="no_gap")
+            # Emergency stop - exit behavior
+            break
+        
+        # ============================================================
+        # PRIORITY 2: Pit Lane vs Green Flag
+        # ============================================================
+        
+        # Check if we're in pit lane
+        in_pit_lane = False
+        if hasattr(track, 'pitLaneRoad') and track.pitLaneRoad:
+            in_pit_lane = track.pitLaneRoad.contains(self.position)
+        
+        if in_pit_lane:
+            # PIT LANE BEHAVIOR
+            take SetSpeedLimitAction(speed_limit=20.0, speed_type="pit_lane")
+            take SetTTLSelectionAction(selection="pit")
+            take SetTargetGapAction(gap=0.0, gap_type="no_gap")
+            take SetStrategyAction(strategy_type="cruise_control")
+            
+            # Execute pit lane behavior
+            do FollowRacingLineBehavior(target_speed=20.0, manage_gears=manage_gears,
+                                       use_waypoints=use_waypoints, lookahead=lookahead)
+        else:
+            # GREEN FLAG BEHAVIOR (Normal Racing)
+            green_speed = 120.0  # Default green speed (m/s)
+            take SetSpeedLimitAction(speed_limit=green_speed, speed_type="green")
+            take SetTTLSelectionAction(selection="race")  # Use race TTL
+            take SetStrategyAction(strategy_type="cruise_control")
+            
+            # Execute green flag behavior
+            do FollowRacingLineBehavior(target_speed=green_speed, manage_gears=manage_gears,
+                                       use_waypoints=use_waypoints, lookahead=lookahead)
+        
+        wait  # Wait one timestep before re-evaluating
