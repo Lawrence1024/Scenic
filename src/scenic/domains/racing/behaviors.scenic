@@ -12,128 +12,130 @@ from scenic.domains.racing.actions import SetMaxSpeedAction, SetTTLAction, SetSp
 import scenic.domains.racing.model as _racing
 
 behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoints=True, lookahead=20.0):
-    """Follow the car's TTL using controllers and respecting max speed.
+    """Follow the car's TTL using controllers.
     
-    The car should be given a TTL (target line to drive on). This behavior
-    follows that TTL; if none is set, it defaults to the domain's racingLine.
+    Outputs NORMALIZED control signals (-1.0 to 1.0).
+    The Simulator (simulator.py) automatically scales these to dSPACE VesiInterface units.
     """
     
-    # Ensure TTL and max speed are set according to inputs/defaults
+    # --- 1. SETUP & DEFAULTS ---
     if not hasattr(self, 'ttl') or self.ttl is None:
         take SetTTLAction(track.racingLine if hasattr(track, 'racingLine') and track.racingLine else mainRacingRoad)
     take SetMaxSpeedAction(target_speed)
     
-    # Get controllers
+    # Get Controllers (Standard Scenic PIDs return -1.0 to 1.0)
     _lon_controller, _lat_controller = simulation().getRacingControllers(self)
-    past_steer_angle = 0
-    gear_up_thresholds = [0.0, 12.0, 22.0, 32.0, 42.0, 52.0]   # m/s thresholds for shifting up (gears 1-6)
-    gear_down_thresholds = [0.0, 9.0, 18.0, 28.0, 38.0, 48.0]  # m/s thresholds for shifting down
     
-    # Waypoint state (nearest index), used only if waypoints are available
+    # Gear thresholds (m/s)
+    gear_up_thresholds = [0.0, 12.0, 22.0, 32.0, 42.0, 52.0]
+    gear_down_thresholds = [0.0, 9.0, 18.0, 28.0, 38.0, 48.0]
+    
     wp_last_idx = 0
     
     while True:
         current_speed = (self.speed if self.speed is not None else 0)
-        line = (self.ttl if hasattr(self, 'ttl') and self.ttl is not None else (track.racingLine if hasattr(track, 'racingLine') and track.racingLine else mainRacingRoad))
-
-        # Compute cross-track error:
-        # - If waypoints are available and enabled, use waypoint lookahead targeting
-        # - Otherwise, fall back to region signedDistanceTo
+        
+        # --- 2. CTE CALCULATION (Waypoints Priority) ---
         cte = None
         wp_list = (self.waypoints if hasattr(self, 'waypoints') else None)
+        
+        # If Waypoints exist (Step 2 Requirement), use lookahead logic
         if use_waypoints and wp_list and len(wp_list) >= 2:
-            # Current position
             px = float(self.position.x); py = float(self.position.y)
-            # Find nearest waypoint (linear scan; small lists are fine)
+            
+            # A. Find nearest waypoint index (Windowed search for efficiency)
             nearest_idx = 0
             best_d2 = 1e18
-            for i in range(max(0, wp_last_idx - 25), min(len(wp_list), wp_last_idx + 26)):
+            start_search = max(0, wp_last_idx - 25)
+            end_search = min(len(wp_list), wp_last_idx + 26)
+            
+            for i in range(start_search, end_search):
                 wx, wy = float(wp_list[i][0]), float(wp_list[i][1])
                 dx = px - wx; dy = py - wy
                 d2 = dx*dx + dy*dy
                 if d2 < best_d2:
                     best_d2 = d2; nearest_idx = i
             wp_last_idx = nearest_idx
-            # Determine a lookahead target by walking forward along the polyline
+            
+            # B. Find Target Point (Lookahead)
             Ld = float(lookahead)
-            tgt_idx = nearest_idx
             rem = Ld
             j = nearest_idx
+            found_target = False
+            
+            # Walk forward along polyline
             while rem > 0.0 and j < len(wp_list) - 1:
                 x0, y0 = float(wp_list[j][0]), float(wp_list[j][1])
                 x1, y1 = float(wp_list[j+1][0]), float(wp_list[j+1][1])
                 seg_dx = x1 - x0; seg_dy = y1 - y0
                 seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                
                 if seg_len <= 1e-6:
-                    j += 1
-                    continue
+                    j += 1; continue
+                
                 if rem <= seg_len:
-                    # Interpolate within this segment
                     u = rem / seg_len
                     tgt_x = x0 + u * seg_dx
                     tgt_y = y0 + u * seg_dy
-                    # Compute lateral error as signed distance to the local segment
-                    # Project current pos to this segment
-                    wx = px - x0; wy = py - y0
-                    u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
-                    if u_proj < 0.0: u_proj = 0.0
-                    if u_proj > 1.0: u_proj = 1.0
-                    qx = x0 + u_proj * seg_dx; qy = y0 + u_proj * seg_dy
-                    # Left normal
+                    
+                    # Calculate CTE: Project vehicle pos onto this segment normal
+                    # Left Normal: (-dy, dx)
                     nx = -seg_dy / seg_len; ny = seg_dx / seg_len
-                    cte = (px - qx)*nx + (py - qy)*ny
+                    cte = (px - tgt_x)*nx + (py - tgt_y)*ny
+                    found_target = True
                     break
                 else:
                     rem -= seg_len
                     j += 1
-                    tgt_idx = j
-            if cte is None:
-                # Fallback if interpolation did not produce a cte (e.g., short list)
-                # Use final segment normal
-                k0 = max(0, min(len(wp_list)-2, wp_last_idx))
-                x0, y0 = float(wp_list[k0][0]), float(wp_list[k0][1])
-                x1, y1 = float(wp_list[k0+1][0]), float(wp_list[k0+1][1])
-                seg_dx = x1 - x0; seg_dy = y1 - y0
-                seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
-                if seg_len <= 1e-6:
-                    cte = 0.0
-                else:
-                    wx = px - x0; wy = py - y0
-                    u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
-                    if u_proj < 0.0: u_proj = 0.0
-                    if u_proj > 1.0: u_proj = 1.0
-                    qx = x0 + u_proj * seg_dx; qy = y0 + u_proj * seg_dy
-                    nx = -seg_dy / seg_len; ny = seg_dx / seg_len
-                    cte = (px - qx)*nx + (py - qy)*ny
-        if cte is None:
-            # Region-based fallback
-            cte = (line.signedDistanceTo(self.position)
-                   if hasattr(line, 'signedDistanceTo')
-                   else ((1 if line.contains(self.position) else -1) * line.distanceTo(self.position)))
-        speed_error = min(self.maxSpeed, target_speed) - current_speed
+            
+            # C. End of track handling
+            if not found_target:
+                cte = 0.0
 
-        # Simple gear management to avoid flooring throttle in neutral
+        # Fallback: Use TTL Geometry (Step 3 Requirement)
+        if cte is None:
+            line = (self.ttl if hasattr(self, 'ttl') and self.ttl is not None else mainRacingRoad)
+            if hasattr(line, 'signedDistanceTo'):
+                cte = line.signedDistanceTo(self.position)
+            else:
+                 cte = 0.0
+
+        # --- 3. PID EXECUTION ---
+        speed_error = min(self.maxSpeed if hasattr(self, 'maxSpeed') else 200, target_speed) - current_speed
+        
+        # Raw PID outputs (-1.0 to 1.0)
+        throttle_pid = _lon_controller.run_step(speed_error)
+        steer_pid = _lat_controller.run_step(cte)
+
+        # --- 4. SIGNAL CONVERSION (NORMALIZED) ---
+        # Note: Do NOT scale to 100 or 70 here. actions.py checks for [-1, 1].
+        # simulator.py will handle the scaling to hardware units.
+        
+        # Steer: [-1, 1]
+        final_steer = max(-1.0, min(1.0, steer_pid))
+
+        # Throttle/Brake Split [0, 1]
+        final_throttle = 0.0
+        final_brake = 0.0
+
+        if throttle_pid >= 0:
+            final_throttle = max(0.0, min(1.0, throttle_pid))
+        else:
+            final_brake = max(0.0, min(1.0, abs(throttle_pid)))
+
+        # --- 5. GEAR MANAGEMENT ---
         if manage_gears and hasattr(self, 'setGear'):
-            current_gear = getattr(self, 'gear', None)
-            if current_gear is None or current_gear < 1:
-                take SetGearAction(1)
-                self.gear = 1
-                current_gear = 1
-            elif current_speed is not None:
-                if current_gear < 6 and current_speed > gear_up_thresholds[current_gear]:
+            current_gear = getattr(self, 'gear', 1) or 1
+            if current_speed is not None:
+                if current_gear < 6 and current_speed > gear_up_thresholds[min(current_gear, 5)]:
                     take SetGearAction(current_gear + 1)
                     self.gear = current_gear + 1
-                    current_gear = self.gear
-                elif current_gear > 1 and current_speed < gear_down_thresholds[current_gear - 1]:
+                elif current_gear > 1 and current_speed < gear_down_thresholds[min(current_gear - 1, 4)]:
                     take SetGearAction(current_gear - 1)
                     self.gear = current_gear - 1
-                    current_gear = self.gear
-        
-        throttle = _lon_controller.run_step(speed_error)
-        steer = _lat_controller.run_step(cte)
-        
-        take RegulatedControlAction(throttle, steer, past_steer_angle)
-        past_steer_angle = steer
+
+        # --- 6. EXECUTE ---
+        take SetSteerAction(final_steer), SetThrottleAction(final_throttle), SetBrakeAction(final_brake)
 
 behavior PitStopBehavior(manage_gears=True):
     """Execute a pit stop using racing-specific systems.

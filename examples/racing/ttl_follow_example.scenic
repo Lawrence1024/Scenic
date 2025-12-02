@@ -3,7 +3,7 @@ param use2DMap = True
 param trackDirection = 'counterclockwise'
 
 # TTL selection and transform (global for all usable TTLs)
-param ttlNumber = 17        # choose among: 2, 3, 9, 15, 16, 17
+param ttlIndex = 17        # choose among: 2, 3, 9, 15, 16, 17
 param ttlDX = -53.6
 param ttlDY = -15.7
 param ttlFolder = localPath('../../assets/ttls/LS_ENU_TTL_CSV/usable')
