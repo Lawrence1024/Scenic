@@ -146,14 +146,15 @@ def evaluate_alignment(road_index: Dict, ttl_points: List[Tuple[float, float]], 
 
 def main():
     # Inputs (adjust paths if needed)
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     default_xodr = os.path.join(repo_root, "assets", "maps", "dSPACE", "LagunaSeca.xodr")
-    ttl_dir = os.path.join(repo_root, "assets", "ttls", "LS_ENU_TTL_CSV")
+    ttl_dir = os.path.join(repo_root, "assets", "ttls", "LS_ENU_TTL_CSV", "usable")
     ttl_candidates = [
-        "ttl_3g_v1r.csv",
-        "ttl_9g_l1p35_r1p35_v1r.csv",
-        "ttl_16_l1p25_r1p25_v1r.csv",
-        "ttl27_v5.csv",
+        "ttl_2.csv",
+        "ttl_9.csv",
+        "ttl_15.csv",
+        "ttl_16.csv",
+        "ttl_17.csv",
     ]
     # Allow narrowing to a single file via env
     only = os.environ.get("TTL_ONLY")
