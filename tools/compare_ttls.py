@@ -258,8 +258,26 @@ def visualize_all_ttls(ttl_data: Dict[str, Tuple[List, Dict]],
             
             # Collect centerline points
             centerline_points = []
-            left_boundary_points = []
-            right_boundary_points = []
+            # Store boundaries per lane to preserve correct ordering
+            left_boundary_segments = []
+            right_boundary_segments = []
+            # Store pit lane boundaries separately
+            pit_left_boundary_segments = []
+            pit_right_boundary_segments = []
+            
+            # Identify pit lane roads using similar logic to RacingTrack
+            pit_lane_roads = set()
+            pit_lane_pattern = "pit"  # Default pattern to match pit lane names
+            
+            # First pass: identify pit lane roads
+            for road in network.roads:
+                road_id = getattr(road, 'id', None)
+                road_name = getattr(road, 'name', str(road))
+                
+                # Check if road name matches pit lane pattern
+                if pit_lane_pattern.lower() in str(road_name).lower():
+                    pit_lane_roads.add(road)
+                    print(f"[INFO] Identified pit lane road: {road_name} (ID: {road_id})")
             
             def extract_point_coords(pt):
                 """Extract (x, y) from point, handling both tuple and object formats."""
@@ -271,6 +289,7 @@ def visualize_all_ttls(ttl_data: Dict[str, Tuple[List, Dict]],
                     return None
             
             for road in network.roads:
+                is_pit_lane = road in pit_lane_roads
                 for lane in road.lanes:
                     # Centerline
                     if hasattr(lane, 'centerline') and lane.centerline:
@@ -290,7 +309,7 @@ def visualize_all_ttls(ttl_data: Dict[str, Tuple[List, Dict]],
                         except Exception:
                             pass
                     
-                    # Left boundary (if available)
+                    # Left boundary (if available) - store as separate segment per lane
                     if hasattr(lane, 'leftEdge') and lane.leftEdge:
                         try:
                             if hasattr(lane.leftEdge, 'points'):
@@ -301,14 +320,21 @@ def visualize_all_ttls(ttl_data: Dict[str, Tuple[List, Dict]],
                                 points_list = []
                             
                             step = max(1, len(points_list) // 100)
+                            segment_points = []
                             for i, pt in enumerate(points_list[::step]):
                                 coords = extract_point_coords(pt)
                                 if coords:
-                                    left_boundary_points.append(coords)
+                                    segment_points.append(coords)
+                            
+                            if segment_points:
+                                if is_pit_lane:
+                                    pit_left_boundary_segments.append(segment_points)
+                                else:
+                                    left_boundary_segments.append(segment_points)
                         except Exception:
                             pass  # Skip if we can't extract left edge
                     
-                    # Right boundary (if available)
+                    # Right boundary (if available) - store as separate segment per lane
                     if hasattr(lane, 'rightEdge') and lane.rightEdge:
                         try:
                             if hasattr(lane.rightEdge, 'points'):
@@ -319,50 +345,65 @@ def visualize_all_ttls(ttl_data: Dict[str, Tuple[List, Dict]],
                                 points_list = []
                             
                             step = max(1, len(points_list) // 100)
+                            segment_points = []
                             for i, pt in enumerate(points_list[::step]):
                                 coords = extract_point_coords(pt)
                                 if coords:
-                                    right_boundary_points.append(coords)
+                                    segment_points.append(coords)
+                            
+                            if segment_points:
+                                if is_pit_lane:
+                                    pit_right_boundary_segments.append(segment_points)
+                                else:
+                                    right_boundary_segments.append(segment_points)
                         except Exception:
                             pass  # Skip if we can't extract right edge
             
-            # Skip centerline - only show boundaries
-            # Remove duplicate boundary points (in case multiple lanes share boundaries)
-            # and plot boundaries with consistent grey color
-            if left_boundary_points:
-                # Remove duplicates while preserving order
-                seen = set()
-                unique_left = []
-                for p in left_boundary_points:
-                    p_tuple = (round(p[0], 2), round(p[1], 2))  # Round to avoid floating point duplicates
-                    if p_tuple not in seen:
-                        seen.add(p_tuple)
-                        unique_left.append(p)
-                
-                track_left_boundary = unique_left
-                left_x = [p[0] for p in unique_left]
-                left_y = [p[1] for p in unique_left]
-                ax.plot(left_x, left_y, color='gray', linewidth=2.5, alpha=0.7, 
-                       label='Track Left Boundary', zorder=1)
+            # Plot main track boundaries - plot each segment separately to preserve correct ordering
+            # This prevents diagonal lines from connecting non-adjacent points
+            left_label_added = False
+            for segment in left_boundary_segments:
+                if segment:
+                    left_x = [p[0] for p in segment]
+                    left_y = [p[1] for p in segment]
+                    label = 'Track Left Boundary' if not left_label_added else None
+                    ax.plot(left_x, left_y, color='gray', linewidth=2.5, alpha=0.7, 
+                           label=label, zorder=1)
+                    left_label_added = True
             
-            # Plot right boundary
-            if right_boundary_points:
-                # Remove duplicates while preserving order
-                seen = set()
-                unique_right = []
-                for p in right_boundary_points:
-                    p_tuple = (round(p[0], 2), round(p[1], 2))  # Round to avoid floating point duplicates
-                    if p_tuple not in seen:
-                        seen.add(p_tuple)
-                        unique_right.append(p)
-                
-                track_right_boundary = unique_right
-                right_x = [p[0] for p in unique_right]
-                right_y = [p[1] for p in unique_right]
-                ax.plot(right_x, right_y, color='gray', linewidth=2.5, alpha=0.7, 
-                       label='Track Right Boundary', zorder=1)
+            # Plot right boundary segments
+            right_label_added = False
+            for segment in right_boundary_segments:
+                if segment:
+                    right_x = [p[0] for p in segment]
+                    right_y = [p[1] for p in segment]
+                    label = 'Track Right Boundary' if not right_label_added else None
+                    ax.plot(right_x, right_y, color='gray', linewidth=2.5, alpha=0.7, 
+                           label=label, zorder=1)
+                    right_label_added = True
             
-            if not left_boundary_points and not right_boundary_points:
+            # Plot pit lane boundaries with a different color/style
+            pit_left_label_added = False
+            for segment in pit_left_boundary_segments:
+                if segment:
+                    left_x = [p[0] for p in segment]
+                    left_y = [p[1] for p in segment]
+                    label = 'Pit Lane Left Boundary' if not pit_left_label_added else None
+                    ax.plot(left_x, left_y, color='orange', linewidth=2.5, alpha=0.7, 
+                           linestyle='--', label=label, zorder=1)
+                    pit_left_label_added = True
+            
+            pit_right_label_added = False
+            for segment in pit_right_boundary_segments:
+                if segment:
+                    right_x = [p[0] for p in segment]
+                    right_y = [p[1] for p in segment]
+                    label = 'Pit Lane Right Boundary' if not pit_right_label_added else None
+                    ax.plot(right_x, right_y, color='orange', linewidth=2.5, alpha=0.7, 
+                           linestyle='--', label=label, zorder=1)
+                    pit_right_label_added = True
+            
+            if not left_boundary_segments and not right_boundary_segments and not pit_left_boundary_segments and not pit_right_boundary_segments:
                 print(f"[WARN] Could not extract track boundaries from XODR")
         except Exception as e:
             print(f"[WARN] Could not load track boundaries: {e}")
