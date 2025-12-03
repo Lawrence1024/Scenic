@@ -1,0 +1,357 @@
+#VRML_SIM R2023a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+IMPORTABLE EXTERNPROTO "../protos/ScenicObject.proto"
+IMPORTABLE EXTERNPROTO "../protos/ScenicObjectWithPhysics.proto"
+
+WorldInfo {
+  gravity 9.81
+  basicTimeStep 16
+  contactProperties [
+    ContactProperties {
+      material1 "wheel_material"
+      material2 "ground_material"
+      coulombFriction 0.8
+      bounce 0
+    }
+  ]
+}
+Viewpoint {
+  orientation -0.19729161510865992 0.07408415124219735 0.977541588446517 2.4380019050245862
+  position 2 2 2
+}
+TexturedBackground {
+}
+TexturedBackgroundLight {
+}
+Robot {
+  name "Supervisor"
+  controller "scenic_supervisor"
+  customData "../../../pololu_verifai.scenic"
+  supervisor TRUE
+  children [
+    Emitter {
+      channel 1
+    }
+    Receiver {
+      channel 1
+    }
+  ]
+}
+DEF GROUND Solid {
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.8 0.8 0.8
+        roughness 0.5
+        metalness 0
+      }
+      geometry DEF GROUND_PLANE Plane {
+        size 10 10
+      }
+    }
+    # Outer track lines - NORTH (red) - from x=-2 to x=2
+    Transform {
+      translation 0 2 0.01
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 1 0 0
+            roughness 0.3
+            metalness 0
+          }
+          geometry Box {
+            size 4 0.1 0.02
+          }
+        }
+      ]
+    }
+    # Outer track lines - EAST (red) - from y=-2 to y=2
+    Transform {
+      translation 2 0 0.01
+      rotation 0 0 1 1.5708
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 1 0 0
+            roughness 0.3
+            metalness 0
+          }
+          geometry Box {
+            size 4 0.1 0.02
+          }
+        }
+      ]
+    }
+    # Outer track lines - SOUTH (red) - from x=-2 to x=2
+    Transform {
+      translation 0 -2 0.01
+      rotation 0 0 1 3.14159
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 1 0 0
+            roughness 0.3
+            metalness 0
+          }
+          geometry Box {
+            size 4 0.1 0.02
+          }
+        }
+      ]
+    }
+    # Outer track lines - WEST (red) - from y=-2 to y=2
+    Transform {
+      translation -2 0 0.01
+      rotation 0 0 1 4.71239
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 1 0 0
+            roughness 0.3
+            metalness 0
+          }
+          geometry Box {
+            size 4 0.1 0.02
+          }
+        }
+      ]
+    }
+    # Inner track lines - NORTH (blue) - from x=-1 to x=1
+    Transform {
+      translation 0 1 0.01
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0 0 1
+            roughness 0.3
+            metalness 0
+          }
+          geometry Box {
+            size 2 0.1 0.02
+          }
+        }
+      ]
+    }
+    # Inner track lines - EAST (blue) - from y=-1 to y=1
+    Transform {
+      translation 1 0 0.01
+      rotation 0 0 1 1.5708
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0 0 1
+            roughness 0.3
+            metalness 0
+          }
+          geometry Box {
+            size 2 0.1 0.02
+          }
+        }
+      ]
+    }
+    # Inner track lines - SOUTH (blue) - from x=-1 to x=1
+    Transform {
+      translation 0 -1 0.01
+      rotation 0 0 1 3.14159
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0 0 1
+            roughness 0.3
+            metalness 0
+          }
+          geometry Box {
+            size 2 0.1 0.02
+          }
+        }
+      ]
+    }
+    # Inner track lines - WEST (blue) - from y=-1 to y=1
+    Transform {
+      translation -1 0 0.01
+      rotation 0 0 1 4.71239
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0 0 1
+            roughness 0.3
+            metalness 0
+          }
+          geometry Box {
+            size 2 0.1 0.02
+          }
+        }
+      ]
+    }
+  ]
+  boundingObject USE GROUND_PLANE
+  locked TRUE
+  contactMaterial "ground_material"
+}
+# Waypoint markers
+Transform {
+  translation -1.5 1.5 0.05
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0 1 0
+        roughness 0.3
+        metalness 0
+      }
+      geometry Sphere {
+        radius 0.05
+      }
+    }
+  ]
+}
+Transform {
+  translation 1.5 1.5 0.05
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0 1 0
+        roughness 0.3
+        metalness 0
+      }
+      geometry Sphere {
+        radius 0.05
+      }
+    }
+  ]
+}
+Transform {
+  translation 1.5 -1.5 0.05
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0 1 0
+        roughness 0.3
+        metalness 0
+      }
+      geometry Sphere {
+        radius 0.05
+      }
+    }
+  ]
+}
+Transform {
+  translation -1.5 -1.5 0.05
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0 1 0
+        roughness 0.3
+        metalness 0
+      }
+      geometry Sphere {
+        radius 0.05
+      }
+    }
+  ]
+}
+DEF POLOLU_ROBOT Robot {
+  translation 0 0 0.02
+  rotation 0 0 1 0
+  controller "simple_robot_controller"
+  boundingObject Cylinder {
+    height 0.036
+    radius 0.048
+  }
+  physics Physics {
+    density 1000
+    mass 0.1
+  }
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.2 0.2 0.8
+        roughness 0.5
+        metalness 0
+      }
+      geometry Cylinder {
+        height 0.036
+        radius 0.048
+      }
+    }
+    HingeJoint {
+      jointParameters HingeJointParameters {
+        axis 0 1 0
+        anchor 0 0.048 -0.016
+      }
+      device [
+        RotationalMotor {
+          name "leftMotor"
+        }
+      ]
+      endPoint Solid {
+        translation 0 0.03 -0.016
+        rotation 1 0 0 1.5708
+        name "leftWheel"
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 1 1 0
+            }
+            geometry Cylinder {
+              height 0.007
+              radius 0.016
+            }
+          }
+        ]
+        boundingObject Cylinder {
+          height 0.007
+          radius 0.016
+        }
+        physics Physics {
+          density 100
+        }
+        contactMaterial "wheel_material"
+      }
+    }
+    HingeJoint {
+      jointParameters HingeJointParameters {
+        axis 0 1 0
+        anchor 0 -0.048 -0.016
+      }
+      device [
+        RotationalMotor {
+          name "rightMotor"
+        }
+      ]
+      endPoint Solid {
+        translation 0 -0.03 -0.016
+        rotation 1 0 0 1.5708
+        name "rightWheel"
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 1 1 0
+            }
+            geometry Cylinder {
+              height 0.007
+              radius 0.016
+            }
+          }
+        ]
+        boundingObject Cylinder {
+          height 0.007
+          radius 0.016
+        }
+        physics Physics {
+          density 100
+        }
+        contactMaterial "wheel_material"
+      }
+    }
+    # Communication devices for Scenic control
+    Emitter {
+      channel 1
+    }
+    Receiver {
+      channel 1
+    }
+  ]
+}
+

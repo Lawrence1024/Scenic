@@ -13,7 +13,7 @@ workspace = Workspace(workspace_region)
 
 # Create a Pololu robot that follows the square track
 # Position at first waypoint to start the track properly
-robot = new WebotsPololuRobot at (0, 0, 0.016), with behavior SquareTrackBehavior(forwardSpeed=80, turnSpeed=60, headingOffset=-90 deg)
+robot = new WebotsPololuRobot at (-1.5, -1.5, 0.016), with behavior SquareTrackBehavior(forwardSpeed=80, turnSpeed=60, headingOffset=-90 deg)
 
-# Terminate after 60 seconds
-terminate after 60 seconds
+# Terminate after 120 seconds
+terminate after 120 seconds
