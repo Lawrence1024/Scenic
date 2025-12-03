@@ -131,20 +131,9 @@ behavior FollowLaneBehavior(target_speed = 10, laneToFollow=None, is_oppositeTra
             target_speed = original_target_speed
             _lon_controller, _lat_controller = simulation().getLaneFollowingControllers(self)
 
-        # --- Lateral Control: Cross-Track Error (CTE) ---
-        #
-        # Default behavior: use the lane centerline, as before.
-        # If a TTL (Target Trajectory Line) has been attached (e.g. by the dSPACE
-        # simulator for ego/fellow vehicles), prefer using that TTL's signedDistanceTo
-        # so the same FollowLaneBehavior can drive on an optimized racing line.
-        if hasattr(self, 'ttl') and self.ttl is not None and hasattr(self.ttl, 'signedDistanceTo'):
-            # TTL-aware lane following (e.g. dSPACE ego/fellow with attached TTL)
-            cte = self.ttl.signedDistanceTo(self.position)
-        else:
-            # Original lane-based behavior (road-network centerline)
-            nearest_line_points = current_centerline.nearestSegmentTo(self.position)
-            nearest_line_segment = PolylineRegion(nearest_line_points)
-            cte = nearest_line_segment.signedDistanceTo(self.position)
+        nearest_line_points = current_centerline.nearestSegmentTo(self.position)
+        nearest_line_segment = PolylineRegion(nearest_line_points)
+        cte = nearest_line_segment.signedDistanceTo(self.position)
 
         if is_oppositeTraffic:
             cte = -cte
