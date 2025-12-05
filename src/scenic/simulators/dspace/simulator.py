@@ -187,6 +187,17 @@ class DSpaceSimulation(RacingSimulation):
             print("[VehicleController] Initialized")
         else:
             self._vehicle_controller = None
+            print("\n" + "="*70)
+            print("⚠️  CRITICAL: ControlDesk Connection Failed!")
+            print("="*70)
+            print("The dSPACE simulator requires ControlDesk to control vehicles.")
+            print("\nTo fix this:")
+            print("  1. Start ControlDesk application")
+            print("  2. Load an experiment with a platform/device")
+            print("  3. Ensure the platform is ready for online calibration")
+            print("  4. Re-run the Scenic script")
+            print("\nWithout ControlDesk, Fellow vehicles CANNOT move.")
+            print("="*70 + "\n")
 
         # 10) NOW start the maneuver via ControlDesk (AFTER VesiInterface is fully initialized)
         if self._cd and cd_session.start_maneuver(self._cd):
@@ -195,9 +206,17 @@ class DSpaceSimulation(RacingSimulation):
             print("[Maneuver] ⚠️  Skipping start - ControlDesk not available")
         
         # Pause simulation initially for step-by-step control
+        print("[Setup] About to pause simulation for step-by-step control...")
         if self._cd and cd_session.pause(self._cd):
+            print("[Setup] Simulation paused successfully")
             # Immediately try to warm-up fellow arrays so first read/write won't warn
+            print("[Setup] Initializing fellow arrays...")
             self._ensureFellowArraysInitialized()
+            print("[Setup] Fellow arrays initialized")
+        else:
+            print("[Setup] Could not pause simulation")
+        
+        print("[Setup] ✅ Setup complete - simulation is ready to run")
 
     def createObjectInSimulator(self, obj):
         """Place car (ego or fellow) by absolute (s,t) computed from (x,y) and XODR.
@@ -572,13 +591,22 @@ class DSpaceSimulation(RacingSimulation):
            - Fellows: External signals (velocity/deviation computed from physics model)
         4. Clear the control state for next timestep
         """
+        if not hasattr(self, '_execute_count'):
+            self._execute_count = 0
+        self._execute_count += 1
+        
         if not self._fellow_arrays_initialized:
             ensure_fellow_arrays_initialized(self)
             if not self._fellow_arrays_initialized:
                 # Skip this tick to give ControlDesk time to produce fellow arrays
                 # Behaviors will run again next tick once arrays are ready
                 # (avoids losing one-shot actions)
+                if self._execute_count % 50 == 1:
+                    print(f"[executeActions #{self._execute_count}] Waiting for fellow arrays...")
                 return
+        
+        if self._execute_count % 50 == 1:
+            print(f"[executeActions #{self._execute_count}] Executing actions for {len(self.scene.objects)} objects")
         
         # First, let actions apply themselves (this calls setThrottle, setSteering, etc.)
         super().executeActions(allActions)
@@ -591,6 +619,8 @@ class DSpaceSimulation(RacingSimulation):
                 
                 if is_ego:
                     # Ego: Use VesiInterface physics-based control
+                    if self._execute_count <= 3:
+                        print(f"[executeActions #{self._execute_count}] Calling apply_ego_control for ego")
                     self._vehicle_controller.apply_ego_control(obj)
                 else:
                     # Fellow: Only drive if a behavior exists; otherwise leave stationary
@@ -602,6 +632,17 @@ class DSpaceSimulation(RacingSimulation):
                     obj._control_state = {}
                 if hasattr(obj, '_oneshot_actions'):
                     obj._oneshot_actions = []
+        else:
+            if self._execute_count == 1:
+                print(f"\n{'='*70}")
+                print(f"⚠️  CRITICAL ERROR: VehicleController is None!")
+                print(f"{'='*70}")
+                print(f"Control commands are being generated but CANNOT be applied.")
+                print(f"This means ControlDesk is not connected to the simulator.")
+                print(f"\nBehaviors are running and generating throttle/brake/steering,")
+                print(f"but these values are NEVER written to the dSPACE simulator.")
+                print(f"\nResult: Vehicles will NOT move!")
+                print(f"{'='*70}\n")
             
             # Read and print ControlDesk variable values (commented out - focus on fellow feedback)
             # self._readAndPrintControlDeskValues()
@@ -716,8 +757,16 @@ class DSpaceSimulation(RacingSimulation):
             is_ego = (obj is self.scene.egoObject)
             
             if is_ego:
+                print(f"[DEBUG] Reading Ego State...")
+
                 # Read ego vehicle state
-                return self._readEgoStateFromControlDesk(obj)
+                result = self._readEgoStateFromControlDesk(obj)
+
+                if hasattr(obj, 'dspaceActor'):
+                    pos = obj.dspaceActor.position
+                    print(f"[DEBUG] Ego State Read: X={pos.x:.2f}, Y={pos.y:.2f}, Speed={obj.dspaceActor.linvel.norm():.2f}")
+            
+                return result
             else:
                 # Read fellow vehicle state
                 return self._readFellowStateFromControlDesk(obj)
@@ -788,7 +837,21 @@ class DSpaceSimulation(RacingSimulation):
         This advances the dSPACE simulation by one timestep using ControlDesk.
         Control variables should already be written by executeActions() before this is called.
         """
-        cd_session.step(self._cd, self.timestep)
+        if not hasattr(self, '_step_count'):
+            self._step_count = 0
+        self._step_count += 1
+        
+        # Always print for first 5 steps, then every 50
+        if self._step_count <= 5 or self._step_count % 50 == 1:
+            print(f"[step #{self._step_count}] Advancing simulation by {self.timestep}s...")
+        
+        success = cd_session.step(self._cd, self.timestep)
+        
+        if self._step_count <= 5:
+            if success:
+                print(f"[step #{self._step_count}] ✓ Step completed")
+            else:
+                print(f"[step #{self._step_count}] ⚠️  Step failed (using time.sleep fallback)")
 
     def getProperties(self, obj, properties):
         """Read the values of the given properties of the object from the simulator.

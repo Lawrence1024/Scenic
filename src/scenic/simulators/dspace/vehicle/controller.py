@@ -47,12 +47,21 @@ class VehicleController:
         """
         control = getattr(obj, '_control_state', None)
         
+        # Track for debug
+        if not hasattr(obj, '_ego_control_count'):
+            obj._ego_control_count = 0
+        obj._ego_control_count += 1
+        
         try:
             # VesiInterface manual control variable paths
             KEY_THROTTLE = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_throttle_cmd/Value"
             KEY_BRAKE_FRONT = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_front/Value"
             KEY_BRAKE_REAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_rear/Value"
             KEY_STEERING = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_steering_cmd/Value"
+            
+            throttle_scenic = control.get('throttle', 0.0) if control else 0.0
+            brake_scenic = control.get('braking', 0.0) if control else 0.0
+            steer_scenic = control.get('steering', 0.0) if control else 0.0
             
             # Apply throttle (0-1 → 0-100 command range)
             if control and 'throttle' in control and control['throttle'] is not None:
@@ -69,9 +78,15 @@ class VehicleController:
             if control and 'steering' in control and control['steering'] is not None:
                 steer_val = -float(max(-1.0, min(1.0, control['steering'])) * 70.0)
                 self.cd.set_var(KEY_STEERING, steer_val)
+            
+            # Debug every 50 steps
+            if obj._ego_control_count % 50 == 0:
+                print(f"[EgoControl #{obj._ego_control_count}] Writing: throttle={throttle_scenic:.3f}→{throttle_scenic*100:.1f}, brake={brake_scenic:.3f}→{brake_scenic*100:.1f}, steer={steer_scenic:.3f}→{-steer_scenic*70:.1f}")
                 
         except Exception as e:
             print(f"[VehicleController:EgoControl] Error: {e}")
+            import traceback
+            traceback.print_exc()
         
         # Apply one-shot actions (gear, clutch)
         if hasattr(obj, '_oneshot_actions') and obj._oneshot_actions:
@@ -83,11 +98,16 @@ class VehicleController:
                     if action_type == 'gear':
                         gear_int = max(0, min(6, int(value)))
                         self.cd.set_var(KEY_GEAR, gear_int)
+                        if obj._ego_control_count <= 5 or obj._ego_control_count % 50 == 0:
+                            print(f"[EgoControl] Setting gear to {gear_int}")
                     elif action_type == 'clutch':
                         clutch_pct = float(value * 100.0)
                         self.cd.set_var(KEY_CLUTCH, clutch_pct)
+                        print(f"[EgoControl] Setting clutch to {clutch_pct}%")
                 except Exception as e:
                     print(f"[VehicleController:EgoControl] {action_type} error: {e}")
+                    import traceback
+                    traceback.print_exc()
     
     def apply_fellow_control(self, obj):
         """Apply kinematic control for fellow vehicle using physics model.
@@ -126,12 +146,22 @@ class VehicleController:
         brake = float(control.get('braking', 0.0))
         steering = float(control.get('steering', 0.0))
         
+        # CRITICAL: Get the actual CTE (cross-track error) from the behavior
+        # The behavior stores this in _current_cte (not in _control_state)
+        cte_from_behavior = getattr(obj, '_current_cte', None)
+        
+        # Track control calls for debug
+        if not hasattr(obj, '_fellow_control_count'):
+            obj._fellow_control_count = 0
+        obj._fellow_control_count += 1
+        
         try:
             # Update physics model
             actor = obj.dspaceActor
             # Ensure physics model exists for kinematic update
             if getattr(actor, "physics", None) is None:
                 actor.physics = VehiclePhysicsState(initial_velocity=0.0, initial_deviation=0.0)
+                print(f"[Fellow {fellow_index}] Physics model created (initial velocity=0.0 m/s)")
             
             # Sync physics model with actual velocity from ControlDesk
             # Read velocity from v_Fellows (plant output, actual simulation velocity)
@@ -182,14 +212,52 @@ class VehicleController:
                     read_source = "linvel_manual"
             
             # Sync physics model's internal velocity with actual velocity from ControlDesk
+            old_physics_velocity = actor.physics.velocity
             actor.physics.velocity = actual_speed
             
+            # Debug: Log physics sync on first few calls
+            if obj._fellow_control_count <= 3:
+                print(f"[Fellow {fellow_index} Physics] Synced velocity: {old_physics_velocity:.2f} → {actual_speed:.2f} m/s (from {read_source})")
+            
+            # CRITICAL: Initialize deviation on first step to match the starting CTE
+            # This ensures the Fellow knows its actual starting lateral position
+            if obj._fellow_control_count == 1 and cte_from_behavior is not None:
+                # Initialize physics model deviation to current CTE
+                actor.physics.deviation = float(cte_from_behavior)
+                print(f"\n[Fellow {fellow_index} Physics] 🚗 INITIALIZATION")
+                print(f"  Starting CTE = {cte_from_behavior:.2f} m")
+                print(f"  Setting initial deviation = {actor.physics.deviation:.2f} m")
+            
+            # Store old deviation to calculate change
+            old_deviation = actor.physics.deviation
+            
+            # Update physics: integrates steering to change lateral position over time
             new_velocity, new_deviation = actor.physics.update(
                 throttle=throttle,
                 brake=brake,
                 steering=steering,
                 dt=self.simulation.timestep
             )
+            
+            # Calculate how much the deviation changed
+            deviation_delta = new_deviation - old_deviation
+            
+            # Log the physics behavior for first 10 steps
+            if obj._fellow_control_count <= 10:
+                velocity_factor = min(actual_speed / 20.0, 1.0)
+                lateral_vel = steering * 2.0 * velocity_factor  # steering_sensitivity = 2.0
+                print(f"\n[Fellow {fellow_index} Physics] Step {obj._fellow_control_count}")
+                print(f"  velocity = {actual_speed:.2f} m/s → velocity_factor = {velocity_factor:.2f}")
+                print(f"  steering = {steering:.3f} → lateral_vel = {lateral_vel:.3f} m/s")
+                print(f"  deviation: {old_deviation:.2f} → {new_deviation:.2f} m (Δ = {deviation_delta:.3f} m)")
+                print(f"  CTE from behavior = {cte_from_behavior:.2f} m")
+                if abs(deviation_delta) < 0.01:
+                    print(f"  ⚠️  Deviation not changing! (velocity too low or steering = 0)")
+            
+            # Debug: Log physics update on first few calls
+            if obj._fellow_control_count <= 3:
+                print(f"[Fellow {fellow_index} Physics] Update: throttle={throttle:.2f}, brake={brake:.2f}, steering={steering:.2f}")
+                print(f"[Fellow {fellow_index} Physics] Result: velocity={new_velocity:.2f} m/s, deviation={new_deviation:.2f} m")
             
             # Write to ControlDesk external signals using bulk arrays (robust when element addressing is not supported)
             self.simulation._probe_external_index_base()
@@ -237,26 +305,46 @@ class VehicleController:
                 d_back_arr = self.cd.get_var(d_path_bulk)
                 v_echo = v_back_arr[eff_ext_index] if isinstance(v_back_arr, (list, tuple)) and len(v_back_arr) > eff_ext_index else None
                 d_echo = d_back_arr[eff_ext_index] if isinstance(d_back_arr, (list, tuple)) and len(d_back_arr) > eff_ext_index else None
-                print(f"[Fellow {fellow_index}] Controls: throttle={throttle:.2f}, brake={brake:.2f}, steering={steering:.2f}")
-                print(f"[Fellow {fellow_index}] → v={new_velocity:.2f} m/s ({v_value:.1f} km/h), d={d_value:.2f} m (eff_idx={eff_ext_index})")
-                print(f"[Fellow {fellow_index}] ExternalSignals bulk write/read: v {v_prev}→{v_echo}, d {d_prev}→{d_echo} @ {v_path_bulk}[{eff_ext_index}]")
+                
+                # Always print (not just first 3 times) so we can see what's happening
+                print(f"\n[Fellow {fellow_index}] Step {obj._fellow_control_count}")
+                print(f"  Controls IN:  throttle={throttle:.2f}, brake={brake:.2f}, steering={steering:.2f}")
+                print(f"  Physics OUT:  velocity={new_velocity:.2f} m/s ({v_value:.1f} km/h), deviation={d_value:.2f} m")
+                print(f"  Written to dSPACE: v={v_value:.1f} km/h, d={d_value:.2f} m @ index {eff_ext_index}")
+                print(f"  Read back:    v={v_echo} km/h, d={d_echo} m")
             except Exception as es_err:
                 print(f"[Fellow {fellow_index}] ExternalSignals bulk feedback read error (idx={eff_ext_index}): {es_err}")
-            # For the first fellow, also try to read plant pose if available (bulk-safe)
-            if fellow_index == 0:
-                try:
-                    plant_base = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer"
-                    x_arr = self.cd.get_var(f"{plant_base}/x")
-                    y_arr = self.cd.get_var(f"{plant_base}/y")
-                    yaw_arr = self.cd.get_var(f"{plant_base}/yaw_deg_out")
-                    x = x_arr[eff_index] if isinstance(x_arr, (list, tuple)) and len(x_arr) > eff_index else None
-                    y = y_arr[eff_index] if isinstance(y_arr, (list, tuple)) and len(y_arr) > eff_index else None
-                    yaw = yaw_arr[eff_index] if isinstance(yaw_arr, (list, tuple)) and len(yaw_arr) > eff_index else None
-                    if x is not None and y is not None and yaw is not None:
-                        print(f"[Fellow {fellow_index}] Plant pose: x={x}, y={y}, yaw_deg={yaw} (idx={eff_index})")
-                except Exception:
-                    # Silently ignore; arrays may not be ready in the first few ticks
-                    pass
+            # Read actual plant pose to see where the fellow really is
+            try:
+                plant_base = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer"
+                x_arr = self.cd.get_var(f"{plant_base}/x")
+                y_arr = self.cd.get_var(f"{plant_base}/y")
+                yaw_arr = self.cd.get_var(f"{plant_base}/yaw_deg_out")
+                x = x_arr[eff_index] if isinstance(x_arr, (list, tuple)) and len(x_arr) > eff_index else None
+                y = y_arr[eff_index] if isinstance(y_arr, (list, tuple)) and len(y_arr) > eff_index else None
+                yaw = yaw_arr[eff_index] if isinstance(yaw_arr, (list, tuple)) and len(yaw_arr) > eff_index else None
+                
+                if x is not None and y is not None and yaw is not None:
+                    print(f"  Actual position in dSPACE: x={x:.2f} m, y={y:.2f} m, yaw={yaw:.1f}°")
+                    
+                    # Check if we have waypoints to compare against
+                    if hasattr(obj, 'waypoints') and obj.waypoints and len(obj.waypoints) > 0:
+                        # Find nearest waypoint
+                        min_dist = float('inf')
+                        nearest_wp = None
+                        for wp in obj.waypoints:
+                            wp_x, wp_y = float(wp[0]), float(wp[1])
+                            dist = ((x - wp_x)**2 + (y - wp_y)**2)**0.5
+                            if dist < min_dist:
+                                min_dist = dist
+                                nearest_wp = (wp_x, wp_y)
+                        
+                        if nearest_wp:
+                            print(f"  Nearest waypoint: ({nearest_wp[0]:.2f}, {nearest_wp[1]:.2f}), distance={min_dist:.2f} m")
+                            print(f"  ⚠️  Fellow is {min_dist:.2f}m away from TTL path!")
+            except Exception:
+                # Silently ignore; arrays may not be ready in the first few ticks
+                pass
             
             # Clear warning flag if we successfully wrote (arrays are now ready)
             if hasattr(obj, '_write_array_bounds_warning_shown'):

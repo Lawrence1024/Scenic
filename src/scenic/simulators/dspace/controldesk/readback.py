@@ -1,26 +1,77 @@
 from scenic.core.vectors import Vector
+import math
 
 def read_ego_state(sim, obj):
     """Read ego vehicle state from ControlDesk into obj.dspaceActor."""
     if not sim._cd:
         return False
+    
+    base_physics = "Platform()://ASM_Traffic/Model Root/VehicleDynamics/Plant/VehicleDynamics/VehicleMovement/ASMSignalCollector/Vehicle_Movement_Info_Car"
+    
+    # 1. POSITION [x, y, z]
+    # 'Out1' of the integrator is the calculated position for the next step.
+    # Note: The '\n' is required because the block name in Simulink has a line break.
+    path_pos_vec = f"{base_physics}/Positions/Discrete-Time\nIntegrator/Out1"
+    
+    # 2. VELOCITY [vx, vy, vz]
+    # We try the Integrator first, then VectorLabel if that fails.
+    path_vel_int = f"{base_physics}/Velocities/Discrete-Time\nIntegrator/Out1"
+    path_vel_lbl = f"{base_physics}/Velocities/VectorLabel/out"
+
     try:
-        base_path = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel"
-        try:
-            x = sim._cd.get_var(f"{base_path}/Ego_x/Value")
-            y = sim._cd.get_var(f"{base_path}/Ego_y/Value")
-            z = sim._cd.get_var(f"{base_path}/Ego_z/Value")
-            yaw_deg = sim._cd.get_var(f"{base_path}/Ego_yaw/Value")
-            velocity = sim._cd.get_var(f"{base_path}/Ego_velocity/Value")
-            obj.dspaceActor.position = Vector(float(x), float(y), float(z))
-            obj.dspaceActor.heading = float(yaw_deg) * (3.14159265 / 180.0)
-            obj.dspaceActor.linvel = Vector(float(velocity), 0, 0)
+        # --- READ POSITION ---
+        pos_arr = sim._cd.get_var(path_pos_vec)
+        
+        if pos_arr and len(pos_arr) >= 2:
+            x = float(pos_arr[0])
+            y = float(pos_arr[1])
+            z = float(pos_arr[2]) if len(pos_arr) > 2 else 0.0
+            
+            # --- READ VELOCITY ---
+            vx = 0.0
+            vy = 0.0
+            
+            # Try Integrator path (Standard physics)
+            try:
+                vel_arr = sim._cd.get_var(path_vel_int)
+                if vel_arr and len(vel_arr) >= 2:
+                    vx = float(vel_arr[0])
+                    vy = float(vel_arr[1])
+            except:
+                # Try VectorLabel path (Passthrough signal)
+                try:
+                    vel_arr = sim._cd.get_var(path_vel_lbl)
+                    if vel_arr and len(vel_arr) >= 2:
+                        vx = float(vel_arr[0])
+                        vy = float(vel_arr[1])
+                except:
+                    pass 
+
+            # --- CALCULATE YAW ---
+            # Since the 'Angles' folder is missing, we derive Heading from Velocity.
+            # This is mathematically accurate as long as the car is moving (> 0.1 m/s).
+            yaw = 0.0
+            
+            if (vx*vx + vy*vy) > 0.01:
+                yaw = math.atan2(vy, vx)
+            elif hasattr(obj, 'dspaceActor'):
+                # If stopped, keep the last known heading so we don't snap to 0
+                yaw = obj.dspaceActor.heading
+
+            # --- UPDATE ACTOR ---
+            obj.dspaceActor.position = Vector(x, y, z)
+            obj.dspaceActor.heading = yaw
+            obj.dspaceActor.linvel = Vector(vx, vy, 0)
+            
             return True
-        except Exception:
-            return False
+
     except Exception as e:
-        print(f"[readback:ego] Error: {e}")
-        return False
+        if not hasattr(obj, '_readback_error_shown'):
+            print(f"[readback:physics] Failed to read ego state: {e}")
+            obj._readback_error_shown = True
+        pass
+
+    return False
 
 
 def read_fellow_state(sim, obj, dutils):

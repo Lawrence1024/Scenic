@@ -2,27 +2,20 @@ param map = localPath('../../assets/maps/dSPACE/LagunaSeca.xodr')
 param use2DMap = True
 param trackDirection = 'counterclockwise'
 
-# TTL (Target Trajectory Line) Configuration
-param ttlIndex = 17
-param ttlDX = -53.6
-param ttlDY = -15.7
-param ttlFolder = localPath('../../assets/ttls/LS_ENU_TTL_CSV/usable')
-param timestep = 2
-
-# Load the dSPACE World Model
 model scenic.simulators.dspace.model
 
-# Create the Ego Car
-ego = new RacingCar on mainRacingRoad
+param test_waypoints = [
+    (587, -260), (575, -257), (563, -244), (558, -219),
+    (556, -202), (556, -172), (558, -149), (556, -118), 
+    (549, -89), (533, -62)
+]
 
-fellow = new RacingCar on mainRacingRoad
+ego = new RacingCar at 601.772 @ -258.196,
+    with heading 1.296,
+    with waypoints globalParameters.test_waypoints,
+    with behavior FollowRacingLineBehavior(target_speed=10, lookahead=20)
 
-# Assign the Behavior
-# Use the driving-domain lane-following behavior. When a TTL is attached by the
-# dSPACE simulator, FollowLaneBehavior will use the TTL's signedDistanceTo for
-# lateral control; otherwise it follows the lane centerline.
-# ego.behavior = FollowLaneBehavior(target_speed=30)
-ego.behavior = FollowRacingLineBehavior()
+fellow = new RacingCar at 612 @ -268,
+    with heading 1.296
 
-# End Condition
-terminate when simulation().currentTime > 30
+terminate when simulation().currentTime > 100

@@ -113,13 +113,25 @@ class ControlDeskApp:
         a paused state where it can be advanced step-by-step.
         """
         try:
+            print("[ControlDesk] Getting PlatformManagement...")
             platforms = self.app.PlatformManagement.Platforms
+            print(f"[ControlDesk] Found {platforms.Count} platform(s)")
+            
+            print("[ControlDesk] Getting platform 0...")
             platform = platforms.Item(0)
+            print(f"[ControlDesk] Platform: {platform.Name if hasattr(platform, 'Name') else 'Unknown'}")
+            
+            print("[ControlDesk] Getting RealTimeApplications...")
             rta = platform.RealTimeApplications.Item(0)
+            print(f"[ControlDesk] RealTimeApplication found")
+            
+            print("[ControlDesk] Calling rta.Pause()...")
             rta.Pause()
-            print("[ControlDesk] Simulation paused for step-by-step control")
+            print("[ControlDesk] ✅ Simulation paused for step-by-step control")
         except Exception as e:
-            print(f"[ControlDesk] Error pausing simulation: {e}")
+            print(f"[ControlDesk] ❌ Error pausing simulation: {e}")
+            import traceback
+            traceback.print_exc()
 
     def advance_simulation_step(self):
         """Advance the dSPACE simulation by one timestep.
@@ -133,7 +145,9 @@ class ControlDeskApp:
             rta = platform.RealTimeApplications.Item(0)
             rta.SingleStep()
         except Exception as e:
-            print(f"[ControlDesk] Error advancing simulation step: {e}")
+            print(f"[ControlDesk] ❌ Error advancing simulation step: {e}")
+            import traceback
+            traceback.print_exc()
             raise
 
     def initialize_vesi_interface(self):

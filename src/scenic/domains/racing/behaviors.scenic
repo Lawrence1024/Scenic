@@ -18,34 +18,38 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
     The Simulator (simulator.py) automatically scales these to dSPACE VesiInterface units.
     """
     
-    # --- 1. SETUP & DEFAULTS ---
+    # SETUP & DEFAULTS
     if not hasattr(self, 'ttl') or self.ttl is None:
         take SetTTLAction(track.racingLine if hasattr(track, 'racingLine') and track.racingLine else mainRacingRoad)
     take SetMaxSpeedAction(target_speed)
     
+    throttle_limit = 1.0
+
+    if self is simulation().scene.egoObject:   
+        throttle_limit = 0.1
+
     # Get Controllers (Standard Scenic PIDs return -1.0 to 1.0)
     _lon_controller, _lat_controller = simulation().getRacingControllers(self)
     
     # Gear thresholds (m/s)
     gear_up_thresholds = [0.0, 12.0, 22.0, 32.0, 42.0, 52.0]
     gear_down_thresholds = [0.0, 9.0, 18.0, 28.0, 38.0, 48.0]
-    
+
     wp_last_idx = 0
 
     while True:
+        # Calculate Control Signals (Standard Logic)
         current_speed = (self.speed if self.speed is not None else 0)
         
-        # --- 2. CTE CALCULATION (Waypoints Priority) ---
+        # --- CTE & Waypoints ---
         cte = None
         wp_list = (self.waypoints if hasattr(self, 'waypoints') else None)
-
-
         
-        # If Waypoints exist (Step 2 Requirement), use lookahead logic
+        # If waypoints exist, use lookahead logic
         if use_waypoints and wp_list and len(wp_list) >= 2:
             px = float(self.position.x); py = float(self.position.y)
             
-            # A. Find nearest waypoint index (Windowed search for efficiency)
+            # A. Find nearest waypoint index
             nearest_idx = 0
             best_d2 = 1e18
             start_search = max(0, wp_last_idx - 25)
@@ -94,50 +98,82 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
             if not found_target:
                 cte = 0.0
 
-        # Fallback: Use TTL Geometry (Step 3 Requirement)
+        # Fallback: Use TTL Geometry if waypoints didn't provide CTE
         if cte is None:
             line = (self.ttl if hasattr(self, 'ttl') and self.ttl is not None else mainRacingRoad)
             if hasattr(line, 'signedDistanceTo'):
                 cte = line.signedDistanceTo(self.position)
             else:
-                 cte = 0.0
+                cte = 0.0
 
-        # --- 3. PID EXECUTION ---
+        # --- PID Calculation ---
         speed_error = min(self.maxSpeed if hasattr(self, 'maxSpeed') else 200, target_speed) - current_speed
-        
-        # Raw PID outputs (-1.0 to 1.0)
         throttle_pid = _lon_controller.run_step(speed_error)
-        steer_pid = _lat_controller.run_step(cte)
-
-        # --- 4. SIGNAL CONVERSION (NORMALIZED) ---
-        # Note: Do NOT scale to 100 or 70 here. actions.py checks for [-1, 1].
-        # simulator.py will handle the scaling to hardware units.
         
-        # Steer: [-1, 1]
-        final_steer = max(-1.0, min(1.0, steer_pid))
+        # CRITICAL: The steering PID should use NEGATIVE CTE
+        # If CTE > 0 (too far left), we want negative steering (steer right)
+        # If CTE < 0 (too far right), we want positive steering (steer left)
+        steer_pid = _lat_controller.run_step(-cte)  # Note the negative sign!
 
-        # Throttle/Brake Split [0, 1]
+        # --- Normalization ---
+        final_steer = max(-1.0, min(1.0, steer_pid))
         final_throttle = 0.0
         final_brake = 0.0
-
+        
+        # Use the throttle_limit set during initialization (respects user's setting)
         if throttle_pid >= 0:
-            final_throttle = max(0.0, min(1.0, throttle_pid))
+            final_throttle = max(0.0, min(throttle_limit, throttle_pid))
         else:
             final_brake = max(0.0, min(1.0, abs(throttle_pid)))
 
-        # --- 5. GEAR MANAGEMENT ---
+        # Store CTE in a separate attribute (NOT _control_state which is managed by actions)
+        self._current_cte = cte
+        
+        # Build Action List 
+        actions_to_take = [
+            SetSteerAction(final_steer), 
+            SetThrottleAction(final_throttle), 
+            SetBrakeAction(final_brake)
+        ]
+
+        # Gear Logic
         if manage_gears and hasattr(self, 'setGear'):
-            current_gear = getattr(self, 'gear', 1) or 1
-            if current_speed is not None:
+            # Default to 0 (Neutral) if unknown, NOT 1
+            current_gear = getattr(self, 'gear', 0) 
+            
+            # Case A: Start from Neutral
+            if current_gear < 1:
+                actions_to_take.append(SetGearAction(1))
+                self.gear = 1
+            
+            # Case B: Shifting while moving
+            elif current_speed is not None:
                 if current_gear < 6 and current_speed > gear_up_thresholds[min(current_gear, 5)]:
-                    take SetGearAction(current_gear + 1)
+                    actions_to_take.append(SetGearAction(current_gear + 1))
                     self.gear = current_gear + 1
-                elif current_gear > 1 and current_speed < gear_down_thresholds[min(current_gear - 1, 4)]:
-                    take SetGearAction(current_gear - 1)
+                elif current_gear > 1 and current_speed < gear_down_thresholds[min(current_gear - 1, 5)]: # Fixed index
+                    actions_to_take.append(SetGearAction(current_gear - 1))
                     self.gear = current_gear - 1
 
-        # --- 6. EXECUTE ---
-        take SetSteerAction(final_steer), SetThrottleAction(final_throttle), SetBrakeAction(final_brake)
+        # Debug Print
+        if hasattr(self, '_behavior_step_count'):
+            self._behavior_step_count += 1
+        else:
+            self._behavior_step_count = 0
+        
+        # Print every step (not just every 50) so we can debug the TTL following
+        gear_val = getattr(self, 'gear', 0)
+        print(f"\n[FollowRacingLine] Step {self._behavior_step_count}:")
+        print(f"  Position: ({self.position.x:.2f}, {self.position.y:.2f})")
+        print(f"  Speed: {current_speed:.2f} m/s")
+        print(f"  CTE (Cross-Track Error): {cte:.3f} m {'(LEFT of path)' if cte > 0 else '(RIGHT of path)'}")
+        print(f"  PID inputs: speed_error={speed_error:.2f}, cte_input={-cte:.3f}")
+        print(f"  PID outputs: throttle_pid={throttle_pid:.3f}, steer_pid={steer_pid:.3f}")
+        print(f"  Final controls: throttle={final_throttle:.3f}, brake={final_brake:.3f}, steer={final_steer:.3f} {'(LEFT)' if final_steer > 0 else '(RIGHT)'}, gear={gear_val}")
+        print(f"  → If CTE is positive (left), steering should be negative (right) to correct")
+
+        # Execute all actions together
+        take actions_to_take
 
 behavior PitStopBehavior(manage_gears=True):
     """Execute a pit stop using racing-specific systems.
