@@ -73,12 +73,7 @@ class VehiclePhysicsState:
             - All outputs are clamped to physical limits
         """
         # 1. Longitudinal dynamics (velocity)
-        if brake > 0.01:
-            # Braking takes priority over throttle
-            acceleration = -brake * self.max_deceleration
-        else:
-            # Apply throttle
-            acceleration = throttle * self.max_acceleration
+        acceleration = throttle * self.max_acceleration - brake * self.max_deceleration
         
         # Integrate velocity using Euler method
         self.velocity += acceleration * dt

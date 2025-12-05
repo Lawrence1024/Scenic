@@ -32,44 +32,6 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
     
     wp_last_idx = 0
 
-    def distance_to_ttl(fellow_x, fellow_y, ttl):
-        steer_sign = 0.0
-        closest_seg_distance = float('inf')
-
-        for i in range(len(ttl) - 1):
-            # defining ttl segment
-            x1, y1 = ttl[i]
-            x2, y2 = ttl[i + 1]
-
-            # segment vectors
-            dx, dy = x2-x1, y2-y1
-            seg_len_sq = dx**2 + dy**2
-            if seg_len_sq < 1e-6:
-                continue
-            
-            # fellow position, vectors, and projection
-            fellow_ttl_dx, fellow_ttl_dy = fellow_x - x1, fellow_y - y1
-            proj_fellow_ttl_seg_len = (fellow_ttl_dx*dx + fellow_ttl_dy*dy) / seg_len_sq
-            proj_fellow_ttl_seg_len = max(0.0, min(1.0, proj_fellow_ttl_seg_len))
-            
-            # closest point on segment
-            closest_x = x1 + proj_fellow_ttl_seg_len * dx
-            closest_y = y1 + proj_fellow_ttl_seg_len * dy
-
-            # perpendicular distance from fellow to TTL segment closes point
-            perp_dx = fellow_ttl_dx - closest_x
-            perp_dy = fellow_ttl_dy - closest_y
-            dist = (perp_dx**2 + perp_dy**2)**0.5
-
-            cross_prod = dx*perp_dy - dy*perp_dx
-            signed = dist if cross_prod > 0.0 else -dist
-
-            if abs(dist) < closest_seg_distance:
-                closest_seg_distance = abs(dist)
-                steer_sign = signed
-
-        return steer_sign
-    
     while True:
         current_speed = (self.speed if self.speed is not None else 0)
         
@@ -77,37 +39,6 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
         cte = None
         wp_list = (self.waypoints if hasattr(self, 'waypoints') else None)
 
-                
-        if hasattr(self, 'isFellow') and self.isFellow:
-            act_pos_x = float(actor.position.x)
-            act_pos_y = float(actor.position.y)
-
-            ttl = getattr(obj, 'ttl', None)
-            if ttl and len(ttl) >= 2:
-                cte = distance_to_ttl(act_pos_x, act_pos_y, ttl)
-
-                # ttl distance adjustment
-                steer = -0.40 * float(cte)
-                steer = max(-1.0, min(1.0, steer))
-
-                TARGET_SPEED = getattr(self, 'maxSpeed', 30.0)
-                err = TARGET_SPEED - speed
-
-                if err > 1.0:
-                    throttle = min(err * 0.05, 1.0)
-                    brake = 0.0
-                elif err < -1.0:
-                    throttle = 0.0
-                    brake = min(-err * 0.05, 1.0)
-                else:
-                    throttle = 1.0
-                    brake = 0.0
-                
-                take RegulatedControlAction(throttle, steer, past_steer_angle)
-                past_steer_angle = angle
-
-                wait
-                continue
 
         
         # If Waypoints exist (Step 2 Requirement), use lookahead logic

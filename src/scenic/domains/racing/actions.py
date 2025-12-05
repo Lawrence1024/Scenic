@@ -197,7 +197,6 @@ class RacingAction(Action):
                 hasattr(agent, 'setTargetGap') and
                 hasattr(agent, 'setStrategy'))
 
-
 class SetSpeedLimitAction(RacingAction):
     """Set speed limit based on speed type (decision tree action).
     
