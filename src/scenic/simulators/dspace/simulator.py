@@ -211,8 +211,7 @@ class DSpaceSimulation(RacingSimulation):
             print("[Setup] Simulation paused successfully")
             # Immediately try to warm-up fellow arrays so first read/write won't warn
             print("[Setup] Initializing fellow arrays...")
-            self._ensureFellowArraysInitialized()
-            print("[Setup] Fellow arrays initialized")
+            ensure_fellow_arrays_initialized(self)
         else:
             print("[Setup] Could not pause simulation")
         

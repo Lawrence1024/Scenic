@@ -129,7 +129,8 @@ class VehicleController:
             return
         
         # Ensure fellow arrays are initialized before attempting to write
-        self.simulation._ensureFellowArraysInitialized()
+        from ..controldesk.arrays import ensure_fellow_arrays_initialized
+        ensure_fellow_arrays_initialized(self.simulation)
         
         # Get fellow index
         fellow_index = self.get_fellow_index(obj)

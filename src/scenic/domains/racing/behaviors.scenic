@@ -37,6 +37,13 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
 
     wp_last_idx = 0
 
+    # CRITICAL: Wait for simulation to initialize and position to be available
+    # This ensures arrays are ready for fellows before behavior tries to read position
+    wait
+    # Additional wait to ensure position is actually readable
+    while not hasattr(self, 'position') or self.position is None:
+        wait
+
     while True:
         # Calculate Control Signals (Standard Logic)
         current_speed = (self.speed if self.speed is not None else 0)
@@ -47,6 +54,10 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
         
         # If waypoints exist, use lookahead logic
         if use_waypoints and wp_list and len(wp_list) >= 2:
+            # Ensure position is available before accessing
+            if not hasattr(self, 'position') or self.position is None:
+                wait
+                continue
             px = float(self.position.x); py = float(self.position.y)
             
             # A. Find nearest waypoint index

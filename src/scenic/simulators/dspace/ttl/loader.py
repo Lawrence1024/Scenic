@@ -97,9 +97,12 @@ def attach_ttl(sim, obj, vehicle_type="vehicle"):
             setattr(obj, "ttl", region)
             name = ttl_file if ttl_file else f"ttl_{ttl_index}.csv"
             print(f"[TTL] Assigned TTL PolylineRegion to {vehicle_type} ({name})")
-            if pts:
+            # Only set waypoints if they weren't already set manually (e.g., via "with waypoints")
+            if pts and not hasattr(obj, "waypoints"):
                 setattr(obj, "waypoints", list(pts))
                 print(f"[TTL] Attached {len(pts)} TTL waypoints to {vehicle_type}")
+            elif hasattr(obj, "waypoints") and obj.waypoints:
+                print(f"[TTL] Preserving existing {len(obj.waypoints)} waypoints for {vehicle_type} (not overwriting with TTL CSV)")
     except Exception as e:
         print(f"[TTL] Could not assign TTL to {vehicle_type}: {e}")
 

@@ -16,5 +16,8 @@ ego = new RacingCar on mainRacingRoad, with raceNumber 1
 # Follow the TTL using the racing line behavior
 ego.behavior = FollowRacingLineBehavior(target_speed=30)
 fellow1 = new RacingCar on road
+fellow1.raceNumber = 2
+fellow2 = new RacingCar on road
+fellow2.raceNumber = 3
 
 

@@ -78,7 +78,16 @@ def read_fellow_state(sim, obj, dutils):
     """Read fellow vehicle state from ControlDesk arrays into obj.dspaceActor."""
     if not sim._cd:
         return False
-    sim._ensureFellowArraysInitialized()
+    
+    # Ensure arrays are initialized (warm-up should have completed during setup)
+    from .arrays import ensure_fellow_arrays_initialized
+    ensure_fellow_arrays_initialized(sim)
+    
+    # If arrays still not ready, this is a real problem - warm-up should have fixed this
+    if not sim._fellow_arrays_initialized:
+        print(f"[readback:fellow] WARNING: Arrays not initialized - warm-up may have failed")
+        return False
+    
     try:
         fellow_index = sim._getFellowIndex(obj)
         if fellow_index is None:
