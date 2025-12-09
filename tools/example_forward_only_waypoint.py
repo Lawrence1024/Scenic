@@ -15,29 +15,37 @@ tools_path = Path(__file__).parent
 sys.path.insert(0, str(tools_path))
 
 from get_map_bounds import find_forward_waypoint, find_best_racing_waypoint
+from laguna_seca_bounds import waypoints as laguna_seca_waypoints
 
 
 def demonstrate_forward_only():
     """Demonstrate forward-only waypoint finding."""
     
-    # Example waypoints (racing line)
-    waypoints = [
-        (100.0, 200.0),   # 0
-        (105.0, 205.0),   # 1
-        (110.0, 210.0),   # 2
-        (115.0, 215.0),   # 3
-        (120.0, 220.0),   # 4
-        (125.0, 225.0),   # 5
-        (130.0, 230.0),   # 6
-        (135.0, 235.0),   # 7
-        (140.0, 240.0),   # 8
-        (145.0, 245.0),   # 9
-    ]
+    # Use real Laguna Seca waypoints
+    waypoints = laguna_seca_waypoints
+    print(f"[INFO] Using {len(waypoints)} real Laguna Seca waypoints")
     
     # Scenario: Car went off track
-    car_position = (150.0, 250.0)  # Car is off to the side
-    car_heading = math.pi / 4  # 45 degrees (northeast)
-    last_known_index = 3  # Car was near waypoint 3 when it went off
+    # Use a position near the middle of the track
+    # Pick a waypoint index around 1000 (roughly 1/3 through the track)
+    last_known_index = 1000
+    if last_known_index < len(waypoints):
+        # Car position is slightly off to the side of the waypoint
+        base_wp = waypoints[last_known_index]
+        car_position = (base_wp[0] + 5.0, base_wp[1] + 5.0)  # 5m offset
+        # Calculate heading towards next waypoint
+        if last_known_index + 1 < len(waypoints):
+            next_wp = waypoints[last_known_index + 1]
+            dx = next_wp[0] - base_wp[0]
+            dy = next_wp[1] - base_wp[1]
+            car_heading = math.atan2(dy, dx)
+        else:
+            car_heading = math.pi / 4  # Default 45 degrees
+    else:
+        # Fallback if index is out of range
+        car_position = (100.0, 200.0)
+        car_heading = math.pi / 4
+        last_known_index = 0
     
     print("=" * 70)
     print("FORWARD-ONLY WAYPOINT FINDING (NO BACKTRACKING)")
