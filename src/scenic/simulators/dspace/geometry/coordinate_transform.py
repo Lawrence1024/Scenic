@@ -223,6 +223,47 @@ def apply_coordinate_transform(transform: dict, pos: Tuple[float, float]) -> Tup
         return pos
 
 
+def apply_inverse_coordinate_transform(transform: dict, pos: Tuple[float, float]) -> Tuple[float, float]:
+    """Apply inverse coordinate transformation to convert RD coords back to XODR coords.
+    
+    This is the inverse of apply_coordinate_transform(). It converts from RD coordinates
+    (as returned by dSPACE/ControlDesk) back to Scenic/XODR coordinates.
+    
+    Args:
+        transform: Transform dictionary from build_coordinate_transform()
+        pos: (x, y) in RD coordinate system (from dSPACE/ControlDesk)
+        
+    Returns:
+        (x', y') in XODR coordinate system (for Scenic)
+    """
+    x, y = pos
+    
+    if transform['type'] == 'translation':
+        # Inverse of translation: subtract the offset
+        dx, dy = transform['offset']
+        return (x - dx, y - dy)
+    
+    elif transform['type'] == 'affine':
+        # Inverse of affine transformation: A^-1 * (pos - b)
+        A = np.array(transform['matrix'])
+        b = np.array(transform['offset'])
+        pos_vec = np.array([x, y])
+        
+        # Compute inverse matrix
+        try:
+            A_inv = np.linalg.inv(A)
+            result = A_inv @ (pos_vec - b)
+            return tuple(result)
+        except np.linalg.LinAlgError:
+            # If matrix is singular, fall back to identity
+            print(f"[coordinate_transform] Warning: Affine matrix is singular, cannot invert. Returning original position.")
+            return pos
+    
+    else:
+        # Unknown transform type
+        return pos
+
+
 def save_transform(transform: dict, output_path: str):
     """Save transformation to JSON file for reuse."""
     import json

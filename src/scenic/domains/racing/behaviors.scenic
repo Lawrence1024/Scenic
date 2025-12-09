@@ -25,8 +25,14 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
     
     throttle_limit = 1.0
 
-    if self is simulation().scene.egoObject:   
+    # Ego: keep a conservative base throttle, we may lower further on large CTE
+    if self is simulation().scene.egoObject:
         throttle_limit = 0.1
+
+    # Steering slew-rate and CTE safety thresholds
+    max_steer_delta = 0.2          # per step (normalized units)
+    cte_slowdown_threshold = 15.0  # m: start slowing down
+    cte_stop_threshold = 50.0      # m: full brake to avoid runaway
 
     # Get Controllers (Standard Scenic PIDs return -1.0 to 1.0)
     _lon_controller, _lat_controller = simulation().getRacingControllers(self)
@@ -43,6 +49,26 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
     # Additional wait to ensure position is actually readable
     while not hasattr(self, 'position') or self.position is None:
         wait
+    
+    # Initialize waypoint index based on starting position (helps with waypoint following)
+    wp_list_init = (self.waypoints if hasattr(self, 'waypoints') else None)
+    if use_waypoints and wp_list_init and len(wp_list_init) >= 2:
+        try:
+            px = float(self.position.x); py = float(self.position.y)
+            # Find nearest waypoint from starting position (full search on first iteration)
+            nearest_idx = 0
+            best_d2 = 1e18
+            for i in range(len(wp_list_init)):
+                wx, wy = float(wp_list_init[i][0]), float(wp_list_init[i][1])
+                dx = px - wx; dy = py - wy
+                d2 = dx*dx + dy*dy
+                if d2 < best_d2:
+                    best_d2 = d2; nearest_idx = i
+            wp_last_idx = nearest_idx
+            print(f"[FollowRacingLineBehavior] Initialized: starting at ({px:.2f}, {py:.2f}), nearest waypoint index={nearest_idx} ({wp_list_init[nearest_idx]})")
+        except Exception as e:
+            print(f"[FollowRacingLineBehavior] Warning: Could not initialize waypoint index: {e}, starting from index 0")
+            wp_last_idx = 0
 
     while True:
         # Calculate Control Signals (Standard Logic)
@@ -60,7 +86,15 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
                 continue
             px = float(self.position.x); py = float(self.position.y)
             
-            # A. Find nearest waypoint index
+            # DEBUG: Log position being used for CTE calculation
+            if not hasattr(self, '_cte_debug_count'):
+                self._cte_debug_count = 0
+            self._cte_debug_count += 1
+            if self._cte_debug_count <= 5:
+                print(f"[FollowRacingLineBehavior] Step {self._cte_debug_count}: Using position ({px:.2f}, {py:.2f}) for CTE calculation")
+                print(f"  First waypoint: ({wp_list[0][0]}, {wp_list[0][1]}), distance = {((px-wp_list[0][0])**2 + (py-wp_list[0][1])**2)**0.5:.2f} m")
+            
+            # A. Find nearest waypoint index (use optimized search with window around last known index)
             nearest_idx = 0
             best_d2 = 1e18
             start_search = max(0, wp_last_idx - 25)
@@ -72,6 +106,17 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
                 d2 = dx*dx + dy*dy
                 if d2 < best_d2:
                     best_d2 = d2; nearest_idx = i
+            
+            # If not found in window, do full search (handles case where car jumped ahead/behind)
+            if wp_last_idx == 0 or best_d2 > 100.0:  # Large threshold if we're far from expected area
+                best_d2 = 1e18
+                for i in range(len(wp_list)):
+                    wx, wy = float(wp_list[i][0]), float(wp_list[i][1])
+                    dx = px - wx; dy = py - wy
+                    d2 = dx*dx + dy*dy
+                    if d2 < best_d2:
+                        best_d2 = d2; nearest_idx = i
+            
             wp_last_idx = nearest_idx
             
             # B. Find Target Point (Lookahead)
@@ -79,6 +124,7 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
             rem = Ld
             j = nearest_idx
             found_target = False
+            last_visited_seg_idx = nearest_idx  # Track the last segment we processed
             
             # Walk forward along polyline
             while rem > 0.0 and j < len(wp_list) - 1:
@@ -89,6 +135,8 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
                 
                 if seg_len <= 1e-6:
                     j += 1; continue
+                
+                last_visited_seg_idx = j  # Track this segment
                 
                 if rem <= seg_len:
                     u = rem / seg_len
@@ -105,8 +153,27 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
                     rem -= seg_len
                     j += 1
             
-            # C. End of track handling
-            if not found_target:
+            # C. End of path handling - if lookahead extends beyond available segments
+            # Use the last segment we visited (from current position forward), not the absolute last segment
+            if not found_target and len(wp_list) >= 2 and last_visited_seg_idx < len(wp_list) - 1:
+                # Use the last segment we actually traversed (from current position)
+                # This handles cases where lookahead extends beyond the path
+                seg_idx = last_visited_seg_idx
+                x0, y0 = float(wp_list[seg_idx][0]), float(wp_list[seg_idx][1])
+                x1, y1 = float(wp_list[seg_idx+1][0]), float(wp_list[seg_idx+1][1])
+                seg_dx = x1 - x0; seg_dy = y1 - y0
+                seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                if seg_len > 1e-6:
+                    # Project vehicle position onto this segment for CTE
+                    wx = px - x0; wy = py - y0
+                    u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
+                    u_proj = max(0.0, min(1.0, u_proj))
+                    qx = x0 + u_proj * seg_dx; qy = y0 + u_proj * seg_dy
+                    nx = -seg_dy / seg_len; ny = seg_dx / seg_len
+                    cte = (px - qx)*nx + (py - qy)*ny
+                else:
+                    cte = 0.0
+            elif not found_target:
                 cte = 0.0
 
         # Fallback: Use TTL Geometry if waypoints didn't provide CTE
@@ -120,22 +187,44 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
         # --- PID Calculation ---
         speed_error = min(self.maxSpeed if hasattr(self, 'maxSpeed') else 200, target_speed) - current_speed
         throttle_pid = _lon_controller.run_step(speed_error)
-        
+
         # CRITICAL: The steering PID should use NEGATIVE CTE
         # If CTE > 0 (too far left), we want negative steering (steer right)
         # If CTE < 0 (too far right), we want positive steering (steer left)
         steer_pid = _lat_controller.run_step(-cte)  # Note the negative sign!
 
-        # --- Normalization ---
-        final_steer = max(-1.0, min(1.0, steer_pid))
-        final_throttle = 0.0
+        # --- CTE-aware safety envelope ---
+        cte_mag = abs(cte)
+        local_throttle_limit = throttle_limit
         final_brake = 0.0
-        
-        # Use the throttle_limit set during initialization (respects user's setting)
+
+        if cte_mag >= cte_stop_threshold:
+            # Way off track: stop and point back toward path gently
+            local_throttle_limit = 0.0
+            final_brake = 1.0
+            steer_pid = -0.5 if cte > 0 else 0.5  # steer toward path without saturation
+        elif cte_mag >= cte_slowdown_threshold:
+            # Far from path: reduce throttle aggressively, allow some brake
+            local_throttle_limit = min(local_throttle_limit, 0.3)
+            final_brake = min(1.0, (cte_mag - cte_slowdown_threshold) / (cte_stop_threshold - cte_slowdown_threshold))
+
+        # --- Normalization & slew limiting ---
+        final_steer = max(-1.0, min(1.0, steer_pid))
+        # Apply simple slew-rate limiter to avoid oscillations
+        if not hasattr(self, '_last_final_steer'):
+            self._last_final_steer = final_steer
+        steer_delta = final_steer - self._last_final_steer
+        if steer_delta > max_steer_delta:
+            final_steer = self._last_final_steer + max_steer_delta
+        elif steer_delta < -max_steer_delta:
+            final_steer = self._last_final_steer - max_steer_delta
+        self._last_final_steer = final_steer
+
+        final_throttle = 0.0
         if throttle_pid >= 0:
-            final_throttle = max(0.0, min(throttle_limit, throttle_pid))
+            final_throttle = max(0.0, min(local_throttle_limit, throttle_pid))
         else:
-            final_brake = max(0.0, min(1.0, abs(throttle_pid)))
+            final_brake = max(final_brake, min(1.0, abs(throttle_pid)))
 
         # Store CTE in a separate attribute (NOT _control_state which is managed by actions)
         self._current_cte = cte

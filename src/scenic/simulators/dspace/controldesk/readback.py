@@ -6,72 +6,60 @@ def read_ego_state(sim, obj):
     if not sim._cd:
         return False
     
-    base_physics = "Platform()://ASM_Traffic/Model Root/VehicleDynamics/Plant/VehicleDynamics/VehicleMovement/ASMSignalCollector/Vehicle_Movement_Info_Car"
+    base_path = "Platform()://ASM_Traffic/Model Root/VehicleDynamics/Plant/UserInterface/DISP_Plant"
     
-    # 1. POSITION [x, y, z]
-    # 'Out1' of the integrator is the calculated position for the next step.
-    # Note: The '\n' is required because the block name in Simulink has a line break.
-    path_pos_vec = f"{base_physics}/Positions/Discrete-Time\nIntegrator/Out1"
+    # 1. Position (x, y, z)
+    path_x = f"{base_path}/Positions/Pos_x_Vehicle_CoorSys_E[m]/Out1"
+    path_y = f"{base_path}/Positions/Pos_y_Vehicle_CoorSys_E[m]/Out1"
+    path_z = f"{base_path}/Positions/Pos_z_Vehicle_CoorSys_E[m]/Out1"
     
-    # 2. VELOCITY [vx, vy, vz]
-    # We try the Integrator first, then VectorLabel if that fails.
-    path_vel_int = f"{base_physics}/Velocities/Discrete-Time\nIntegrator/Out1"
-    path_vel_lbl = f"{base_physics}/Velocities/VectorLabel/out"
+    # 2. Orientation (yaw)
+    path_yaw = f"{base_path}/Positions/Angle_Yaw_Vehicle_CoorSys_E[deg]/Out1"
+
+    # 3. Velocity [vx, vy, vz]
+    path_vx = f"{base_path}/Velocities/v_x_Vehicle_CoG[km|h]/Out1"
+    path_vy = f"{base_path}/Velocities/v_y_Vehicle_CoG[km|h]/Out1"
 
     try:
-        # --- READ POSITION ---
-        pos_arr = sim._cd.get_var(path_pos_vec)
+        # 1. Read Position
+        x = float(sim._cd.get_var(path_x))
+        y = float(sim._cd.get_var(path_y))
+        z = float(sim._cd.get_var(path_z))
         
-        if pos_arr and len(pos_arr) >= 2:
-            x = float(pos_arr[0])
-            y = float(pos_arr[1])
-            z = float(pos_arr[2]) if len(pos_arr) > 2 else 0.0
-            
-            # --- READ VELOCITY ---
-            vx = 0.0
-            vy = 0.0
-            
-            # Try Integrator path (Standard physics)
-            try:
-                vel_arr = sim._cd.get_var(path_vel_int)
-                if vel_arr and len(vel_arr) >= 2:
-                    vx = float(vel_arr[0])
-                    vy = float(vel_arr[1])
-            except:
-                # Try VectorLabel path (Passthrough signal)
-                try:
-                    vel_arr = sim._cd.get_var(path_vel_lbl)
-                    if vel_arr and len(vel_arr) >= 2:
-                        vx = float(vel_arr[0])
-                        vy = float(vel_arr[1])
-                except:
-                    pass 
-
-            # --- CALCULATE YAW ---
-            # Since the 'Angles' folder is missing, we derive Heading from Velocity.
-            # This is mathematically accurate as long as the car is moving (> 0.1 m/s).
-            yaw = 0.0
-            
-            if (vx*vx + vy*vy) > 0.01:
-                yaw = math.atan2(vy, vx)
-            elif hasattr(obj, 'dspaceActor'):
-                # If stopped, keep the last known heading so we don't snap to 0
-                yaw = obj.dspaceActor.heading
-
-            # --- UPDATE ACTOR ---
-            obj.dspaceActor.position = Vector(x, y, z)
-            obj.dspaceActor.heading = yaw
-            obj.dspaceActor.linvel = Vector(vx, vy, 0)
-            
-            return True
+        # CRITICAL: Transform position from RD/dSPACE coordinates back to Scenic/XODR coordinates
+        # Position read from ControlDesk is in RD coordinate system, but Scenic expects XODR coordinates
+        if sim._coordinate_transform is not None:
+            from ..geometry.coordinate_transform import apply_inverse_coordinate_transform
+            rd_x, rd_y = float(x), float(y)
+            scenic_x, scenic_y = apply_inverse_coordinate_transform(sim._coordinate_transform, (rd_x, rd_y))
+            # Debug on first read
+            if not hasattr(obj, '_coord_transform_debug_shown'):
+                print(f"[readback:ego] Coordinate transform: RD ({rd_x:.2f}, {rd_y:.2f}) → Scenic ({scenic_x:.2f}, {scenic_y:.2f})")
+                obj._coord_transform_debug_shown = True
+            x, y = scenic_x, scenic_y
+        
+        # 2. Read Orientation
+        yaw_deg = float(sim._cd.get_var(path_yaw))
+        yaw_rad = yaw_deg * (math.pi / 180.0)
+        
+        # 3. Read Velocity
+        # Inputs are km/h, Scenic uses m/s
+        vx_kmh = float(sim._cd.get_var(path_vx))
+        vy_kmh = float(sim._cd.get_var(path_vy))
+        
+        vx_ms = vx_kmh / 3.6
+        vy_ms = vy_kmh / 3.6
+        
+        # 4. Update Actor
+        obj.dspaceActor.position = Vector(x, y, z)
+        obj.dspaceActor.heading = yaw_rad
+        obj.dspaceActor.linvel = Vector(vx_ms, vy_ms, 0)
+        
+        return True
 
     except Exception as e:
-        if not hasattr(obj, '_readback_error_shown'):
-            print(f"[readback:physics] Failed to read ego state: {e}")
-            obj._readback_error_shown = True
-        pass
-
-    return False
+        print(f"[readback:ego] Error reading UI paths: {e}")
+        return False
 
 
 def read_fellow_state(sim, obj, dutils):
@@ -130,8 +118,22 @@ def read_fellow_state(sim, obj, dutils):
             pass
         if hasattr(obj, '_array_bounds_warning_shown'):
             delattr(obj, '_array_bounds_warning_shown')
+        
+        # CRITICAL: Transform position from RD/dSPACE coordinates back to Scenic/XODR coordinates
+        # Position read from ControlDesk is in RD coordinate system, but Scenic expects XODR coordinates
+        if sim._coordinate_transform is not None:
+            from ..geometry.coordinate_transform import apply_inverse_coordinate_transform
+            rd_x, rd_y = float(x), float(y)
+            scenic_x, scenic_y = apply_inverse_coordinate_transform(sim._coordinate_transform, (rd_x, rd_y))
+            # Debug on first read
+            if not hasattr(obj, '_coord_transform_debug_shown'):
+                print(f"[readback:fellow] Coordinate transform: RD ({rd_x:.2f}, {rd_y:.2f}) → Scenic ({scenic_x:.2f}, {scenic_y:.2f})")
+                obj._coord_transform_debug_shown = True
+        else:
+            scenic_x, scenic_y = float(x), float(y)
+        
         import math
-        obj.dspaceActor.position = Vector(float(x), float(y), float(z))
+        obj.dspaceActor.position = Vector(scenic_x, scenic_y, float(z))
         obj.dspaceActor.heading = float(yaw_deg) * (math.pi / 180.0)
         yaw_rad = obj.dspaceActor.heading
         obj.dspaceActor.linvel = Vector(

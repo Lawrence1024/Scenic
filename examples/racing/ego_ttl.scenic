@@ -10,8 +10,16 @@ param test_waypoints = [
     (549, -89), (533, -62)
 ]
 
+# param test_waypoints = [
+#     (184, -823), (202, -826), (222, -825), (243, -823),
+#     (264, -820), (286, -816), (304, -813), (335, -808),
+#     (366, -801), (395, -796), (429, -789), (454, -785),
+#     (484, -780), (516, -775), (539, -764), (548, -753),
+#     (559, -733)    
+# ]
+
 ego = new RacingCar at 601.772 @ -258.196,
-    with heading 1.296,
+    with heading roadDirection,
     with waypoints globalParameters.test_waypoints,
     with behavior FollowRacingLineBehavior(target_speed=10, lookahead=20)
 

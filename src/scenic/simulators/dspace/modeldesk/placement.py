@@ -26,10 +26,10 @@ def place_ego(sim, obj):
         s_val, t_val = 0.0, 0.0
         print("  Warning: No position available, using default coordinates (s=0, t=0)")
 
-    # 2) Get velocity - always set to 0 for static scenarios
+    # 2) Get velocity
     base_v = 0.0
 
-    # 3) Access the ego maneuver (Maneuver is a collection, use Item(0))
+    # 3) Access the ego maneuver
     try:
         maneuver_collection = sim.ts.Maneuver
         if maneuver_collection.Count == 0:
@@ -38,6 +38,12 @@ def place_ego(sim, obj):
 
         ego_maneuver = maneuver_collection.Item(0)
         print(f"  Accessed ego maneuver: {ego_maneuver.Name if hasattr(ego_maneuver, 'Name') else 'Ego'}")
+
+        # Ensure Maneuver is enabled/active if such a property exists
+        try:
+            ego_maneuver.Enabled = True
+        except:
+            pass
 
         # Access sequences
         sequences = ego_maneuver.Sequences
@@ -48,32 +54,65 @@ def place_ego(sim, obj):
 
         # 4) Configure ego vehicle position and properties
         print(f"  Setting ego position: s={s_val:.1f}, t={t_val:.3f}, velocity={base_v:.1f}")
+        
+        # STRATEGY: Set StartPosition on Sequence AND Segments to force update
         seq.StartPosition = float(s_val)
         seq.InitialLongitudinalVelocity = float(base_v)
 
-        # Orientation conversion: dSPACE_orientation = scenic_heading - π/2
+        # Iterate through segments to ensure they don't override the start pos
+        for i in range(seq.Segments.Count):
+            seg = seq.Segments.Item(i)
+            # Some versions allow setting start S on segment 0 explicitly
+            if i == 0 and hasattr(seg, 'StartPosition'):
+                try:
+                    seg.StartPosition = float(s_val)
+                except:
+                    pass
+
+        # Orientation conversion
         if hasattr(obj, 'heading'):
             import math
             dspace_orientation = obj.heading - math.pi / 2
             seq.VehicleOrientation = dspace_orientation
-            print(f"  Set orientation: {math.degrees(dspace_orientation):.1f} degrees (from Scenic heading {math.degrees(obj.heading):.1f})")
+            print(f"  Set orientation: {math.degrees(dspace_orientation):.1f} degrees")
         else:
             seq.VehicleOrientation = 0.0
-            print(f"  Set orientation: 0.0 degrees (aligned with road)")
 
-        # Optional lateral position through segments if t != 0
-        if abs(t_val) > 0.1:
+        # Optional lateral position (Fix for 'Constant' error)
+        if abs(t_val) > 0.01: # Lower threshold to catch small offsets
             try:
                 segments = seq.Segments
                 if segments.Count > 0:
                     seg0 = segments.Item(0)
                     lat0 = seg0.Activity.LateralType
                     dutils.activate_type(lat0, "Deviation")
+                    
                     dep = getattr(lat0.ActiveElement, "DependencyType", None)
                     if dep is not None:
                         dutils.activate_type(dep, "Absolute")
-                    dutils.set_activity_constant(lat0, t_val)
-                    print(f"  Set lateral deviation: {t_val:.3f}m")
+                    
+                    # RETRY LOGIC for Lateral Property
+                    # Try 'Constant', then 'Value', then 'Offset'
+                    success_lat = False
+                    for prop_name in ['Constant', 'Value', 'Offset', 'LateralOffset']:
+                        try:
+                            # Try setting property directly on ActiveElement
+                            if hasattr(lat0.ActiveElement, prop_name):
+                                setattr(lat0.ActiveElement, prop_name, float(t_val))
+                                success_lat = True
+                                break
+                            # Try dutils helper
+                            dutils.set_activity_constant(lat0, t_val)
+                            success_lat = True
+                            break
+                        except:
+                            continue
+                    
+                    if success_lat:
+                        print(f"  Set lateral deviation: {t_val:.3f}m")
+                    else:
+                        print(f"  Warning: Could not find valid property to set lateral t={t_val}")
+
             except Exception as e:
                 print(f"  Warning: Could not set lateral position: {e}")
 
@@ -95,7 +134,7 @@ def place_ego(sim, obj):
 
 def place_fellow(sim, obj):
     """Create a Fellow vehicle (non-ego) using the Fellows API."""
-    # 1) Project Scenic (x,y) → (s,t). If no map, use zeros.
+    # 1) Project Scenic (x,y) → (s,t)
     if getattr(obj, "position", None) is not None:
         scenic_x, scenic_y = obj.position.x, obj.position.y
         if sim._coordinate_transform is not None:
@@ -121,10 +160,9 @@ def place_fellow(sim, obj):
         s_val, t_val = 0.0, 0.0
         print("Warning: No position available, using default coordinates (s=0, t=0)")
 
-    # 3) Create Fellow with one Sequence and two Segments
+    # 3) Create Fellow
     F = sim.ts.Fellows.Add()
 
-    # Set a unique name
     try:
         if getattr(obj, "name", None):
             F.Name = str(obj.name)
@@ -143,8 +181,7 @@ def place_fellow(sim, obj):
     # seg0 = ABSOLUTE pose: Position = s, Deviation(Absolute) = t
     dutils.configure_seg0_absolute_pose(segs, s=float(s_val), t=float(t_val))
 
-    # seg1 = Longitudinal Velocity (Extern), Lateral deviation (Extern); make segment endless
-    # Both are configured with SourceType='Extern' to enable external control via ControlDesk
+    # seg1 = Longitudinal Velocity (Extern), Lateral deviation (Extern)
     try:
         dutils.configure_seg1_motion(segs, v=0.0, t=0.0)
     except Exception as e:
@@ -154,21 +191,21 @@ def place_fellow(sim, obj):
     except Exception:
         pass
 
-    # Orientation (if supported)
+    # Orientation
     if hasattr(obj, 'heading'):
         try:
             import math
             dspace_orientation = obj.heading - math.pi / 2
             if hasattr(S1, 'VehicleOrientation'):
                 S1.VehicleOrientation = dspace_orientation
-                print(f"    Set orientation: {math.degrees(dspace_orientation):.1f} degrees (from Scenic heading {math.degrees(obj.heading):.1f})")
+                print(f"    Set orientation: {math.degrees(dspace_orientation):.1f} degrees")
         except Exception as e:
             print(f"    Note: Cannot set orientation for Fellow (not supported or error: {e})")
 
-    # Route via sequence.Route
+    # Route
     sim._set_fellow_route_via_sequence(S1, obj)
 
-    # Store fellow reference for dynamic control
+    # Store reference
     sim._fellow_vehicles[F.Name] = {
         'fellow_object': F,
         'sequence': S1,
@@ -178,5 +215,3 @@ def place_fellow(sim, obj):
     }
 
     return F
-
-
