@@ -48,7 +48,9 @@ class MPCConfig:
         
         # Safety thresholds
         self.admissible_position_error = config_dict.get('admissible_position_error', 5.0)
-        self.admissible_yaw_error_rad = config_dict.get('admissible_yaw_error_rad', 1.57)
+        # Reduced from 1.57 rad (90 deg) to 2.36 rad (135 deg) to allow MPC to run more often
+        # Large yaw errors are common when off-track, and MPC can handle them better than fallback
+        self.admissible_yaw_error_rad = config_dict.get('admissible_yaw_error_rad', 2.36)
         self.max_invalid_count = config_dict.get('max_invalid_count', 10)
         
         # Filter
@@ -86,8 +88,20 @@ def load_mpc_config(config_path: Optional[str] = None) -> MPCConfig:
         yaml.YAMLError: If YAML parsing fails
     """
     if config_path is None:
-        # Default to debug_mpc directory
-        default_path = Path(__file__).parent.parent.parent.parent.parent / 'debug_mpc' / 'vehicle_mpc.yaml'
+        # Find Scenic root by looking for debug_mpc directory
+        current = Path(__file__).resolve()
+        default_path = None
+        while current.parent != current:  # Stop at filesystem root
+            debug_mpc_dir = current / 'debug_mpc'
+            if debug_mpc_dir.exists() and debug_mpc_dir.is_dir():
+                default_path = debug_mpc_dir / 'vehicle_mpc.yaml'
+                break
+            current = current.parent
+        
+        # Fallback to relative path calculation if search failed
+        if default_path is None:
+            default_path = Path(__file__).parent.parent.parent.parent.parent.parent / 'debug_mpc' / 'vehicle_mpc.yaml'
+        
         config_path = str(default_path)
     
     config_path = Path(config_path)
@@ -98,8 +112,11 @@ def load_mpc_config(config_path: Optional[str] = None) -> MPCConfig:
         config_dict = yaml.safe_load(f)
     
     # Handle ROS-style parameter nesting (/**/ros__parameters)
+    # YAML parser may read '/**:' as '/**' (colon is special in YAML)
     if '/**:' in config_dict:
         config_dict = config_dict['/**:'].get('ros__parameters', config_dict)
+    elif '/**' in config_dict:
+        config_dict = config_dict['/**'].get('ros__parameters', config_dict)
     
     return MPCConfig(config_dict)
 

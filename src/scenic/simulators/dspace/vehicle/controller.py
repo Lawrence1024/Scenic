@@ -76,8 +76,10 @@ class VehicleController:
                 self.cd.set_var(KEY_BRAKE_REAR, brake_val)
             
             # Apply steering (-1 to 1 → -70 to +70 command range)
+            # NOTE: Positive steering = LEFT turn in ControlDesk (verified via joystick integration docs)
+            # The negative sign was causing steering to be inverted (steering LEFT when should steer RIGHT)
             if control and 'steering' in control and control['steering'] is not None:
-                steer_val = -float(max(-1.0, min(1.0, control['steering'])) * 70.0)
+                steer_val = float(max(-1.0, min(1.0, control['steering']))) * 70.0
                 self.cd.set_var(KEY_STEERING, steer_val)
             
             # Debug every 50 steps

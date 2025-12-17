@@ -207,7 +207,8 @@ class MPCLateralController:
     def run_step(self,
                  vehicle_state: Dict[str, float],
                  waypoints: List[Tuple[float, float]],
-                 current_waypoint_idx: Optional[int] = None) -> float:
+                 current_waypoint_idx: Optional[int] = None,
+                 cte_magnitude: Optional[float] = None) -> float:
         """Compute steering command for one control step.
         
         Args:
@@ -216,6 +217,7 @@ class MPCLateralController:
                 - 'yaw': heading (radians)
                 - 'speed': speed (m/s)
                 - 'yaw_rate': yaw rate (rad/s, optional)
+                - 'gear': current gear (optional, for checking if in neutral)
             waypoints: List of waypoint (x, y) tuples
             current_waypoint_idx: Current waypoint index (for efficiency)
             
@@ -227,11 +229,16 @@ class MPCLateralController:
         y = vehicle_state.get('y', 0.0)
         yaw = vehicle_state.get('yaw', 0.0)
         speed = vehicle_state.get('speed', 0.0)
+        gear = vehicle_state.get('gear', None)  # Get gear if available
         
-        # Safety check: disable MPC if errors too large
-        # TODO: Compute actual errors from waypoints
-        if abs(speed) < 0.1:
-            # Very slow or stopped - return zero steering
+        # Safety check: disable MPC if in neutral (gear 0) or if speed is very low AND gear unknown
+        # Allow MPC to work from stopped state if gear is set (gear >= 1)
+        if gear is not None:
+            if gear < 1:
+                # In neutral - return zero steering
+                return 0.0
+        elif abs(speed) < 0.1:
+            # Very slow or stopped AND gear unknown - return zero steering
             return 0.0
         
         # Build reference trajectory
@@ -243,11 +250,22 @@ class MPCLateralController:
                 horizon_steps=self.config.mpc_prediction_horizon,
                 dt=self.config.mpc_prediction_dt,
                 speed=speed,
-                last_waypoint_idx=current_waypoint_idx
+                last_waypoint_idx=current_waypoint_idx,
+                cte_magnitude=cte_magnitude
             )
         except Exception as e:
             print(f"[MPC] Error building reference: {e}")
-            return self._fallback_steering()
+            # Try to compute errors for proportional fallback, but don't fail if it doesn't work
+            try:
+                e_y, e_psi = self._compute_errors(
+                    position=(x, y),
+                    heading=yaw,
+                    waypoints=waypoints,
+                    waypoint_idx=current_waypoint_idx if current_waypoint_idx is not None else 0
+                )
+                return self._fallback_steering(e_y=e_y, e_psi=e_psi)
+            except:
+                return self._fallback_steering(e_y=None, e_psi=None)
         
         # Compute current state [e_y, e_psi, delta]
         e_y, e_psi = self._compute_errors(
@@ -258,17 +276,21 @@ class MPCLateralController:
         )
         
         # Safety check: disable MPC if errors too large
+        # Use proportional fallback to prevent catch-22 (large error → no steering → larger error)
         if abs(e_y) > self.config.admissible_position_error:
             print(f"[MPC] Position error too large: {e_y:.2f}m > {self.config.admissible_position_error}m")
-            return self._fallback_steering()
+            return self._fallback_steering(e_y=e_y, e_psi=e_psi)
         
         if abs(e_psi) > self.config.admissible_yaw_error_rad:
             print(f"[MPC] Yaw error too large: {e_psi:.2f}rad > {self.config.admissible_yaw_error_rad}rad")
-            return self._fallback_steering()
+            return self._fallback_steering(e_y=e_y, e_psi=e_psi)
         
         # Get current steering angle (delta)
-        # TODO: Read from ControlDesk if available, otherwise use previous control
-        delta = self.state[2] if hasattr(self, 'state') and len(self.state) > 2 else 0.0
+        # Priority: 1) From vehicle_state (read from ControlDesk), 2) Previous state, 3) Zero
+        delta = vehicle_state.get('steer_actual', None)
+        if delta is None:
+            # Fallback: use previous state estimate
+            delta = self.state[2] if hasattr(self, 'state') and len(self.state) > 2 else 0.0
         
         self.state = np.array([e_y, e_psi, delta])
         
@@ -389,18 +411,94 @@ class MPCLateralController:
         
         return (float(e_y), float(e_psi))
     
-    def _fallback_steering(self) -> float:
+    def _fallback_steering(self, e_y: Optional[float] = None, e_psi: Optional[float] = None) -> float:
         """Fallback steering when MPC fails.
         
+        Uses proportional control based on lateral error to prevent catch-22 situations
+        where large errors disable MPC, causing zero steering, which makes errors worse.
+        
+        Args:
+            e_y: Lateral error (meters). Positive = LEFT of path, Negative = RIGHT of path.
+            e_psi: Heading error (radians). Optional, used for additional correction.
+            
         Returns:
-            Steering command (holds last valid or zeros)
+            Steering command in normalized range [-1.0, 1.0]
         """
         self.invalid_count += 1
         
+        # Proportional fallback: use error-based steering to correct large deviations
+        # This prevents the catch-22: large error → MPC disabled → zero steering → larger error
+        if e_y is not None:
+            # FIX 4: Increase steering authority for large CTE errors
+            error_magnitude = abs(e_y)
+            
+            # Adaptive steering authority based on error magnitude
+            if error_magnitude > 10.0:
+                # Very large error (>10m): maximum steering authority
+                max_error_for_full_steer = 10.0
+                proportional_gain = 0.6  # Maximum steering
+            elif error_magnitude > 5.0:
+                # Large error (5-10m): increased steering authority
+                max_error_for_full_steer = 10.0
+                proportional_gain = 0.4  # Strong steering
+            elif error_magnitude > 2.0:
+                # Moderate error (2-5m): increased steering authority to prevent overshooting
+                max_error_for_full_steer = 5.0  # Full steering at 5m (more responsive)
+                proportional_gain = 0.5  # Increased from 0.3 - stronger correction for moderate errors
+            else:
+                # Small error (<2m): increased steering authority to prevent overshooting when close to track
+                max_error_for_full_steer = 2.0  # Full steering at 2m (more responsive for small errors)
+                proportional_gain = 0.4  # Increased from 0.3 - stronger correction to prevent overshooting
+            
+            # Proportional gain: steer toward path based on lateral error
+            # Negative e_y (RIGHT of path) → positive steering (LEFT) to correct
+            # Positive e_y (LEFT of path) → negative steering (RIGHT) to correct
+            
+            # Compute proportional steering: steer opposite to error direction
+            steer_proportional = -np.sign(e_y) * proportional_gain * min(error_magnitude / max_error_for_full_steer, 1.0)
+            
+            # Add heading error correction if available (smaller contribution, but only when lateral error is small)
+            # When lateral error is large, lateral correction should dominate
+            if e_psi is not None:
+                # Reduce heading error contribution when lateral error is large
+                if error_magnitude > 5.0:
+                    heading_gain = 0.05  # Very small gain when lateral error is large
+                elif error_magnitude > 2.0:
+                    heading_gain = 0.08  # Small gain for moderate lateral error
+                else:
+                    heading_gain = 0.1  # Standard gain for small lateral error
+                
+                # Only apply heading correction if it doesn't counteract lateral correction
+                steer_heading = -np.sign(e_psi) * heading_gain * min(abs(e_psi) / (np.pi / 2), 1.0)
+                
+                # Check if heading correction would counteract lateral correction
+                if np.sign(steer_proportional) != 0 and np.sign(steer_heading) != 0:
+                    if np.sign(steer_proportional) != np.sign(steer_heading):
+                        # Heading correction opposes lateral correction - reduce it
+                        steer_heading = steer_heading * 0.5
+                
+                steer_proportional += steer_heading
+            
+            # Combine with last valid steering (weighted average)
+            if self.invalid_count <= self.config.max_invalid_count and abs(self.last_valid_steering) > 0.01:
+                # Blend: more proportional as invalid count increases
+                blend_factor = min(self.invalid_count / self.config.max_invalid_count, 1.0)
+                steer = (1.0 - blend_factor) * self.last_valid_steering + blend_factor * steer_proportional
+            else:
+                # Use pure proportional after max invalid count or if no valid steering
+                steer = steer_proportional
+            
+            # Clamp to valid range
+            steer = max(-1.0, min(1.0, steer))
+            
+            print(f"[MPC Fallback] Using proportional steering: {steer:.3f} (e_y={e_y:.2f}m, e_psi={e_psi:.2f}rad if available)")
+            return float(steer)
+        
+        # Fallback to old behavior if no error information available
         if self.invalid_count <= self.config.max_invalid_count:
             # Hold last valid steering
             return self.last_valid_steering
         else:
-            # Zero steering after max invalid count
+            # Zero steering after max invalid count (should rarely happen now)
             return 0.0
 

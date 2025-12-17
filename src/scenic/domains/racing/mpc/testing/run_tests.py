@@ -23,6 +23,9 @@ def run_all_tests():
         'test_utils',
         'test_reference_builder',
         'test_mpc_lateral',
+        'test_behavior_integration',
+        'test_simulation_integration',
+        'test_scenario_compilation',
     ]
     
     for module_name in test_modules:

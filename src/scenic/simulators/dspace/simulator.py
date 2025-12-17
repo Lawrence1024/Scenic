@@ -894,10 +894,8 @@ class DSpaceSimulation(RacingSimulation):
             else:
                 print(f"[step #{self._step_count}] [WARN] Step failed (using time.sleep fallback)")
         
-        # DEBUG: Exit after 10 steps for debugging purposes
-        if self._step_count >= 10:
-            print(f"[DEBUG] Reached {self._step_count} steps - exiting for debugging purposes")
-            exit()
+        # NOTE: Debug exit removed - simulation should run for full duration
+        # If you need to limit steps for testing, use --time parameter in scenic command
 
     def getProperties(self, obj, properties):
         """Read the values of the given properties of the object from the simulator.
@@ -940,26 +938,58 @@ class DSpaceSimulation(RacingSimulation):
         
         return {k: vals[k] for k in properties if k in vals}
 
-    def getRacingControllers(self, agent):
+    def getRacingControllers(self, agent, use_mpc=False, mpc_config_path=None):
         """Get racing controllers optimized for dSPACE racing scenarios.
         dSPACE-specific racing controllers tuned for ModelDesk's physics
         and control systems.
         
         Args:
             agent: The racing agent (RacingCar, etc.)
+            use_mpc: If True, use MPC for lateral control instead of PID
+            mpc_config_path: Path to MPC config YAML file (optional, uses default if None)
             
         Returns:
             A pair of controllers for throttle and steering respectively.
+            If use_mpc=True: (PIDLongitudinalController, MPCLateralController)
+            If use_mpc=False: (PIDLongitudinalController, PIDLateralController)
         """
         dt = self.timestep
         
-        # dSPACE-specific racing controller tuning
-        # More aggressive than standard driving controllers
-        from scenic.domains.driving.controllers import PIDLongitudinalController, PIDLateralController
+        # Longitudinal controller (always PID for now)
+        from scenic.domains.driving.controllers import PIDLongitudinalController
         lon_controller = PIDLongitudinalController(K_P=0.8, K_D=0.15, K_I=0.9, dt=dt)
-        lat_controller = PIDLateralController(K_P=0.3, K_D=0.15, K_I=0.0, dt=dt)
         
-        return lon_controller, lat_controller
+        # Lateral controller: MPC or PID
+        if use_mpc:
+            try:
+                from scenic.domains.racing.mpc import MPCLateralController, load_mpc_config
+                
+                # Load MPC configuration
+                config = load_mpc_config(mpc_config_path)
+                
+                # Adapt config to simulation timestep
+                config.adapt_to_timestep(dt)
+                
+                # Create MPC controller
+                mpc_controller = MPCLateralController(config, timestep=dt)
+                
+                # Store config in simulation for io_adapter access
+                self.mpc_config = config
+                
+                print(f"[DSpaceSimulation] Using MPC lateral controller (horizon={config.mpc_prediction_horizon}, dt={config.mpc_prediction_dt})")
+                return lon_controller, mpc_controller
+            except Exception as e:
+                print(f"[DSpaceSimulation] WARNING: Failed to create MPC controller: {e}")
+                print(f"[DSpaceSimulation] Falling back to PID controller")
+                # Fall back to PID
+                from scenic.domains.driving.controllers import PIDLateralController
+                lat_controller = PIDLateralController(K_P=0.3, K_D=0.15, K_I=0.0, dt=dt)
+                return lon_controller, lat_controller
+        else:
+            # Standard PID lateral controller
+            from scenic.domains.driving.controllers import PIDLateralController
+            lat_controller = PIDLateralController(K_P=0.3, K_D=0.15, K_I=0.0, dt=dt)
+            return lon_controller, lat_controller
     
     def getRacingLineControllers(self, agent):
         """Get controllers optimized for following the racing line in dSPACE.

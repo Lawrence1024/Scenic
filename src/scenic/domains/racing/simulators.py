@@ -40,7 +40,7 @@ class RacingSimulation(Simulation):
     - Route assignment based on track segments (pit lane vs main racing)
     """
 
-    def getRacingControllers(self, agent):
+    def getRacingControllers(self, agent, use_mpc=False, mpc_config_path=None):
         """Get longitudinal and lateral controllers optimized for racing.
         
         Racing controllers are tuned for higher performance than standard driving
@@ -48,9 +48,13 @@ class RacingSimulation(Simulation):
         
         Args:
             agent: The racing agent (RacingCar, FormulaCar, etc.)
+            use_mpc: If True, use MPC for lateral control instead of PID (optional)
+            mpc_config_path: Path to MPC config YAML file (optional, only used if use_mpc=True)
             
         Returns:
             A pair of controllers for throttle and steering respectively.
+            If use_mpc=True: (PIDLongitudinalController, MPCLateralController)
+            If use_mpc=False: (PIDLongitudinalController, PIDLateralController)
         """
         dt = self.timestep
         

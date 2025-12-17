@@ -28,16 +28,21 @@ class ReferenceBuilder:
     def find_nearest_waypoint(self, 
                               position: Tuple[float, float],
                               waypoints: List[Tuple[float, float]],
-                              last_idx: Optional[int] = None) -> int:
+                              last_idx: Optional[int] = None,
+                              adaptive_search: bool = True,
+                              cte_magnitude: Optional[float] = None) -> int:
         """Find nearest waypoint index to current position.
         
         Uses forward-only search starting from last_idx to ensure
-        forward progress along the path.
+        forward progress along the path. Search window is adaptive
+        based on CTE magnitude when vehicle is far off-track.
         
         Args:
             position: Current vehicle position (x, y)
             waypoints: List of waypoint (x, y) tuples
             last_idx: Last known waypoint index (for forward-only search)
+            adaptive_search: If True, adapt search window based on CTE
+            cte_magnitude: Current CTE magnitude (meters) for adaptive search
             
         Returns:
             Index of nearest waypoint
@@ -48,9 +53,45 @@ class ReferenceBuilder:
         px, py = position
         start_idx = last_idx if last_idx is not None else self._last_nearest_idx
         
-        # Search forward from last index (with some lookback for safety)
-        search_start = max(0, start_idx - 10)
-        search_end = min(len(waypoints), start_idx + 50)
+        # Adaptive search window: scale with CTE magnitude
+        # Base window: 200 waypoints (~40m at 0.2m spacing)
+        # When CTE is large, expand search window AND increase lookback
+        base_forward = 200  # Increased from 50
+        base_lookback = 20  # Base lookback when on-track
+        
+        if adaptive_search and cte_magnitude is not None:
+            # Scale search window based on CTE
+            # At 0m CTE: base window
+            # At 10m CTE: 2x window
+            # At 20m+ CTE: 3x window
+            if cte_magnitude >= 20.0:
+                scale = 3.0
+            elif cte_magnitude >= 10.0:
+                scale = 2.0
+            elif cte_magnitude >= 5.0:
+                scale = 1.5
+            else:
+                scale = 1.0
+            
+            forward_window = int(base_forward * scale)
+            
+            # CRITICAL FIX: Increase lookback significantly when CTE is large
+            # When vehicle is far off-track, it might be behind the last known waypoint
+            # Need more aggressive lookback to find the actual nearest waypoint
+            if cte_magnitude >= 5.0:
+                # When far off-track, use much larger lookback (up to 50% of forward window)
+                lookback_window = int(base_forward * scale * 0.5)  # 50% of forward window
+            else:
+                # Normal case: small lookback for safety
+                lookback_window = int(base_lookback * scale)
+        else:
+            forward_window = base_forward
+            lookback_window = base_lookback
+        
+        # Search from last index with adaptive lookback
+        # More lookback when off-track to find actual nearest waypoint
+        search_start = max(0, start_idx - lookback_window)
+        search_end = min(len(waypoints), start_idx + forward_window)
         
         best_idx = start_idx
         best_dist2 = float('inf')
@@ -159,7 +200,8 @@ class ReferenceBuilder:
                        horizon_steps: int,
                        dt: float,
                        speed: float,
-                       last_waypoint_idx: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+                       last_waypoint_idx: Optional[int] = None,
+                       cte_magnitude: Optional[float] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
         """Build reference trajectory for MPC horizon.
         
         Args:
@@ -188,8 +230,17 @@ class ReferenceBuilder:
             )
         
         # Find nearest waypoint
+        # Use provided CTE magnitude if available, otherwise estimate from distance to last waypoint
+        cte_estimate = cte_magnitude
+        if cte_estimate is None and last_waypoint_idx is not None and last_waypoint_idx < len(waypoints):
+            last_wp = waypoints[last_waypoint_idx]
+            dx = current_position[0] - last_wp[0]
+            dy = current_position[1] - last_wp[1]
+            cte_estimate = (dx*dx + dy*dy) ** 0.5
+        
         nearest_idx = self.find_nearest_waypoint(
-            current_position, waypoints, last_waypoint_idx
+            current_position, waypoints, last_waypoint_idx,
+            adaptive_search=True, cte_magnitude=cte_estimate
         )
         
         # Build reference arrays

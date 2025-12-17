@@ -1,0 +1,605 @@
+(venv) PS C:\Users\bklfh\Documents\Scenic\Scenic> scenic examples/racing/ego_mpc_behavior.scenic --simulate --time 25 --count 1 --model scenic.simulators.dspace.racing_model
+Beginning scenario construction...
+  Loading cached version of road network...
+  Loaded cached network in 0.03 seconds.
+  Loading cached version of road network...
+  Loaded cached network in 0.03 seconds.
+
+[RacingTrack] Identifying track features...
+  Total roads in network: 3
+
+  [Track Segments] Analyzing road structure...
+    Road: The Corkscrew1
+      ID: 2117817291, Length: 2491.5m, Lanes: 3
+    Road: Pit Lane1_2
+      ID: 1545702203, Length: 883.4m, Lanes: 1
+    Road: Andretti Hairpin1_3
+      ID: 1776499453, Length: 988.0m, Lanes: 1
+
+  [OK] Pit lane identified by name: Pit Lane1_2 (883.4m)
+  [INFO] Main racing road: The Corkscrew1 (2491.5m)
+  [INFO] Main racing road: Andretti Hairpin1_3 (988.0m)
+
+  [OK] Main racing road: Union of 2 road(s)
+  [OK] Two mutually exclusive segments defined:
+       - Pit lane: 1 road
+       - Main racing: 2 road(s)
+  [OK] Pit lane identified: <Road Pit Lane1_2>
+  [OK] Generated 3 sectors
+  Pruning scenario...
+  Pruned scenario in 0 seconds.
+Scenario constructed in 1.84 seconds.
+  Generated scene in 1 iterations, 0.00211 seconds.
+  Beginning simulation of top-level scenario...
+[DSpaceSimulation] timestep: 1.0
+[Transform] Loading cached coordinate transformation
+Loaded transformation from: C:\Users\bklfh\Documents\Scenic\Scenic\assets\maps\dSPACE\Laguna_Seca_transform.json
+  Built independent RD road: The Corkscrew1 (ID: 0, Length: 2484.6m, Points: 4987)
+  Built independent RD road: Pit Lane1_2 (ID: 1, Length: 883.5m, Points: 1777)
+  Built independent RD road: Andretti Hairpin1_3 (ID: 2, Length: 988.0m, Points: 1985)
+Built 3 independent RD roads with separate s-coordinate systems
+[Geometry] Using RD geometry for accurate (s,t) projection
+[Status] [OK] Full coordinate transformation pipeline active
+  [RouteDetection] Position: (57.202511, 67.518280)
+  [RouteDetection] pitLaneRoadIds: ['1545702203']
+  [RouteDetection] mainRacingRoadIds: ['2117817291', '1776499453']
+  [RouteDetection] Projected road ID (raw): 2 (type: int)
+  [RouteDetection] Road name: 'Andretti Hairpin1_3' (lowercase: 'andretti hairpin1_3')
+  [RouteDetection] Name does not contain 'pit' -> 'mainRacing'
+[Ego] Route set to: R2 (from preference: Lap)
+[Ego] XODR: (53.280000, 73.010000) -> RD: (57.202511, 67.518280) -> Route Lap (s=213.74, t=1.994415)
+[TTL] Loaded 50 waypoints from ttl_dummy_test.csv (offset: (0.0, 0.0), coordinate system: XODR (already transformed))
+[TTL] Assigned TTL PolylineRegion to ego (ttl_dummy_test.csv)
+[TTL] Attached 50 TTL waypoints to ego
+  [RouteDetection] Position: (60.692000, 71.018553)
+  [RouteDetection] pitLaneRoadIds: ['1545702203']
+  [RouteDetection] mainRacingRoadIds: ['2117817291', '1776499453']
+  [RouteDetection] Projected road ID (raw): 1 (type: int)
+  [RouteDetection] Road name: 'Pit Lane1_2' (lowercase: 'pit lane1_2')
+  [RouteDetection] Name contains 'pit' -> 'pitLane'
+[Fellow_0] XODR: (56.820000, 76.550000) -> RD: (60.692000, 71.018553) -> Route Pit (s=174.71, t=-1.910498)
+[TTL] Loaded 3600 waypoints from ttl_17.csv (offset: (0.0, 0.0), coordinate system: XODR (already transformed))
+[TTL] Assigned TTL PolylineRegion to fellow (ttl_17.csv)
+[TTL] Attached 3600 TTL waypoints to fellow
+  [RouteDetection] Position: (64.171632, 74.508939)
+  [RouteDetection] pitLaneRoadIds: ['1545702203']
+  [RouteDetection] mainRacingRoadIds: ['2117817291', '1776499453']
+  [RouteDetection] Projected road ID (raw): 1 (type: int)
+  [RouteDetection] Road name: 'Pit Lane1_2' (lowercase: 'pit lane1_2')
+  [RouteDetection] Name contains 'pit' -> 'pitLane'
+[Fellow_1] XODR: (60.350000, 80.080000) -> RD: (64.171632, 74.508939) -> Route Pit (s=169.83, t=-1.683990)
+[TTL] Loaded 3600 waypoints from ttl_17.csv (offset: (0.0, 0.0), coordinate system: XODR (already transformed))
+[TTL] Assigned TTL PolylineRegion to fellow (ttl_17.csv)
+[TTL] Attached 3600 TTL waypoints to fellow
+  [RouteDetection] Position: (67.661121, 78.009212)
+  [RouteDetection] pitLaneRoadIds: ['1545702203']
+  [RouteDetection] mainRacingRoadIds: ['2117817291', '1776499453']
+  [RouteDetection] Projected road ID (raw): 1 (type: int)
+  [RouteDetection] Road name: 'Pit Lane1_2' (lowercase: 'pit lane1_2')
+  [RouteDetection] Name contains 'pit' -> 'pitLane'
+[Fellow_2] XODR: (63.890000, 83.620000) -> RD: (67.661121, 78.009212) -> Route Pit (s=164.95, t=-1.456068)
+[TTL] Loaded 3600 waypoints from ttl_17.csv (offset: (0.0, 0.0), coordinate system: XODR (already transformed))
+[TTL] Assigned TTL PolylineRegion to fellow (ttl_17.csv)
+[TTL] Attached 3600 TTL waypoints to fellow
+[dSPACE] Dynamic control detected - authoring scenario in ModelDesk
+[ModelDesk] Using existing scenario: Scenic_20251217_035259
+[ASM_Maneuver] ✅ Enabled external control for F1
+[ASM_Maneuver] ✅ Enabled external control for F655.7892575261549
+[ASM_Maneuver] ✅ Enabled external control for F976.1468828520976
+[ASM_Maneuver] ✅ Enabled external control for F473.94087498974295
+[ModelDesk] Scenario is consistent
+[ModelDesk] Scenario downloaded to VEOS successfully
+[ControlDesk] Configuring race control...
+[Setup] Initializing fellow arrays...
+[Setup] Verifying ControlDesk readback for all vehicles...
+[Setup] Verifying ego vehicle readback...
+[Ego Readback] RD: (51.772855, 71.354316) [expected: (57.202511, 67.518280), error: 6.648m]
+[Ego Readback] XODR: (47.754294, 76.899998) [expected: (53.280000, 73.010000), error: 6.758m]
+[Setup] [OK] Ego readback successful: position=(47.754, 76.900, 4.582)
+[Setup] Verifying 3 fellow vehicle(s) readback...
+[Fellow_0 Readback] RD: (65.838042, 67.267040) [expected: (60.692000, 71.018553), error: 6.368m]
+[Fellow_0 Readback] XODR: (62.057293, 72.745898) [expected: (56.820000, 76.550000), error: 6.473m]
+[Setup] [OK] Fellow 0 readback successful: position=(62.057, 72.746, 4.569)
+[Fellow_1 Readback] RD: (68.709460, 71.204808) [expected: (64.171632, 74.508939), error: 5.613m]
+[Fellow_1 Readback] XODR: (64.968287, 76.729546) [expected: (60.350000, 80.080000), error: 5.706m]
+[Setup] [OK] Fellow 1 readback successful: position=(64.968, 76.730, 4.596)
+[Fellow_2 Readback] RD: (71.586562, 75.154739) [expected: (67.661121, 78.009212), error: 4.854m]
+[Fellow_2 Readback] XODR: (67.885034, 80.725502) [expected: (63.890000, 83.620000), error: 4.933m]
+[Setup] [OK] Fellow 2 readback successful: position=(67.885, 80.726, 4.625)
+[Setup] [OK] ControlDesk readback verified successfully
+[Setup] Pausing simulation for step-by-step control...
+[Setup] [OK] Simulation paused successfully
+[executeActions #1] Executing actions for 4 objects
+[step #1] Advancing simulation by 1.0s...
+[step #1] [OK] Step completed
+[DSpaceSimulation] Using MPC lateral controller (horizon=30, dt=1.0)
+[step #2] Advancing simulation by 1.0s...
+[step #2] [OK] Step completed
+[FollowRacingLineMPCBehavior] Initialized: starting at (47.71, 76.84), waypoint index=0, distance=6.76m
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=6.76m)
+[CTE-Aware PID] CTE=6.64m, target_speed=30.0m/s -> effective=0.1m/s (current=0.06m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=6.64m >= 5m but stopped (speed=0.06m/s): ALLOWING MIN THROTTLE (0.100) TO START MOVING
+[CTE-Aware PID] speed_error=0.00m/s, throttle_pid=0.100, cte_brake=0.000
+  [Gear] Shifting from 0 to 1 (starting from neutral)
+\n[FollowRacingLineMPC] Step 0:
+  Position: (47.71, 76.84)
+  Speed: 0.06 m/s
+  CTE: 6.643 m (LEFT)
+  MPC steering: 0.000 -> 0.000 (after slew limit)
+  Final controls: throttle=0.059, brake=0.000, steer=0.000, gear=1
+[DSPACERacingCar.setSteering] Called with steering=0.0
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': 0.0}
+[DSPACERacingCar.setThrottle] Called with throttle=0.059376739765987833
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': 0.0, 'throttle': 0.059376739765987833}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': 0.0, 'throttle': 0.059376739765987833, 'braking': 0.0}
+[DSPACERacingCar.setGear] Called with gear=1
+[EgoControl] Setting gear to 1
+[step #3] Advancing simulation by 1.0s...
+[step #3] [OK] Step completed
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=6.75m)
+[CTE-Aware PID] CTE=6.63m, target_speed=30.0m/s -> effective=0.9m/s (current=0.93m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=6.63m >= 5m but stopped (speed=0.93m/s): ALLOWING MIN THROTTLE (0.100) TO START MOVING
+[CTE-Aware PID] speed_error=0.00m/s, throttle_pid=0.100, cte_brake=0.000
+\n[FollowRacingLineMPC] Step 1:
+  Position: (47.67, 76.78)
+  Speed: 0.93 m/s
+  CTE: 6.626 m (LEFT)
+  MPC steering: -0.286 -> -0.200 (after slew limit)
+  Final controls: throttle=0.060, brake=0.000, steer=-0.200, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.2
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.2}
+[DSPACERacingCar.setThrottle] Called with throttle=0.05951923502426004
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.2, 'throttle': 0.05951923502426004}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.2, 'throttle': 0.05951923502426004, 'braking': 0.0}
+[step #4] Advancing simulation by 1.0s...
+[step #4] [OK] Step completed
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=6.88m)
+[CTE-Aware PID] CTE=6.30m, target_speed=30.0m/s -> effective=2.1m/s (current=2.13m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=6.30m >= 5m, speed=2.13m/s: GRADUAL THROTTLE REDUCTION (factor=0.74, brake=0.0)
+[CTE-Aware PID] speed_error=0.00m/s, throttle_pid=0.000, cte_brake=0.000
+\n[FollowRacingLineMPC] Step 2:
+  Position: (46.87, 75.51)
+  Speed: 2.13 m/s
+  CTE: 6.297 m (LEFT)
+  MPC steering: -0.298 -> -0.298 (after slew limit)
+  Final controls: throttle=0.000, brake=0.000, steer=-0.298, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.29792572424341895
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.29792572424341895}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.29792572424341895, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.29792572424341895, 'throttle': 0.0, 'braking': 0.0}
+[step #5] Advancing simulation by 1.0s...
+[step #5] [OK] Step completed
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=7.77m)
+[CTE-Aware PID] CTE=5.89m, target_speed=30.0m/s -> effective=3.4m/s (current=3.44m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=5.89m >= 5m, speed=3.44m/s: REDUCING THROTTLE ONLY (throttle=0.0, brake=0.0) - smooth deceleration
+[CTE-Aware PID] speed_error=0.00m/s, throttle_pid=0.000, cte_brake=0.000
+\n[FollowRacingLineMPC] Step 3:
+  Position: (45.53, 73.58)
+  Speed: 3.44 m/s
+  CTE: 5.888 m (LEFT)
+  MPC steering: -0.333 -> -0.333 (after slew limit)
+  Final controls: throttle=0.000, brake=0.000, steer=-0.333, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.33263912355571074
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.33263912355571074}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.33263912355571074, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.33263912355571074, 'throttle': 0.0, 'braking': 0.0}
+[Waypoint Search] Large distance to waypoint (10.2m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (10.2m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=10.16m (was 0 at 10.16m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=10.16m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=10.16m)
+[CTE-Aware PID] CTE=5.39m, target_speed=30.0m/s -> effective=3.5m/s (current=3.51m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=5.39m >= 5m, speed=3.51m/s: REDUCING THROTTLE ONLY (throttle=0.0, brake=0.0) - smooth deceleration
+[CTE-Aware PID] speed_error=0.00m/s, throttle_pid=0.000, cte_brake=0.000
+\n[FollowRacingLineMPC] Step 4:
+  Position: (43.38, 70.73)
+  Speed: 3.51 m/s
+  CTE: 5.388 m (LEFT)
+  MPC steering: -0.335 -> -0.335 (after slew limit)
+  Final controls: throttle=0.000, brake=0.000, steer=-0.335, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.3348004327411358
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.3348004327411358}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.3348004327411358, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.3348004327411358, 'throttle': 0.0, 'braking': 0.0}
+[Waypoint Search] Large distance to waypoint (13.2m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (13.2m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=13.17m (was 0 at 13.17m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=13.17m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=13.17m)
+[CTE-Aware PID] CTE=5.04m, target_speed=30.0m/s -> effective=3.5m/s (current=3.53m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=5.04m >= 5m, speed=3.53m/s: REDUCING THROTTLE ONLY (throttle=0.0, brake=0.0) - smooth deceleration
+[CTE-Aware PID] speed_error=0.00m/s, throttle_pid=0.000, cte_brake=0.000
+\n[FollowRacingLineMPC] Step 5:
+  Position: (41.11, 67.96)
+  Speed: 3.53 m/s
+  CTE: 5.036 m (LEFT)
+  MPC steering: -0.331 -> -0.331 (after slew limit)
+  Final controls: throttle=0.000, brake=0.000, steer=-0.331, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.3308392205881997
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.3308392205881997}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.3308392205881997, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.3308392205881997, 'throttle': 0.0, 'braking': 0.0}
+[Waypoint Search] Large distance to waypoint (16.4m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (16.4m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=16.43m (was 0 at 16.43m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=16.43m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=16.43m)
+[CTE-Aware PID] CTE=4.80m, target_speed=30.0m/s -> effective=4.0m/s (current=3.53m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=4.80m >= 5m, speed=3.53m/s: REDUCING THROTTLE ONLY (throttle=0.0, brake=0.0) - smooth deceleration
+[CTE-Aware PID] speed_error=0.47m/s, throttle_pid=0.000, cte_brake=0.000
+\n[FollowRacingLineMPC] Step 6:
+  Position: (38.77, 65.30)
+  Speed: 3.53 m/s
+  CTE: 4.803 m (LEFT)
+  MPC steering: -0.325 -> -0.325 (after slew limit)
+  Final controls: throttle=0.000, brake=0.000, steer=-0.325, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.32494707207084184
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.32494707207084184}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.32494707207084184, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.32494707207084184, 'throttle': 0.0, 'braking': 0.0}
+[Waypoint Search] Large distance to waypoint (19.9m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (19.9m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=19.88m (was 0 at 19.88m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=19.88m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=19.88m)
+[CTE-Aware PID] CTE=4.69m, target_speed=30.0m/s -> effective=4.0m/s (current=3.53m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=4.69m >= 5m, speed=3.53m/s: REDUCING THROTTLE ONLY (throttle=0.0, brake=0.0) - smooth deceleration
+[CTE-Aware PID] speed_error=0.47m/s, throttle_pid=0.000, cte_brake=0.000
+\n[FollowRacingLineMPC] Step 7:
+  Position: (36.30, 62.67)
+  Speed: 3.53 m/s
+  CTE: 4.695 m (LEFT)
+  MPC steering: -0.316 -> -0.316 (after slew limit)
+  Final controls: throttle=0.000, brake=0.000, steer=-0.316, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.3164000313373506
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.3164000313373506}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.3164000313373506, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.3164000313373506, 'throttle': 0.0, 'braking': 0.0}
+[Waypoint Search] Large distance to waypoint (23.4m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (23.4m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=23.37m (was 0 at 23.37m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=23.37m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=23.37m)
+[CTE-Aware PID] CTE=4.71m, target_speed=30.0m/s -> effective=4.0m/s (current=3.53m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=4.71m >= 5m, speed=3.53m/s: REDUCING THROTTLE ONLY (throttle=0.0, brake=0.0) - smooth deceleration
+[CTE-Aware PID] speed_error=0.47m/s, throttle_pid=0.000, cte_brake=0.000
+\n[FollowRacingLineMPC] Step 8:
+  Position: (33.76, 60.15)
+  Speed: 3.53 m/s
+  CTE: 4.708 m (LEFT)
+  MPC steering: -0.306 -> -0.306 (after slew limit)
+  Final controls: throttle=0.000, brake=0.000, steer=-0.306, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.30631192155133463
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.30631192155133463}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.30631192155133463, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.30631192155133463, 'throttle': 0.0, 'braking': 0.0}
+[Waypoint Search] Large distance to waypoint (26.9m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (26.9m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=26.87m (was 0 at 26.87m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=26.87m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=26.87m)
+[CTE-Aware PID] CTE=4.81m, target_speed=30.0m/s -> effective=4.0m/s (current=3.53m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=4.81m >= 5m, speed=3.53m/s: REDUCING THROTTLE ONLY (throttle=0.0, brake=0.0) - smooth deceleration
+[CTE-Aware PID] speed_error=0.47m/s, throttle_pid=0.000, cte_brake=0.000
+\n[FollowRacingLineMPC] Step 9:
+  Position: (31.18, 57.72)
+  Speed: 3.53 m/s
+  CTE: 4.811 m (LEFT)
+  MPC steering: -0.300 -> -0.300 (after slew limit)
+  Final controls: throttle=0.000, brake=0.000, steer=-0.300, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.3001817107625047
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.3001817107625047}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.3001817107625047, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.3001817107625047, 'throttle': 0.0, 'braking': 0.0}
+[Waypoint Search] Large distance to waypoint (30.4m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (30.4m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=30.40m (was 0 at 30.40m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=30.40m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=30.40m)
+[CTE-Aware PID] CTE=5.03m, target_speed=30.0m/s -> effective=3.5m/s (current=3.53m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=5.03m >= 5m, speed=3.53m/s: REDUCING THROTTLE ONLY (throttle=0.0, brake=0.0) - smooth deceleration
+[CTE-Aware PID] speed_error=0.00m/s, throttle_pid=0.000, cte_brake=0.000
+\n[FollowRacingLineMPC] Step 10:
+  Position: (28.52, 55.37)
+  Speed: 3.53 m/s
+  CTE: 5.033 m (LEFT)
+  MPC steering: -0.304 -> -0.304 (after slew limit)
+  Final controls: throttle=0.000, brake=0.000, steer=-0.304, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.3041896970275963
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.3041896970275963}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.3041896970275963, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.3041896970275963, 'throttle': 0.0, 'braking': 0.0}
+[Waypoint Search] Large distance to waypoint (34.0m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (34.0m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=33.97m (was 0 at 33.97m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=33.97m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=33.97m)
+[CTE-Aware PID] CTE=5.39m, target_speed=30.0m/s -> effective=3.5m/s (current=3.53m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=5.39m >= 5m, speed=3.53m/s: REDUCING THROTTLE ONLY (throttle=0.0, brake=0.0) - smooth deceleration
+[CTE-Aware PID] speed_error=0.00m/s, throttle_pid=0.000, cte_brake=0.000
+\n[FollowRacingLineMPC] Step 11:
+  Position: (25.76, 53.10)
+  Speed: 3.53 m/s
+  CTE: 5.386 m (LEFT)
+  MPC steering: -0.309 -> -0.309 (after slew limit)
+  Final controls: throttle=0.000, brake=0.000, steer=-0.309, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.3088438354111005
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.3088438354111005}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.3088438354111005, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.3088438354111005, 'throttle': 0.0, 'braking': 0.0}
+[Waypoint Search] Large distance to waypoint (37.5m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (37.5m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=37.52m (was 0 at 37.52m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=37.52m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=37.52m)
+[CTE-Aware PID] CTE=5.82m, target_speed=30.0m/s -> effective=3.5m/s (current=3.53m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=5.82m >= 5m, speed=3.53m/s: REDUCING THROTTLE ONLY (throttle=0.0, brake=0.0) - smooth deceleration
+[CTE-Aware PID] speed_error=0.00m/s, throttle_pid=0.000, cte_brake=0.000
+\n[FollowRacingLineMPC] Step 12:
+  Position: (22.96, 50.91)
+  Speed: 3.53 m/s
+  CTE: 5.817 m (LEFT)
+  MPC steering: -0.308 -> -0.308 (after slew limit)
+  Final controls: throttle=0.000, brake=0.000, steer=-0.308, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.30836140226448394
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.30836140226448394}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.30836140226448394, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.30836140226448394, 'throttle': 0.0, 'braking': 0.0}
+[Waypoint Search] Large distance to waypoint (41.2m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (41.2m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=41.16m (was 0 at 41.16m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=41.16m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=41.16m)
+[CTE-Aware PID] CTE=6.36m, target_speed=30.0m/s -> effective=3.5m/s (current=3.53m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=6.36m >= 5m, speed=3.53m/s: REDUCING THROTTLE ONLY (throttle=0.0, brake=0.0) - smooth deceleration
+[CTE-Aware PID] speed_error=0.00m/s, throttle_pid=0.000, cte_brake=0.000
+\n[FollowRacingLineMPC] Step 13:
+  Position: (20.03, 48.75)
+  Speed: 3.53 m/s
+  CTE: 6.363 m (LEFT)
+  MPC steering: -0.305 -> -0.305 (after slew limit)
+  Final controls: throttle=0.000, brake=0.000, steer=-0.305, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.30501728687826596
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.30501728687826596}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.30501728687826596, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.30501728687826596, 'throttle': 0.0, 'braking': 0.0}
+[Waypoint Search] Large distance to waypoint (44.7m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (44.7m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=44.71m (was 0 at 44.71m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=44.71m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=44.71m)
+[CTE-Aware PID] CTE=7.04m, target_speed=30.0m/s -> effective=3.5m/s (current=3.53m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=7.04m >= 5m, speed=3.53m/s: REDUCING THROTTLE ONLY (throttle=0.0, brake=0.0) - smooth deceleration
+[CTE-Aware PID] speed_error=0.00m/s, throttle_pid=0.000, cte_brake=0.000
+\n[FollowRacingLineMPC] Step 14:
+  Position: (17.08, 46.77)
+  Speed: 3.53 m/s
+  CTE: 7.043 m (LEFT)
+  MPC steering: -0.302 -> -0.302 (after slew limit)
+  Final controls: throttle=0.000, brake=0.000, steer=-0.302, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.3017677774356267
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.3017677774356267}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.3017677774356267, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.3017677774356267, 'throttle': 0.0, 'braking': 0.0}
+[Waypoint Search] Large distance to waypoint (48.3m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (48.3m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=48.30m (was 0 at 48.30m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=48.30m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=48.30m)
+[CTE-Aware PID] CTE=7.80m, target_speed=30.0m/s -> effective=3.5m/s (current=3.53m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=7.80m >= 5m, speed=3.53m/s: REDUCING THROTTLE ONLY (throttle=0.0, brake=0.0) - smooth deceleration
+[CTE-Aware PID] speed_error=0.00m/s, throttle_pid=0.000, cte_brake=0.000
+\n[FollowRacingLineMPC] Step 15:
+  Position: (14.06, 44.82)
+  Speed: 3.53 m/s
+  CTE: 7.803 m (LEFT)
+  MPC steering: -0.299 -> -0.299 (after slew limit)
+  Final controls: throttle=0.000, brake=0.000, steer=-0.299, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.2990633013878656
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.2990633013878656}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.2990633013878656, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.2990633013878656, 'throttle': 0.0, 'braking': 0.0}
+[Waypoint Search] Large distance to waypoint (51.9m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (51.9m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=51.86m (was 0 at 51.86m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=51.86m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=51.86m)
+[CTE-Aware PID] CTE=8.68m, target_speed=30.0m/s -> effective=3.5m/s (current=3.53m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=8.68m >= 5m, speed=3.53m/s: REDUCING THROTTLE ONLY (throttle=0.0, brake=0.0) - smooth deceleration
+[CTE-Aware PID] speed_error=0.00m/s, throttle_pid=0.000, cte_brake=0.000
+[MPC] Position error too large: 8.68m > 8.0m
+[MPC Fallback] Using proportional steering: -0.307 (e_y=8.68m, e_psi=0.85rad if available)
+\n[FollowRacingLineMPC] Step 16:
+  Position: (10.99, 43.00)
+  Speed: 3.53 m/s
+  CTE: 8.682 m (LEFT)
+  MPC steering: -0.307 -> -0.307 (after slew limit)
+  Final controls: throttle=0.000, brake=0.000, steer=-0.307, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.3066057073060944
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.3066057073060944}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.3066057073060944, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.3066057073060944, 'throttle': 0.0, 'braking': 0.0}
+[Waypoint Search] Large distance to waypoint (55.4m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (55.4m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=55.40m (was 0 at 55.40m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=55.40m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=55.40m)
+[CTE-Aware PID] CTE=9.66m, target_speed=30.0m/s -> effective=3.5m/s (current=3.53m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=9.66m >= 5m, speed=3.53m/s: REDUCING THROTTLE ONLY (throttle=0.0, brake=0.0) - smooth deceleration
+[CTE-Aware PID] speed_error=0.00m/s, throttle_pid=0.000, cte_brake=0.000
+[MPC] Position error too large: 9.66m > 8.0m
+[MPC Fallback] Using proportional steering: -0.322 (e_y=9.66m, e_psi=0.88rad if available)
+\n[FollowRacingLineMPC] Step 17:
+  Position: (7.88, 41.27)
+  Speed: 3.53 m/s
+  CTE: 9.660 m (LEFT)
+  MPC steering: -0.322 -> -0.322 (after slew limit)
+  Final controls: throttle=0.000, brake=0.000, steer=-0.322, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.3221592360816852
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.3221592360816852}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.3221592360816852, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.3221592360816852, 'throttle': 0.0, 'braking': 0.0}
+[Waypoint Search] Large distance to waypoint (59.0m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (59.0m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=58.98m (was 0 at 58.98m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=58.98m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=58.98m)
+[CTE-Aware PID] CTE=10.74m, target_speed=30.0m/s -> effective=1.5m/s (current=3.53m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=10.74m >= 10m, speed=3.53m/s: REDUCING THROTTLE + LIGHT BRAKE (throttle=0.0, brake=0.100)
+[CTE-Aware PID] speed_error=-2.00m/s, throttle_pid=0.000, cte_brake=0.100
+[MPC] Position error too large: 10.74m > 8.0m
+[MPC Fallback] Using proportional steering: -0.398 (e_y=10.74m, e_psi=0.92rad if available)
+\n[FollowRacingLineMPC] Step 18:
+  Position: (4.68, 39.60)
+  Speed: 3.53 m/s
+  CTE: 10.744 m (LEFT)
+  MPC steering: -0.398 -> -0.398 (after slew limit)
+  Final controls: throttle=0.000, brake=0.100, steer=-0.398, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.39808632088319984
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.39808632088319984}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.39808632088319984, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.1
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.39808632088319984, 'throttle': 0.0, 'braking': 0.1}
+[Waypoint Search] Large distance to waypoint (62.5m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (62.5m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=62.48m (was 0 at 62.48m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=62.48m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=62.48m)
+[CTE-Aware PID] CTE=11.94m, target_speed=30.0m/s -> effective=1.0m/s (current=3.04m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=11.94m >= 10m, speed=3.04m/s: REDUCING THROTTLE + LIGHT BRAKE (throttle=0.0, brake=0.100)
+[CTE-Aware PID] speed_error=-2.00m/s, throttle_pid=0.000, cte_brake=0.100
+[MPC] Position error too large: 11.94m > 8.0m
+[MPC Fallback] Using proportional steering: -0.432 (e_y=11.94m, e_psi=0.95rad if available)
+\n[FollowRacingLineMPC] Step 19:
+  Position: (1.47, 38.08)
+  Speed: 3.04 m/s
+  CTE: 11.936 m (LEFT)
+  MPC steering: -0.432 -> -0.432 (after slew limit)
+  Final controls: throttle=0.000, brake=0.100, steer=-0.432, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.43150806040999107
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.43150806040999107}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.43150806040999107, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.1
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.43150806040999107, 'throttle': 0.0, 'braking': 0.1}
+[Waypoint Search] Large distance to waypoint (64.6m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (64.6m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=64.61m (was 0 at 64.61m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=64.61m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=64.61m)
+[CTE-Aware PID] CTE=12.79m, target_speed=30.0m/s -> effective=0.0m/s (current=0.05m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=12.79m >= 10m but slow (speed=0.05m/s): ALLOWING MIN THROTTLE (0.100)
+[CTE-Aware PID] speed_error=-0.05m/s, throttle_pid=0.100, cte_brake=0.000
+[MPC] Position error too large: 12.79m > 8.0m
+[MPC Fallback] Using proportional steering: -0.465 (e_y=12.79m, e_psi=0.97rad if available)
+\n[FollowRacingLineMPC] Step 20:
+  Position: (-0.54, 37.28)
+  Speed: 0.05 m/s
+  CTE: 12.794 m (LEFT)
+  MPC steering: -0.465 -> -0.465 (after slew limit)
+  Final controls: throttle=0.100, brake=0.000, steer=-0.465, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.46490644671272163
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.46490644671272163}
+[DSPACERacingCar.setThrottle] Called with throttle=0.1
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.46490644671272163, 'throttle': 0.1}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.46490644671272163, 'throttle': 0.1, 'braking': 0.0}
+[Waypoint Search] Large distance to waypoint (64.6m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (64.6m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=64.63m (was 0 at 64.63m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=64.63m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=64.63m)
+[CTE-Aware PID] CTE=12.81m, target_speed=30.0m/s -> effective=0.0m/s (current=0.81m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=12.81m >= 10m but slow (speed=0.81m/s): ALLOWING MIN THROTTLE (0.100)
+[CTE-Aware PID] speed_error=-0.81m/s, throttle_pid=0.100, cte_brake=0.000
+[MPC] Position error too large: 12.81m > 8.0m
+[MPC Fallback] Using proportional steering: -0.498 (e_y=12.81m, e_psi=0.97rad if available)
+\n[FollowRacingLineMPC] Step 21:
+  Position: (-0.57, 37.28)
+  Speed: 0.81 m/s
+  CTE: 12.809 m (LEFT)
+  MPC steering: -0.498 -> -0.498 (after slew limit)
+  Final controls: throttle=0.100, brake=0.000, steer=-0.498, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.4980835857300878
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.4980835857300878}
+[DSPACERacingCar.setThrottle] Called with throttle=0.1
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.4980835857300878, 'throttle': 0.1}
+[DSPACERacingCar.setBraking] Called with braking=0.0
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.4980835857300878, 'throttle': 0.1, 'braking': 0.0}
+[Waypoint Search] Large distance to waypoint (66.0m), finding nearest waypoint first...
+[Waypoint Search] Nearest in window still far (66.0m), scanning all waypoints...
+[Waypoint Search] Found nearest waypoint: index=0, distance=66.03m (was 0 at 66.03m)
+[Waypoint Search] Found waypoint with aggressive search: index=0, distance=66.03m
+[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead
+[FollowRacingLineMPCBehavior] Waypoint index: 0 (distance=66.03m)
+[CTE-Aware PID] CTE=13.32m, target_speed=30.0m/s -> effective=0.5m/s (current=2.54m/s, max_limit=17.9m/s)
+[CTE-Aware PID] CTE=13.32m >= 10m, speed=2.54m/s: REDUCING THROTTLE + LIGHT BRAKE (throttle=0.0, brake=0.100)
+[CTE-Aware PID] speed_error=-2.00m/s, throttle_pid=0.000, cte_brake=0.100
+[MPC] Position error too large: 13.32m > 8.0m
+[MPC Fallback] Using proportional steering: -0.532 (e_y=13.32m, e_psi=0.99rad if available)
+\n[FollowRacingLineMPC] Step 22:
+  Position: (-1.87, 36.70)
+  Speed: 2.54 m/s
+  CTE: 13.320 m (LEFT)
+  MPC steering: -0.532 -> -0.532 (after slew limit)
+  Final controls: throttle=0.000, brake=0.100, steer=-0.532, gear=1
+[DSPACERacingCar.setSteering] Called with steering=-0.5317642130879422
+[DSPACERacingCar.setSteering] Stored in _control_state: {'steering': -0.5317642130879422}
+[DSPACERacingCar.setThrottle] Called with throttle=0.0
+[DSPACERacingCar.setThrottle] Stored in _control_state: {'steering': -0.5317642130879422, 'throttle': 0.0}
+[DSPACERacingCar.setBraking] Called with braking=0.1
+[DSPACERacingCar.setBraking] Stored in _control_state: {'steering': -0.5317642130879422, 'throttle': 0.0, 'braking': 0.1}
+  Ran simulation in 58.73 seconds.

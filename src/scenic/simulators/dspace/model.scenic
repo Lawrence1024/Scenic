@@ -23,7 +23,7 @@ from scenic.domains.driving.actions import Steers
 # dSPACE ModelDesk parameters
 param scenario_src = "LagunaSeca_ExternalControl"
 param scenario_name = None
-param timestep = 0.01
+param timestep = 1.0
 
 # Configure the dSPACE simulator
 simulator dspace.DSpaceSimulator(

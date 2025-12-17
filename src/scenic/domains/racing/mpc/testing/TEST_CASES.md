@@ -323,10 +323,18 @@ When adding new functionality:
 
 ## Changelog
 
+### 2024-12-19 - Integration Testing Complete
+- ✅ Added behavior integration tests (`test_behavior_integration.py`)
+- ✅ Added simulation integration tests (`test_simulation_integration.py`)
+- ✅ Added scenario compilation tests (`test_scenario_compilation.py`)
+- ✅ Updated test runner to include all new tests
+- ✅ All 27 tests passing! (4 skipped due to missing dependencies/config)
+- ✅ Test coverage: Unit tests, integration tests, and scenario compilation tests
+
 ### 2024-12-19 - Test Fixes
 - ✅ Fixed test expectation for lateral error sign convention
 - ✅ Fixed OSQP solver update issue (now uses setup() each step instead of update())
-- ✅ All 18 tests now passing!
+- ✅ All 18 unit tests now passing!
 
 ### 2024-12-19 - Initial Test Suite
 - Created test infrastructure

@@ -59,7 +59,31 @@ def read_state_from_controldesk(sim: DSpaceSimulation, obj) -> Dict[str, float]:
             state['yaw_rate'] = float(angvel.z)
     
     # Try to read actual steering if available
-    # TODO: Add ControlDesk path for steer_actual if available
+    # Check if config has steer_actual path configured
+    if hasattr(sim, 'mpc_config') and sim.mpc_config:
+        steer_path = sim.mpc_config.controldesk_paths.get('steer_actual')
+        if steer_path:
+            try:
+                # Read steering angle from ControlDesk
+                steer_val = sim._cd.get_var(steer_path)
+                # Convert to radians (assuming degrees from ControlDesk)
+                import math
+                steer_rad = float(steer_val) * (math.pi / 180.0)
+                state['steer_actual'] = steer_rad
+                
+                # Debug logging (first few reads only)
+                if not hasattr(sim, '_steer_feedback_log_count'):
+                    sim._steer_feedback_log_count = 0
+                if sim._steer_feedback_log_count < 3:
+                    print(f"[MPC Steering Feedback] Read: {steer_val:.3f} deg ({steer_rad:.4f} rad)")
+                    sim._steer_feedback_log_count += 1
+            except Exception as e:
+                # Path might not exist or variable not available
+                # Fall back to using previous control estimate
+                if not hasattr(sim, '_steer_feedback_error_logged'):
+                    print(f"[MPC Steering Feedback] Warning: Could not read steering feedback: {e}")
+                    print(f"[MPC Steering Feedback] Falling back to previous control estimate")
+                    sim._steer_feedback_error_logged = True
     
     return state
 
