@@ -16,9 +16,9 @@ model scenic.domains.racing.model
 
 # --- Ego car with MPC behavior ---
 # Using main racing road centerline TTL (excluding pitlane)
-ego = new RacingCar at (-75.55, -109.95, 0.0), \
+ego = new RacingCar at (72.567889, 107.574718, 0.0), \
     with raceNumber 1, \
-    with ttlFileName 'ttl_main_racing_road.csv', \
+    with ttlFileName 'ttl_fellow_test_xodr.csv', \
     with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV/transformed'), \
     with ttlDX 0.0, \
     with ttlDY 0.0
@@ -34,6 +34,6 @@ ego.behavior = FollowRacingLineMPCBehavior(
 
 # Using main racing road centerline TTL (3541 waypoints, ~4.2km total length)
 # Waypoints are in XODR coordinate system and guaranteed to be on-road
-# TTL file: ttl_main_racing_road.csv
+# TTL file: ttl_fellow_test_xodr.csv (XODR coordinates, transformed from dSPACE)
 
 fellow1 = new RacingCar at (66.428759, 87.330550, 0.0)

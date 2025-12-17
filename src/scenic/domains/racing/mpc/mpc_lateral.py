@@ -99,6 +99,36 @@ class MPCLateralController:
             Tuple of (P, q, A, l, u) for QP: minimize 0.5*x'*P*x + q'*x
             subject to l <= A*x <= u
         """
+        # Ensure horizon is a positive integer
+        horizon = int(horizon)
+        if horizon <= 0:
+            raise ValueError(f"horizon must be > 0, got {horizon}")
+        
+        # Ensure all reference arrays are 1D numpy arrays with correct shape
+        # Arrays should already be correct from build_reference, but validate them
+        if not isinstance(psi_ref, np.ndarray):
+            raise TypeError(f"psi_ref must be a numpy array, got {type(psi_ref)}")
+        if not isinstance(kappa_ref, np.ndarray):
+            raise TypeError(f"kappa_ref must be a numpy array, got {type(kappa_ref)}")
+        if not isinstance(v_ref, np.ndarray):
+            raise TypeError(f"v_ref must be a numpy array, got {type(v_ref)}")
+        
+        # Ensure arrays are 1D
+        if psi_ref.ndim != 1:
+            raise ValueError(f"psi_ref must be 1D, got {psi_ref.ndim}D array with shape {psi_ref.shape}")
+        if kappa_ref.ndim != 1:
+            raise ValueError(f"kappa_ref must be 1D, got {kappa_ref.ndim}D array with shape {kappa_ref.shape}")
+        if v_ref.ndim != 1:
+            raise ValueError(f"v_ref must be 1D, got {v_ref.ndim}D array with shape {v_ref.shape}")
+        
+        # Verify arrays have correct length
+        if len(psi_ref) != horizon:
+            raise ValueError(f"psi_ref length mismatch: expected {horizon}, got {len(psi_ref)}. Shape: {psi_ref.shape}, dtype: {psi_ref.dtype}")
+        if len(kappa_ref) != horizon:
+            raise ValueError(f"kappa_ref length mismatch: expected {horizon}, got {len(kappa_ref)}. Shape: {kappa_ref.shape}, dtype: {kappa_ref.dtype}")
+        if len(v_ref) != horizon:
+            raise ValueError(f"v_ref length mismatch: expected {horizon}, got {len(v_ref)}. Shape: {v_ref.shape}, dtype: {v_ref.dtype}")
+        
         n_x = 3
         n_u = 1
         n_vars = horizon * n_u + (horizon + 1) * n_x
@@ -253,6 +283,13 @@ class MPCLateralController:
                 last_waypoint_idx=current_waypoint_idx,
                 cte_magnitude=cte_magnitude
             )
+            # Debug: verify arrays right after build_reference returns
+            if len(psi_ref) != self.config.mpc_prediction_horizon:
+                raise ValueError(f"[MPC] CRITICAL: build_reference returned psi_ref with wrong length: expected {self.config.mpc_prediction_horizon}, got {len(psi_ref)}. Shape: {psi_ref.shape}, dtype: {psi_ref.dtype}")
+            if len(kappa_ref) != self.config.mpc_prediction_horizon:
+                raise ValueError(f"[MPC] CRITICAL: build_reference returned kappa_ref with wrong length: expected {self.config.mpc_prediction_horizon}, got {len(kappa_ref)}. Shape: {kappa_ref.shape}, dtype: {kappa_ref.dtype}")
+            if len(v_ref) != self.config.mpc_prediction_horizon:
+                raise ValueError(f"[MPC] CRITICAL: build_reference returned v_ref with wrong length: expected {self.config.mpc_prediction_horizon}, got {len(v_ref)}. Shape: {v_ref.shape}, dtype: {v_ref.dtype}")
         except Exception as e:
             print(f"[MPC] Error building reference: {e}")
             # Try to compute errors for proportional fallback, but don't fail if it doesn't work
@@ -275,6 +312,24 @@ class MPCLateralController:
             waypoint_idx=new_waypoint_idx
         )
         
+        # Compute reference heading for logging (extract from _compute_errors logic)
+        # NOTE: Use different variable name to avoid shadowing the psi_ref array from build_reference
+        psi_ref_logging = None
+        if waypoints and len(waypoints) > new_waypoint_idx and new_waypoint_idx >= 0:
+            if new_waypoint_idx < len(waypoints) - 1:
+                wp0 = waypoints[new_waypoint_idx]
+                wp1 = waypoints[new_waypoint_idx + 1]
+                seg_dx = wp1[0] - wp0[0]
+                seg_dy = wp1[1] - wp0[1]
+                seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)
+                if seg_len > 1e-6:
+                    psi_ref_logging = np.arctan2(seg_dy, seg_dx)
+                    # Apply same 180° flip logic as in _compute_errors
+                    heading_diff = psi_ref_logging - yaw
+                    heading_diff = np.arctan2(np.sin(heading_diff), np.cos(heading_diff))
+                    if abs(heading_diff) > np.pi / 2:  # > 90 degrees
+                        psi_ref_logging = np.arctan2(np.sin(psi_ref_logging + np.pi), np.cos(psi_ref_logging + np.pi))
+        
         # Safety check: disable MPC if errors too large
         # Use proportional fallback to prevent catch-22 (large error → no steering → larger error)
         if abs(e_y) > self.config.admissible_position_error:
@@ -282,7 +337,16 @@ class MPCLateralController:
             return self._fallback_steering(e_y=e_y, e_psi=e_psi)
         
         if abs(e_psi) > self.config.admissible_yaw_error_rad:
-            print(f"[MPC] Yaw error too large: {e_psi:.2f}rad > {self.config.admissible_yaw_error_rad}rad")
+            # Enhanced logging: show orientation information to diagnose large yaw errors
+            vehicle_heading_deg = yaw * 180.0 / np.pi
+            yaw_error_deg = e_psi * 180.0 / np.pi
+            if psi_ref_logging is not None:
+                ref_heading_deg = psi_ref_logging * 180.0 / np.pi
+                print(f"[MPC] Yaw error too large: {e_psi:.2f}rad ({yaw_error_deg:.1f}deg) > {self.config.admissible_yaw_error_rad:.2f}rad")
+                print(f"[MPC] Orientation details: vehicle_heading={vehicle_heading_deg:.1f}deg, reference_heading={ref_heading_deg:.1f}deg, error={yaw_error_deg:.1f}deg")
+            else:
+                print(f"[MPC] Yaw error too large: {e_psi:.2f}rad ({yaw_error_deg:.1f}deg) > {self.config.admissible_yaw_error_rad:.2f}rad")
+                print(f"[MPC] Orientation details: vehicle_heading={vehicle_heading_deg:.1f}deg, reference_heading=N/A, error={yaw_error_deg:.1f}deg")
             return self._fallback_steering(e_y=e_y, e_psi=e_psi)
         
         # Get current steering angle (delta)
@@ -295,14 +359,11 @@ class MPCLateralController:
         self.state = np.array([e_y, e_psi, delta])
         
         # Build QP matrices
-        try:
-            P, q, A, l, u = self._build_qp_matrices(
-                self.state, psi_ref, kappa_ref, v_ref,
-                self.config.mpc_prediction_horizon
-            )
-        except Exception as e:
-            print(f"[MPC] Error building QP: {e}")
-            return self._fallback_steering()
+        # Don't catch exceptions - let them propagate to identify bugs
+        P, q, A, l, u = self._build_qp_matrices(
+            self.state, psi_ref, kappa_ref, v_ref,
+            self.config.mpc_prediction_horizon
+        )
         
         # Initialize solver on first solve
         if not self._solver_initialized:
@@ -403,6 +464,15 @@ class MPCLateralController:
         # Compute heading error (e_psi)
         # Reference heading is the segment direction
         psi_ref = np.arctan2(seg_dy, seg_dx)
+        
+        # CRITICAL: If reference heading is opposite to vehicle heading (>90° difference),
+        # flip it by 180° to align with vehicle's forward direction
+        # This ensures "forward along track" matches "forward from vehicle perspective"
+        heading_diff = psi_ref - heading
+        heading_diff = np.arctan2(np.sin(heading_diff), np.cos(heading_diff))  # Normalize to [-pi, pi]
+        if abs(heading_diff) > np.pi / 2:  # > 90 degrees
+            # Flip reference heading by 180°
+            psi_ref = np.arctan2(np.sin(psi_ref + np.pi), np.cos(psi_ref + np.pi))
         
         # Heading error: difference between reference and actual
         # Normalize to [-pi, pi]

@@ -10,6 +10,7 @@ from scenic.domains.driving.controllers import PIDLateralController, PIDLongitud
 from scenic.domains.driving.actions import SetThrottleAction, SetBrakeAction, SetSteerAction
 from scenic.domains.racing.actions import SetMaxSpeedAction, SetTTLAction, SetSpeedLimitAction, SetTTLSelectionAction, SetTargetGapAction, SetStrategyAction, SetPowertrainModeAction, SetScaleFactorAction, SetPush2PassAction, StopCarAction, SetGearAction
 import scenic.domains.racing.model as _racing
+import math
 
 # Import waypoint finding utility
 import sys
@@ -491,6 +492,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         except Exception as e:
             print(f"[FollowRacingLineMPCBehavior] Warning: Could not initialize waypoint index: {e}, starting from index 0")
             wp_last_idx = 0
+        
+        # Initialize waypoint progress tracking
+        if not hasattr(self, '_waypoints_passed'):
+            self._waypoints_passed = 0
 
     while True:
         # Calculate Control Signals
@@ -564,33 +569,44 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     nearest_dist = best_d2 ** 0.5
                     print(f"[Waypoint Search] Found nearest waypoint: index={nearest_idx}, distance={nearest_dist:.2f}m (was {wp_last_idx} at {current_wp_dist:.2f}m)")
                     
-                    # Now use the nearest waypoint as starting point for aggressive search
-                    # This ensures we find waypoints near the vehicle, not biased toward old index
+                    # CRITICAL: Always enforce forward progress - never use a backward waypoint as starting point
+                    # If nearest waypoint is backward, use current wp_last_idx instead to maintain forward progress
+                    search_start_idx = nearest_idx if nearest_idx >= wp_last_idx else wp_last_idx
+                    if nearest_idx < wp_last_idx:
+                        print(f"[Waypoint Search] Nearest waypoint ({nearest_idx}) is backward, using current index ({wp_last_idx}) to enforce forward progress")
+                    
+                    # Now use the search_start_idx as starting point for aggressive search
+                    # CRITICAL: Always use forward_only=True to prevent backward waypoint jumps
                     result = find_best_racing_waypoint(
                         car_position=(px, py),
                         car_heading=car_heading if car_heading is not None else 0.0,
                         waypoints=wp_list,
-                        last_known_index=nearest_idx,  # Use nearest as starting point, not old index
+                        last_known_index=search_start_idx,  # Always forward from wp_last_idx
                         max_search_distance=500.0,  # Very large search distance
-                        forward_bias=0.5,  # Less strict forward bias (allow more flexibility)
+                        forward_bias=0.95,  # Strong forward bias to prefer forward progress
                         min_forward_distance=0.0,  # Remove minimum forward distance requirement
-                        forward_only=False  # Allow backward search if needed (vehicle may have passed waypoint)
+                        forward_only=True  # CRITICAL: Always enforce forward-only to prevent backward jumps
                     )
                     if result:
                         print(f"[Waypoint Search] Found waypoint with aggressive search: index={result['index']}, distance={result.get('distance', 0.0):.2f}m")
-                        # If result is still the old index and distance is large, use nearest instead
+                        # If result is still the old index and distance is large, enforce forward progress
+                        # Never use a backward waypoint even if it's nearest
                         if result['index'] == wp_last_idx and result.get('distance', 0.0) > 10.0:
-                            print(f"[Waypoint Search] Aggressive search returned old index with large distance, using nearest waypoint instead")
-                            result = {
-                                'index': nearest_idx,
-                                'waypoint': wp_list[nearest_idx],
-                                'distance': nearest_dist,
-                                'forward_score': 1.0 if nearest_idx >= wp_last_idx else 0.5,
-                                'heading_alignment': 0.5,
-                                'total_score': 0.0,
-                                'next_index': (nearest_idx + 1) % len(wp_list),
-                                'next_waypoint': wp_list[(nearest_idx + 1) % len(wp_list)]
-                            }
+                            # Only use nearest if it's forward; otherwise keep current index
+                            if nearest_idx >= wp_last_idx:
+                                print(f"[Waypoint Search] Aggressive search returned old index with large distance, using forward nearest waypoint ({nearest_idx}) instead")
+                                result = {
+                                    'index': nearest_idx,
+                                    'waypoint': wp_list[nearest_idx],
+                                    'distance': nearest_dist,
+                                    'forward_score': 1.0,
+                                    'heading_alignment': 0.5,
+                                    'total_score': 0.0,
+                                    'next_index': (nearest_idx + 1) % len(wp_list),
+                                    'next_waypoint': wp_list[(nearest_idx + 1) % len(wp_list)]
+                                }
+                            else:
+                                print(f"[Waypoint Search] Aggressive search returned old index with large distance, but nearest ({nearest_idx}) is backward - keeping current index ({wp_last_idx}) to enforce forward progress")
                 
                 # If aggressive search didn't find anything, try standard forward-only search
                 if not result:
@@ -681,10 +697,36 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     # Debug logging: show waypoint index updates
                     wp_dist = result.get('distance', 0.0)
                     if new_wp_idx != old_wp_idx:
-                        print(f"[FollowRacingLineMPCBehavior] Waypoint index updated: {old_wp_idx} -> {new_wp_idx} (distance={wp_dist:.2f}m)")
+                        # Initialize waypoint progress tracking
+                        if not hasattr(self, '_waypoints_passed'):
+                            self._waypoints_passed = 0
+                        
+                        # Track forward progress (but handle backward jumps)
+                        if new_wp_idx > old_wp_idx:
+                            # Forward progress
+                            progress = new_wp_idx - old_wp_idx
+                            self._waypoints_passed += progress
+                        elif new_wp_idx < old_wp_idx:
+                            # Backward jump detected (shouldn't happen with forward_only=True, but log it)
+                            print(f"[FollowRacingLineMPCBehavior] WARNING: Backward waypoint jump detected: {old_wp_idx} -> {new_wp_idx}")
+                        
+                        # WAYPOINT HIT: Index changed
+                        if new_wp_idx < len(wp_list):
+                            hit_wp = wp_list[new_wp_idx]
+                            hit_wp_x, hit_wp_y = float(hit_wp[0]), float(hit_wp[1])
+                            progress_pct = (self._waypoints_passed / len(wp_list)) * 100.0 if len(wp_list) > 0 else 0.0
+                            print(f"[FollowRacingLineMPCBehavior] WAYPOINT HIT: index {old_wp_idx} -> {new_wp_idx} at ({hit_wp_x:.2f}, {hit_wp_y:.2f}), distance={wp_dist:.2f}m")
+                            print(f"[FollowRacingLineMPCBehavior] Progress: {self._waypoints_passed} waypoints passed ({progress_pct:.1f}% of {len(wp_list)} total waypoints)")
+                        else:
+                            print(f"[FollowRacingLineMPCBehavior] Waypoint index updated: {old_wp_idx} -> {new_wp_idx} (distance={wp_dist:.2f}m)")
                     else:
-                        # Log current waypoint index (every step for now)
-                        print(f"[FollowRacingLineMPCBehavior] Waypoint index: {wp_last_idx} (distance={wp_dist:.2f}m)")
+                        # Log current waypoint index with coordinates (every step for now)
+                        if wp_last_idx < len(wp_list):
+                            current_wp = wp_list[wp_last_idx]
+                            current_wp_x, current_wp_y = float(current_wp[0]), float(current_wp[1])
+                            print(f"[FollowRacingLineMPCBehavior] Waypoint index: {wp_last_idx} at ({current_wp_x:.2f}, {current_wp_y:.2f}), distance={wp_dist:.2f}m")
+                        else:
+                            print(f"[FollowRacingLineMPCBehavior] Waypoint index: {wp_last_idx} (distance={wp_dist:.2f}m)")
                 else:
                     # Still no waypoint found - log warning but keep current index
                     print(f"[FollowRacingLineMPCBehavior] WARNING: Could not find any forward waypoint, keeping index {wp_last_idx}")
@@ -1155,6 +1197,36 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         print(f"  Position: ({px:.2f}, {py:.2f})")
         print(f"  Speed: {current_speed:.2f} m/s")
         print(f"  CTE: {cte:.3f} m {'(LEFT)' if cte > 0 else '(RIGHT)'}")
+        
+        # Add waypoint information
+        if use_waypoints and wp_list and len(wp_list) >= 2 and wp_last_idx is not None:
+            if wp_last_idx < len(wp_list):
+                current_wp = wp_list[wp_last_idx]
+                current_wp_x, current_wp_y = float(current_wp[0]), float(current_wp[1])
+                # Calculate distance to current waypoint
+                dx_to_wp = px - current_wp_x
+                dy_to_wp = py - current_wp_y
+                dist_to_wp = (dx_to_wp*dx_to_wp + dy_to_wp*dy_to_wp) ** 0.5
+                
+                print(f"  Current waypoint: index={wp_last_idx}, coord=({current_wp_x:.2f}, {current_wp_y:.2f}), distance={dist_to_wp:.2f}m")
+                
+                # Next waypoint information
+                if wp_last_idx < len(wp_list) - 1:
+                    next_wp = wp_list[wp_last_idx + 1]
+                    next_wp_x, next_wp_y = float(next_wp[0]), float(next_wp[1])
+                    # Calculate segment heading (orientation)
+                    seg_dx = next_wp_x - current_wp_x
+                    seg_dy = next_wp_y - current_wp_y
+                    seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                    if seg_len > 1e-6:
+                        seg_heading = math.atan2(seg_dy, seg_dx)  # radians
+                        seg_heading_deg = seg_heading * 180.0 / math.pi
+                        print(f"  Next waypoint: index={wp_last_idx + 1}, coord=({next_wp_x:.2f}, {next_wp_y:.2f}), segment_heading={seg_heading_deg:.1f}deg")
+                elif wp_last_idx == len(wp_list) - 1:
+                    print(f"  Next waypoint: N/A (at last waypoint)")
+        else:
+            print(f"  Current waypoint: N/A (no waypoints available)")
+        
         print(f"  MPC steering: {steer_mpc:.3f} -> {final_steer:.3f} (after slew limit)")
         print(f"  Final controls: throttle={final_throttle:.3f}, brake={final_brake:.3f}, steer={final_steer:.3f}, gear={gear_val}")
 

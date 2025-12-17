@@ -243,10 +243,15 @@ class ReferenceBuilder:
             adaptive_search=True, cte_magnitude=cte_estimate
         )
         
-        # Build reference arrays
-        psi_ref = np.zeros(horizon_steps)
-        kappa_ref = np.zeros(horizon_steps)
-        v_ref = np.full(horizon_steps, speed)  # Constant speed for now
+        # Ensure horizon_steps is a positive integer
+        horizon_steps = int(horizon_steps)
+        if horizon_steps <= 0:
+            raise ValueError(f"horizon_steps must be > 0, got {horizon_steps}")
+        
+        # Build reference arrays - ensure they are 1D numpy arrays
+        psi_ref = np.zeros(horizon_steps, dtype=np.float64)
+        kappa_ref = np.zeros(horizon_steps, dtype=np.float64)
+        v_ref = np.full(horizon_steps, float(speed), dtype=np.float64)  # Constant speed for now
         
         # Distance to travel over horizon
         horizon_dist = speed * horizon_steps * dt
@@ -254,6 +259,19 @@ class ReferenceBuilder:
         # Build reference by walking along waypoints
         current_idx = nearest_idx
         accumulated_dist = 0.0
+        
+        # Helper function to flip heading by 180° if opposite to vehicle heading
+        def adjust_heading_if_opposite(seg_heading, vehicle_heading):
+            """Flip segment heading by 180° if it's opposite to vehicle heading (>90° difference)."""
+            import math
+            heading_diff = seg_heading - vehicle_heading
+            # Normalize to [-pi, pi]
+            heading_diff = math.atan2(math.sin(heading_diff), math.cos(heading_diff))
+            if abs(heading_diff) > math.pi / 2:  # > 90 degrees
+                # Flip by 180°
+                flipped = seg_heading + math.pi
+                return math.atan2(math.sin(flipped), math.cos(flipped))  # Normalize to [-pi, pi]
+            return seg_heading
         
         for k in range(horizon_steps):
             target_dist = speed * (k + 1) * dt
@@ -277,7 +295,9 @@ class ReferenceBuilder:
                     ref_y = y0 + u * dy
                     
                     # Compute heading (tangent direction)
-                    psi_ref[k] = math.atan2(dy, dx)
+                    seg_heading = math.atan2(dy, dx)
+                    # Flip by 180° if opposite to vehicle heading
+                    psi_ref[k] = adjust_heading_if_opposite(seg_heading, current_heading)
                     
                     # Compute curvature (use 3-point method if possible)
                     if current_idx > 0 and current_idx < len(waypoints) - 1:
@@ -299,10 +319,40 @@ class ReferenceBuilder:
                     prev_seg = waypoints[-2]
                     dx = last_seg[0] - prev_seg[0]
                     dy = last_seg[1] - prev_seg[1]
-                    psi_ref[k] = math.atan2(dy, dx)
+                    seg_heading = math.atan2(dy, dx)
+                    # Flip by 180° if opposite to vehicle heading
+                    psi_ref[k] = adjust_heading_if_opposite(seg_heading, current_heading)
                 else:
                     psi_ref[k] = current_heading
-                kappa_ref[k] = 0.0
+                    kappa_ref[k] = 0.0
+        
+        # Verify arrays have correct shape and length before returning
+        # Arrays should already be correctly initialized with shape (horizon_steps,)
+        # Don't modify the arrays - just validate them
+        
+        # Check that arrays are numpy arrays
+        if not isinstance(psi_ref, np.ndarray):
+            raise TypeError(f"psi_ref must be a numpy array, got {type(psi_ref)}")
+        if not isinstance(kappa_ref, np.ndarray):
+            raise TypeError(f"kappa_ref must be a numpy array, got {type(kappa_ref)}")
+        if not isinstance(v_ref, np.ndarray):
+            raise TypeError(f"v_ref must be a numpy array, got {type(v_ref)}")
+        
+        # Ensure arrays are 1D with correct length
+        if psi_ref.ndim != 1:
+            raise ValueError(f"psi_ref must be 1D, got {psi_ref.ndim}D array with shape {psi_ref.shape}")
+        if kappa_ref.ndim != 1:
+            raise ValueError(f"kappa_ref must be 1D, got {kappa_ref.ndim}D array with shape {kappa_ref.shape}")
+        if v_ref.ndim != 1:
+            raise ValueError(f"v_ref must be 1D, got {v_ref.ndim}D array with shape {v_ref.shape}")
+        
+        # Verify arrays have correct length - this is the critical check
+        if len(psi_ref) != horizon_steps:
+            raise ValueError(f"psi_ref length mismatch: expected {horizon_steps}, got {len(psi_ref)}. Shape: {psi_ref.shape}, dtype: {psi_ref.dtype}")
+        if len(kappa_ref) != horizon_steps:
+            raise ValueError(f"kappa_ref length mismatch: expected {horizon_steps}, got {len(kappa_ref)}. Shape: {kappa_ref.shape}, dtype: {kappa_ref.dtype}")
+        if len(v_ref) != horizon_steps:
+            raise ValueError(f"v_ref length mismatch: expected {horizon_steps}, got {len(v_ref)}. Shape: {v_ref.shape}, dtype: {v_ref.dtype}")
         
         return (psi_ref, kappa_ref, v_ref, nearest_idx)
 
