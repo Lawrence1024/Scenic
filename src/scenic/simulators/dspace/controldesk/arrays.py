@@ -24,8 +24,6 @@ def ensure_fellow_arrays_initialized(sim):
         if num_fellows == 0:
             num_fellows = 5
 
-        print(f"[dSPACE] Starting warm-up: waiting for {num_fellows} fellow array(s) to be populated...")
-        
         # More aggressive warm-up: advance more steps and wait for REAL values
         max_attempts = 500  # Increased from 200
         for attempt in range(max_attempts):
@@ -66,38 +64,22 @@ def ensure_fellow_arrays_initialized(sim):
                 # This means fellows are actually spawned in the simulation
                 if has_real_values(x_arr, num_fellows) or (y_arr and has_real_values(y_arr, num_fellows)):
                     ready = True
-                    if attempt > 0:
-                        # Show what we found
-                        try:
-                            x_val = x_arr[0] if len(x_arr) > 0 else "N/A"
-                            y_val = y_arr[0] if y_arr and len(y_arr) > 0 else "N/A"
-                            print(f"[dSPACE] Arrays ready: x[0]={x_val}, y[0]={y_val}")
-                        except:
-                            pass
-            elif attempt < 10 or attempt % 50 == 0:
-                # Debug: show what we got periodically
-                x_type = type(x_arr).__name__ if x_arr is not None else "None"
-                x_len = len(x_arr) if isinstance(x_arr, (list, tuple)) else "N/A"
-                print(f"[dSPACE] Warm-up attempt {attempt}: x_arr type={x_type}, len={x_len}, num_fellows={num_fellows}")
-                
             if ready:
                 sim._fellow_arrays_initialized = True
                 sim._fellow_index_base = 0
-                print(f"[dSPACE] ✅ Fellow arrays initialized after {attempt} warm-up step(s)")
                 break
 
             if attempt < max_attempts - 1:
-                try:
-                    sim._cd.advance_simulation_step()
-                    # Small delay to let simulation process
-                    time.sleep(sim.timestep * 0.5)
-                except Exception as step_err:
-                    print(f"[dSPACE] Unable to advance simulation during warm-up (attempt {attempt}): {step_err}")
-                    # Don't break - keep trying
-                    time.sleep(sim.timestep)
+                # TEMPORARILY COMMENTED OUT FOR DEBUGGING - no stepping/pausing
+                # try:
+                #     sim._cd.advance_simulation_step()
+                #     time.sleep(sim.timestep * 0.5)
+                # except Exception:
+                #     time.sleep(sim.timestep)
+                # Just wait without stepping for debugging
+                time.sleep(sim.timestep * 0.5)
         if not sim._fellow_arrays_initialized:
-            print(f"[dSPACE] ❌ Fellow arrays still not initialized after {max_attempts} warm-up steps")
-            print(f"[dSPACE] This may indicate fellows are not spawning in the simulation. Check ModelDesk configuration.")
+            print(f"[dSPACE] [ERROR] Fellow arrays not initialized after {max_attempts} warm-up steps")
     finally:
         sim._initializing_fellow_arrays = False
 
@@ -124,7 +106,6 @@ def probe_external_index_base(sim):
                     sim._ext_d_path = d_candidates[0]
                     sim._ext_index_base = idx_base
                     sim._ext_probe_done = True
-                    print(f"[dSPACE] ExternalSignals ready at {vpath}[{idx_base}]")
                     return True
                 except Exception:
                     continue
@@ -132,7 +113,6 @@ def probe_external_index_base(sim):
             sim._ext_d_path = d_candidates[0]
             sim._ext_index_base = 0
             sim._ext_probe_done = True
-            print(f"[dSPACE] ExternalSignals available via bulk at {vpath} (no element addressing)")
             return True
         except Exception:
             continue
@@ -140,7 +120,6 @@ def probe_external_index_base(sim):
     sim._ext_d_path = d_candidates[0]
     sim._ext_index_base = 0
     sim._ext_probe_done = True
-    print("[dSPACE] ExternalSignals probe failed; using default paths")
     return False
 
 

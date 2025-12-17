@@ -68,7 +68,7 @@ class PIDLateralController:
         dt: time step
     """
 
-    def __init__(self, K_P=0.3, K_D=0.2, K_I=0, dt=0.1):
+    def __init__(self, K_P=0.3, K_D=0.2, K_I=0, dt=0.1, max_dterm_contribution=0.1):
         self.Kp = K_P
         self.Kd = K_D
         self.Ki = K_I
@@ -78,6 +78,7 @@ class PIDLateralController:
         self.dt = dt
         self.last_error = 0
         self.windup_guard = 20.0
+        self.max_dterm_contribution = max_dterm_contribution  # Limit DTerm contribution to prevent derivative kick
         self.output = 0
 
     def run_step(self, cte):
@@ -101,9 +102,19 @@ class PIDLateralController:
 
         self.DTerm = delta_error / self.dt
 
+        # Limit DTerm contribution to prevent derivative kick on first step or large error changes
+        # This is especially important for vehicle control where sudden large errors can cause
+        # excessive steering commands
+        dterm_contribution = self.Kd * self.DTerm
+        if abs(dterm_contribution) > self.max_dterm_contribution:
+            # Clamp DTerm contribution while preserving sign
+            dterm_contribution = self.max_dterm_contribution * (1.0 if dterm_contribution > 0 else -1.0)
+            # Recalculate DTerm to maintain the limited contribution
+            self.DTerm = dterm_contribution / self.Kd if self.Kd > 0 else 0.0
+
         # Remember last error for next calculation
         self.last_error = error
 
-        self.output = self.PTerm + (self.Ki * self.ITerm) + (self.Kd * self.DTerm)
+        self.output = self.PTerm + (self.Ki * self.ITerm) + dterm_contribution
 
         return np.clip(self.output, -1, 1)

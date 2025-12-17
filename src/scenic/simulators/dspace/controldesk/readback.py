@@ -32,11 +32,17 @@ def read_ego_state(sim, obj):
             from ..geometry.coordinate_transform import apply_inverse_coordinate_transform
             rd_x, rd_y = float(x), float(y)
             scenic_x, scenic_y = apply_inverse_coordinate_transform(sim._coordinate_transform, (rd_x, rd_y))
-            # Debug on first read
-            if not hasattr(obj, '_coord_transform_debug_shown'):
-                print(f"[readback:ego] Coordinate transform: RD ({rd_x:.2f}, {rd_y:.2f}) → Scenic ({scenic_x:.2f}, {scenic_y:.2f})")
-                obj._coord_transform_debug_shown = True
             x, y = scenic_x, scenic_y
+            
+            # Compare with expected position on first read
+            if hasattr(obj, '_expected_rd') and not hasattr(obj, '_readback_shown'):
+                expected_rd = obj._expected_rd
+                error_rd = math.sqrt((rd_x - expected_rd[0])**2 + (rd_y - expected_rd[1])**2)
+                expected_xodr = obj._scenic_xodr
+                error_xodr = math.sqrt((scenic_x - expected_xodr[0])**2 + (scenic_y - expected_xodr[1])**2)
+                print(f"[Ego Readback] RD: ({rd_x:.6f}, {rd_y:.6f}) [expected: ({expected_rd[0]:.6f}, {expected_rd[1]:.6f}), error: {error_rd:.3f}m]")
+                print(f"[Ego Readback] XODR: ({scenic_x:.6f}, {scenic_y:.6f}) [expected: ({expected_xodr[0]:.6f}, {expected_xodr[1]:.6f}), error: {error_xodr:.3f}m]")
+                obj._readback_shown = True
         
         # 2. Read Orientation
         yaw_deg = float(sim._cd.get_var(path_yaw))
@@ -58,7 +64,7 @@ def read_ego_state(sim, obj):
         return True
 
     except Exception as e:
-        print(f"[readback:ego] Error reading UI paths: {e}")
+        print(f"[Ego Readback] Error: {e}")
         return False
 
 
@@ -73,7 +79,6 @@ def read_fellow_state(sim, obj, dutils):
     
     # If arrays still not ready, this is a real problem - warm-up should have fixed this
     if not sim._fellow_arrays_initialized:
-        print(f"[readback:fellow] WARNING: Arrays not initialized - warm-up may have failed")
         return False
     
     try:
@@ -121,18 +126,25 @@ def read_fellow_state(sim, obj, dutils):
         
         # CRITICAL: Transform position from RD/dSPACE coordinates back to Scenic/XODR coordinates
         # Position read from ControlDesk is in RD coordinate system, but Scenic expects XODR coordinates
+        vehicle_name = getattr(obj, "name", f"Fellow_{fellow_index}")
+        
         if sim._coordinate_transform is not None:
             from ..geometry.coordinate_transform import apply_inverse_coordinate_transform
             rd_x, rd_y = float(x), float(y)
             scenic_x, scenic_y = apply_inverse_coordinate_transform(sim._coordinate_transform, (rd_x, rd_y))
-            # Debug on first read
-            if not hasattr(obj, '_coord_transform_debug_shown'):
-                print(f"[readback:fellow] Coordinate transform: RD ({rd_x:.2f}, {rd_y:.2f}) → Scenic ({scenic_x:.2f}, {scenic_y:.2f})")
-                obj._coord_transform_debug_shown = True
         else:
             scenic_x, scenic_y = float(x), float(y)
         
-        import math
+        # Compare with expected position on first read
+        if hasattr(obj, '_expected_rd') and not hasattr(obj, '_readback_shown'):
+            expected_rd = obj._expected_rd
+            error_rd = math.sqrt((rd_x - expected_rd[0])**2 + (rd_y - expected_rd[1])**2)
+            expected_xodr = obj._scenic_xodr
+            error_xodr = math.sqrt((scenic_x - expected_xodr[0])**2 + (scenic_y - expected_xodr[1])**2)
+            print(f"[{vehicle_name} Readback] RD: ({rd_x:.6f}, {rd_y:.6f}) [expected: ({expected_rd[0]:.6f}, {expected_rd[1]:.6f}), error: {error_rd:.3f}m]")
+            print(f"[{vehicle_name} Readback] XODR: ({scenic_x:.6f}, {scenic_y:.6f}) [expected: ({expected_xodr[0]:.6f}, {expected_xodr[1]:.6f}), error: {error_xodr:.3f}m]")
+            obj._readback_shown = True
+        
         obj.dspaceActor.position = Vector(scenic_x, scenic_y, float(z))
         obj.dspaceActor.heading = float(yaw_deg) * (math.pi / 180.0)
         yaw_rad = obj.dspaceActor.heading
@@ -146,11 +158,7 @@ def read_fellow_state(sim, obj, dutils):
     except Exception as e:
         msg = str(e)
         if "bounds" in msg:
-            if not hasattr(obj, '_array_bounds_warning_shown'):
-                print(f"[readback:fellow] Warning: Fellow {fellow_index} array not ready yet")
-                obj._array_bounds_warning_shown = True
             return False
-        print(f"[readback:fellow] Error: {e}")
         return False
 
 

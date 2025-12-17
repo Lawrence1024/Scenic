@@ -1,0 +1,47 @@
+/**:
+  ros__parameters:
+    # Timing
+    ctrl_period: 0.05  # Control update period (seconds) - will adapt to Scenic timestep
+    mpc_prediction_horizon: 30  # Prediction horizon steps
+    mpc_prediction_dt: 0.05  # Time step for prediction (seconds)
+    
+    # Vehicle geometry
+    wheel_base: 2.9718  # Wheelbase (meters) - from dspace_iac_car.param.yaml
+    max_steer_angle: 0.2816  # Maximum front-wheel angle (radians) - from dspace_iac_car.param.yaml
+    steer_tau: 0.3  # Steering actuator time constant (seconds) - from aw_lat_mpc.param.yaml
+    steer_rate_lim: 1.0  # Steering rate limit (rad/s) - conservative estimate
+    steer_cmd_max: 70  # Maximum steering command in ControlDesk units
+    
+    # Steering mapping (to be calibrated)
+    steer_scale: null  # Will be calibrated: delta_actual_rad / steer_cmd
+    
+    # MPC weights (from starting_guide.md initial values)
+    w_ey: 2.0  # Lateral error weight
+    w_epsi: 0.5  # Heading error weight
+    w_u: 0.2  # Control input weight
+    w_du: 5.0  # Control rate weight
+    wT_ey: 5.0  # Terminal lateral error weight
+    wT_epsi: 1.0  # Terminal heading error weight
+    
+    # Safety thresholds
+    admissible_position_error: 5.0  # Stop MPC if position error > this (meters)
+    admissible_yaw_error_rad: 1.57  # Stop MPC if yaw error > this (radians, ~90 deg)
+    max_invalid_count: 10  # Max consecutive solver failures before zeroing steering
+    
+    # Filtering
+    steering_lpf_cutoff_hz: 3.0  # Low-pass filter cutoff for steering output (Hz)
+    
+    # Waypoint/Reference
+    traj_resample_dist: 0.2  # Distance between resampled waypoints (meters)
+    
+    # ControlDesk variable paths (optional - can be overridden)
+    controldesk_paths:
+      # Read paths (from readback.py)
+      pose_x: "Platform()://ASM_Traffic/Model Root/VehicleDynamics/Plant/UserInterface/DISP_Plant/Positions/Pos_x_Vehicle_CoorSys_E[m]/Out1"
+      pose_y: "Platform()://ASM_Traffic/Model Root/VehicleDynamics/Plant/UserInterface/DISP_Plant/Positions/Pos_y_Vehicle_CoorSys_E[m]/Out1"
+      yaw: "Platform()://ASM_Traffic/Model Root/VehicleDynamics/Plant/UserInterface/DISP_Plant/Positions/Angle_Yaw_Vehicle_CoorSys_E[deg]/Out1"
+      speed: "Platform()://ASM_Traffic/Model Root/VehicleDynamics/Plant/UserInterface/DISP_Plant/Velocities/v_x_Vehicle_CoG[km|h]/Out1"
+      
+      # Write path (from controller.py)
+      steering: "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_steering_cmd/Value"
+

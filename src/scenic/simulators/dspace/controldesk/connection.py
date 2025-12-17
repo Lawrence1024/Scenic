@@ -82,7 +82,6 @@ class ControlDeskApp:
         self.set_var(maneuver_start_path, 1.0)
         time.sleep(0.1)
         self.set_var(maneuver_start_path, 0.0)
-        print("[ControlDesk] Maneuver started")
 
     def stop_maneuver(self):
         """Stop the active experiment's maneuver."""
@@ -102,7 +101,6 @@ class ControlDeskApp:
         try:
             platform = self.app.PlatformManagement.Platforms.Item(0)
             platform.SimulationTimeOptions.SingleStepTime = str(step)
-            print(f"[ControlDesk] Simulation step set to {step} seconds")
         except Exception as e:
             print(f"[ControlDesk] Error setting simulation step: {e}")
 
@@ -113,25 +111,12 @@ class ControlDeskApp:
         a paused state where it can be advanced step-by-step.
         """
         try:
-            print("[ControlDesk] Getting PlatformManagement...")
             platforms = self.app.PlatformManagement.Platforms
-            print(f"[ControlDesk] Found {platforms.Count} platform(s)")
-            
-            print("[ControlDesk] Getting platform 0...")
             platform = platforms.Item(0)
-            print(f"[ControlDesk] Platform: {platform.Name if hasattr(platform, 'Name') else 'Unknown'}")
-            
-            print("[ControlDesk] Getting RealTimeApplications...")
             rta = platform.RealTimeApplications.Item(0)
-            print(f"[ControlDesk] RealTimeApplication found")
-            
-            print("[ControlDesk] Calling rta.Pause()...")
             rta.Pause()
-            print("[ControlDesk] ✅ Simulation paused for step-by-step control")
         except Exception as e:
-            print(f"[ControlDesk] ❌ Error pausing simulation: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"[ControlDesk] Error pausing simulation: {e}")
 
     def advance_simulation_step(self):
         """Advance the dSPACE simulation by one timestep.
@@ -145,9 +130,6 @@ class ControlDeskApp:
             rta = platform.RealTimeApplications.Item(0)
             rta.SingleStep()
         except Exception as e:
-            print(f"[ControlDesk] ❌ Error advancing simulation step: {e}")
-            import traceback
-            traceback.print_exc()
             raise
 
     def initialize_vesi_interface(self):
@@ -156,11 +138,8 @@ class ControlDeskApp:
         Sets all required master switches, race control configuration, and enable flags
         to activate the VesiInterface manual control system.
         """
-        print("[ControlDesk] Initializing VesiInterface manual control interface...")
-        
         try:
             # Step 1: VesiInterface Master Switches
-            print("[ControlDesk] Setting master switches...")
             self.set_var(
                 "Platform()://ASM_Traffic/Model Root/VesiInterface/Sw_Activate_CLIF[0|1]/Value",
                 0.0
@@ -169,7 +148,6 @@ class ControlDeskApp:
                 "Platform()://ASM_Traffic/Model Root/VesiInterface/Sw_Manual_VESI_Overwrite[0|1]/Value",
                 1.0  # CRITICAL: Enable manual VESI control
             )
-            print("[ControlDesk] Master switches set")
             
             # Step 2: Race Control Configuration
             print("[ControlDesk] Configuring race control...")
@@ -189,10 +167,8 @@ class ControlDeskApp:
                 "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_veh_flag/Value",
                 0
             )
-            print("[ControlDesk] Race control configured")
             
             # Step 3: Enable Individual Control Channels
-            print("[ControlDesk] Enabling control channels...")
             self.set_var(
                 "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_enable_brake_cmd/Value",
                 1
@@ -209,10 +185,8 @@ class ControlDeskApp:
                 "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_enable_throttle_cmd/Value",
                 1
             )
-            print("[ControlDesk] Control channels enabled")
             
             # Step 4: Initialize all control values to 0
-            print("[ControlDesk] Initializing control values to 0...")
             KEY_THROTTLE = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_throttle_cmd/Value"
             KEY_BRAKE_FRONT = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_front/Value"
             KEY_BRAKE_REAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_rear/Value"
@@ -226,13 +200,8 @@ class ControlDeskApp:
             self.set_var(KEY_STEERING, 0)
             self.set_var(KEY_GEAR, 0.0)
             self.set_var(KEY_CLUTCH, 0.0)
-            print("[ControlDesk] All control values initialized to 0")
-            
-            print("[ControlDesk] VesiInterface initialization complete - manual control ready")
             
         except Exception as e:
             print(f"[ControlDesk] ERROR - VesiInterface initialization failed: {e}")
-            import traceback
-            traceback.print_exc()
 
 

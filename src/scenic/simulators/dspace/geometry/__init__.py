@@ -12,6 +12,7 @@ from .utils import (
     make_endless_transition,
     configure_seg0_absolute_pose,
     configure_seg1_motion,
+    get_road_name_for_id,
     MAIN_ROAD_NAMES
 )
 
@@ -31,6 +32,7 @@ __all__ = [
     'make_endless_transition',
     'configure_seg0_absolute_pose',
     'configure_seg1_motion',
+    'get_road_name_for_id',
     'MAIN_ROAD_NAMES',
 ]
 

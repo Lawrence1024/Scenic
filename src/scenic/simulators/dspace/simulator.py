@@ -155,16 +155,13 @@ class DSpaceSimulation(RacingSimulation):
             author_scenario(self)
 
         # 7) Save and Download All to simulator
-        print("[ModelDesk] Saving and downloading scenario...")
         try:
             self.ts.Save()
             self.ts.Download()  # Download all to simulator
-            print("[ModelDesk] Download complete")
         except Exception as e:
             print(f"[ModelDesk] Save/Download failed: {e}")
 
         # 8) Reset maneuver (but do NOT start yet)
-        print("[ModelDesk] Resetting maneuver...")
         try:
             mc = self.exp.ManeuverControl
             try: 
@@ -174,21 +171,18 @@ class DSpaceSimulation(RacingSimulation):
             time.sleep(0.2)
             mc.Reset()  # Reset to initial state
             time.sleep(0.2)
-            print("[ModelDesk] Reset complete - maneuver ready (not started)")
-        except Exception as e:
-            print(f"[ModelDesk] Reset failed: {e}")
+        except Exception:
+            pass
 
         # 9) Connect ControlDesk and initialize VesiInterface BEFORE starting maneuver
-        print("[ControlDesk] Connecting and initializing VesiInterface...")
         self._cd = cd_session.connect_and_prepare(self)
         if self._cd:
             # Initialize VehicleController for applying controls
             self._vehicle_controller = VehicleController(self)
-            print("[VehicleController] Initialized")
         else:
             self._vehicle_controller = None
             print("\n" + "="*70)
-            print("⚠️  CRITICAL: ControlDesk Connection Failed!")
+            print("[WARNING] CRITICAL: ControlDesk Connection Failed!")
             print("="*70)
             print("The dSPACE simulator requires ControlDesk to control vehicles.")
             print("\nTo fix this:")
@@ -200,22 +194,28 @@ class DSpaceSimulation(RacingSimulation):
             print("="*70 + "\n")
 
         # 10) NOW start the maneuver via ControlDesk (AFTER VesiInterface is fully initialized)
-        if self._cd and cd_session.start_maneuver(self._cd):
-            print("[Maneuver] ✅ Started via ControlDesk - VesiInterface controls active")
-        else:
-            print("[Maneuver] ⚠️  Skipping start - ControlDesk not available")
+        if self._cd:
+            cd_session.start_maneuver(self._cd)
         
-        # Pause simulation initially for step-by-step control
-        print("[Setup] About to pause simulation for step-by-step control...")
+        # 11) Initialize fellow arrays and verify readback before pausing
+        print("[Setup] Initializing fellow arrays...")
+        ensure_fellow_arrays_initialized(self)
+        
+        # 12) Verify we can read back values from ControlDesk for all vehicles
+        print("[Setup] Verifying ControlDesk readback for all vehicles...")
+        readback_success = self._verifyControlDeskReadback()
+        
+        if readback_success:
+            print("[Setup] [OK] ControlDesk readback verified successfully")
+        else:
+            print("[Setup] [WARN] Warning: Some ControlDesk readbacks failed, but continuing...")
+        
+        # 13) Pause simulation for step-by-step control (after readback verification)
+        print("[Setup] Pausing simulation for step-by-step control...")
         if self._cd and cd_session.pause(self._cd):
-            print("[Setup] Simulation paused successfully")
-            # Immediately try to warm-up fellow arrays so first read/write won't warn
-            print("[Setup] Initializing fellow arrays...")
-            ensure_fellow_arrays_initialized(self)
+            print("[Setup] [OK] Simulation paused successfully")
         else:
-            print("[Setup] Could not pause simulation")
-        
-        print("[Setup] ✅ Setup complete - simulation is ready to run")
+            print("[Setup] [WARN] Could not pause simulation")
 
     def createObjectInSimulator(self, obj):
         """Place car (ego or fellow) by absolute (s,t) computed from (x,y) and XODR.
@@ -234,10 +234,8 @@ class DSpaceSimulation(RacingSimulation):
         is_ego = (obj is self.scene.egoObject)
         
         if is_ego:
-            print(f"Creating EGO vehicle in dSPACE at position: {obj.position}, heading: {obj.heading}")
             return self.createEgoInSimulator(obj)
         else:
-            print(f"Creating FELLOW vehicle in dSPACE at position: {obj.position}, heading: {obj.heading}")
             return self.createFellowInSimulator(obj)
     
     def createEgoInSimulator(self, obj):
@@ -246,7 +244,6 @@ class DSpaceSimulation(RacingSimulation):
         Unlike Fellows which are added to the Fellows collection, the ego vehicle
         is accessed through TrafficScenario.Maneuver.Item(0) and configured.
         """
-        print(f"  Configuring ego vehicle (Maneuver)")
         result = place_ego(self, obj)
         # Assign TTL to ego if available (delegated)
         attach_to_ego(self, obj)
@@ -262,22 +259,17 @@ class DSpaceSimulation(RacingSimulation):
     def _needsDynamicControl(self):
         """Check if any Scenic objects need dynamic control (have behaviors with dSPACE actions)."""
         try:
-            print(f"[dSPACE] Checking {len(self.scene.objects)} objects for dynamic control needs")
             # Check if any objects have behaviors that use dSPACE actions
             for obj in self.scene.objects:
                 if hasattr(obj, 'behavior'):
                     behavior = obj.behavior
                     if behavior:
                         behavior_name = behavior.__class__.__name__
-                        print(f"[dSPACE] Found behavior: {behavior_name}")
                         # Check if it's a racing behavior that uses dSPACE actions
                         if 'Racing' in behavior_name or 'Pit' in behavior_name:
-                            print(f"[dSPACE] Found racing behavior: {behavior_name}")
                             return True
-            print("[dSPACE] No racing behaviors found")
             return False
-        except Exception as e:
-            print(f"[dSPACE] Error checking dynamic control needs: {e}")
+        except Exception:
             return False
     
     def _connectModelDesk(self):
@@ -467,10 +459,10 @@ class DSpaceSimulation(RacingSimulation):
                     self._cd.set_var(KEY_THROTTLE, throttle_val)
                     print(f"  [ControlDesk] OK - Throttle written successfully")
                 
-                # Brake: Scenic uses 0-1, ControlDesk expects 0-100 command range
+                # Brake: Scenic uses 0-1, ControlDesk expects 0-10000 command range
                 # Apply same value to both front and rear
                 if brake is not None:
-                    brake_val = float(max(0.0, min(1.0, brake)) * 100.0)
+                    brake_val = float(max(0.0, min(1.0, brake)) * 10000.0)
                     print(f"  [ControlDesk] Setting brake: {brake} -> front={brake_val}, rear={brake_val}")
                     self._cd.set_var(KEY_BRAKE_FRONT, brake_val)
                     self._cd.set_var(KEY_BRAKE_REAR, brake_val)
@@ -618,8 +610,6 @@ class DSpaceSimulation(RacingSimulation):
                 
                 if is_ego:
                     # Ego: Use VesiInterface physics-based control
-                    if self._execute_count <= 3:
-                        print(f"[executeActions #{self._execute_count}] Calling apply_ego_control for ego")
                     self._vehicle_controller.apply_ego_control(obj)
                 else:
                     # Fellow: Only drive if a behavior exists; otherwise leave stationary
@@ -634,7 +624,7 @@ class DSpaceSimulation(RacingSimulation):
         else:
             if self._execute_count == 1:
                 print(f"\n{'='*70}")
-                print(f"⚠️  CRITICAL ERROR: VehicleController is None!")
+                print(f"[WARNING] CRITICAL ERROR: VehicleController is None!")
                 print(f"{'='*70}")
                 print(f"Control commands are being generated but CANNOT be applied.")
                 print(f"This means ControlDesk is not connected to the simulator.")
@@ -756,16 +746,8 @@ class DSpaceSimulation(RacingSimulation):
             is_ego = (obj is self.scene.egoObject)
             
             if is_ego:
-                print(f"[DEBUG] Reading Ego State...")
-
                 # Read ego vehicle state
-                result = self._readEgoStateFromControlDesk(obj)
-
-                if hasattr(obj, 'dspaceActor'):
-                    pos = obj.dspaceActor.position
-                    print(f"[DEBUG] Ego State Read: X={pos.x:.2f}, Y={pos.y:.2f}, Speed={obj.dspaceActor.linvel.norm():.2f}")
-            
-                return result
+                return self._readEgoStateFromControlDesk(obj)
             else:
                 # Read fellow vehicle state
                 return self._readFellowStateFromControlDesk(obj)
@@ -784,6 +766,66 @@ class DSpaceSimulation(RacingSimulation):
             True if successful, False otherwise
         """
         return read_ego_state(self, obj)
+    
+    def _verifyControlDeskReadback(self):
+        """Verify that we can read back values from ControlDesk for all vehicles.
+        
+        Attempts to read position/state for ego and all fellow vehicles to ensure
+        ControlDesk connection is working properly.
+        
+        Returns:
+            True if all vehicles readback successfully, False otherwise
+        """
+        if not self._cd:
+            print("[Setup] [WARN] ControlDesk not connected, skipping readback verification")
+            return False
+        
+        all_success = True
+        
+        # Verify ego readback
+        ego = self.scene.egoObject
+        if ego:
+            print("[Setup] Verifying ego vehicle readback...")
+            try:
+                ego_success = self._readVehicleStateFromControlDesk(ego)
+                if ego_success:
+                    if hasattr(ego, 'dspaceActor') and ego.dspaceActor:
+                        pos = ego.dspaceActor.position
+                        print(f"[Setup] [OK] Ego readback successful: position=({pos.x:.3f}, {pos.y:.3f}, {pos.z:.3f})")
+                    else:
+                        print(f"[Setup] [OK] Ego readback successful (no position available)")
+                else:
+                    print(f"[Setup] [ERROR] Ego readback failed")
+                    all_success = False
+            except Exception as e:
+                print(f"[Setup] [ERROR] Ego readback error: {e}")
+                all_success = False
+        else:
+            print("[Setup] [WARN] No ego vehicle found")
+        
+        # Verify fellow readbacks
+        fellows = [obj for obj in self.scene.objects if obj is not ego]
+        if fellows:
+            print(f"[Setup] Verifying {len(fellows)} fellow vehicle(s) readback...")
+            for i, fellow in enumerate(fellows):
+                try:
+                    fellow_success = self._readVehicleStateFromControlDesk(fellow)
+                    if fellow_success:
+                        if hasattr(fellow, 'dspaceActor') and fellow.dspaceActor:
+                            pos = fellow.dspaceActor.position
+                            print(f"[Setup] [OK] Fellow {i} readback successful: position=({pos.x:.3f}, {pos.y:.3f}, {pos.z:.3f})")
+                        else:
+                            print(f"[Setup] [OK] Fellow {i} readback successful (no position available)")
+                    else:
+                        print(f"[Setup] [ERROR] Fellow {i} readback failed")
+                        all_success = False
+                except Exception as e:
+                    print(f"[Setup] [ERROR] Fellow {i} readback error: {e}")
+                    all_success = False
+        else:
+            print("[Setup] No fellow vehicles to verify")
+        
+        return all_success
     
     def _ensureFellowArraysInitialized(self):
         """Deprecated wrapper for controldesk.arrays.ensure_fellow_arrays_initialized."""
@@ -848,9 +890,14 @@ class DSpaceSimulation(RacingSimulation):
         
         if self._step_count <= 5:
             if success:
-                print(f"[step #{self._step_count}] ✓ Step completed")
+                print(f"[step #{self._step_count}] [OK] Step completed")
             else:
-                print(f"[step #{self._step_count}] ⚠️  Step failed (using time.sleep fallback)")
+                print(f"[step #{self._step_count}] [WARN] Step failed (using time.sleep fallback)")
+        
+        # DEBUG: Exit after 10 steps for debugging purposes
+        if self._step_count >= 10:
+            print(f"[DEBUG] Reached {self._step_count} steps - exiting for debugging purposes")
+            exit()
 
     def getProperties(self, obj, properties):
         """Read the values of the given properties of the object from the simulator.
@@ -891,7 +938,6 @@ class DSpaceSimulation(RacingSimulation):
             "elevation":       float(pos.z),
         }
         
-        # Return only requested properties
         return {k: vals[k] for k in properties if k in vals}
 
     def getRacingControllers(self, agent):

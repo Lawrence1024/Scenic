@@ -68,9 +68,10 @@ class VehicleController:
                 throttle_val = float(max(0.0, min(1.0, control['throttle'])) * 100.0)
                 self.cd.set_var(KEY_THROTTLE, throttle_val)
             
-            # Apply brake (0-1 → 0-100 command range, front and rear)
+            # Apply brake (0-1 → 0-10000 command range, front and rear)
+            # ControlDesk expects brake in range 0-10000, not 0-100
             if control and 'braking' in control and control['braking'] is not None:
-                brake_val = float(max(0.0, min(1.0, control['braking'])) * 100.0)
+                brake_val = float(max(0.0, min(1.0, control['braking'])) * 10000.0)
                 self.cd.set_var(KEY_BRAKE_FRONT, brake_val)
                 self.cd.set_var(KEY_BRAKE_REAR, brake_val)
             

@@ -124,11 +124,11 @@ def build_coordinate_transform(xodr_path: str, rd_path: str, num_samples: int = 
     print(f"   Max error: {max_error:.2f}m")
     
     if mean_error < 2.0:
-        print(f"   ✅ Transform validated successfully!")
+        print(f"   [OK] Transform validated successfully!")
     elif mean_error < 5.0:
-        print(f"   ⚠️  Transform has moderate errors")
+        print(f"   [WARN] Transform has moderate errors")
     else:
-        print(f"   ❌ Transform has high errors - may need piecewise calibration")
+        print(f"   [ERROR] Transform has high errors - may need piecewise calibration")
     
     print("="*80 + "\n")
     

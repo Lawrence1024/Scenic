@@ -1,5 +1,8 @@
 """COM helper utilities for dSPACE ModelDesk."""
 
+# Import projection functions for use by route_mapping
+from .projection import find_road_id_for_position
+
 def _count_any(coll):
     try:
         return int(getattr(coll, "Count", len(coll)))
@@ -142,4 +145,70 @@ def configure_seg1_motion(segs, *, v: float, t: float):
 
 # Main road names for Laguna Seca (consistent across XODR and RD paths)
 MAIN_ROAD_NAMES = ['The Corkscrew1', 'Pit Lane1_2', 'Andretti Hairpin1_3']
+
+
+def get_road_name_for_id(road_index, road_id):
+    """Get road name from road ID in road_index.
+    
+    Args:
+        road_index: Road index dict with 'roads' key
+        road_id: Road ID (RD ID, typically 0, 1, 2)
+        
+    Returns:
+        Road name string or None if not found
+    """
+    try:
+        if not road_index:
+            return None
+        roads = road_index.get('roads', {})
+        for road_name, road_data in roads.items():
+            if road_data.get('id') == road_id:
+                return road_name
+        return None
+    except Exception:
+        return None
+
+
+def map_rd_to_xodr_road_id(road_index, rd_road_id):
+    """Map RD road ID to XODR road ID.
+    
+    Maps RD road IDs (0, 1, 2) to XODR road IDs based on road names.
+    Known mapping for Laguna Seca:
+    - RD ID 0 (The Corkscrew1) -> XODR ID "2117817291"
+    - RD ID 1 (Pit Lane1_2) -> XODR ID "1545702203"
+    - RD ID 2 (Andretti Hairpin1_3) -> XODR ID "1776499453"
+    
+    Args:
+        road_index: Road index dict
+        rd_road_id: RD road ID (typically 0, 1, 2)
+        
+    Returns:
+        XODR road ID string or None if mapping not available
+    """
+    # Known mapping for Laguna Seca
+    RD_TO_XODR_MAPPING = {
+        0: '2117817291',  # The Corkscrew1
+        1: '1545702203',  # Pit Lane1_2
+        2: '1776499453',  # Andretti Hairpin1_3
+    }
+    
+    if isinstance(rd_road_id, int) and rd_road_id in RD_TO_XODR_MAPPING:
+        return RD_TO_XODR_MAPPING[rd_road_id]
+    
+    # Fallback: Try to get road name and map it
+    try:
+        road_name = get_road_name_for_id(road_index, rd_road_id)
+        if road_name:
+            # Map road name to XODR ID
+            NAME_TO_XODR_MAPPING = {
+                'The Corkscrew1': '2117817291',
+                'Pit Lane1_2': '1545702203',
+                'Andretti Hairpin1_3': '1776499453',
+            }
+            if road_name in NAME_TO_XODR_MAPPING:
+                return NAME_TO_XODR_MAPPING[road_name]
+    except Exception:
+        pass
+    
+    return None
 

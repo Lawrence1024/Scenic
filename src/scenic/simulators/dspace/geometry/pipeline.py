@@ -28,7 +28,7 @@ def build_road_index_and_transform(map_path, utils_module):
             from ..geometry.rd_parser import build_rd_road_index
             road_index = build_rd_road_index(rd_path, step=0.5)
             print(f"[Geometry] Using RD geometry for accurate (s,t) projection")
-            print(f"[Status] ✅ Full coordinate transformation pipeline active")
+            print(f"[Status] [OK] Full coordinate transformation pipeline active")
             return road_index, coordinate_transform
         except Exception as e:
             print(f"[Transform] Failed to build transformation: {e}")
@@ -47,7 +47,7 @@ def build_road_index_and_transform(map_path, utils_module):
             road_index = utils_module.build_xodr_sec_points(map_path)
             coordinate_transform = None
             print(f"[Geometry] Using XODR geometry")
-            print(f"[Warning] ⚠️  No RD file found - coordinate mismatches possible (up to 34m)")
+            print(f"[Warning] [WARN] No RD file found - coordinate mismatches possible (up to 34m)")
             print(f"[Hint] Place '{os.path.basename(rd_path)}' next to XODR for accurate positioning")
             return road_index, coordinate_transform
         except Exception as e:

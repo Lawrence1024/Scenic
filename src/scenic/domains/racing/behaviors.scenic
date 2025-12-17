@@ -11,6 +11,15 @@ from scenic.domains.driving.actions import SetThrottleAction, SetBrakeAction, Se
 from scenic.domains.racing.actions import SetMaxSpeedAction, SetTTLAction, SetSpeedLimitAction, SetTTLSelectionAction, SetTargetGapAction, SetStrategyAction, SetPowertrainModeAction, SetScaleFactorAction, SetPush2PassAction, StopCarAction, SetGearAction
 import scenic.domains.racing.model as _racing
 
+# Import waypoint finding utility
+import sys
+import os
+_scenic_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+_tools_path = os.path.join(_scenic_root, 'tools')
+if _tools_path not in sys.path:
+    sys.path.insert(0, _tools_path)
+from get_map_bounds import find_best_racing_waypoint
+
 behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoints=True, lookahead=20.0):
     """Follow the car's TTL using controllers.
     
@@ -55,7 +64,17 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
     if use_waypoints and wp_list_init and len(wp_list_init) >= 2:
         try:
             px = float(self.position.x); py = float(self.position.y)
-            # Find nearest waypoint from starting position (full search on first iteration)
+            
+            # Get car heading if available
+            car_heading = None
+            if hasattr(self, 'heading') and self.heading is not None:
+                try:
+                    car_heading = float(self.heading)
+                except:
+                    pass
+            
+            # First, find the actual nearest waypoint (simple distance-based search)
+            # This ensures we start from a reasonable starting point
             nearest_idx = 0
             best_d2 = 1e18
             for i in range(len(wp_list_init)):
@@ -64,8 +83,29 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
                 d2 = dx*dx + dy*dy
                 if d2 < best_d2:
                     best_d2 = d2; nearest_idx = i
-            wp_last_idx = nearest_idx
-            print(f"[FollowRacingLineBehavior] Initialized: starting at ({px:.2f}, {py:.2f}), nearest waypoint index={nearest_idx} ({wp_list_init[nearest_idx]})")
+            
+            # Now use find_best_racing_waypoint starting from the nearest waypoint
+            # This ensures we start from a reasonable position and consider forward direction
+            result = find_best_racing_waypoint(
+                car_position=(px, py),
+                car_heading=car_heading if car_heading is not None else 0.0,
+                waypoints=wp_list_init,
+                last_known_index=nearest_idx,  # Start from nearest, not index 0
+                max_search_distance=50.0,  # Smaller search radius since we're starting from nearest
+                forward_bias=0.9,
+                min_forward_distance=5.0,
+                forward_only=False  # Allow any waypoint for initialization
+            )
+            
+            if result:
+                wp_last_idx = result['index']
+                print(f"[FollowRacingLineBehavior] Initialized: starting at ({px:.2f}, {py:.2f}), "
+                      f"waypoint index={wp_last_idx}, distance={result['distance']:.2f}m")
+            else:
+                # Fallback: use the nearest waypoint we found
+                wp_last_idx = nearest_idx
+                print(f"[FollowRacingLineBehavior] Initialized (fallback): starting at ({px:.2f}, {py:.2f}), "
+                      f"nearest waypoint index={nearest_idx}, distance={best_d2**0.5:.2f}m")
         except Exception as e:
             print(f"[FollowRacingLineBehavior] Warning: Could not initialize waypoint index: {e}, starting from index 0")
             wp_last_idx = 0
@@ -94,39 +134,67 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
                 print(f"[FollowRacingLineBehavior] Step {self._cte_debug_count}: Using position ({px:.2f}, {py:.2f}) for CTE calculation")
                 print(f"  First waypoint: ({wp_list[0][0]}, {wp_list[0][1]}), distance = {((px-wp_list[0][0])**2 + (py-wp_list[0][1])**2)**0.5:.2f} m")
             
-            # A. Find nearest waypoint index (use optimized search with window around last known index)
-            nearest_idx = 0
-            best_d2 = 1e18
-            start_search = max(0, wp_last_idx - 25)
-            end_search = min(len(wp_list), wp_last_idx + 26)
+            # A. Find best waypoint using forward-only racing waypoint finder
+            # This guarantees forward progress and considers heading alignment
+            car_heading = None
+            if hasattr(self, 'heading') and self.heading is not None:
+                try:
+                    car_heading = float(self.heading)
+                except:
+                    pass
             
-            for i in range(start_search, end_search):
-                wx, wy = float(wp_list[i][0]), float(wp_list[i][1])
-                dx = px - wx; dy = py - wy
-                d2 = dx*dx + dy*dy
-                if d2 < best_d2:
-                    best_d2 = d2; nearest_idx = i
+            # Use find_best_racing_waypoint for robust forward-only waypoint selection
+            try:
+                result = find_best_racing_waypoint(
+                    car_position=(px, py),
+                    car_heading=car_heading if car_heading is not None else 0.0,
+                    waypoints=wp_list,
+                    last_known_index=wp_last_idx,
+                    max_search_distance=100.0,
+                    forward_bias=0.9,  # Strong forward preference
+                    min_forward_distance=5.0,
+                    forward_only=True  # CRITICAL: No backtracking allowed
+                )
+                
+                if result:
+                    nearest_idx = result['index']
+                    wp_last_idx = nearest_idx
+                    if self._cte_debug_count <= 5:
+                        wp_coord = wp_list[nearest_idx]
+                        print(f"  [Waypoint] Found forward waypoint: index={nearest_idx}, "
+                              f"coordinate=({wp_coord[0]:.2f}, {wp_coord[1]:.2f}), "
+                              f"distance={result['distance']:.2f}m, "
+                              f"forward_score={result['forward_score']:.3f}")
+                        # Check if waypoint is actually on road
+                        if nearest_idx > 0:
+                            prev_wp = wp_list[nearest_idx - 1]
+                            next_wp = wp_list[nearest_idx + 1] if nearest_idx < len(wp_list) - 1 else wp_list[0]
+                            print(f"  [Waypoint] Previous wp {nearest_idx-1}: ({prev_wp[0]:.2f}, {prev_wp[1]:.2f}), "
+                                  f"Next wp {nearest_idx+1 if nearest_idx < len(wp_list)-1 else 0}: ({next_wp[0]:.2f}, {next_wp[1]:.2f})")
+                else:
+                    # Fallback: No forward waypoint found, use simple nearest (shouldn't happen often)
+                    print(f"[FollowRacingLineBehavior] Warning: No forward waypoint found, using fallback")
+                    nearest_idx = wp_last_idx
+                    if nearest_idx >= len(wp_list):
+                        nearest_idx = len(wp_list) - 1
+            except Exception as e:
+                # Fallback to simple nearest if function fails
+                print(f"[FollowRacingLineBehavior] Warning: Waypoint finder error: {e}, using fallback")
+                nearest_idx = wp_last_idx
+                if nearest_idx >= len(wp_list):
+                    nearest_idx = len(wp_list) - 1
             
-            # If not found in window, do full search (handles case where car jumped ahead/behind)
-            if wp_last_idx == 0 or best_d2 > 100.0:  # Large threshold if we're far from expected area
-                best_d2 = 1e18
-                for i in range(len(wp_list)):
-                    wx, wy = float(wp_list[i][0]), float(wp_list[i][1])
-                    dx = px - wx; dy = py - wy
-                    d2 = dx*dx + dy*dy
-                    if d2 < best_d2:
-                        best_d2 = d2; nearest_idx = i
-            
-            wp_last_idx = nearest_idx
-            
-            # B. Find Target Point (Lookahead)
+            # B. Find Target Point (Lookahead) - use this for CTE calculation
+            # This provides better control by looking ahead instead of using nearest waypoint
             Ld = float(lookahead)
             rem = Ld
             j = nearest_idx
             found_target = False
-            last_visited_seg_idx = nearest_idx  # Track the last segment we processed
+            lookahead_seg_idx = nearest_idx
+            tgt_x = None
+            tgt_y = None
             
-            # Walk forward along polyline
+            # Walk forward along polyline for lookahead target
             while rem > 0.0 and j < len(wp_list) - 1:
                 x0, y0 = float(wp_list[j][0]), float(wp_list[j][1])
                 x1, y1 = float(wp_list[j+1][0]), float(wp_list[j+1][1])
@@ -136,45 +204,68 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
                 if seg_len <= 1e-6:
                     j += 1; continue
                 
-                last_visited_seg_idx = j  # Track this segment
+                lookahead_seg_idx = j  # Track this segment for CTE calculation
                 
                 if rem <= seg_len:
                     u = rem / seg_len
                     tgt_x = x0 + u * seg_dx
                     tgt_y = y0 + u * seg_dy
-                    
-                    # Calculate CTE: Project vehicle pos onto this segment normal
-                    # Left Normal: (-dy, dx)
-                    nx = -seg_dy / seg_len; ny = seg_dx / seg_len
-                    cte = (px - tgt_x)*nx + (py - tgt_y)*ny
                     found_target = True
                     break
                 else:
                     rem -= seg_len
                     j += 1
             
-            # C. End of path handling - if lookahead extends beyond available segments
-            # Use the last segment we visited (from current position forward), not the absolute last segment
-            if not found_target and len(wp_list) >= 2 and last_visited_seg_idx < len(wp_list) - 1:
-                # Use the last segment we actually traversed (from current position)
-                # This handles cases where lookahead extends beyond the path
-                seg_idx = last_visited_seg_idx
-                x0, y0 = float(wp_list[seg_idx][0]), float(wp_list[seg_idx][1])
-                x1, y1 = float(wp_list[seg_idx+1][0]), float(wp_list[seg_idx+1][1])
+            # C. Calculate CTE using the lookahead segment (not nearest segment)
+            # This provides better control by looking ahead where we want to go
+            if found_target and tgt_x is not None and tgt_y is not None:
+                # Use the lookahead segment for CTE calculation
+                x0, y0 = float(wp_list[lookahead_seg_idx][0]), float(wp_list[lookahead_seg_idx][1])
+                x1, y1 = float(wp_list[lookahead_seg_idx+1][0]), float(wp_list[lookahead_seg_idx+1][1])
                 seg_dx = x1 - x0; seg_dy = y1 - y0
                 seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                
                 if seg_len > 1e-6:
-                    # Project vehicle position onto this segment for CTE
+                    # Project vehicle position onto the lookahead segment
                     wx = px - x0; wy = py - y0
                     u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
                     u_proj = max(0.0, min(1.0, u_proj))
-                    qx = x0 + u_proj * seg_dx; qy = y0 + u_proj * seg_dy
+                    proj_x = x0 + u_proj * seg_dx
+                    proj_y = y0 + u_proj * seg_dy
+                    
+                    # Calculate CTE: Project vehicle pos onto segment normal
+                    # Left Normal: (-dy, dx) - points LEFT of forward direction
+                    # Positive CTE = LEFT of path, Negative CTE = RIGHT of path
                     nx = -seg_dy / seg_len; ny = seg_dx / seg_len
-                    cte = (px - qx)*nx + (py - qy)*ny
+                    cte = (px - proj_x)*nx + (py - proj_y)*ny
+                    
+                    # DEBUG: Log CTE calculation details
+                    if self._cte_debug_count <= 5:
+                        print(f"  [CTE Debug] Lookahead segment: wp[{lookahead_seg_idx}]=({x0:.2f}, {y0:.2f}) -> wp[{lookahead_seg_idx+1}]=({x1:.2f}, {y1:.2f})")
+                        print(f"  [CTE Debug] Lookahead target: ({tgt_x:.2f}, {tgt_y:.2f})")
+                        print(f"  [CTE Debug] Vehicle projection on segment: ({proj_x:.2f}, {proj_y:.2f}), u={u_proj:.3f}")
+                        print(f"  [CTE Debug] Normal vector: ({nx:.3f}, {ny:.3f})")
+                        print(f"  [CTE Debug] CTE = {cte:.3f}m ({'LEFT' if cte > 0 else 'RIGHT'} of path)")
                 else:
                     cte = 0.0
-            elif not found_target:
-                cte = 0.0
+            else:
+                # Fallback: use nearest segment if lookahead not found
+                best_seg_idx = nearest_idx
+                x0, y0 = float(wp_list[best_seg_idx][0]), float(wp_list[best_seg_idx][1])
+                x1, y1 = float(wp_list[best_seg_idx+1][0]), float(wp_list[best_seg_idx+1][1])
+                seg_dx = x1 - x0; seg_dy = y1 - y0
+                seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                
+                if seg_len > 1e-6:
+                    wx = px - x0; wy = py - y0
+                    u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
+                    u_proj = max(0.0, min(1.0, u_proj))
+                    proj_x = x0 + u_proj * seg_dx
+                    proj_y = y0 + u_proj * seg_dy
+                    nx = -seg_dy / seg_len; ny = seg_dx / seg_len
+                    cte = (px - proj_x)*nx + (py - proj_y)*ny
+                else:
+                    cte = 0.0
 
         # Fallback: Use TTL Geometry if waypoints didn't provide CTE
         if cte is None:
@@ -191,7 +282,20 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
         # CRITICAL: The steering PID should use NEGATIVE CTE
         # If CTE > 0 (too far left), we want negative steering (steer right)
         # If CTE < 0 (too far right), we want positive steering (steer left)
-        steer_pid = _lat_controller.run_step(-cte)  # Note the negative sign!
+        
+        # Scale down large CTE to prevent PID saturation
+        # For racing, we want conservative steering (0.3-0.5 range) to avoid dangerous oversteer
+        # For dSPACE with K_P=0.3, K_D=0.15, max_dterm_contribution=0.1:
+        # To keep total output ≤ 0.5: PTerm + DTerm ≤ 0.5
+        # With DTerm limited to 0.1, max PTerm = 0.4, so max CTE = 0.4/0.3 = 1.33m
+        # Using 1.5m for moderate correction: PTerm = 0.3 * 1.5 = 0.45, DTerm ≤ 0.1, total ≤ 0.55
+        cte_for_pid = -cte
+        max_cte_for_pid = 1.5  # Conservative for racing: PTerm = 0.45, DTerm ≤ 0.1, total ≤ 0.55
+        if abs(cte_for_pid) > max_cte_for_pid:
+            # Clamp to ±1.5m for safe, controlled steering in racing scenarios
+            cte_for_pid = max_cte_for_pid * (1.0 if cte_for_pid > 0 else -1.0)
+        
+        steer_pid = _lat_controller.run_step(cte_for_pid)
 
         # --- CTE-aware safety envelope ---
         cte_mag = abs(cte)
@@ -237,6 +341,8 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
         ]
 
         # Gear Logic
+        gear_changed = False
+        new_gear = None
         if manage_gears and hasattr(self, 'setGear'):
             # Default to 0 (Neutral) if unknown, NOT 1
             current_gear = getattr(self, 'gear', 0) 
@@ -245,15 +351,24 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
             if current_gear < 1:
                 actions_to_take.append(SetGearAction(1))
                 self.gear = 1
+                gear_changed = True
+                new_gear = 1
+                print(f"  [Gear] Shifting from {current_gear} to 1 (starting from neutral)")
             
             # Case B: Shifting while moving
             elif current_speed is not None:
                 if current_gear < 6 and current_speed > gear_up_thresholds[min(current_gear, 5)]:
-                    actions_to_take.append(SetGearAction(current_gear + 1))
-                    self.gear = current_gear + 1
+                    new_gear = current_gear + 1
+                    actions_to_take.append(SetGearAction(new_gear))
+                    self.gear = new_gear
+                    gear_changed = True
+                    print(f"  [Gear] Shifting up from {current_gear} to {new_gear} (speed={current_speed:.2f} m/s > threshold={gear_up_thresholds[min(current_gear, 5)]:.2f})")
                 elif current_gear > 1 and current_speed < gear_down_thresholds[min(current_gear - 1, 5)]: # Fixed index
-                    actions_to_take.append(SetGearAction(current_gear - 1))
-                    self.gear = current_gear - 1
+                    new_gear = current_gear - 1
+                    actions_to_take.append(SetGearAction(new_gear))
+                    self.gear = new_gear
+                    gear_changed = True
+                    print(f"  [Gear] Shifting down from {current_gear} to {new_gear} (speed={current_speed:.2f} m/s < threshold={gear_down_thresholds[min(current_gear - 1, 5)]:.2f})")
 
         # Debug Print
         if hasattr(self, '_behavior_step_count'):
@@ -267,9 +382,14 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
         print(f"  Position: ({self.position.x:.2f}, {self.position.y:.2f})")
         print(f"  Speed: {current_speed:.2f} m/s")
         print(f"  CTE (Cross-Track Error): {cte:.3f} m {'(LEFT of path)' if cte > 0 else '(RIGHT of path)'}")
-        print(f"  PID inputs: speed_error={speed_error:.2f}, cte_input={-cte:.3f}")
+        if abs(cte) > 5.0:
+            print(f"  PID inputs: speed_error={speed_error:.2f}, cte_input={cte_for_pid:.3f} (clamped from {cte:.3f})")
+        else:
+            print(f"  PID inputs: speed_error={speed_error:.2f}, cte_input={cte_for_pid:.3f}")
         print(f"  PID outputs: throttle_pid={throttle_pid:.3f}, steer_pid={steer_pid:.3f}")
         print(f"  Final controls: throttle={final_throttle:.3f}, brake={final_brake:.3f}, steer={final_steer:.3f} {'(LEFT)' if final_steer > 0 else '(RIGHT)'}, gear={gear_val}")
+        if gear_changed and new_gear is not None:
+            print(f"  [Gear Change] Applied: {new_gear}")
         print(f"  → If CTE is positive (left), steering should be negative (right) to correct")
 
         # Execute all actions together
