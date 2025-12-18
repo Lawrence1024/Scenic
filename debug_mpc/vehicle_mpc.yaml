@@ -24,7 +24,7 @@
     wT_epsi: 1.0  # Terminal heading error weight
     
     # Safety thresholds
-    admissible_position_error: 8.0  # Stop MPC if position error > this (meters) - increased from 5.0m to allow MPC to run more often
+    admissible_position_error: 30.0  # Stop MPC if position error > this (meters) - increased to 30.0m for sparse waypoints (~25m apart)
     admissible_yaw_error_rad: 2.36  # Stop MPC if yaw error > this (radians, ~135 deg) - increased from 1.57rad to allow MPC when off-track
     max_invalid_count: 10  # Max consecutive solver failures before zeroing steering
     

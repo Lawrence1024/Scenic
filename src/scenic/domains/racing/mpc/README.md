@@ -76,7 +76,7 @@ mpc/
 
 ### Configuration Management
 - **Decision:** Use YAML config files (compatible with ROS-style parameter format)
-- **Location:** `debug_mpc/vehicle_mpc.yaml` (to be created)
+- **Location:** `debug_mpc/vehicle_mpc.yaml`
 - **Adaptation:** Config adapts to Scenic `timestep` automatically
 
 ### ControlDesk Integration
@@ -84,6 +84,92 @@ mpc/
 - **Write Path:** Use existing `VehicleController` infrastructure via `_control_state`
 - **Steering Range:** ControlDesk expects -70 to +70 (degrees-like units)
 - **Normalization:** MPC outputs [-1, 1], converted to ControlDesk range
+
+### Coordinate Frames & Heading (Critical)
+This project uses multiple coordinate/angle conventions at once. The most important debugging lesson was:
+
+- **Waypoints in `assets/ttls/.../transformed/*.csv` are in XODR/Scenic coordinates** (already transformed).
+- **ControlDesk provides yaw in degrees** via `Angle_Yaw_Vehicle_CoorSys_E[deg]` (see `debug_mpc/vehicle_mpc.yaml` path).
+- **Do not blindly apply ±90° or ±180° offsets** to yaw in code. We tested both and they can silently break tracking.
+
+#### Final decision (what worked)
+- **Heading used by MPC must come from ControlDesk readback** (`self.dspaceActor.heading`) so the MPC state is consistent with the simulator.
+  - In `src/scenic/domains/racing/behaviors.scenic`, the MPC behavior now prefers `dspaceActor.heading` (ControlDesk) over `self.heading`.
+- **Yaw conversion in readback is: degrees -> radians -> normalize to [-pi, pi]**
+  - In `src/scenic/simulators/dspace/controldesk/readback.py`, we keep yaw as:
+    - `yaw_rad_raw = yaw_deg * pi/180`
+    - `yaw_rad = atan2(sin(yaw_rad_raw), cos(yaw_rad_raw))`
+  - This was validated by logs where `raw_yaw_deg≈236°` normalized to `heading_deg≈-123°`, matching the local track/waypoint direction.
+
+#### Why earlier "flip by 180°" experiments happened
+At one point the controller appeared to need a 180° heading flip. That turned out to be a **heading source mismatch**:
+- the behavior used `self.heading` (not necessarily the ControlDesk yaw), while the debug prints were inspecting ControlDesk yaw.
+- mixing these sources made the MPC fight a fake heading error and "swerve" off track.
+
+### Waypoint Direction & 180° Reference Heading Flip
+Even if yaw is correct, waypoints can be "geometrically reversed" relative to travel direction.
+
+We implemented a robust rule in `src/scenic/domains/racing/mpc/mpc_lateral.py::_compute_errors`:
+- Compute segment heading from waypoint geometry: `psi_ref_original = atan2(seg_dy, seg_dx)`
+- If the segment heading differs from vehicle heading by > 90°, **flip the reference heading by 180°**:
+  - `psi_ref = wrap(psi_ref_original + pi)`
+- **If we flip reference heading, we must also flip CTE sign** (see next section).
+
+This avoids "drive backwards along the segment" behavior without requiring CSV reversal.
+
+### CTE Sign Conventions (Critical)
+Within `_compute_errors` in `mpc_lateral.py`:
+- Normal vector is defined as `n = (-dy, dx) / len` (LEFT of the segment direction).
+- Raw CTE is `e_y_raw = (p - proj) · n`
+- If we flip the reference heading by 180° (meaning "travel opposite direction"), then the notion of LEFT/RIGHT relative to travel direction also flips.
+
+**Final rule:**
+- Keep the normal vector based on the geometric segment (do NOT negate `n`).
+- If `heading_flipped == True`, then apply:
+  - `e_y = -e_y_raw`
+
+This fixes the common bug where the vehicle consistently steers away from the line because CTE left/right is inverted.
+
+### Steering Sign Conventions (Critical)
+The MPC solves for a steering command `u0` (front wheel angle command in radians). In practice we observed a sign mismatch between:
+- the sign of the QP solution (`u0_raw_rad`), and
+- the direction the vehicle actually turns in the dSPACE visualization.
+
+**Final decision (empirical):** Steering sign is **environment-dependent**; validate it with logs.
+
+In the current (consistent-yaw) setup, the solver output is used **without negation**:
+- Implemented in `src/scenic/domains/racing/mpc/mpc_lateral.py` (solve path):
+  - `delta_cmd_rad = delta_cmd_rad_raw`
+
+Why we document this explicitly:
+- It is easy to accidentally "fix" this away when also changing yaw transforms.
+- Always validate with logs + visualization: when CTE is RIGHT (negative), steering must turn LEFT (positive), and vice versa.
+
+Practical validation:
+- Use `[MPC Error Computation] CTE_raw=...` and `[MPC Actuation DBG] u0_raw_rad/u0_used_rad`.
+- If `CTE_used > 0` (LEFT), `u0_used_rad` should steer RIGHT (negative) to reduce CTE (depending on your simulator steering convention).
+
+### Waypoint Index Initialization & Progress
+Two independent issues can cause "random swerves":
+- tracking a waypoint that is behind the vehicle
+- getting stuck on an old waypoint index
+
+We added/used:
+- **Initialize waypoint index using a forward dot-product check** (pick the first waypoint ahead of the vehicle).
+- **Prefer ControlDesk heading** for that dot-product (see heading section above).
+- **Increment waypoint index** using a hit-threshold (default 3m) to prevent oscillating index selection.
+
+These changes live in `src/scenic/domains/racing/behaviors.scenic`.
+
+### Debugging Playbook (What to Log)
+When tracking is wrong, print the pipeline values so you can isolate sign/frame issues quickly.
+
+Recommended log tags (added during debugging):
+- `[Yaw Readback]`: shows yaw_deg -> yaw_rad -> normalized heading
+- `[MPC Errors DBG]`: shows segment geometry, projection, normal vector
+- `CTE_raw` vs `CTE_used`: shows whether heading flip changed CTE sign
+- `[MPC Actuation DBG]`: shows `u0_raw_rad`, `u0_neg_rad`, normalized, filtered
+- `[Steer Slew DBG]`: shows MPC output vs slew-limited command applied by behavior
 
 ### Waypoint Format
 - **Format:** CSV files with `x,y` pairs (no speed profile initially)

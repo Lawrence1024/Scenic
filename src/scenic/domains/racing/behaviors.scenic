@@ -68,9 +68,18 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
             
             # Get car heading if available
             car_heading = None
-            if hasattr(self, 'heading') and self.heading is not None:
+            car_heading_src = None
+            # Prefer dSPACE/ControlDesk readback heading if available
+            if hasattr(self, 'dspaceActor') and self.dspaceActor is not None and hasattr(self.dspaceActor, 'heading') and self.dspaceActor.heading is not None:
+                try:
+                    car_heading = float(self.dspaceActor.heading)
+                    car_heading_src = "dspaceActor.heading"
+                except:
+                    pass
+            if car_heading is None and hasattr(self, 'heading') and self.heading is not None:
                 try:
                     car_heading = float(self.heading)
+                    car_heading_src = "self.heading"
                 except:
                     pass
             
@@ -447,20 +456,36 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
     wait
     while not hasattr(self, 'position') or self.position is None:
         wait
+    # Also wait for dSPACE heading readback so waypoint-ahead initialization uses a real heading.
+    while (not hasattr(self, 'dspaceActor') or self.dspaceActor is None
+           or not hasattr(self.dspaceActor, 'heading') or self.dspaceActor.heading is None):
+        wait
     
     # Initialize waypoint index based on starting position
+    # CRITICAL FIX: Find the first waypoint that is AHEAD of the vehicle
     wp_list_init = (self.waypoints if hasattr(self, 'waypoints') else None)
     if use_waypoints and wp_list_init and len(wp_list_init) >= 2:
         try:
             px = float(self.position.x); py = float(self.position.y)
             
             car_heading = None
-            if hasattr(self, 'heading') and self.heading is not None:
+            car_heading_src = None
+            if hasattr(self, 'dspaceActor') and self.dspaceActor is not None and hasattr(self.dspaceActor, 'heading') and self.dspaceActor.heading is not None:
                 try:
-                    car_heading = float(self.heading)
+                    car_heading = float(self.dspaceActor.heading)
+                    car_heading_src = "dspaceActor.heading"
                 except:
                     pass
+            if car_heading is None and hasattr(self, 'heading') and self.heading is not None:
+                try:
+                    car_heading = float(self.heading)
+                    car_heading_src = "self.heading"
+                except:
+                    pass
+            if car_heading is None:
+                print("[FollowRacingLineMPCBehavior] Warning: heading unavailable at init; dot-product ahead search disabled")
             
+            # Step 1: Find the nearest waypoint (by distance)
             nearest_idx = 0
             best_d2 = 1e18
             for i in range(len(wp_list_init)):
@@ -470,25 +495,37 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 if d2 < best_d2:
                     best_d2 = d2; nearest_idx = i
             
-            result = find_best_racing_waypoint(
-                car_position=(px, py),
-                car_heading=car_heading if car_heading is not None else 0.0,
-                waypoints=wp_list_init,
-                last_known_index=nearest_idx,
-                max_search_distance=50.0,
-                forward_bias=0.9,
-                min_forward_distance=5.0,
-                forward_only=False
-            )
-            
-            if result:
-                wp_last_idx = result['index']
-                print(f"[FollowRacingLineMPCBehavior] Initialized: starting at ({px:.2f}, {py:.2f}), "
-                      f"waypoint index={wp_last_idx}, distance={result['distance']:.2f}m")
-            else:
+            # Step 2: If we have a valid heading, find the first waypoint AHEAD of the vehicle
+            # This prevents trying to track waypoints behind the vehicle
+            if car_heading is not None:
+                # Vehicle forward direction (math is already imported at module level)
+                veh_fx = math.cos(car_heading)
+                veh_fy = math.sin(car_heading)
+                
+                # Starting from nearest waypoint, find first one ahead
+                # A waypoint is "ahead" if the dot product of (vehicle_to_waypoint) and (vehicle_forward) > 0
                 wp_last_idx = nearest_idx
-                print(f"[FollowRacingLineMPCBehavior] Initialized (fallback): starting at ({px:.2f}, {py:.2f}), "
-                      f"nearest waypoint index={nearest_idx}, distance={best_d2**0.5:.2f}m")
+                for i in range(nearest_idx, min(len(wp_list_init), nearest_idx + 100)):
+                    wx, wy = float(wp_list_init[i][0]), float(wp_list_init[i][1])
+                    to_wp_x = wx - px
+                    to_wp_y = wy - py
+                    dot_product = to_wp_x * veh_fx + to_wp_y * veh_fy
+                    
+                    if dot_product > 0:  # Waypoint is ahead
+                        wp_last_idx = i
+                        wp_dist = (to_wp_x*to_wp_x + to_wp_y*to_wp_y) ** 0.5
+                        print(f"[FollowRacingLineMPCBehavior] Initialized: starting at ({px:.2f}, {py:.2f}), heading={car_heading*180/math.pi:.1f}deg (src={car_heading_src})")
+                        print(f"  Found first waypoint AHEAD: index={wp_last_idx} at ({wx:.2f}, {wy:.2f}), distance={wp_dist:.2f}m")
+                        print(f"  Dot product={dot_product:.2f} (positive means ahead)")
+                        break
+                else:
+                    # No waypoint ahead found in search window, use nearest
+                    wp_last_idx = nearest_idx
+                    print(f"[FollowRacingLineMPCBehavior] Warning: No waypoint ahead found in search window, using nearest waypoint {nearest_idx}")
+            else:
+                # No heading available, use nearest waypoint
+                wp_last_idx = nearest_idx
+                print(f"[FollowRacingLineMPCBehavior] Initialized (no heading): nearest waypoint index={nearest_idx}, distance={best_d2**0.5:.2f}m")
         except Exception as e:
             print(f"[FollowRacingLineMPCBehavior] Warning: Could not initialize waypoint index: {e}, starting from index 0")
             wp_last_idx = 0
@@ -511,28 +548,130 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         
         px = float(self.position.x); py = float(self.position.y)
         car_heading = None
-        if hasattr(self, 'heading') and self.heading is not None:
+        # Prefer dSPACE/ControlDesk readback heading if available
+        if hasattr(self, 'dspaceActor') and self.dspaceActor is not None and hasattr(self.dspaceActor, 'heading') and self.dspaceActor.heading is not None:
+            try:
+                car_heading = float(self.dspaceActor.heading)
+            except:
+                pass
+        if car_heading is None and hasattr(self, 'heading') and self.heading is not None:
             try:
                 car_heading = float(self.heading)
             except:
                 pass
         
         # Update waypoint index for MPC
-        # Check waypoint index every step (already at 1 Hz, so this is frequent enough)
-        # The key is making the search more aggressive when waypoints are missed
+        # SIMPLIFIED (but robust): advance waypoint index using a hit-threshold, with
+        # pass-through detection to handle large timestep/high speed (can "jump over" a waypoint).
         old_wp_idx = wp_last_idx
         if use_waypoints and wp_list and len(wp_list) >= 2:
             try:
-                # Calculate distance to current waypoint to detect if we've missed it
+                # Track previous position for pass-through detection
+                if not hasattr(self, '_prev_pos') or self._prev_pos is None:
+                    self._prev_pos = (px, py)
+                prev_px, prev_py = self._prev_pos
+
+                # NOTE: Scenic behaviors.scenic does NOT support nested Python defs.
+                # We compute point-to-segment distance inline below.
+
+                # Calculate distance to current waypoint
                 current_wp_dist = None
                 if wp_last_idx < len(wp_list):
                     wp_x, wp_y = float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1])
                     dx = px - wp_x; dy = py - wp_y
                     current_wp_dist = (dx*dx + dy*dy) ** 0.5
                 
-                result = None
+                # Hit threshold (meters)
+                #
+                # IMPORTANT:
+                # With large Scenic timesteps (e.g., 1s) and moderate/high speed, we can easily
+                # pass *near* a waypoint without ever getting within a tiny fixed radius (3m).
+                # If we fail to advance, the controller will keep targeting an old waypoint and
+                # can "turn back" (exactly what the log shows for wp=1: min dist ~5.4m).
+                #
+                # So we scale the hit threshold with the actual travel distance over the last step.
+                travel_dx = px - prev_px
+                travel_dy = py - prev_py
+                travel_dist = (travel_dx*travel_dx + travel_dy*travel_dy) ** 0.5
+                HIT_THRESHOLD = 3.0  # base meters
+                # Dynamic component: ~60% of last-step travel, capped to avoid skipping too aggressively
+                dyn_thr = 0.6 * travel_dist
+                if dyn_thr > HIT_THRESHOLD:
+                    HIT_THRESHOLD = dyn_thr
+                if HIT_THRESHOLD > 12.0:
+                    HIT_THRESHOLD = 12.0
+
+                # Advance as many waypoints as we plausibly "hit" this step
+                advanced_any = False
+                while wp_last_idx < len(wp_list) - 1:
+                    wp_x, wp_y = float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1])
+                    dx_now = px - wp_x; dy_now = py - wp_y
+                    d_now = (dx_now*dx_now + dy_now*dy_now) ** 0.5
+
+                    # Pass-through detection: distance from waypoint to (prev_pos -> curr_pos) segment
+                    # Compute point-to-segment distance inline:
+                    ax = prev_px
+                    ay = prev_py
+                    bx = px
+                    by_ = py
+                    vx = bx - ax
+                    vy = by_ - ay
+                    wx0 = wp_x - ax
+                    wy0 = wp_y - ay
+                    vv = vx*vx + vy*vy
+                    if vv <= 1e-12:
+                        # Segment degenerate
+                        d_seg = d_now
+                    else:
+                        t = (wx0*vx + wy0*vy) / vv
+                        if t < 0.0:
+                            t = 0.0
+                        elif t > 1.0:
+                            t = 1.0
+                        cx = ax + t * vx
+                        cy = ay + t * vy
+                        ddx = wp_x - cx
+                        ddy = wp_y - cy
+                        d_seg = (ddx*ddx + ddy*ddy) ** 0.5
+
+                    if d_now < HIT_THRESHOLD or d_seg < HIT_THRESHOLD:
+                        advanced_any = True
+                        reason = "within_radius" if d_now < HIT_THRESHOLD else "passed_through"
+                        print(f"[Waypoint Increment] {reason}: advancing {wp_last_idx} -> {wp_last_idx + 1} (d_now={d_now:.2f}m, d_seg={d_seg:.2f}m, travel={travel_dist:.2f}m, thr={HIT_THRESHOLD:.2f}m)")
+                        wp_last_idx += 1
+                        continue
+                    break
+
+                # Update current_wp_dist for logging below
+                current_wp_dist = None
+                if wp_last_idx < len(wp_list):
+                    wp_x, wp_y = float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1])
+                    dx = px - wp_x; dy = py - wp_y
+                    current_wp_dist = (dx*dx + dy*dy) ** 0.5
+
+                # Store current as previous for next step
+                self._prev_pos = (px, py)
                 
-                # CRITICAL FIX: If distance to current waypoint is very large (>10m), find nearest waypoint first
+                # Log current waypoint
+                if wp_last_idx < len(wp_list):
+                    current_wp = wp_list[wp_last_idx]
+                    current_wp_x, current_wp_y = float(current_wp[0]), float(current_wp[1])
+                    if wp_last_idx != old_wp_idx:
+                        # Initialize waypoint progress tracking
+                        if not hasattr(self, '_waypoints_passed'):
+                            self._waypoints_passed = 0
+                        self._waypoints_passed += 1
+                        progress_pct = (self._waypoints_passed / len(wp_list)) * 100.0 if len(wp_list) > 0 else 0.0
+                        print(f"[FollowRacingLineMPCBehavior] WAYPOINT HIT: index {old_wp_idx} -> {wp_last_idx} at ({current_wp_x:.2f}, {current_wp_y:.2f}), distance={current_wp_dist:.2f}m")
+                        print(f"[FollowRacingLineMPCBehavior] Progress: {self._waypoints_passed} waypoints passed ({progress_pct:.1f}% of {len(wp_list)} total waypoints)")
+                    else:
+                        print(f"[FollowRacingLineMPCBehavior] Waypoint index: {wp_last_idx} at ({current_wp_x:.2f}, {current_wp_y:.2f}), distance={current_wp_dist:.2f}m")
+                
+                # DISABLED: Complex search logic - using simple increment for testing
+                # All waypoint search code below is commented out for testing
+                
+                """
+                # OLD COMPLEX LOGIC: If distance to current waypoint is very large (>10m), find nearest waypoint first
                 # This prevents the waypoint index from getting stuck when vehicle has moved far from the waypoint
                 # The issue: using wp_last_idx as starting point biases search toward that index
                 if current_wp_dist and current_wp_dist > 10.0:
@@ -696,6 +835,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     wp_last_idx = new_wp_idx
                     # Debug logging: show waypoint index updates
                     wp_dist = result.get('distance', 0.0)
+                    
                     if new_wp_idx != old_wp_idx:
                         # Initialize waypoint progress tracking
                         if not hasattr(self, '_waypoints_passed'):
@@ -730,6 +870,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 else:
                     # Still no waypoint found - log warning but keep current index
                     print(f"[FollowRacingLineMPCBehavior] WARNING: Could not find any forward waypoint, keeping index {wp_last_idx}")
+                """  # End of commented-out complex search logic
+                
             except Exception as e:
                 print(f"[FollowRacingLineMPCBehavior] Warning: Waypoint finder error: {e}")
         
@@ -1028,7 +1170,22 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     u_proj = max(0.0, min(1.0, u_proj))
                     proj_x = x0 + u_proj * seg_dx
                     proj_y = y0 + u_proj * seg_dy
+                    
+                    # Compute normal vector: (-dy, dx) points LEFT of forward direction
                     nx = -seg_dy / seg_len; ny = seg_dx / seg_len
+                    
+                    # Apply heading flip logic to match MPC's internal CTE calculation
+                    # This ensures displayed CTE matches what MPC uses for control
+                    if car_heading is not None:
+                        seg_heading = math.atan2(seg_dy, seg_dx)
+                        heading_diff = seg_heading - car_heading
+                        # Normalize to [-pi, pi]
+                        heading_diff = math.atan2(math.sin(heading_diff), math.cos(heading_diff))
+                        # If heading difference > 90°, flip the normal vector (same as MPC does)
+                        if abs(heading_diff) > math.pi / 2:
+                            nx = -nx
+                            ny = -ny
+                    
                     cte = (px - proj_x)*nx + (py - proj_y)*ny
         
         # Fallback: Use TTL Geometry if waypoints didn't provide CTE
@@ -1092,16 +1249,26 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             local_throttle_limit = local_throttle_limit * moderate_cte_factor
 
         # --- Normalization & slew limiting ---
-        final_steer = max(-1.0, min(1.0, steer_mpc))
+        steer_mpc_raw = steer_mpc
+        final_steer = max(-1.0, min(1.0, steer_mpc_raw))
         # Apply simple slew-rate limiter
         if not hasattr(self, '_last_final_steer'):
             self._last_final_steer = final_steer
-        steer_delta = final_steer - self._last_final_steer
+        prev_steer = self._last_final_steer
+        steer_delta = final_steer - prev_steer
+        limited = False
         if steer_delta > max_steer_delta:
-            final_steer = self._last_final_steer + max_steer_delta
+            final_steer = prev_steer + max_steer_delta
+            limited = True
         elif steer_delta < -max_steer_delta:
-            final_steer = self._last_final_steer - max_steer_delta
+            final_steer = prev_steer - max_steer_delta
+            limited = True
         self._last_final_steer = final_steer
+        print(
+            f"[Steer Slew DBG] mpc_raw={float(steer_mpc_raw):+.3f} clamp={float(max(-1.0, min(1.0, steer_mpc_raw))):+.3f} "
+            f"prev={float(prev_steer):+.3f} delta={float(steer_delta):+.3f} max_delta={float(max_steer_delta):+.3f} "
+            f"limited={limited} final={float(final_steer):+.3f}"
+        )
 
         # Ensure local_throttle_limit doesn't exceed base throttle_limit
         local_throttle_limit = min(local_throttle_limit, throttle_limit)

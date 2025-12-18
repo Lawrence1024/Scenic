@@ -47,7 +47,7 @@ class MPCConfig:
         self.wT_epsi = config_dict.get('wT_epsi', 1.0)
         
         # Safety thresholds
-        self.admissible_position_error = config_dict.get('admissible_position_error', 5.0)
+        self.admissible_position_error = config_dict.get('admissible_position_error', 30.0)  # Default 30.0m for sparse waypoints
         # Reduced from 1.57 rad (90 deg) to 2.36 rad (135 deg) to allow MPC to run more often
         # Large yaw errors are common when off-track, and MPC can handle them better than fallback
         self.admissible_yaw_error_rad = config_dict.get('admissible_yaw_error_rad', 2.36)

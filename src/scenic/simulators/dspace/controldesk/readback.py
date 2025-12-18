@@ -46,7 +46,22 @@ def read_ego_state(sim, obj):
         
         # 2. Read Orientation
         yaw_deg = float(sim._cd.get_var(path_yaw))
-        yaw_rad = yaw_deg * (math.pi / 180.0)
+        yaw_rad_raw = yaw_deg * (math.pi / 180.0)
+
+        # Convert raw yaw to Scenic heading.
+        #
+        # IMPORTANT: Do NOT apply any 90deg or 180deg offset here unless empirically proven.
+        # The raw ControlDesk yaw (Angle_Yaw_Vehicle_CoorSys_E) is already consistent with
+        # the XODR geometry used by waypoints in our current setup.
+        #
+        # Normalize to [-pi, pi]
+        yaw_rad = math.atan2(math.sin(yaw_rad_raw), math.cos(yaw_rad_raw))
+
+        # Debug: show raw and normalized heading (in degrees) for sign/frame validation
+        print(
+            f"[Yaw Readback] raw_yaw_deg={yaw_deg:.3f} raw_yaw_rad={yaw_rad_raw:.3f} "
+            f"-> normalized -> heading_rad={yaw_rad:.3f} heading_deg={yaw_rad*180.0/math.pi:.3f}"
+        )
         
         # 3. Read Velocity
         # Inputs are km/h, Scenic uses m/s
@@ -146,8 +161,19 @@ def read_fellow_state(sim, obj, dutils):
             obj._readback_shown = True
         
         obj.dspaceActor.position = Vector(scenic_x, scenic_y, float(z))
-        obj.dspaceActor.heading = float(yaw_deg) * (math.pi / 180.0)
-        yaw_rad = obj.dspaceActor.heading
+        
+        # Convert heading from degrees to radians
+        yaw_rad = float(yaw_deg) * (math.pi / 180.0)
+        
+        # CRITICAL: ModelDesk orients vehicles BACKWARD along track (toward decreasing s)
+        # Flip by 180° to get forward direction (toward increasing s)
+        # This aligns vehicle heading with the direction of travel along the racing line
+        yaw_rad = yaw_rad + math.pi
+        
+        # Normalize to [-pi, pi]
+        yaw_rad = math.atan2(math.sin(yaw_rad), math.cos(yaw_rad))
+        
+        obj.dspaceActor.heading = yaw_rad
         obj.dspaceActor.linvel = Vector(
             float(v) * math.cos(yaw_rad),
             float(v) * math.sin(yaw_rad),

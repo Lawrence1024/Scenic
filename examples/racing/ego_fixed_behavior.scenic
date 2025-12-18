@@ -13,5 +13,5 @@ ego = new RacingCar at (72.567889, 107.574718, 0.0), with behavior FollowRacingL
 # Place fellow car at lookahead target (20m ahead) for visualization
 # This is where the ego is steering towards, not the nearest waypoint
 # Lookahead target calculated from waypoint 3422: (66.428759, 87.330550)
-fellow1 = new RacingCar at (66.428759, 87.330550, 0.0)
+fellow1 = new RacingCar at (55.7661373818, 88.2693869080), with regionContainedIn everywhere
 

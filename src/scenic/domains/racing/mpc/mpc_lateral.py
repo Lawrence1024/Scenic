@@ -386,7 +386,8 @@ class MPCLateralController:
             # Extract first control input
             n_x = 3  # State dimension
             u_0_idx = n_x  # First control is after initial state
-            delta_cmd_rad = result.x[u_0_idx]
+            delta_cmd_rad_raw = float(result.x[u_0_idx])
+            delta_cmd_rad = delta_cmd_rad_raw
             
             # Update previous control
             self.prev_control = delta_cmd_rad
@@ -396,6 +397,13 @@ class MPCLateralController:
             
             # Apply low-pass filter
             steer_filtered = self.steering_filter.update(steer_normalized)
+
+            # Debug: solver -> command pipeline
+            print(
+                f"[MPC Actuation DBG] u0_raw_rad={delta_cmd_rad_raw:+.6f} "
+                f"u0_used_rad={delta_cmd_rad:+.6f} max_steer_angle_rad={self.config.max_steer_angle:.6f} "
+                f"norm={steer_normalized:+.6f} lpf={float(steer_filtered):+.6f}"
+            )
             
             # Reset invalid count on success
             self.invalid_count = 0
@@ -454,30 +462,71 @@ class MPCLateralController:
         proj_x = x0 + u_proj * seg_dx
         proj_y = y0 + u_proj * seg_dy
         
-        # Compute lateral error (e_y)
-        # Normal vector: (-dy, dx) points LEFT of forward direction
-        # Positive e_y = LEFT of path, Negative e_y = RIGHT of path
-        nx = -seg_dy / seg_len
-        ny = seg_dx / seg_len
-        e_y = (px - proj_x)*nx + (py - proj_y)*ny
-        
         # Compute heading error (e_psi)
         # Reference heading is the segment direction
-        psi_ref = np.arctan2(seg_dy, seg_dx)
+        psi_ref_original = np.arctan2(seg_dy, seg_dx)
+        psi_ref = psi_ref_original
         
-        # CRITICAL: If reference heading is opposite to vehicle heading (>90° difference),
-        # flip it by 180° to align with vehicle's forward direction
-        # This ensures "forward along track" matches "forward from vehicle perspective"
+        # Check if reference heading is opposite to vehicle heading (>90° difference)
+        # If so, flip it by 180° to align with vehicle's forward direction
         heading_diff = psi_ref - heading
         heading_diff = np.arctan2(np.sin(heading_diff), np.cos(heading_diff))  # Normalize to [-pi, pi]
+        heading_flipped = False
         if abs(heading_diff) > np.pi / 2:  # > 90 degrees
             # Flip reference heading by 180°
             psi_ref = np.arctan2(np.sin(psi_ref + np.pi), np.cos(psi_ref + np.pi))
+            heading_flipped = True
+        
+        # Compute lateral error (e_y)
+        # Normal vector: (-dy, dx) points LEFT of forward direction along segment
+        # Positive e_y = LEFT of path, Negative e_y = RIGHT of path
+        nx = -seg_dy / seg_len
+        ny = seg_dx / seg_len
+        
+        # NOTE: We do NOT flip the normal vector when heading is flipped
+        # The normal vector is based on geometric position, not travel direction
+        
+        e_y_raw = (px - proj_x)*nx + (py - proj_y)*ny
+        e_y = e_y_raw
+        
+        # CRITICAL FIX: When heading is flipped by 180°, CTE sign must also be flipped!
+        # Why: The normal vector (-dy, dx) is defined relative to the original segment direction.
+        # When we flip the reference heading by 180°, we're saying "travel in the opposite direction".
+        # The CTE "left/right" is relative to travel direction, so it must also flip.
+        # Example: If vehicle is physically right of the geometric line (e_y < 0), but we're
+        # traveling opposite to the line direction, then vehicle is LEFT of the travel path (e_y > 0).
+        if heading_flipped:
+            e_y = -e_y
+        
+        # Diagnostic logging
+        vehicle_heading_deg = heading * 180.0 / np.pi
+        seg_heading_deg = psi_ref_original * 180.0 / np.pi
+        heading_diff_deg = heading_diff * 180.0 / np.pi
+        flipped_heading_deg = psi_ref * 180.0 / np.pi if heading_flipped else None
+        print(
+            f"[MPC Errors DBG] seg_idx={waypoint_idx} "
+            f"wp0=({x0:.2f},{y0:.2f}) wp1=({x1:.2f},{y1:.2f}) "
+            f"seg_d=({seg_dx:.2f},{seg_dy:.2f}) seg_len={seg_len:.3f} "
+            f"u_proj={u_proj:.3f} proj=({proj_x:.2f},{proj_y:.2f}) "
+            f"n=({nx:.3f},{ny:.3f})"
+        )
+        print(
+            f"[MPC Error Computation] Vehicle heading={vehicle_heading_deg:.1f}deg, "
+            f"Segment heading={seg_heading_deg:.1f}deg, diff={heading_diff_deg:.1f}deg, flip={heading_flipped}"
+        )
+        if heading_flipped:
+            print(f"[MPC Error Computation] HEADING FLIPPED: {seg_heading_deg:.1f}deg -> {flipped_heading_deg:.1f}deg (for heading alignment only, normal vector unchanged)")
+        print(
+            f"[MPC Error Computation] CTE_raw={e_y_raw:.3f}m ({'LEFT' if e_y_raw > 0 else 'RIGHT'}), "
+            f"CTE_used={e_y:.3f}m ({'LEFT' if e_y > 0 else 'RIGHT'})"
+        )
         
         # Heading error: difference between reference and actual
         # Normalize to [-pi, pi]
         e_psi = psi_ref - heading
         e_psi = np.arctan2(np.sin(e_psi), np.cos(e_psi))  # Normalize to [-pi, pi]
+        e_psi_deg = e_psi * 180.0 / np.pi
+        print(f"[MPC Error Computation] Final errors: e_y={e_y:.3f}m, e_psi={e_psi:.3f}rad ({e_psi_deg:.1f}deg)")
         
         return (float(e_y), float(e_psi))
     
@@ -560,6 +609,9 @@ class MPCLateralController:
             
             # Clamp to valid range
             steer = max(-1.0, min(1.0, steer))
+            
+            # CRITICAL: Negate steering for dSPACE sign convention (same as MPC output above)
+            steer = -steer
             
             print(f"[MPC Fallback] Using proportional steering: {steer:.3f} (e_y={e_y:.2f}m, e_psi={e_psi:.2f}rad if available)")
             return float(steer)
