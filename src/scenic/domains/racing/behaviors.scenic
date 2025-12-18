@@ -601,12 +601,29 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 if HIT_THRESHOLD > 12.0:
                     HIT_THRESHOLD = 12.0
 
-                # Advance as many waypoints as we plausibly "hit" this step
+                # Advance waypoints only if they're behind vehicle or within close distance
+                # This implements "waypoint chasing" - only advance past waypoints we've actually passed
                 advanced_any = False
                 while wp_last_idx < len(wp_list) - 1:
                     wp_x, wp_y = float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1])
                     dx_now = px - wp_x; dy_now = py - wp_y
                     d_now = (dx_now*dx_now + dy_now*dy_now) ** 0.5
+
+                    # Check if waypoint is behind vehicle (in direction of travel)
+                    waypoint_behind = False
+                    if car_heading is not None:
+                        # Vector from vehicle to waypoint
+                        to_wp_x = wp_x - px
+                        to_wp_y = wp_y - py
+                        # Vehicle forward direction
+                        veh_fx = math.cos(car_heading)
+                        veh_fy = math.sin(car_heading)
+                        # Dot product: positive = ahead, negative = behind
+                        dot_product = to_wp_x * veh_fx + to_wp_y * veh_fy
+                        waypoint_behind = dot_product < 0  # Behind if dot product negative
+
+                    # Advance only if: waypoint is behind vehicle OR within close distance (2m) OR pass-through detected
+                    should_advance = waypoint_behind or d_now < 2.0
 
                     # Pass-through detection: distance from waypoint to (prev_pos -> curr_pos) segment
                     # Compute point-to-segment distance inline:
@@ -634,10 +651,15 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         ddy = wp_y - cy
                         d_seg = (ddx*ddx + ddy*ddy) ** 0.5
 
-                    if d_now < HIT_THRESHOLD or d_seg < HIT_THRESHOLD:
+                    if should_advance and (d_now < HIT_THRESHOLD or d_seg < HIT_THRESHOLD):
                         advanced_any = True
-                        reason = "within_radius" if d_now < HIT_THRESHOLD else "passed_through"
-                        print(f"[Waypoint Increment] {reason}: advancing {wp_last_idx} -> {wp_last_idx + 1} (d_now={d_now:.2f}m, d_seg={d_seg:.2f}m, travel={travel_dist:.2f}m, thr={HIT_THRESHOLD:.2f}m)")
+                        if waypoint_behind:
+                            reason = "behind_vehicle"
+                        elif d_now < HIT_THRESHOLD:
+                            reason = "within_radius"
+                        else:
+                            reason = "passed_through"
+                        print(f"[Waypoint Increment] {reason}: advancing {wp_last_idx} -> {wp_last_idx + 1} (d_now={d_now:.2f}m, d_seg={d_seg:.2f}m, travel={travel_dist:.2f}m, thr={HIT_THRESHOLD:.2f}m, dot={dot_product:.2f})")
                         wp_last_idx += 1
                         continue
                     break
@@ -1120,9 +1142,9 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         # Pass CTE magnitude for adaptive waypoint search
         try:
             steer_mpc = _lat_controller.run_step(
-                vehicle_state, 
-                waypoints_for_mpc, 
-                wp_last_idx,
+                vehicle_state,
+                waypoints_for_mpc,
+                None,  # MPC now selects segments dynamically, doesn't need waypoint index
                 cte_magnitude=cte_mag_for_pid  # Pass CTE magnitude for adaptive search
             )
         except Exception as ex:
@@ -1375,7 +1397,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 dy_to_wp = py - current_wp_y
                 dist_to_wp = (dx_to_wp*dx_to_wp + dy_to_wp*dy_to_wp) ** 0.5
                 
-                print(f"  Current waypoint: index={wp_last_idx}, coord=({current_wp_x:.2f}, {current_wp_y:.2f}), distance={dist_to_wp:.2f}m")
+                print(f"  Waypoint advancement: index={wp_last_idx}, coord=({current_wp_x:.2f}, {current_wp_y:.2f}), distance={dist_to_wp:.2f}m")
                 
                 # Next waypoint information
                 if wp_last_idx < len(wp_list) - 1:

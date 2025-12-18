@@ -294,23 +294,25 @@ class MPCLateralController:
             print(f"[MPC] Error building reference: {e}")
             # Try to compute errors for proportional fallback, but don't fail if it doesn't work
             try:
-                e_y, e_psi = self._compute_errors(
+                e_y, e_psi, _ = self._compute_errors(
                     position=(x, y),
                     heading=yaw,
-                    waypoints=waypoints,
-                    waypoint_idx=current_waypoint_idx if current_waypoint_idx is not None else 0
+                    waypoints=waypoints
                 )
                 return self._fallback_steering(e_y=e_y, e_psi=e_psi)
             except:
                 return self._fallback_steering(e_y=None, e_psi=None)
         
         # Compute current state [e_y, e_psi, delta]
-        e_y, e_psi = self._compute_errors(
+        # MPC now dynamically selects the best segment each step
+        e_y, e_psi, mpc_segment_idx = self._compute_errors(
             position=(x, y),
             heading=yaw,
-            waypoints=waypoints,
-            waypoint_idx=new_waypoint_idx
+            waypoints=waypoints
         )
+
+        # Log the actual reference segment being used for MPC control
+        print(f"[MPC Reference] Using segment {mpc_segment_idx} (waypoints {mpc_segment_idx} -> {mpc_segment_idx+1}) for control")
         
         # Compute reference heading for logging (extract from _compute_errors logic)
         # NOTE: Use different variable name to avoid shadowing the psi_ref array from build_reference
@@ -418,31 +420,63 @@ class MPCLateralController:
     def _compute_errors(self,
                        position: Tuple[float, float],
                        heading: float,
-                       waypoints: List[Tuple[float, float]],
-                       waypoint_idx: int) -> Tuple[float, float]:
+                       waypoints: List[Tuple[float, float]]) -> Tuple[float, float, int]:
         """Compute lateral error (e_y) and heading error (e_psi) from waypoints.
-        
+
+        Dynamically selects the best waypoint segment for control based on proximity to vehicle.
+
         Args:
             position: Current vehicle position (x, y)
             heading: Current vehicle heading (radians)
             waypoints: List of waypoint (x, y) tuples
-            waypoint_idx: Current waypoint index
-            
+
         Returns:
-            Tuple of (e_y, e_psi):
+            Tuple of (e_y, e_psi, segment_idx):
             - e_y: Lateral error (meters), positive = left of path
             - e_psi: Heading error (radians), positive = heading left of path direction
+            - segment_idx: Index of the waypoint segment being used for control
         """
         if not waypoints or len(waypoints) < 2:
-            return (0.0, 0.0)
-        
+            return (0.0, 0.0, 0)
+
         px, py = position
-        
-        # Find the waypoint segment to use (use nearest segment)
-        if waypoint_idx >= len(waypoints) - 1:
-            waypoint_idx = len(waypoints) - 2
-        
-        # Get segment endpoints
+
+        # Find the best waypoint segment dynamically
+        # Choose segment with closest perpendicular distance to vehicle
+        best_segment_idx = 0
+        best_distance = float('inf')
+
+        for i in range(len(waypoints) - 1):
+            x0, y0 = waypoints[i]
+            x1, y1 = waypoints[i + 1]
+
+            seg_dx = x1 - x0
+            seg_dy = y1 - y0
+            seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)
+
+            if seg_len < 1e-6:
+                continue
+
+            # Project vehicle position onto segment
+            wx = px - x0
+            wy = py - y0
+            u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
+            u_proj = np.clip(u_proj, 0.0, 1.0)
+
+            proj_x = x0 + u_proj * seg_dx
+            proj_y = y0 + u_proj * seg_dy
+
+            # Distance from vehicle to projection point
+            dx = px - proj_x
+            dy = py - proj_y
+            distance = np.sqrt(dx*dx + dy*dy)
+
+            if distance < best_distance:
+                best_distance = distance
+                best_segment_idx = i
+
+        # Use the best segment found
+        waypoint_idx = best_segment_idx
         x0, y0 = waypoints[waypoint_idx]
         x1, y1 = waypoints[waypoint_idx + 1]
         
@@ -528,7 +562,7 @@ class MPCLateralController:
         e_psi_deg = e_psi * 180.0 / np.pi
         print(f"[MPC Error Computation] Final errors: e_y={e_y:.3f}m, e_psi={e_psi:.3f}rad ({e_psi_deg:.1f}deg)")
         
-        return (float(e_y), float(e_psi))
+        return (float(e_y), float(e_psi), waypoint_idx)
     
     def _fallback_steering(self, e_y: Optional[float] = None, e_psi: Optional[float] = None) -> float:
         """Fallback steering when MPC fails.
