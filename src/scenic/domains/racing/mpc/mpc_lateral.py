@@ -12,6 +12,7 @@ from scipy.sparse import csc_matrix
 from .config import MPCConfig
 from .reference_builder import ReferenceBuilder
 from .utils import LowPassFilter
+import math
 
 
 class MPCLateralController:
@@ -557,10 +558,17 @@ class MPCLateralController:
         
         # Heading error: difference between reference and actual
         # Normalize to [-pi, pi]
-        e_psi = psi_ref - heading
+        # Use e_psi = vehicle_heading - reference_heading (matches the discrete model sign)
+        e_psi = heading - psi_ref
+        # normalize to [-pi, pi]
+        e_psi = math.atan2(math.sin(e_psi), math.cos(e_psi))
         e_psi = np.arctan2(np.sin(e_psi), np.cos(e_psi))  # Normalize to [-pi, pi]
         e_psi_deg = e_psi * 180.0 / np.pi
+        # Expose last errors for outer behavior logic (conditioning/safety/debug)
         print(f"[MPC Error Computation] Final errors: e_y={e_y:.3f}m, e_psi={e_psi:.3f}rad ({e_psi_deg:.1f}deg)")
+        self.last_e_y = float(e_y)
+        self.last_e_psi = float(e_psi)
+        self.last_seg_idx = int(waypoint_idx)
         
         return (float(e_y), float(e_psi), waypoint_idx)
     

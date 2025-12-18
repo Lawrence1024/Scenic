@@ -68,7 +68,12 @@ def read_state_from_controldesk(sim: DSpaceSimulation, obj) -> Dict[str, float]:
                 steer_val = sim._cd.get_var(steer_path)
                 # Convert to radians (assuming degrees from ControlDesk)
                 import math
-                steer_rad = float(steer_val) * (math.pi / 180.0)
+                steer_rad = math.radians(steer_val)
+
+                # IMPORTANT: MPC expects +delta=LEFT, -delta=RIGHT.
+                # If ControlDesk reports the opposite sign, flip here.
+                STEER_ACTUAL_SIGN = -1.0   # <-- use -1.0 only if left-turn readback is negative
+                steer_rad = STEER_ACTUAL_SIGN * steer_rad
                 state['steer_actual'] = steer_rad
                 
                 # Debug logging (first few reads only)

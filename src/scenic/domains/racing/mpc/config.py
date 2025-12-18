@@ -40,9 +40,9 @@ class MPCConfig:
         
         # MPC weights
         self.w_ey = config_dict.get('w_ey', 2.0)
-        self.w_epsi = config_dict.get('w_epsi', 0.5)
-        self.w_u = config_dict.get('w_u', 0.2)
-        self.w_du = config_dict.get('w_du', 5.0)
+        self.w_epsi = config_dict.get('w_epsi', 2.0)
+        self.w_u = config_dict.get('w_u', 0.1)
+        self.w_du = config_dict.get('w_du', 0.75)
         self.wT_ey = config_dict.get('wT_ey', 5.0)
         self.wT_epsi = config_dict.get('wT_epsi', 1.0)
         

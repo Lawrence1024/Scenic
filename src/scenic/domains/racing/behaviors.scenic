@@ -603,7 +603,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
 
                 # Advance waypoints only if they're behind vehicle or within close distance
                 # This implements "waypoint chasing" - only advance past waypoints we've actually passed
-                advanced_any = False
                 while wp_last_idx < len(wp_list) - 1:
                     wp_x, wp_y = float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1])
                     dx_now = px - wp_x; dy_now = py - wp_y
@@ -651,8 +650,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         ddy = wp_y - cy
                         d_seg = (ddx*ddx + ddy*ddy) ** 0.5
 
-                    if should_advance and (d_now < HIT_THRESHOLD or d_seg < HIT_THRESHOLD):
-                        advanced_any = True
+                    if waypoint_behind or (d_now < HIT_THRESHOLD) or (d_seg < HIT_THRESHOLD):
                         if waypoint_behind:
                             reason = "behind_vehicle"
                         elif d_now < HIT_THRESHOLD:
@@ -688,211 +686,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         print(f"[FollowRacingLineMPCBehavior] Progress: {self._waypoints_passed} waypoints passed ({progress_pct:.1f}% of {len(wp_list)} total waypoints)")
                     else:
                         print(f"[FollowRacingLineMPCBehavior] Waypoint index: {wp_last_idx} at ({current_wp_x:.2f}, {current_wp_y:.2f}), distance={current_wp_dist:.2f}m")
-                
-                # DISABLED: Complex search logic - using simple increment for testing
-                # All waypoint search code below is commented out for testing
-                
-                """
-                # OLD COMPLEX LOGIC: If distance to current waypoint is very large (>10m), find nearest waypoint first
-                # This prevents the waypoint index from getting stuck when vehicle has moved far from the waypoint
-                # The issue: using wp_last_idx as starting point biases search toward that index
-                if current_wp_dist and current_wp_dist > 10.0:
-                    print(f"[Waypoint Search] Large distance to waypoint ({current_wp_dist:.1f}m), finding nearest waypoint first...")
-                    # First, find the actual nearest waypoint by brute force (scan all waypoints)
-                    # This ensures we start from the closest waypoint, not the last known index
-                    nearest_idx = wp_last_idx
-                    best_d2 = current_wp_dist * current_wp_dist  # Start with current distance
-                    # Scan a large window around current index first (faster)
-                    scan_window = 500
-                    scan_start = max(0, wp_last_idx - scan_window)
-                    scan_end = min(len(wp_list), wp_last_idx + scan_window)
-                    for i in range(scan_start, scan_end):
-                        wp_x, wp_y = float(wp_list[i][0]), float(wp_list[i][1])
-                        dx = px - wp_x; dy = py - wp_y
-                        d2 = dx*dx + dy*dy
-                        if d2 < best_d2:
-                            best_d2 = d2
-                            nearest_idx = i
-                    
-                    # If nearest is still far, scan entire waypoint list
-                    if best_d2 > 100.0:  # If nearest is still >10m, scan everything
-                        print(f"[Waypoint Search] Nearest in window still far ({best_d2**0.5:.1f}m), scanning all waypoints...")
-                        nearest_idx = 0
-                        best_d2 = 1e18
-                        for i in range(len(wp_list)):
-                            wp_x, wp_y = float(wp_list[i][0]), float(wp_list[i][1])
-                            dx = px - wp_x; dy = py - wp_y
-                            d2 = dx*dx + dy*dy
-                            if d2 < best_d2:
-                                best_d2 = d2
-                                nearest_idx = i
-                    
-                    nearest_dist = best_d2 ** 0.5
-                    print(f"[Waypoint Search] Found nearest waypoint: index={nearest_idx}, distance={nearest_dist:.2f}m (was {wp_last_idx} at {current_wp_dist:.2f}m)")
-                    
-                    # CRITICAL: Always enforce forward progress - never use a backward waypoint as starting point
-                    # If nearest waypoint is backward, use current wp_last_idx instead to maintain forward progress
-                    search_start_idx = nearest_idx if nearest_idx >= wp_last_idx else wp_last_idx
-                    if nearest_idx < wp_last_idx:
-                        print(f"[Waypoint Search] Nearest waypoint ({nearest_idx}) is backward, using current index ({wp_last_idx}) to enforce forward progress")
-                    
-                    # Now use the search_start_idx as starting point for aggressive search
-                    # CRITICAL: Always use forward_only=True to prevent backward waypoint jumps
-                    result = find_best_racing_waypoint(
-                        car_position=(px, py),
-                        car_heading=car_heading if car_heading is not None else 0.0,
-                        waypoints=wp_list,
-                        last_known_index=search_start_idx,  # Always forward from wp_last_idx
-                        max_search_distance=500.0,  # Very large search distance
-                        forward_bias=0.95,  # Strong forward bias to prefer forward progress
-                        min_forward_distance=0.0,  # Remove minimum forward distance requirement
-                        forward_only=True  # CRITICAL: Always enforce forward-only to prevent backward jumps
-                    )
-                    if result:
-                        print(f"[Waypoint Search] Found waypoint with aggressive search: index={result['index']}, distance={result.get('distance', 0.0):.2f}m")
-                        # If result is still the old index and distance is large, enforce forward progress
-                        # Never use a backward waypoint even if it's nearest
-                        if result['index'] == wp_last_idx and result.get('distance', 0.0) > 10.0:
-                            # Only use nearest if it's forward; otherwise keep current index
-                            if nearest_idx >= wp_last_idx:
-                                print(f"[Waypoint Search] Aggressive search returned old index with large distance, using forward nearest waypoint ({nearest_idx}) instead")
-                                result = {
-                                    'index': nearest_idx,
-                                    'waypoint': wp_list[nearest_idx],
-                                    'distance': nearest_dist,
-                                    'forward_score': 1.0,
-                                    'heading_alignment': 0.5,
-                                    'total_score': 0.0,
-                                    'next_index': (nearest_idx + 1) % len(wp_list),
-                                    'next_waypoint': wp_list[(nearest_idx + 1) % len(wp_list)]
-                                }
-                            else:
-                                print(f"[Waypoint Search] Aggressive search returned old index with large distance, but nearest ({nearest_idx}) is backward - keeping current index ({wp_last_idx}) to enforce forward progress")
-                
-                # If aggressive search didn't find anything, try standard forward-only search
-                if not result:
-                    # Adaptive search distance: increase when CTE is large or distance to waypoint is large
-                    # This helps catch waypoints even when vehicle is far off-track
-                    base_search_dist = 100.0
-                    if current_wp_dist and current_wp_dist > 50.0:
-                        # If distance to current waypoint is > 50m, we've likely missed it - search more aggressively
-                        search_dist = max(base_search_dist, current_wp_dist * 2.0)  # Search at least 2x the distance
-                        print(f"[Waypoint Search] Very large distance to waypoint ({current_wp_dist:.1f}m), using extended search distance ({search_dist:.1f}m)")
-                    else:
-                        search_dist = base_search_dist
-                    
-                    # Try standard forward-only search
-                    result = find_best_racing_waypoint(
-                        car_position=(px, py),
-                        car_heading=car_heading if car_heading is not None else 0.0,
-                        waypoints=wp_list,
-                        last_known_index=wp_last_idx,
-                        max_search_distance=search_dist,
-                        forward_bias=0.9,
-                        min_forward_distance=5.0,
-                        forward_only=True
-                    )
-                
-                # Fallback: If no forward waypoint found and distance is large, try more aggressive search
-                if not result and current_wp_dist and current_wp_dist > 30.0:
-                    print(f"[Waypoint Search] No waypoint found with standard search, trying extended search...")
-                    # Try with much larger search distance and relaxed forward constraint
-                    extended_result = find_best_racing_waypoint(
-                        car_position=(px, py),
-                        car_heading=car_heading if car_heading is not None else 0.0,
-                        waypoints=wp_list,
-                        last_known_index=wp_last_idx,
-                        max_search_distance=500.0,  # Very large search distance
-                        forward_bias=0.7,  # Slightly less forward bias
-                        min_forward_distance=0.0,  # Remove minimum forward distance requirement
-                        forward_only=False  # Allow backward search when distance is very large
-                    )
-                    if extended_result:
-                        result = extended_result
-                        print(f"[Waypoint Search] Found waypoint with extended search: index={extended_result['index']}, distance={extended_result.get('distance', 0.0):.2f}m")
-                
-                # Final fallback: If still no result, find nearest waypoint by scanning (forward and backward if needed)
-                if not result:
-                    print(f"[Waypoint Search] No waypoint found with standard/extended search, scanning waypoints...")
-                    # Manually scan waypoints to find the nearest one
-                    # If distance is large, scan both forward and backward
-                    best_idx = None
-                    best_dist = float('inf')
-                    
-                    if current_wp_dist and current_wp_dist > 20.0:
-                        # Very large distance - scan both forward and backward
-                        print(f"[Waypoint Search] Large distance ({current_wp_dist:.1f}m), scanning both forward and backward waypoints")
-                        scan_start = max(0, wp_last_idx - 200)  # Look back up to 200 waypoints
-                        scan_end = min(len(wp_list), wp_last_idx + 500)  # Scan up to 500 waypoints ahead
-                    else:
-                        # Normal case - scan forward only
-                        scan_start = wp_last_idx
-                        scan_end = min(len(wp_list), wp_last_idx + 500)  # Scan up to 500 waypoints ahead
-                    
-                    for i in range(scan_start, scan_end):
-                        wp_x, wp_y = float(wp_list[i][0]), float(wp_list[i][1])
-                        dx = px - wp_x; dy = py - wp_y
-                        dist = (dx*dx + dy*dy) ** 0.5
-                        if dist < best_dist:
-                            best_dist = dist
-                            best_idx = i
-                    
-                    if best_idx is not None and best_dist < 500.0:  # Only use if within 500m
-                        # Create a result-like dict for consistency
-                        result = {
-                            'index': best_idx,
-                            'waypoint': wp_list[best_idx],
-                            'distance': best_dist,
-                            'forward_score': 1.0 if best_idx >= wp_last_idx else 0.5,  # Forward if ahead, partial if behind
-                            'heading_alignment': 0.5,  # Unknown
-                            'total_score': 0.0,
-                            'next_index': (best_idx + 1) % len(wp_list),
-                            'next_waypoint': wp_list[(best_idx + 1) % len(wp_list)]
-                        }
-                        direction = "forward" if best_idx >= wp_last_idx else "backward"
-                        print(f"[Waypoint Search] Found waypoint via manual scan ({direction}): index={best_idx}, distance={best_dist:.2f}m")
-                
-                if result:
-                    new_wp_idx = result['index']
-                    wp_last_idx = new_wp_idx
-                    # Debug logging: show waypoint index updates
-                    wp_dist = result.get('distance', 0.0)
-                    
-                    if new_wp_idx != old_wp_idx:
-                        # Initialize waypoint progress tracking
-                        if not hasattr(self, '_waypoints_passed'):
-                            self._waypoints_passed = 0
-                        
-                        # Track forward progress (but handle backward jumps)
-                        if new_wp_idx > old_wp_idx:
-                            # Forward progress
-                            progress = new_wp_idx - old_wp_idx
-                            self._waypoints_passed += progress
-                        elif new_wp_idx < old_wp_idx:
-                            # Backward jump detected (shouldn't happen with forward_only=True, but log it)
-                            print(f"[FollowRacingLineMPCBehavior] WARNING: Backward waypoint jump detected: {old_wp_idx} -> {new_wp_idx}")
-                        
-                        # WAYPOINT HIT: Index changed
-                        if new_wp_idx < len(wp_list):
-                            hit_wp = wp_list[new_wp_idx]
-                            hit_wp_x, hit_wp_y = float(hit_wp[0]), float(hit_wp[1])
-                            progress_pct = (self._waypoints_passed / len(wp_list)) * 100.0 if len(wp_list) > 0 else 0.0
-                            print(f"[FollowRacingLineMPCBehavior] WAYPOINT HIT: index {old_wp_idx} -> {new_wp_idx} at ({hit_wp_x:.2f}, {hit_wp_y:.2f}), distance={wp_dist:.2f}m")
-                            print(f"[FollowRacingLineMPCBehavior] Progress: {self._waypoints_passed} waypoints passed ({progress_pct:.1f}% of {len(wp_list)} total waypoints)")
-                        else:
-                            print(f"[FollowRacingLineMPCBehavior] Waypoint index updated: {old_wp_idx} -> {new_wp_idx} (distance={wp_dist:.2f}m)")
-                    else:
-                        # Log current waypoint index with coordinates (every step for now)
-                        if wp_last_idx < len(wp_list):
-                            current_wp = wp_list[wp_last_idx]
-                            current_wp_x, current_wp_y = float(current_wp[0]), float(current_wp[1])
-                            print(f"[FollowRacingLineMPCBehavior] Waypoint index: {wp_last_idx} at ({current_wp_x:.2f}, {current_wp_y:.2f}), distance={wp_dist:.2f}m")
-                        else:
-                            print(f"[FollowRacingLineMPCBehavior] Waypoint index: {wp_last_idx} (distance={wp_dist:.2f}m)")
-                else:
-                    # Still no waypoint found - log warning but keep current index
-                    print(f"[FollowRacingLineMPCBehavior] WARNING: Could not find any forward waypoint, keeping index {wp_last_idx}")
-                """  # End of commented-out complex search logic
                 
             except Exception as e:
                 print(f"[FollowRacingLineMPCBehavior] Warning: Waypoint finder error: {e}")
@@ -1010,94 +803,119 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         # Clamp PID output to reasonable range (prevent excessive throttle commands)
         throttle_pid = max(-1.0, min(1.0, throttle_pid))
         
-        # FIX 1: Force zero/negative throttle AND braking when CTE is very large
-        # Override PID output to command braking when far off-track
-        # Also apply brake to counteract natural acceleration
-        # CRITICAL FIX: Don't apply brake when speed is zero/very low - brake should only slow down moving vehicles
-        # Use hysteresis to prevent deadlock at threshold boundary
-        
-        # Initialize hysteresis state tracking
+        # -------------------------------
+        # CTE-aware longitudinal safety
+        # -------------------------------
+
+        # Hysteresis state tracking
         if not hasattr(self, '_was_cte_large'):
             self._was_cte_large = False
-        
-        # Hysteresis: Enter "large CTE" mode at 5.5m, exit at 4.5m (prevents oscillation at boundary)
+
+        # Enter large-CTE mode at 5.5m, exit at 4.5m
         if cte_mag_for_pid >= 5.5:
             self._was_cte_large = True
         elif cte_mag_for_pid < 4.5:
             self._was_cte_large = False
-        
-        # Speed threshold: Only apply brake if speed is significant
-        # When stopped, allow throttle to enable movement
-        # Progressive brake and throttle control to prevent brake-accelerate cycles
-        SPEED_THRESHOLD_FOR_BRAKE = 2.0  # Increased from 1.0 m/s - allows more movement before braking
-        MIN_THROTTLE_WHEN_STOPPED = 0.1  # Increased from 0.05 - stronger throttle to start moving
-        MIN_THROTTLE_WHEN_MOVING_SLOW = 0.05  # Allow small throttle when moving slowly to enable progress
-        
-        # SMOOTH DRIVING: Prefer throttle reduction over braking for smoother control
-        # Strategy: Use throttle reduction as primary speed control, brake only when necessary
-        # This prevents drive-brake-drive cycles and creates smoother deceleration
-        cte_brake = 0.0  # Brake command for CTE-based braking
-        throttle_override = None  # Optional throttle override (None = use PID output)
-        
-        if cte_mag_for_pid >= 10.0:
-            # Very far off-track (>10m): need active braking
-            if current_speed > 4.0:  # Only brake when speed is high
-                # High speed + large CTE: apply brake to slow down quickly
-                throttle_override = -0.3  # Negative throttle (braking via throttle)
-                cte_brake = 0.2  # Moderate brake
-                print(f"[CTE-Aware PID] CTE={cte_mag_for_pid:.2f}m >= 10m, speed={current_speed:.2f}m/s: APPLYING BRAKE (throttle={throttle_override:.3f}, brake={cte_brake:.3f})")
+
+        SPEED_THRESHOLD_FOR_BRAKE = 2.0
+        MIN_THROTTLE_WHEN_STOPPED = 0.10
+
+        # Output knobs (IMPORTANT)
+        MAX_BRAKE_NORMAL = 0.25        # speed PID is NOT allowed to exceed this
+        MAX_BRAKE_LARGE_CTE = 0.60     # only when CTE is large
+        MAX_BRAKE_VERY_LARGE = 0.90    # only when CTE is huge (still not instant 1.0)
+        BRAKE_SLEW = 0.15              # per step (dt=1.0) -- adjust if needed
+
+        cte_brake = 0.0
+        throttle_override = None
+
+        # Decide envelope
+        very_large = (cte_mag_for_pid >= 10.0)
+        large = (self._was_cte_large or cte_mag_for_pid >= 5.0)
+
+        if very_large:
+            # You’re far off-track: prioritize slowing down, but don’t deadlock at low speed
+            if current_speed > 4.0:
+                throttle_override = 0.0
+                cte_brake = 0.35
             elif current_speed > SPEED_THRESHOLD_FOR_BRAKE:
-                # Moderate speed: reduce throttle, light brake
-                throttle_override = 0.0  # Zero throttle
-                cte_brake = 0.1  # Light brake
-                print(f"[CTE-Aware PID] CTE={cte_mag_for_pid:.2f}m >= 10m, speed={current_speed:.2f}m/s: REDUCING THROTTLE + LIGHT BRAKE (throttle=0.0, brake={cte_brake:.3f})")
+                throttle_override = 0.0
+                cte_brake = 0.20
             else:
-                # Low speed: allow small throttle to enable movement
                 throttle_override = MIN_THROTTLE_WHEN_STOPPED
                 cte_brake = 0.0
-                print(f"[CTE-Aware PID] CTE={cte_mag_for_pid:.2f}m >= 10m but slow (speed={current_speed:.2f}m/s): ALLOWING MIN THROTTLE ({throttle_override:.3f})")
-        elif self._was_cte_large or cte_mag_for_pid >= 5.0:
-            # Moderate CTE (5-10m): prefer throttle reduction over braking for smoothness
-            if current_speed > 5.0:
-                # High speed (>5 m/s): use brake to slow down (necessary for safety)
-                if cte_mag_for_pid >= 7.0:
-                    throttle_override = 0.0  # Zero throttle
-                    cte_brake = 0.08  # Light brake
-                else:
-                    throttle_override = 0.0  # Zero throttle
-                    cte_brake = 0.05  # Very light brake
-                print(f"[CTE-Aware PID] CTE={cte_mag_for_pid:.2f}m >= 5m, speed={current_speed:.2f}m/s: REDUCING THROTTLE + LIGHT BRAKE (throttle=0.0, brake={cte_brake:.3f})")
+        elif large:
+            # Moderate off-track: prefer coasting; only light braking at higher speeds
+            if current_speed > 6.0:
+                throttle_override = 0.0
+                cte_brake = 0.10
             elif current_speed > 3.0:
-                # Moderate speed (3-5 m/s): reduce throttle, no brake (smooth deceleration)
-                throttle_override = 0.0  # Zero throttle - let vehicle coast/slow naturally
-                cte_brake = 0.0  # No brake - throttle reduction is sufficient
-                print(f"[CTE-Aware PID] CTE={cte_mag_for_pid:.2f}m >= 5m, speed={current_speed:.2f}m/s: REDUCING THROTTLE ONLY (throttle=0.0, brake=0.0) - smooth deceleration")
-            elif current_speed > SPEED_THRESHOLD_FOR_BRAKE:
-                # Low speed (2-3 m/s): allow small throttle for progress, no brake
-                # Use PID output but reduce it gradually based on CTE
-                throttle_reduction_factor = 1.0 - (cte_mag_for_pid - 5.0) / 5.0  # 0.0 at 10m CTE, 1.0 at 5m CTE
-                throttle_reduction_factor = max(0.3, min(1.0, throttle_reduction_factor))  # Clamp to 30-100%
-                throttle_override = None  # Use PID output, but will be reduced later
-                cte_brake = 0.0  # No brake
-                print(f"[CTE-Aware PID] CTE={cte_mag_for_pid:.2f}m >= 5m, speed={current_speed:.2f}m/s: GRADUAL THROTTLE REDUCTION (factor={throttle_reduction_factor:.2f}, brake=0.0)")
-            else:
-                # Stopped or very slow: allow min throttle to start moving
-                throttle_override = MIN_THROTTLE_WHEN_STOPPED
+                throttle_override = 0.0
                 cte_brake = 0.0
-                print(f"[CTE-Aware PID] CTE={cte_mag_for_pid:.2f}m >= 5m but stopped (speed={current_speed:.2f}m/s): ALLOWING MIN THROTTLE ({throttle_override:.3f}) TO START MOVING")
-        
+            else:
+                # At low speed, allow the speed PID to work (but we’ll cap brake later)
+                throttle_override = None
+                cte_brake = 0.0
+
         # Apply throttle override if set
         if throttle_override is not None:
             throttle_pid = throttle_override
-        elif current_speed > SPEED_THRESHOLD_FOR_BRAKE and current_speed <= 3.0 and (self._was_cte_large or cte_mag_for_pid >= 5.0):
-            # Apply gradual throttle reduction for low-moderate speed
-            throttle_reduction_factor = 1.0 - (cte_mag_for_pid - 5.0) / 5.0  # 0.0 at 10m CTE, 1.0 at 5m CTE
-            throttle_reduction_factor = max(0.3, min(1.0, throttle_reduction_factor))  # Clamp to 30-100%
-            throttle_pid = throttle_pid * throttle_reduction_factor
-        
-        # Debug logging for PID output when CTE is large
-        if cte_mag_for_pid >= cte_throttle_reduction_start:
-            print(f"[CTE-Aware PID] speed_error={speed_error:.2f}m/s, throttle_pid={throttle_pid:.3f}, cte_brake={cte_brake:.3f}")
+
+        # -------------------------------
+        # Brake cap + conversion + merge + SLEW-LIMIT (drop-in replacement)
+        # -------------------------------
+
+        # Compute a brake cap depending on CTE regime
+        if very_large:
+            brake_cap = MAX_BRAKE_VERY_LARGE
+        elif large:
+            brake_cap = MAX_BRAKE_LARGE_CTE
+        else:
+            brake_cap = MAX_BRAKE_NORMAL
+
+        # Convert any negative throttle_pid into a capped brake demand
+        pid_brake = 0.0
+        if throttle_pid < 0.0:
+            pid_brake = min(-throttle_pid, brake_cap)
+            throttle_pid = 0.0  # zero throttle when braking
+
+        # Merge CTE brake + PID brake (both capped)
+        raw_brake = max(float(cte_brake), float(pid_brake))
+        raw_brake = min(float(raw_brake), float(brake_cap))
+
+        # ---- Guard: do not "slam brake" at (near) standstill ----
+        STOP_SPEED = 0.6  # m/s (tune: 0.3~1.0)
+        if current_speed <= STOP_SPEED:
+            raw_brake = 0.0
+
+        # ---- Slew-limit brake to avoid spikes (apply slower, release faster) ----
+        BRAKE_SLEW_UP = 0.12     # max increase per step (0..1 scale)
+        BRAKE_SLEW_DOWN = 0.20   # max decrease per step
+
+        if not hasattr(self, "_last_raw_brake"):
+            self._last_raw_brake = float(raw_brake)
+
+        prev_brake = float(self._last_raw_brake)
+        db = float(raw_brake) - prev_brake
+        limited = False
+
+        if db > BRAKE_SLEW_UP:
+            raw_brake = prev_brake + BRAKE_SLEW_UP
+            limited = True
+        elif db < -BRAKE_SLEW_DOWN:
+            raw_brake = prev_brake - BRAKE_SLEW_DOWN
+            limited = True
+
+        raw_brake = max(0.0, min(float(brake_cap), float(raw_brake)))
+        self._last_raw_brake = float(raw_brake)
+        final_brake = max(0.0, min(1.0, raw_brake))
+
+        print(
+            f"[BrakeCap DBG] very_large={very_large} large={large} cap={brake_cap:.3f} "
+            f"cte_brake={float(cte_brake):.3f} pid_brake={float(pid_brake):.3f} "
+            f"prev={prev_brake:.3f} raw={float(raw_brake):.3f} limited={limited} v={float(current_speed):.2f}"
+        )
+
         
         # --- Lateral Control (MPC) ---
         # Build vehicle state for MPC
@@ -1107,19 +925,19 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             'yaw': car_heading if car_heading is not None else 0.0,
             'speed': current_speed,
         }
-        
+
         # Add gear information for MPC (check before gear change logic)
         if manage_gears and hasattr(self, 'setGear'):
             current_gear = getattr(self, 'gear', 0)
             vehicle_state['gear'] = current_gear
-        
+
         # Add optional yaw_rate if available
         if hasattr(self, 'angularVelocity') and self.angularVelocity is not None:
             try:
                 vehicle_state['yaw_rate'] = float(self.angularVelocity.z) if hasattr(self.angularVelocity, 'z') else 0.0
-            except:
+            except Exception:
                 pass
-        
+
         # Try to read steering feedback from ControlDesk
         # This provides actual steering angle (delta) for MPC state
         sim = simulation()
@@ -1128,29 +946,32 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             try:
                 cd_state = read_state_from_controldesk(sim, self)
                 if 'steer_actual' in cd_state:
-                    vehicle_state['steer_actual'] = cd_state['steer_actual']
-            except Exception as e:
+                    vehicle_state['steer_actual'] = cd_state['steer_actual']   # match the same sign convention as command
+
+            except Exception:
                 # If reading fails, MPC will use previous state estimate
                 pass
-        
+
         # Convert waypoints to list of tuples for MPC
         waypoints_for_mpc = None
         if wp_list and len(wp_list) >= 2:
             waypoints_for_mpc = [(float(wp[0]), float(wp[1])) for wp in wp_list]
-        
+
         # Compute steering using MPC
         # Pass CTE magnitude for adaptive waypoint search
         try:
             steer_mpc = _lat_controller.run_step(
                 vehicle_state,
                 waypoints_for_mpc,
-                None,  # MPC now selects segments dynamically, doesn't need waypoint index
-                cte_magnitude=cte_mag_for_pid  # Pass CTE magnitude for adaptive search
+                None,  # MPC selects segments dynamically
+                cte_magnitude=cte_mag_for_pid
             )
+            steer_mpc = float(steer_mpc)
+
         except Exception as ex:
             print(f"[FollowRacingLineMPCBehavior] MPC error: {ex}, using fallback")
             steer_mpc = 0.0
-        
+
         # --- CTE-aware safety envelope (for throttle/brake) ---
         # Compute CTE for safety checks (similar to PID behavior)
         cte = None
@@ -1161,55 +982,57 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             j = wp_last_idx
             found_target = False
             lookahead_seg_idx = wp_last_idx
-            
+
             while rem > 0.0 and j < len(wp_list) - 1:
                 x0, y0 = float(wp_list[j][0]), float(wp_list[j][1])
                 x1, y1 = float(wp_list[j+1][0]), float(wp_list[j+1][1])
-                seg_dx = x1 - x0; seg_dy = y1 - y0
+                seg_dx = x1 - x0
+                seg_dy = y1 - y0
                 seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
-                
+
                 if seg_len <= 1e-6:
-                    j += 1; continue
-                
+                    j += 1
+                    continue
+
                 lookahead_seg_idx = j
-                
+
                 if rem <= seg_len:
                     found_target = True
                     break
                 else:
                     rem -= seg_len
                     j += 1
-            
+
             if found_target:
                 x0, y0 = float(wp_list[lookahead_seg_idx][0]), float(wp_list[lookahead_seg_idx][1])
                 x1, y1 = float(wp_list[lookahead_seg_idx+1][0]), float(wp_list[lookahead_seg_idx+1][1])
-                seg_dx = x1 - x0; seg_dy = y1 - y0
+                seg_dx = x1 - x0
+                seg_dy = y1 - y0
                 seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
-                
+
                 if seg_len > 1e-6:
-                    wx = px - x0; wy = py - y0
+                    wx = px - x0
+                    wy = py - y0
                     u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
                     u_proj = max(0.0, min(1.0, u_proj))
                     proj_x = x0 + u_proj * seg_dx
                     proj_y = y0 + u_proj * seg_dy
-                    
+
                     # Compute normal vector: (-dy, dx) points LEFT of forward direction
-                    nx = -seg_dy / seg_len; ny = seg_dx / seg_len
-                    
+                    nx = -seg_dy / seg_len
+                    ny = seg_dx / seg_len
+
                     # Apply heading flip logic to match MPC's internal CTE calculation
-                    # This ensures displayed CTE matches what MPC uses for control
                     if car_heading is not None:
                         seg_heading = math.atan2(seg_dy, seg_dx)
                         heading_diff = seg_heading - car_heading
-                        # Normalize to [-pi, pi]
                         heading_diff = math.atan2(math.sin(heading_diff), math.cos(heading_diff))
-                        # If heading difference > 90°, flip the normal vector (same as MPC does)
                         if abs(heading_diff) > math.pi / 2:
                             nx = -nx
                             ny = -ny
-                    
+
                     cte = (px - proj_x)*nx + (py - proj_y)*ny
-        
+
         # Fallback: Use TTL Geometry if waypoints didn't provide CTE
         if cte is None:
             line = (self.ttl if hasattr(self, 'ttl') and self.ttl is not None else mainRacingRoad)
@@ -1217,80 +1040,143 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 cte = line.signedDistanceTo(self.position)
             else:
                 cte = 0.0
-        
+
         cte_mag = abs(cte)
         local_throttle_limit = throttle_limit
         final_brake = 0.0
 
         # Progressive throttle reduction based on CTE magnitude
-        # This prevents the vehicle from accelerating too fast when off-track
         if cte_mag >= cte_stop_threshold:
             local_throttle_limit = 0.0
             final_brake = 1.0
+            # Keep your recovery steer intent, but DON'T bypass conditioning/caps/slew below.
             steer_mpc = -0.5 if cte > 0 else 0.5
         elif cte_mag >= cte_slowdown_threshold:
-            # Between 15m and 50m: progressive braking
             local_throttle_limit = min(local_throttle_limit, 0.3)
             final_brake = min(1.0, (cte_mag - cte_slowdown_threshold) / (cte_stop_threshold - cte_slowdown_threshold))
         elif cte_mag >= cte_throttle_reduction_max:
-            # Between 10m and 15m: aggressive throttle reduction
-            # Linear reduction from base throttle_limit to 0.3
             throttle_factor = 1.0 - ((cte_mag - cte_throttle_reduction_max) / (cte_slowdown_threshold - cte_throttle_reduction_max)) * 0.7
             local_throttle_limit = min(local_throttle_limit, throttle_limit * throttle_factor)
-            local_throttle_limit = max(local_throttle_limit, 0.3)  # Don't go below 0.3 in this zone
+            local_throttle_limit = max(local_throttle_limit, 0.3)
         elif cte_mag >= cte_throttle_reduction_start:
-            # Between 2m and 10m: progressive throttle reduction
-            # Linear reduction from base throttle_limit to min_throttle_at_large_cte
             throttle_factor = 1.0 - ((cte_mag - cte_throttle_reduction_start) / (cte_throttle_reduction_max - cte_throttle_reduction_start)) * (1.0 - min_throttle_at_large_cte / throttle_limit)
             local_throttle_limit = min(local_throttle_limit, throttle_limit * throttle_factor)
             local_throttle_limit = max(local_throttle_limit, min_throttle_at_large_cte)
-        
-        # Speed-based throttle reduction when CTE is large (prevents overshooting)
-        # At higher speeds with large CTE, reduce throttle more aggressively
-        if cte_mag >= cte_throttle_reduction_start and current_speed > 3.0:
-            # Speed penalty: more aggressive reduction at high speeds
-            # At 3 m/s: 0% reduction, at 8 m/s: 50% reduction, at 13+ m/s: 80% reduction
-            if current_speed <= 8.0:
-                speed_penalty = (current_speed - 3.0) / 10.0  # 0 at 3 m/s, 0.5 at 8 m/s
-            else:
-                speed_penalty = 0.5 + ((current_speed - 8.0) / 10.0) * 0.3  # 0.5 at 8 m/s, 0.8 at 13+ m/s
-            speed_penalty = min(0.8, speed_penalty)  # Cap at 80% reduction
-            speed_factor = 1.0 - speed_penalty
-            local_throttle_limit = local_throttle_limit * speed_factor
-        
-        # Additional throttle reduction for moderate CTE (2-4m) when speed is high
-        # This prevents overshooting when approaching the track at high speed
-        if cte_mag >= 2.0 and cte_mag < 5.0 and current_speed > 4.0:
-            # More aggressive reduction: at 4 m/s: 0%, at 6 m/s: 50%, at 8+ m/s: 80%
-            if current_speed <= 6.0:
-                moderate_cte_penalty = (current_speed - 4.0) / 4.0  # 0 at 4 m/s, 0.5 at 6 m/s
-            else:
-                moderate_cte_penalty = 0.5 + ((current_speed - 6.0) / 4.0) * 0.3  # 0.5 at 6 m/s, 0.8 at 8+ m/s
-            moderate_cte_penalty = min(0.8, moderate_cte_penalty)  # Cap at 80% reduction
-            moderate_cte_factor = 1.0 - moderate_cte_penalty
-            local_throttle_limit = local_throttle_limit * moderate_cte_factor
 
-        # --- Normalization & slew limiting ---
-        steer_mpc_raw = steer_mpc
-        final_steer = max(-1.0, min(1.0, steer_mpc_raw))
-        # Apply simple slew-rate limiter
+        # Speed-based throttle reduction when CTE is large
+        if cte_mag >= cte_throttle_reduction_start and current_speed > 3.0:
+            if current_speed <= 8.0:
+                speed_penalty = (current_speed - 3.0) / 10.0
+            else:
+                speed_penalty = 0.5 + ((current_speed - 8.0) / 10.0) * 0.3
+            speed_penalty = min(0.8, speed_penalty)
+            local_throttle_limit = local_throttle_limit * (1.0 - speed_penalty)
+
+        # Additional throttle reduction for moderate CTE (2-4m) when speed is high
+        if cte_mag >= 2.0 and cte_mag < 5.0 and current_speed > 4.0:
+            if current_speed <= 6.0:
+                moderate_cte_penalty = (current_speed - 4.0) / 4.0
+            else:
+                moderate_cte_penalty = 0.5 + ((current_speed - 6.0) / 4.0) * 0.3
+            moderate_cte_penalty = min(0.8, moderate_cte_penalty)
+            local_throttle_limit = local_throttle_limit * (1.0 - moderate_cte_penalty)
+
+        
+        # --- Steering conditioning + normalization & slew limiting ---
+        # Goal: avoid "small CTE but too much/too-late steer" -> overshoot & miss waypoint.
+
+        STEER_GAIN   = 0.75     # 0.6–0.9
+        CTE_DEADBAND = 0.10     # meters: ignore tiny CTE noise
+        CTE_SOFT     = 1.00     # meters: full CTE authority by here
+
+        PSI_SOFT     = 0.25     # rad (~14 deg): full heading authority by here
+        MIN_SCALE    = 0.25     # IMPORTANT: never zero steering (prevents late-turn overshoot)
+
+        v = float(current_speed) if current_speed is not None else 0.0
+
+        # Base speed steering cap (normalized)
+        if v < 5.0:
+            base_cap = 0.70
+        elif v < 10.0:
+            base_cap = 0.55
+        else:
+            base_cap = 0.45
+
+        # Use the same CTE you computed for safety envelope (keep naming consistent!)
+        cte_val = float(getattr(_lat_controller, "last_e_y", cte if cte is not None else 0.0))
+        cte_mag_local = abs(cte_val)
+
+        # CTE scale 0..1
+        if cte_mag_local <= CTE_DEADBAND:
+            cte_scale = 0.0
+        elif cte_mag_local >= CTE_SOFT:
+            cte_scale = 1.0
+        else:
+            cte_scale = (cte_mag_local - CTE_DEADBAND) / max(1e-6, (CTE_SOFT - CTE_DEADBAND))
+
+        # Heading/turn anticipation scale 0..1 (lets you steer even when CTE is small)
+        # We already computed heading_diff earlier in your CTE block (seg_heading - car_heading, wrapped to [-pi, pi]).
+        # If you DON'T have heading_diff in scope here, recompute it (same wrap logic).
+        try:
+            psi_mag = abs(float(heading_diff))
+        except Exception:
+            psi_mag = 0.0
+
+        psi_scale = min(1.0, psi_mag / max(1e-6, PSI_SOFT))
+
+        # "recovery" factor 0..1: how much extra authority/slew we allow
+        rec = max(cte_scale, psi_scale)
+
+        # Final scale (NEVER go below MIN_SCALE)
+        scale = max(MIN_SCALE, cte_scale, psi_scale)
+
+        steer_mpc_raw = float(steer_mpc)
+        steer_cmd = steer_mpc_raw * STEER_GAIN * scale
+
+        # Cap increases slightly in recovery / large heading error (so you can turn in time)
+        steer_cap = min(1.0, base_cap + 0.25 * rec)
+
+        # Clamp before slew
+        steer_pre_slew = max(-steer_cap, min(steer_cap, max(-1.0, min(1.0, steer_cmd))))
+
+        # Slew limiter (increase slew allowance during recovery / big heading error)
+        max_delta_eff = float(max_steer_delta) * (1.0 + 1.5 * rec)
+
         if not hasattr(self, '_last_final_steer'):
-            self._last_final_steer = final_steer
-        prev_steer = self._last_final_steer
-        steer_delta = final_steer - prev_steer
+            self._last_final_steer = float(steer_pre_slew)
+
+        prev_steer = float(self._last_final_steer)
+        steer_delta = float(steer_pre_slew) - prev_steer
         limited = False
-        if steer_delta > max_steer_delta:
-            final_steer = prev_steer + max_steer_delta
+
+        if steer_delta > max_delta_eff:
+            final_steer = prev_steer + max_delta_eff
             limited = True
-        elif steer_delta < -max_steer_delta:
-            final_steer = prev_steer - max_steer_delta
+        elif steer_delta < -max_delta_eff:
+            final_steer = prev_steer - max_delta_eff
             limited = True
+        else:
+            final_steer = float(steer_pre_slew)
+
+        final_steer = max(-1.0, min(1.0, final_steer))
         self._last_final_steer = final_steer
+
+        # ---- dSPACE interface sign ----
+        # If your vehicle turns the wrong way, flip HERE (and also flip steer_actual readback below).
+        final_steer_ds = final_steer   # negative = right, positive = left (your dSPACE convention)
+
         print(
-            f"[Steer Slew DBG] mpc_raw={float(steer_mpc_raw):+.3f} clamp={float(max(-1.0, min(1.0, steer_mpc_raw))):+.3f} "
-            f"prev={float(prev_steer):+.3f} delta={float(steer_delta):+.3f} max_delta={float(max_steer_delta):+.3f} "
-            f"limited={limited} final={float(final_steer):+.3f}"
+            f"[SteerCond DBG] mpc={steer_mpc_raw:+.3f} gain={STEER_GAIN:.2f} "
+            f"cte={cte_val:+.3f} |cte|={cte_mag_local:.3f} psi={psi_mag:.3f} "
+            f"scale={scale:.3f} rec={rec:.2f} v={v:.2f} base_cap={base_cap:.2f} cap={steer_cap:.2f} "
+            f"pre_slew={steer_pre_slew:+.3f} max_d={max_delta_eff:.3f}"
         )
+        print(
+            f"[Steer Slew DBG] pre={steer_pre_slew:+.3f} prev={prev_steer:+.3f} "
+            f"delta={steer_delta:+.3f} limited={limited} final={final_steer:+.3f} ds={final_steer_ds:+.3f}"
+        )
+
+
 
         # Ensure local_throttle_limit doesn't exceed base throttle_limit
         local_throttle_limit = min(local_throttle_limit, throttle_limit)
@@ -1395,8 +1281,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 # Calculate distance to current waypoint
                 dx_to_wp = px - current_wp_x
                 dy_to_wp = py - current_wp_y
-                dist_to_wp = (dx_to_wp*dx_to_wp + dy_to_wp*dy_to_wp) ** 0.5
-                
+                dist_to_wp = (dx_to_wp*dx_to_wp + dy_to_wp*dy_to_wp) ** 0.5         
                 print(f"  Waypoint advancement: index={wp_last_idx}, coord=({current_wp_x:.2f}, {current_wp_y:.2f}), distance={dist_to_wp:.2f}m")
                 
                 # Next waypoint information
