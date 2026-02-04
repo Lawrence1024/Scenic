@@ -32,11 +32,12 @@ from .geometry.params import get_map_path
 
 class DSpaceSimulator(RacingSimulator):
     def __init__(self, *, scenario_src="LagunaSeca_ExternalControl",
-                 scenario_name=None, timestep=1, save_as=True):
+                 scenario_name=None, timestep=1, batch_steps=1, save_as=True):
         super().__init__()
         self.scenario_src = scenario_src
         self.scenario_name = scenario_name
         self.timestep = float(timestep)
+        self.batch_steps = int(batch_steps)
         self.save_as = bool(save_as)
 
     def createSimulation(self, scene, **kwargs):
@@ -66,7 +67,8 @@ class DSpaceSimulation(RacingSimulation):
         self._ext_index_base = 0
         
         ts = kwargs.pop("timestep", None) or sim.timestep
-        print(f"[DSpaceSimulation] timestep: {ts}")
+        self.batch_steps = getattr(sim, 'batch_steps', 1)
+        print(f"[DSpaceSimulation] timestep: {ts}, batch_steps: {self.batch_steps}")
         super().__init__(scene, timestep=ts, **kwargs)
 
     # --- TTL (Target Trajectory Line) loading utilities ---
@@ -877,22 +879,58 @@ class DSpaceSimulation(RacingSimulation):
         
         This advances the dSPACE simulation by one timestep using ControlDesk.
         Control variables should already be written by executeActions() before this is called.
+        
+        If batch_steps > 1, SingleStepTime is dynamically set to timestep * batch_steps,
+        and SingleStep() is called once. This reduces pause/continue overhead significantly
+        but increases the control update period (reduces control frequency).
+        
+        Example: timestep=0.05s, batch_steps=2 → SingleStepTime=0.10s, control frequency=10Hz
         """
         if not hasattr(self, '_step_count'):
             self._step_count = 0
         self._step_count += 1
         
-        # Always print for first 5 steps, then every 50
-        if self._step_count <= 5 or self._step_count % 50 == 1:
-            print(f"[step #{self._step_count}] Advancing simulation by {self.timestep}s...")
+        batch_steps = getattr(self, 'batch_steps', 1)
         
-        success = cd_session.step(self._cd, self.timestep)
-        
-        if self._step_count <= 5:
-            if success:
-                print(f"[step #{self._step_count}] [OK] Step completed")
-            else:
-                print(f"[step #{self._step_count}] [WARN] Step failed (using time.sleep fallback)")
+        if batch_steps > 1:
+            # Dynamic batching: set SingleStepTime to larger value, step once
+            # This reduces overhead from multiple pause/continue cycles
+            effective_step_size = self.timestep * batch_steps
+            control_frequency = 1.0 / effective_step_size
+            
+            # Set SingleStepTime only once (it persists between steps)
+            if not hasattr(self, '_batch_step_size_set'):
+                if self._cd:
+                    try:
+                        self._cd.set_simulation_step(effective_step_size)
+                        self._batch_step_size_set = True
+                        print(f"[step #1] Batching enabled: SingleStepTime={effective_step_size:.4f}s (control frequency={control_frequency:.1f}Hz)")
+                    except Exception as e:
+                        print(f"[step #1] [WARN] Failed to set SingleStepTime: {e}")
+            
+            if self._step_count <= 5 or self._step_count % 50 == 1:
+                print(f"[step #{self._step_count}] Batching: advancing by {effective_step_size:.4f}s (control frequency={control_frequency:.1f}Hz)...")
+            
+            # Execute single step with larger step size (one pause/continue cycle)
+            success = cd_session.step(self._cd, effective_step_size)
+            
+            if self._step_count <= 5:
+                if success:
+                    print(f"[step #{self._step_count}] [OK] Batched step completed (advanced {effective_step_size:.4f}s)")
+                else:
+                    print(f"[step #{self._step_count}] [WARN] Batched step failed (using time.sleep fallback)")
+        else:
+            # Single step (no batching) - use original timestep
+            if self._step_count <= 5 or self._step_count % 50 == 1:
+                print(f"[step #{self._step_count}] Advancing simulation by {self.timestep}s...")
+            
+            success = cd_session.step(self._cd, self.timestep)
+            
+            if self._step_count <= 5:
+                if success:
+                    print(f"[step #{self._step_count}] [OK] Step completed")
+                else:
+                    print(f"[step #{self._step_count}] [WARN] Step failed (using time.sleep fallback)")
         
         # NOTE: Debug exit removed - simulation should run for full duration
         # If you need to limit steps for testing, use --time parameter in scenic command

@@ -6,7 +6,8 @@
 # --- Map and timing (must come before the model line) ---
 param map = localPath('../../assets/maps/dSPACE/LagunaSeca.xodr')
 param use2DMap = True
-param time_step = 1  # 20 Hz control frequency
+param time_step = 0.05  
+param batch_steps = 1   
 
 # --- Driving world model (brings in Car/road/behaviors) ---
 model scenic.domains.driving.model

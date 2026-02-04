@@ -23,13 +23,22 @@ from scenic.domains.driving.actions import Steers
 # dSPACE ModelDesk parameters
 param scenario_src = "LagunaSeca_ExternalControl"
 param scenario_name = None
-param timestep = 1.0
+# Support both time_step (from examples) and timestep (from model) for compatibility
+param timestep = (globalParameters.time_step if 'time_step' in globalParameters else (globalParameters.timestep if 'timestep' in globalParameters else 1.0))
+# Batching parameter: multiplies the step size to reduce pause/continue overhead
+# Effective step size = timestep * batch_steps
+# Control frequency = 1 / (timestep * batch_steps)
+# Example: timestep=0.05s, batch_steps=2 → step=0.10s, frequency=10Hz
+# Higher values reduce overhead but lower control frequency
+# Default: 1 (no batching). For 0.05s timestep, use 2 for 10Hz minimum
+param batch_steps = 1
 
 # Configure the dSPACE simulator
 simulator dspace.DSpaceSimulator(
     scenario_src=globalParameters.scenario_src,
     scenario_name=globalParameters.scenario_name,
     timestep=globalParameters.timestep,
+    batch_steps=globalParameters.batch_steps,
 )
 
 # dSPACE-specific racing car implementation

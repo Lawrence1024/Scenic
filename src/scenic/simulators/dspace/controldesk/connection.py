@@ -20,6 +20,9 @@ class ControlDeskApp:
         self._outer_platform_name = outer_platform_name
         self._inner_platform_name = inner_platform_name
         self.app = None
+        # Cache COM objects to reduce overhead
+        self._platform = None
+        self._rta = None
 
     def connect(self):
         import pythoncom
@@ -96,10 +99,28 @@ class ControlDeskApp:
         mc.Reset()
 
     # Simulation control
+    def _get_platform(self):
+        """Get cached platform object, creating if needed."""
+        if self._platform is None:
+            self._platform = self.app.PlatformManagement.Platforms.Item(0)
+        return self._platform
+    
+    def _get_rta(self):
+        """Get cached RealTimeApplication object, creating if needed."""
+        if self._rta is None:
+            platform = self._get_platform()
+            self._rta = platform.RealTimeApplications.Item(0)
+        return self._rta
+    
+    def _clear_cache(self):
+        """Clear cached COM objects (useful for reconnection scenarios)."""
+        self._platform = None
+        self._rta = None
+    
     def set_simulation_step(self, step=0.01):
         """Set the simulation time step."""
         try:
-            platform = self.app.PlatformManagement.Platforms.Item(0)
+            platform = self._get_platform()
             platform.SimulationTimeOptions.SingleStepTime = str(step)
         except Exception as e:
             print(f"[ControlDesk] Error setting simulation step: {e}")
@@ -111,9 +132,7 @@ class ControlDeskApp:
         a paused state where it can be advanced step-by-step.
         """
         try:
-            platforms = self.app.PlatformManagement.Platforms
-            platform = platforms.Item(0)
-            rta = platform.RealTimeApplications.Item(0)
+            rta = self._get_rta()
             rta.Pause()
         except Exception as e:
             print(f"[ControlDesk] Error pausing simulation: {e}")
@@ -125,9 +144,7 @@ class ControlDeskApp:
         This should be called after control variables have been written.
         """
         try:
-            platforms = self.app.PlatformManagement.Platforms
-            platform = platforms.Item(0)
-            rta = platform.RealTimeApplications.Item(0)
+            rta = self._get_rta()
             rta.SingleStep()
         except Exception as e:
             raise

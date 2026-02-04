@@ -50,7 +50,6 @@ def pause(cd):
 
 
 def step(cd, dt):
-    """Advance one simulation step; fallback to sleep if not available."""
     if cd:
         try:
             cd.advance_simulation_step()
