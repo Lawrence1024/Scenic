@@ -37,7 +37,10 @@ class MPCLateralController:
             config.adapt_to_timestep(timestep)
         
         # Initialize reference builder
-        self.ref_builder = ReferenceBuilder(config.traj_resample_dist)
+        self.ref_builder = ReferenceBuilder(
+            resample_dist=config.traj_resample_dist,
+            curvature_smoothing_num=config.curvature_smoothing_num
+        )
         
         # Initialize low-pass filter for steering output
         self.steering_filter = LowPassFilter(
@@ -48,6 +51,7 @@ class MPCLateralController:
         # State: [e_y, e_psi, delta]
         self.state = np.zeros(3)
         self.prev_control = 0.0  # Previous steering command (for rate penalty)
+        self.prev_prev_control = 0.0  # Previous-previous steering command (for acceleration penalty)
         
         # Safety state
         self.invalid_count = 0
@@ -173,12 +177,48 @@ class MPCLateralController:
             kappa_k = kappa_ref[k]
             psi_ref_k = psi_ref[k]
             
-            # State cost: w_ey * e_y^2 + w_epsi * e_psi^2
-            P[x_k_idx, x_k_idx] += self.config.w_ey  # e_y
-            P[x_k_idx + 1, x_k_idx + 1] += self.config.w_epsi  # e_psi
+            # Select weights based on curvature (three regions: low, moderate, high)
+            if self.config.use_adaptive_weights:
+                abs_kappa = abs(kappa_k)
+                if abs_kappa < self.config.low_curvature_threshold:
+                    # Low curvature (straight sections) - relaxed tracking
+                    w_ey_k = self.config.w_ey_low_curv
+                    w_epsi_k = self.config.w_epsi_low_curv
+                    w_epsi_vel_k = self.config.w_epsi_vel_low_curv
+                    w_u_k = self.config.w_u_low_curv
+                    w_u_vel_k = self.config.w_u_vel_low_curv
+                    w_ddu_k = self.config.w_ddu_low_curv
+                elif abs_kappa >= self.config.high_curvature_threshold:
+                    # High curvature (sharp turns) - aggressive tracking, fast steering
+                    w_ey_k = self.config.w_ey_high_curv
+                    w_epsi_k = self.config.w_epsi_high_curv
+                    w_epsi_vel_k = self.config.w_epsi_vel_high_curv
+                    w_u_k = self.config.w_u_high_curv
+                    w_u_vel_k = self.config.w_u_vel_high_curv
+                    w_ddu_k = self.config.w_ddu_high_curv
+                else:
+                    # Moderate curvature (normal curves) - base weights
+                    w_ey_k = self.config.w_ey
+                    w_epsi_k = self.config.w_epsi
+                    w_epsi_vel_k = self.config.w_epsi_vel
+                    w_u_k = self.config.w_u
+                    w_u_vel_k = self.config.w_u_vel
+                    w_ddu_k = self.config.w_ddu
+            else:
+                # Adaptive weights disabled - use base weights for all
+                w_ey_k = self.config.w_ey
+                w_epsi_k = self.config.w_epsi
+                w_epsi_vel_k = self.config.w_epsi_vel
+                w_u_k = self.config.w_u
+                w_u_vel_k = self.config.w_u_vel
+                w_ddu_k = self.config.w_ddu
             
-            # Control cost: w_u * u^2
-            P[u_k_idx, u_k_idx] += self.config.w_u
+            # State cost: w_ey * e_y^2 + w_epsi * e_psi^2 + w_epsi_vel * e_psi^2 * v^2
+            P[x_k_idx, x_k_idx] += w_ey_k  # e_y
+            P[x_k_idx + 1, x_k_idx + 1] += w_epsi_k + w_epsi_vel_k * v_k * v_k  # e_psi (with velocity weighting)
+            
+            # Control cost: w_u * u^2 + w_u_vel * u^2 * v^2
+            P[u_k_idx, u_k_idx] += w_u_k + w_u_vel_k * v_k * v_k
             
             # Control rate cost: w_du * (u_k - u_{k-1})^2
             if k == 0:
@@ -192,6 +232,39 @@ class MPCLateralController:
                 P[u_km1_idx, u_km1_idx] += self.config.w_du
                 P[u_k_idx, u_km1_idx] -= self.config.w_du
                 P[u_km1_idx, u_k_idx] -= self.config.w_du
+            
+            # Steering acceleration cost: w_ddu * (u_k - 2*u_{k-1} + u_{k-2})^2
+            # This penalizes rapid changes in steering rate (jerk)
+            if k == 0:
+                # First step: compare to previous two controls
+                # (u_0 - 2*u_{-1} + u_{-2})^2 = u_0^2 - 4*u_0*u_{-1} + 4*u_{-1}^2 + 2*u_0*u_{-2} - 4*u_{-1}*u_{-2} + u_{-2}^2
+                P[u_k_idx, u_k_idx] += w_ddu_k
+                q[u_k_idx] -= 4.0 * w_ddu_k * self.prev_control
+                q[u_k_idx] += 2.0 * w_ddu_k * self.prev_prev_control
+            elif k == 1:
+                # Second step: compare to previous step and previous-previous control
+                u_km1_idx = (k - 1) * (n_x + n_u) + n_x
+                # (u_1 - 2*u_0 + u_{-1})^2
+                P[u_k_idx, u_k_idx] += w_ddu_k
+                P[u_km1_idx, u_km1_idx] += 4.0 * w_ddu_k
+                P[u_k_idx, u_km1_idx] -= 4.0 * w_ddu_k
+                P[u_km1_idx, u_k_idx] -= 4.0 * w_ddu_k
+                q[u_k_idx] += 2.0 * w_ddu_k * self.prev_prev_control
+                q[u_km1_idx] -= 4.0 * w_ddu_k * self.prev_prev_control
+            else:
+                # Compare to previous two steps
+                u_km1_idx = (k - 1) * (n_x + n_u) + n_x
+                u_km2_idx = (k - 2) * (n_x + n_u) + n_x
+                # (u_k - 2*u_{k-1} + u_{k-2})^2
+                P[u_k_idx, u_k_idx] += w_ddu_k
+                P[u_km1_idx, u_km1_idx] += 4.0 * w_ddu_k
+                P[u_km2_idx, u_km2_idx] += w_ddu_k
+                P[u_k_idx, u_km1_idx] -= 4.0 * w_ddu_k
+                P[u_km1_idx, u_k_idx] -= 4.0 * w_ddu_k
+                P[u_k_idx, u_km2_idx] += 2.0 * w_ddu_k
+                P[u_km2_idx, u_k_idx] += 2.0 * w_ddu_k
+                P[u_km1_idx, u_km2_idx] -= 4.0 * w_ddu_k
+                P[u_km2_idx, u_km1_idx] -= 4.0 * w_ddu_k
             
             # Dynamics: x_{k+1} = A_k * x_k + B_k * u_k + g_k
             # e_y_{k+1} = e_y_k + v_k * e_psi_k * dt
@@ -392,7 +465,8 @@ class MPCLateralController:
             delta_cmd_rad_raw = float(result.x[u_0_idx])
             delta_cmd_rad = delta_cmd_rad_raw
             
-            # Update previous control
+            # Update previous controls (for next iteration's acceleration penalty)
+            self.prev_prev_control = self.prev_control
             self.prev_control = delta_cmd_rad
             
             # Convert to normalized steering [-1, 1]

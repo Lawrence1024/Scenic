@@ -28,7 +28,7 @@ class TestBehaviorIntegration(unittest.TestCase):
             self.assertEqual(mpc.timestep, 0.05)
         except FileNotFoundError:
             # Config file doesn't exist - skip test
-            self.skipTest("MPC config file not found (expected in debug_mpc/vehicle_mpc.yaml)")
+            self.skipTest("MPC config file not found (expected in src/scenic/domains/racing/mpc/vehicle_mpc.yaml)")
         except Exception as e:
             self.fail(f"Failed to create MPC controller: {e}")
     

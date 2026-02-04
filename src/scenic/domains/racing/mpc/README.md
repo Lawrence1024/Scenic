@@ -76,7 +76,7 @@ mpc/
 
 ### Configuration Management
 - **Decision:** Use YAML config files (compatible with ROS-style parameter format)
-- **Location:** `debug_mpc/vehicle_mpc.yaml`
+- **Location:** `src/scenic/domains/racing/mpc/vehicle_mpc.yaml`
 - **Adaptation:** Config adapts to Scenic `timestep` automatically
 
 ### ControlDesk Integration
@@ -89,7 +89,7 @@ mpc/
 This project uses multiple coordinate/angle conventions at once. The most important debugging lesson was:
 
 - **Waypoints in `assets/ttls/.../transformed/*.csv` are in XODR/Scenic coordinates** (already transformed).
-- **ControlDesk provides yaw in degrees** via `Angle_Yaw_Vehicle_CoorSys_E[deg]` (see `debug_mpc/vehicle_mpc.yaml` path).
+- **ControlDesk provides yaw in degrees** via `Angle_Yaw_Vehicle_CoorSys_E[deg]` (see `src/scenic/domains/racing/mpc/vehicle_mpc.yaml` path).
 - **Do not blindly apply ±90° or ±180° offsets** to yaw in code. We tested both and they can silently break tracking.
 
 #### Final decision (what worked)
@@ -490,7 +490,7 @@ ego.behavior = FollowRacingLineMPCBehavior(
 from scenic.domains.racing.mpc import MPCLateralController, load_mpc_config
 
 # Load configuration
-config = load_mpc_config('debug_mpc/vehicle_mpc.yaml')
+config = load_mpc_config('src/scenic/domains/racing/mpc/vehicle_mpc.yaml')
 
 # Create controller
 mpc = MPCLateralController(config, timestep=0.05)
@@ -515,7 +515,7 @@ steering = mpc.run_step(vehicle_state, waypoints)
 lon_controller, lat_controller = sim.getRacingControllers(
     agent, 
     use_mpc=True,  # Enable MPC
-    mpc_config_path='debug_mpc/vehicle_mpc.yaml'  # Optional custom config
+    mpc_config_path='src/scenic/domains/racing/mpc/vehicle_mpc.yaml'  # Optional custom config
 )
 ```
 
@@ -817,7 +817,7 @@ lon_controller, lat_controller = sim.getRacingControllers(
 - ✅ Added behavior integration tests (`test_behavior_integration.py`)
 - ✅ Added simulation integration tests (`test_simulation_integration.py`)
 - ✅ Added scenario compilation tests (`test_scenario_compilation.py`)
-- ✅ **Fixed config path resolution** - now correctly finds `debug_mpc/vehicle_mpc.yaml`
+- ✅ **Fixed config path resolution** - now correctly finds `src/scenic/domains/racing/mpc/vehicle_mpc.yaml`
 - ✅ **All 27 tests passing!** (1 skipped - requires dSPACE simulator)
 - ✅ Updated test runner to include all new tests
 - ✅ Updated TEST_CASES.md with integration test documentation

@@ -31,7 +31,7 @@ ego.behavior = FollowRacingLineMPCBehavior(
     manage_gears=True,    # Auto gear shifting
     use_waypoints=True,   # Use waypoint-based control
     lookahead=20.0,       # 20m lookahead distance
-    mpc_config_path=None  # Use default MPC config (debug_mpc/vehicle_mpc.yaml)
+    mpc_config_path=None  # Use default MPC config (src/scenic/domains/racing/mpc/vehicle_mpc.yaml)
 )
 
 # Using main racing road centerline TTL (3541 waypoints, ~4.2km total length)

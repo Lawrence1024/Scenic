@@ -25,26 +25,52 @@ class MPCConfig:
         """
         # Timing
         self.ctrl_period = config_dict.get('ctrl_period', 0.05)
-        self.mpc_prediction_horizon = config_dict.get('mpc_prediction_horizon', 30)
+        self.mpc_prediction_horizon = config_dict.get('mpc_prediction_horizon', 35)  # Balanced for preview and speed
         self.mpc_prediction_dt = config_dict.get('mpc_prediction_dt', 0.05)
         
         # Vehicle geometry
         self.wheel_base = config_dict.get('wheel_base', 2.9718)
         self.max_steer_angle = config_dict.get('max_steer_angle', 0.2816)
         self.steer_tau = config_dict.get('steer_tau', 0.3)
-        self.steer_rate_lim = config_dict.get('steer_rate_lim', 1.0)  # rad/s
+        self.steer_rate_lim = config_dict.get('steer_rate_lim', 6.98)  # Increased from 1.0 to ~400 deg/s (6.98 rad/s) for racing
         self.steer_cmd_max = config_dict.get('steer_cmd_max', 70)  # ControlDesk units
         
         # Steering mapping (calibrated)
         self.steer_scale = config_dict.get('steer_scale', None)  # Will be calibrated
         
-        # MPC weights
+        # MPC weights (base weights)
         self.w_ey = config_dict.get('w_ey', 2.0)
         self.w_epsi = config_dict.get('w_epsi', 2.0)
         self.w_u = config_dict.get('w_u', 0.1)
         self.w_du = config_dict.get('w_du', 0.75)
         self.wT_ey = config_dict.get('wT_ey', 5.0)
         self.wT_epsi = config_dict.get('wT_epsi', 1.0)
+        
+        # Velocity-weighted costs (improved performance at different speeds)
+        self.w_epsi_vel = config_dict.get('w_epsi_vel', 0.3)  # Heading error * velocity^2 weight
+        self.w_u_vel = config_dict.get('w_u_vel', 0.25)  # Control input * velocity^2 weight
+        
+        # Steering acceleration penalty (smoother steering)
+        self.w_ddu = config_dict.get('w_ddu', 0.00002)  # Steering acceleration weight
+        
+        # Adaptive weights based on curvature (low curvature = straights, high curvature = sharp turns)
+        self.use_adaptive_weights = config_dict.get('use_adaptive_weights', True)
+        self.low_curvature_threshold = config_dict.get('low_curvature_threshold', 0.02)  # 1/m
+        self.high_curvature_threshold = config_dict.get('high_curvature_threshold', 0.1)  # 1/m
+        # Low curvature weights (for straights)
+        self.w_ey_low_curv = config_dict.get('w_ey_low_curv', 0.01)
+        self.w_epsi_low_curv = config_dict.get('w_epsi_low_curv', 0.0)
+        self.w_epsi_vel_low_curv = config_dict.get('w_epsi_vel_low_curv', 0.3)
+        self.w_u_low_curv = config_dict.get('w_u_low_curv', 1.0)
+        self.w_u_vel_low_curv = config_dict.get('w_u_vel_low_curv', 0.25)
+        self.w_ddu_low_curv = config_dict.get('w_ddu_low_curv', 0.000001)
+        # High curvature weights (for sharp turns)
+        self.w_ey_high_curv = config_dict.get('w_ey_high_curv', 8.0)
+        self.w_epsi_high_curv = config_dict.get('w_epsi_high_curv', 5.0)
+        self.w_epsi_vel_high_curv = config_dict.get('w_epsi_vel_high_curv', 0.8)
+        self.w_u_high_curv = config_dict.get('w_u_high_curv', 0.02)
+        self.w_u_vel_high_curv = config_dict.get('w_u_vel_high_curv', 0.05)
+        self.w_ddu_high_curv = config_dict.get('w_ddu_high_curv', 0.0000005)
         
         # Safety thresholds
         self.admissible_position_error = config_dict.get('admissible_position_error', 30.0)  # Default 30.0m for sparse waypoints
@@ -57,7 +83,10 @@ class MPCConfig:
         self.steering_lpf_cutoff_hz = config_dict.get('steering_lpf_cutoff_hz', 3.0)
         
         # Waypoint/Reference
-        self.traj_resample_dist = config_dict.get('traj_resample_dist', 0.2)
+        self.traj_resample_dist = config_dict.get('traj_resample_dist', 0.1)  # Finer resolution (0.1m vs 0.2m)
+        
+        # Curvature smoothing
+        self.curvature_smoothing_num = config_dict.get('curvature_smoothing_num', 15)  # Points for curvature calculation
         
         # ControlDesk variable paths (optional, can be overridden)
         self.controldesk_paths = config_dict.get('controldesk_paths', {})
@@ -88,20 +117,8 @@ def load_mpc_config(config_path: Optional[str] = None) -> MPCConfig:
         yaml.YAMLError: If YAML parsing fails
     """
     if config_path is None:
-        # Find Scenic root by looking for debug_mpc directory
-        current = Path(__file__).resolve()
-        default_path = None
-        while current.parent != current:  # Stop at filesystem root
-            debug_mpc_dir = current / 'debug_mpc'
-            if debug_mpc_dir.exists() and debug_mpc_dir.is_dir():
-                default_path = debug_mpc_dir / 'vehicle_mpc.yaml'
-                break
-            current = current.parent
-        
-        # Fallback to relative path calculation if search failed
-        if default_path is None:
-            default_path = Path(__file__).parent.parent.parent.parent.parent.parent / 'debug_mpc' / 'vehicle_mpc.yaml'
-        
+        # Use default config file in the same directory as this module
+        default_path = Path(__file__).parent / 'vehicle_mpc.yaml'
         config_path = str(default_path)
     
     config_path = Path(config_path)

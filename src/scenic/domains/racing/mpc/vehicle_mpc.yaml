@@ -1,0 +1,83 @@
+/**: 
+  ros__parameters:
+    # Timing
+    ctrl_period: 0.05  # Control update period (seconds) - will adapt to Scenic timestep
+    mpc_prediction_horizon: 35  # Prediction horizon steps (reduced from 50 for faster computation, 35*0.05=1.75s preview)
+    mpc_prediction_dt: 0.05  # Time step for prediction (seconds)
+    
+    # Vehicle geometry
+    wheel_base: 2.9718  # Wheelbase (meters) - from dspace_iac_car.param.yaml
+    max_steer_angle: 0.2816  # Maximum front-wheel angle (radians) - from dspace_iac_car.param.yaml
+    steer_tau: 0.3  # Steering actuator time constant (seconds) - from aw_lat_mpc.param.yaml
+    steer_rate_lim: 6.98  # Steering rate limit (rad/s) - ~400 deg/s for racing performance
+    steer_cmd_max: 70  # Maximum steering command in ControlDesk units
+    
+    # Steering mapping (to be calibrated)
+    steer_scale: null  # Will be calibrated: delta_actual_rad / steer_cmd
+    
+    # MPC weights (base weights for moderate curves - increased for better tracking)
+    w_ey: 5.0  # Lateral error weight (increased from 2.0 for better curve tracking)
+    w_epsi: 3.0  # Heading error weight (increased from 2.0 for better curve tracking)
+    w_u: 0.05  # Control input weight (reduced from 0.1 to allow more steering authority)
+    w_du: 0.75  # Control rate weight
+    wT_ey: 5.0  # Terminal lateral error weight
+    wT_epsi: 1.0  # Terminal heading error weight
+    
+    # Velocity-weighted costs (improved performance at different speeds)
+    w_epsi_vel: 0.5  # Heading error * velocity^2 weight (increased from 0.3 for better high-speed tracking)
+    w_u_vel: 0.15  # Control input * velocity^2 weight (reduced from 0.25 to allow more steering at speed)
+    
+    # Steering acceleration penalty (smoother steering, reduces jerk)
+    w_ddu: 0.000005  # Steering acceleration weight (reduced from 0.00002 to allow faster steering changes)
+    
+    # Adaptive weights based on curvature
+    use_adaptive_weights: true  # Enable adaptive weights based on curvature
+    low_curvature_threshold: 0.02  # Curvature threshold (1/m) below which low curvature weights are used
+    high_curvature_threshold: 0.1  # Curvature threshold (1/m) above which high curvature weights are used (for sharp turns)
+    
+    # Low curvature weights (for straight sections - relaxed tracking)
+    w_ey_low_curv: 0.01  # Lateral error weight in low curvature (straights)
+    w_epsi_low_curv: 0.0  # Heading error weight in low curvature
+    w_epsi_vel_low_curv: 0.3  # Velocity-weighted heading error in low curvature
+    w_u_low_curv: 1.0  # Control input weight in low curvature
+    w_u_vel_low_curv: 0.25  # Velocity-weighted control input in low curvature
+    w_ddu_low_curv: 0.000001  # Steering acceleration weight in low curvature (lighter penalty)
+    
+    # High curvature weights (for sharp turns - aggressive tracking, fast steering)
+    w_ey_high_curv: 8.0  # Lateral error weight in high curvature (sharp turns - very aggressive)
+    w_epsi_high_curv: 5.0  # Heading error weight in high curvature (sharp turns - very aggressive)
+    w_epsi_vel_high_curv: 0.8  # Velocity-weighted heading error in high curvature (strong at speed)
+    w_u_high_curv: 0.02  # Control input weight in high curvature (very low - allow maximum steering)
+    w_u_vel_high_curv: 0.05  # Velocity-weighted control input in high curvature (low penalty)
+    w_ddu_high_curv: 0.0000005  # Steering acceleration weight in high curvature (very light - allow rapid steering changes)
+    
+    # Safety thresholds
+    admissible_position_error: 30.0  # Stop MPC if position error > this (meters) - increased to 30.0m for sparse waypoints (~25m apart)
+    admissible_yaw_error_rad: 2.36  # Stop MPC if yaw error > this (radians, ~135 deg) - increased from 1.57rad to allow MPC when off-track
+    max_invalid_count: 10  # Max consecutive solver failures before zeroing steering
+    
+    # Filtering
+    steering_lpf_cutoff_hz: 3.0  # Low-pass filter cutoff for steering output (Hz)
+    
+    # Waypoint/Reference
+    traj_resample_dist: 0.1  # Distance between resampled waypoints (meters) - finer resolution for better tracking
+    curvature_smoothing_num: 15  # Number of points for curvature calculation (smoothing window)
+    
+    # ControlDesk variable paths (optional - can be overridden)
+    controldesk_paths:
+      # Read paths (from readback.py)
+      pose_x: "Platform()://ASM_Traffic/Model Root/VehicleDynamics/Plant/UserInterface/DISP_Plant/Positions/Pos_x_Vehicle_CoorSys_E[m]/Out1"
+      pose_y: "Platform()://ASM_Traffic/Model Root/VehicleDynamics/Plant/UserInterface/DISP_Plant/Positions/Pos_y_Vehicle_CoorSys_E[m]/Out1"
+      yaw: "Platform()://ASM_Traffic/Model Root/VehicleDynamics/Plant/UserInterface/DISP_Plant/Positions/Angle_Yaw_Vehicle_CoorSys_E[deg]/Out1"
+      speed: "Platform()://ASM_Traffic/Model Root/VehicleDynamics/Plant/UserInterface/DISP_Plant/Velocities/v_x_Vehicle_CoG[km|h]/Out1"
+      
+      # Steering feedback (actual front wheel angle)
+      # Using Angle_SteeringGear - this may need verification/adjustment in the future
+      # Alternative paths found but not used:
+      # - Angle_SteeringWheel[deg] (steering wheel angle, has steering ratio, not front wheel angle)
+      # - Displ_Steering[m] (displacement, not angle)
+      steer_actual: "Platform()://ASM_Traffic/Model Root/VehicleDynamics/Plant/UserInterface/DISP_Plant/Steering/Angle_SteeringGear[deg]/Out1"
+      
+      # Write path (from controller.py)
+      steering: "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_steering_cmd/Value"
+

@@ -16,13 +16,15 @@ class ReferenceBuilder:
     and curvature (kappa_ref) arrays for the MPC prediction horizon.
     """
     
-    def __init__(self, resample_dist: float = 0.2):
+    def __init__(self, resample_dist: float = 0.2, curvature_smoothing_num: int = 15):
         """Initialize reference builder.
         
         Args:
             resample_dist: Distance between resampled waypoints (meters)
+            curvature_smoothing_num: Number of points apart for curvature calculation (smoothing)
         """
         self.resample_dist = resample_dist
+        self.curvature_smoothing_num = curvature_smoothing_num
         self._last_nearest_idx = 0
     
     def find_nearest_waypoint(self, 
@@ -299,8 +301,17 @@ class ReferenceBuilder:
                     # Flip by 180° if opposite to vehicle heading
                     psi_ref[k] = adjust_heading_if_opposite(seg_heading, current_heading)
                     
-                    # Compute curvature (use 3-point method if possible)
-                    if current_idx > 0 and current_idx < len(waypoints) - 1:
+                    # Compute curvature (use 3-point method with smoothing if possible)
+                    # Use points that are curvature_smoothing_num apart for smoother curvature
+                    smoothing_offset = max(1, self.curvature_smoothing_num)
+                    if current_idx >= smoothing_offset and current_idx < len(waypoints) - smoothing_offset:
+                        kappa_ref[k] = self.compute_curvature(
+                            waypoints[current_idx - smoothing_offset],
+                            waypoints[current_idx],
+                            waypoints[current_idx + smoothing_offset]
+                        )
+                    elif current_idx > 0 and current_idx < len(waypoints) - 1:
+                        # Fallback to adjacent points if smoothing not possible
                         kappa_ref[k] = self.compute_curvature(
                             waypoints[current_idx - 1],
                             waypoints[current_idx],
