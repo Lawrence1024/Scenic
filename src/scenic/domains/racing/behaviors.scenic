@@ -757,6 +757,69 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         # Universal max speed limit: 40 mph = 17.88 m/s
         MAX_SPEED_LIMIT_MS = 17.88  # 40 mph in m/s
         
+        # --- Curvature-based speed reduction (for sharp turns) ---
+        # Compute upcoming curvature from waypoints to reduce speed before sharp turns
+        curvature_speed_limit = target_speed  # Default: no reduction
+        if use_waypoints and wp_list and len(wp_list) >= 3 and wp_last_idx < len(wp_list) - 2:
+            try:
+                # Look ahead to compute curvature (use waypoints ahead of current position)
+                # Look ahead distance: ~20-30m (about 1-1.5 seconds at typical speeds)
+                lookahead_dist = 25.0  # meters
+                lookahead_idx = wp_last_idx
+                accumulated_dist = 0.0
+                
+                # Find waypoint index at lookahead distance
+                while lookahead_idx < len(wp_list) - 1 and accumulated_dist < lookahead_dist:
+                    x0, y0 = float(wp_list[lookahead_idx][0]), float(wp_list[lookahead_idx][1])
+                    x1, y1 = float(wp_list[lookahead_idx+1][0]), float(wp_list[lookahead_idx+1][1])
+                    seg_dx = x1 - x0; seg_dy = y1 - y0
+                    seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                    if seg_len < 1e-6:
+                        lookahead_idx += 1
+                        continue
+                    accumulated_dist += seg_len
+                    if accumulated_dist < lookahead_dist:
+                        lookahead_idx += 1
+                
+                # Compute curvature using 3-point method at lookahead point
+                if lookahead_idx > 0 and lookahead_idx < len(wp_list) - 1:
+                    p0 = (float(wp_list[lookahead_idx-1][0]), float(wp_list[lookahead_idx-1][1]))
+                    p1 = (float(wp_list[lookahead_idx][0]), float(wp_list[lookahead_idx][1]))
+                    p2 = (float(wp_list[lookahead_idx+1][0]), float(wp_list[lookahead_idx+1][1]))
+                    
+                    # Compute curvature (3-point method)
+                    v1x = p1[0] - p0[0]; v1y = p1[1] - p0[1]
+                    v2x = p2[0] - p1[0]; v2y = p2[1] - p1[1]
+                    cross = v1x * v2y - v1y * v2x
+                    len1 = (v1x*v1x + v1y*v1y) ** 0.5
+                    len2 = (v2x*v2x + v2y*v2y) ** 0.5
+                    if len1 > 1e-6 and len2 > 1e-6:
+                        avg_len = (len1 + len2) / 2.0
+                        if avg_len > 1e-6:
+                            curvature = abs(2.0 * cross / (len1 * len2 * avg_len))  # Absolute curvature
+                            
+                            # Speed reduction based on curvature
+                            # Sharp turns (>0.1 1/m): significant speed reduction
+                            # Moderate turns (0.05-0.1 1/m): moderate reduction
+                            # Gentle turns (<0.05 1/m): minimal reduction
+                            if curvature >= 0.15:
+                                # Very sharp turn: reduce to 40% of target speed
+                                curvature_speed_limit = target_speed * 0.4
+                            elif curvature >= 0.1:
+                                # Sharp turn: reduce to 50% of target speed
+                                curvature_speed_limit = target_speed * 0.5
+                            elif curvature >= 0.05:
+                                # Moderate turn: reduce to 70% of target speed
+                                curvature_speed_limit = target_speed * 0.7
+                            elif curvature >= 0.02:
+                                # Gentle turn: reduce to 85% of target speed
+                                curvature_speed_limit = target_speed * 0.85
+                            # curvature < 0.02: no reduction (straight sections)
+            except Exception as e:
+                # If curvature computation fails, use full target speed
+                pass
+        
+        # --- CTE-based speed reduction (existing logic) ---
         # When CTE is large, modify target speed to encourage slowing down
         # This makes the PID aware that we want to reduce speed when off-track
         # The vehicle naturally accelerates even without throttle, so we need to
@@ -765,38 +828,45 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         if cte_mag_for_pid >= 10.0:
             # At 10m+ CTE: set target to current speed - 2 m/s (encourages braking)
             # This ensures speed_error is negative, commanding braking
-            effective_target_speed = max(0.0, current_speed - 2.0)
+            cte_target_speed = max(0.0, current_speed - 2.0)
         elif cte_mag_for_pid >= 5.0:
             # At 5-10m CTE: set target to current speed (zero throttle)
             # This ensures speed_error is near zero, commanding no throttle
-            effective_target_speed = current_speed
+            cte_target_speed = current_speed
         elif cte_mag_for_pid >= 3.0:
             # FIX: 3-5m CTE: Limit to 4 m/s (prevent overshooting when approaching track)
-            effective_target_speed = 4.0
+            cte_target_speed = 4.0
         elif cte_mag_for_pid >= 2.0:
             # FIX: 2-3m CTE: Limit to 5 m/s (prevent overshooting when close to track)
-            effective_target_speed = 5.0
+            cte_target_speed = 5.0
         elif cte_mag_for_pid >= cte_stop_threshold:
             # At 50m+ CTE: aim for very low speed (encourages heavy braking)
-            effective_target_speed = target_speed * 0.1
+            cte_target_speed = target_speed * 0.1
         elif cte_mag_for_pid >= cte_slowdown_threshold:
             # Between 15-50m: aim for 30% of target speed (encourages braking)
             factor = 0.3
-            effective_target_speed = target_speed * factor
+            cte_target_speed = target_speed * factor
         elif cte_mag_for_pid >= cte_throttle_reduction_max:
             # Between 10-15m: linear from 50% to 30% of target speed
             factor = 0.5 - ((cte_mag_for_pid - cte_throttle_reduction_max) / (cte_slowdown_threshold - cte_throttle_reduction_max)) * 0.2
-            effective_target_speed = target_speed * factor
+            cte_target_speed = target_speed * factor
         else:
             # CTE < 2m: use full target speed (but still respect max speed limit)
-            effective_target_speed = target_speed
+            cte_target_speed = target_speed
+        
+        # --- Combine CTE and curvature speed limits (take minimum) ---
+        # Use the more restrictive limit (lower speed) to ensure safety
+        effective_target_speed = min(cte_target_speed, curvature_speed_limit)
         
         # Apply universal max speed limit
         effective_target_speed = min(effective_target_speed, MAX_SPEED_LIMIT_MS)
         
-        # Debug logging for CTE-aware PID (only log when CTE is significant)
-        if cte_mag_for_pid >= cte_throttle_reduction_start:
-            print(f"[CTE-Aware PID] CTE={cte_mag_for_pid:.2f}m, target_speed={target_speed:.1f}m/s -> effective={effective_target_speed:.1f}m/s (current={current_speed:.2f}m/s, max_limit={MAX_SPEED_LIMIT_MS:.1f}m/s)")
+        # Debug logging for CTE and curvature-aware speed control
+        if cte_mag_for_pid >= cte_throttle_reduction_start or curvature_speed_limit < target_speed * 0.95:
+            curvature_info = ""
+            if curvature_speed_limit < target_speed * 0.95:
+                curvature_info = f", curvature_limit={curvature_speed_limit:.1f}m/s"
+            print(f"[Speed Control] CTE={cte_mag_for_pid:.2f}m, target={target_speed:.1f}m/s -> effective={effective_target_speed:.1f}m/s (CTE_limit={cte_target_speed:.1f}m/s{curvature_info}, current={current_speed:.2f}m/s)")
         
         speed_error = min(self.maxSpeed if hasattr(self, 'maxSpeed') else 200, effective_target_speed) - current_speed
         throttle_pid = _lon_controller.run_step(speed_error)
