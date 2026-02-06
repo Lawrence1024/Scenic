@@ -1,12 +1,14 @@
 """Reference trajectory builder for MPC.
 
 Builds reference heading and curvature profiles from waypoint lists
-for MPC horizon prediction.
+for MPC horizon prediction. Uses spline fitting with arc-length parameterization
+for smooth, continuous trajectories.
 """
 
 import numpy as np
 from typing import List, Tuple, Optional
 import math
+from scipy.interpolate import splprep, splev, UnivariateSpline
 
 
 class ReferenceBuilder:
@@ -16,16 +18,30 @@ class ReferenceBuilder:
     and curvature (kappa_ref) arrays for the MPC prediction horizon.
     """
     
-    def __init__(self, resample_dist: float = 0.2, curvature_smoothing_num: int = 15):
+    def __init__(self, resample_dist: float = 0.2, curvature_smoothing_num: int = 15, use_splines: bool = True):
         """Initialize reference builder.
         
         Args:
             resample_dist: Distance between resampled waypoints (meters)
             curvature_smoothing_num: Number of points apart for curvature calculation (smoothing)
+            use_splines: If True, use spline fitting with arc-length parameterization (default: True)
         """
         self.resample_dist = resample_dist
         self.curvature_smoothing_num = curvature_smoothing_num
+        self.use_splines = use_splines
         self._last_nearest_idx = 0
+        self._spline_cache = None  # Cache for spline parameters
+        self._spline_waypoints = None  # Cache for waypoints used to build spline
+    
+    def _is_3d_waypoint(self, waypoint) -> bool:
+        """Check if waypoint is 3D (has z coordinate)."""
+        return len(waypoint) >= 3
+    
+    def _is_3d_waypoints(self, waypoints) -> bool:
+        """Check if waypoints list contains 3D points."""
+        if not waypoints or len(waypoints) == 0:
+            return False
+        return self._is_3d_waypoint(waypoints[0])
     
     def find_nearest_waypoint(self, 
                               position: Tuple[float, float],
@@ -39,9 +55,11 @@ class ReferenceBuilder:
         forward progress along the path. Search window is adaptive
         based on CTE magnitude when vehicle is far off-track.
         
+        Supports both 2D (x, y) and 3D (x, y, z) waypoints.
+        
         Args:
-            position: Current vehicle position (x, y)
-            waypoints: List of waypoint (x, y) tuples
+            position: Current vehicle position (x, y) or (x, y, z)
+            waypoints: List of waypoint (x, y) or (x, y, z) tuples
             last_idx: Last known waypoint index (for forward-only search)
             adaptive_search: If True, adapt search window based on CTE
             cte_magnitude: Current CTE magnitude (meters) for adaptive search
@@ -52,7 +70,11 @@ class ReferenceBuilder:
         if not waypoints or len(waypoints) == 0:
             return 0
         
-        px, py = position
+        # Handle both 2D and 3D positions
+        px, py = position[0], position[1]
+        pz = position[2] if len(position) >= 3 else 0.0
+        is_3d = self._is_3d_waypoints(waypoints)
+        
         start_idx = last_idx if last_idx is not None else self._last_nearest_idx
         
         # Adaptive search window: scale with CTE magnitude
@@ -99,10 +121,17 @@ class ReferenceBuilder:
         best_dist2 = float('inf')
         
         for i in range(search_start, search_end):
-            wx, wy = waypoints[i]
+            wp = waypoints[i]
+            wx, wy = wp[0], wp[1]
+            wz = wp[2] if len(wp) >= 3 else 0.0
+            
             dx = px - wx
             dy = py - wy
-            dist2 = dx*dx + dy*dy
+            if is_3d:
+                dz = pz - wz
+                dist2 = dx*dx + dy*dy + dz*dz
+            else:
+                dist2 = dx*dx + dy*dy
             
             if dist2 < best_dist2:
                 best_dist2 = dist2
@@ -111,27 +140,118 @@ class ReferenceBuilder:
         self._last_nearest_idx = best_idx
         return best_idx
     
-    def resample_waypoints(self, waypoints: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
-        """Resample waypoints to uniform spacing.
+    def _fit_spline(self, waypoints: List[Tuple[float, float]]) -> Tuple:
+        """Fit a parametric spline through waypoints.
+        
+        Supports both 2D (x, y) and 3D (x, y, z) waypoints.
+        
+        Args:
+            waypoints: List of waypoint (x, y) or (x, y, z) tuples
+            
+        Returns:
+            Tuple of (tck, u) where tck is spline representation and u is parameter array
+        """
+        if len(waypoints) < 2:
+            return None
+        
+        # Check if waypoints are 3D
+        is_3d = self._is_3d_waypoints(waypoints)
+        
+        # Convert to numpy arrays
+        waypoints_array = np.array(waypoints, dtype=np.float64)
+        x = waypoints_array[:, 0]
+        y = waypoints_array[:, 1]
+        
+        # Fit parametric spline (s=0 means no smoothing, just interpolation)
+        # k=3 for cubic splines (smooth curvature)
+        try:
+            if is_3d:
+                z = waypoints_array[:, 2]
+                tck, u = splprep([x, y, z], s=0, k=min(3, len(waypoints)-1), per=0)
+            else:
+                tck, u = splprep([x, y], s=0, k=min(3, len(waypoints)-1), per=0)
+            return (tck, u)
+        except Exception as e:
+            print(f"[ReferenceBuilder] Spline fitting failed: {e}, falling back to linear")
+            return None
+    
+    def _compute_arc_length_parameterization(self, tck, u_param: np.ndarray, num_points: int) -> Tuple[np.ndarray, np.ndarray]:
+        """Compute arc-length parameterization of spline.
+        
+        Supports both 2D and 3D splines.
+        
+        Args:
+            tck: Spline representation from splprep
+            u_param: Original parameter array
+            num_points: Number of points for arc-length sampling
+            
+        Returns:
+            Tuple of (u_arc, s_arc) where:
+            - u_arc: Parameter values at uniform arc-length intervals
+            - s_arc: Arc-length values (cumulative distance)
+        """
+        # Evaluate spline at many points to compute arc-length
+        u_fine = np.linspace(0, 1, max(1000, num_points * 10))
+        points_fine = splev(u_fine, tck)
+        
+        # Compute arc-length at each point (supports both 2D and 3D)
+        dx = np.diff(points_fine[0])
+        dy = np.diff(points_fine[1])
+        if len(points_fine) >= 3:
+            # 3D case
+            dz = np.diff(points_fine[2])
+            ds = np.sqrt(dx*dx + dy*dy + dz*dz)
+        else:
+            # 2D case
+            ds = np.sqrt(dx*dx + dy*dy)
+        
+        s_cumulative = np.concatenate(([0], np.cumsum(ds)))
+        total_length = s_cumulative[-1]
+        
+        if total_length < 1e-6:
+            # Degenerate case: return uniform parameterization
+            return (np.linspace(0, 1, num_points), np.linspace(0, total_length, num_points))
+        
+        # Create uniform arc-length samples
+        s_uniform = np.linspace(0, total_length, num_points)
+        
+        # Find parameter values u that correspond to these arc-lengths
+        u_arc = np.interp(s_uniform, s_cumulative, u_fine)
+        
+        return (u_arc, s_uniform)
+    
+    def _resample_waypoints_linear(self, waypoints: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+        """Linear resampling of waypoints (fallback method).
+        
+        Supports both 2D (x, y) and 3D (x, y, z) waypoints.
         
         Args:
             waypoints: Original waypoint list
             
         Returns:
-            Resampled waypoint list with uniform spacing
+            Resampled waypoint list with uniform spacing (preserves dimensionality)
         """
         if len(waypoints) < 2:
             return waypoints
         
+        is_3d = self._is_3d_waypoints(waypoints)
         resampled = [waypoints[0]]
         current_dist = 0.0
         
         for i in range(1, len(waypoints)):
-            x0, y0 = waypoints[i-1]
-            x1, y1 = waypoints[i]
+            wp0 = waypoints[i-1]
+            wp1 = waypoints[i]
+            x0, y0 = wp0[0], wp0[1]
+            x1, y1 = wp1[0], wp1[1]
             dx = x1 - x0
             dy = y1 - y0
-            seg_len = math.sqrt(dx*dx + dy*dy)
+            
+            # Compute segment length (3D if available, otherwise 2D)
+            if is_3d and len(wp0) >= 3 and len(wp1) >= 3:
+                dz = wp1[2] - wp0[2]
+                seg_len = math.sqrt(dx*dx + dy*dy + dz*dz)
+            else:
+                seg_len = math.sqrt(dx*dx + dy*dy)
             
             if seg_len < 1e-6:
                 continue
@@ -140,7 +260,12 @@ class ReferenceBuilder:
             while current_dist + self.resample_dist < seg_len:
                 current_dist += self.resample_dist
                 u = current_dist / seg_len
-                resampled.append((x0 + u*dx, y0 + u*dy))
+                if is_3d and len(wp0) >= 3 and len(wp1) >= 3:
+                    z0 = wp0[2]
+                    z1 = wp1[2]
+                    resampled.append((x0 + u*dx, y0 + u*dy, z0 + u*(z1 - z0)))
+                else:
+                    resampled.append((x0 + u*dx, y0 + u*dy))
             
             # Move to next segment
             current_dist = current_dist + self.resample_dist - seg_len
@@ -152,6 +277,61 @@ class ReferenceBuilder:
             resampled.append(waypoints[-1])
         
         return resampled
+    
+    def resample_waypoints(self, waypoints: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+        """Resample waypoints to uniform spacing using splines and arc-length parameterization.
+        
+        Args:
+            waypoints: Original waypoint list
+            
+        Returns:
+            Resampled waypoint list with uniform arc-length spacing
+        """
+        if len(waypoints) < 2:
+            return waypoints
+        
+        if not self.use_splines:
+            return self._resample_waypoints_linear(waypoints)
+        
+        # Use spline-based resampling
+        try:
+            # Fit spline
+            spline_result = self._fit_spline(waypoints)
+            if spline_result is None:
+                # Fallback to linear
+                return self._resample_waypoints_linear(waypoints)
+            
+            tck, u = spline_result
+            
+            # Compute total arc-length
+            u_fine = np.linspace(0, 1, 1000)
+            points_fine = splev(u_fine, tck)
+            dx = np.diff(points_fine[0])
+            dy = np.diff(points_fine[1])
+            ds = np.sqrt(dx*dx + dy*dy)
+            total_length = np.sum(ds)
+            
+            if total_length < 1e-6:
+                return waypoints
+            
+            # Determine number of points based on resample_dist
+            num_points = max(2, int(total_length / self.resample_dist) + 1)
+            
+            # Get arc-length parameterization
+            u_arc, s_arc = self._compute_arc_length_parameterization(tck, u, num_points)
+            
+            # Evaluate spline at arc-length parameterized points
+            points_arc = splev(u_arc, tck)
+            
+            # Convert to list of tuples
+            resampled = [(float(x), float(y)) for x, y in zip(points_arc[0], points_arc[1])]
+            
+            return resampled
+            
+        except Exception as e:
+            print(f"[ReferenceBuilder] Spline resampling failed: {e}, falling back to linear")
+            # Fallback to linear resampling
+            return self._resample_waypoints_linear(waypoints)
     
     def compute_curvature(self, 
                          p0: Tuple[float, float],
@@ -206,9 +386,11 @@ class ReferenceBuilder:
                        cte_magnitude: Optional[float] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
         """Build reference trajectory for MPC horizon.
         
+        Supports both 2D (x, y) and 3D (x, y, z) waypoints.
+        
         Args:
-            waypoints: List of waypoint (x, y) tuples
-            current_position: Current vehicle position (x, y)
+            waypoints: List of waypoint (x, y) or (x, y, z) tuples
+            current_position: Current vehicle position (x, y) or (x, y, z)
             current_heading: Current vehicle heading (radians)
             horizon_steps: Number of prediction steps
             dt: Time step (seconds)
@@ -217,8 +399,8 @@ class ReferenceBuilder:
             
         Returns:
             Tuple of (psi_ref, kappa_ref, v_ref, new_waypoint_idx)
-            - psi_ref: Reference heading array (radians)
-            - kappa_ref: Reference curvature array (1/meters)
+            - psi_ref: Reference heading array (radians) - yaw angle in XY plane
+            - kappa_ref: Reference curvature array (1/meters) - curvature in XY plane
             - v_ref: Reference speed array (m/s) - currently constant
             - new_waypoint_idx: Updated waypoint index
         """
@@ -231,6 +413,9 @@ class ReferenceBuilder:
                 0
             )
         
+        # Check if waypoints are 3D
+        is_3d = self._is_3d_waypoints(waypoints)
+        
         # Find nearest waypoint
         # Use provided CTE magnitude if available, otherwise estimate from distance to last waypoint
         cte_estimate = cte_magnitude
@@ -238,7 +423,11 @@ class ReferenceBuilder:
             last_wp = waypoints[last_waypoint_idx]
             dx = current_position[0] - last_wp[0]
             dy = current_position[1] - last_wp[1]
-            cte_estimate = (dx*dx + dy*dy) ** 0.5
+            if is_3d and len(current_position) >= 3 and len(last_wp) >= 3:
+                dz = current_position[2] - last_wp[2]
+                cte_estimate = (dx*dx + dy*dy + dz*dz) ** 0.5
+            else:
+                cte_estimate = (dx*dx + dy*dy) ** 0.5
         
         nearest_idx = self.find_nearest_waypoint(
             current_position, waypoints, last_waypoint_idx,
@@ -258,14 +447,9 @@ class ReferenceBuilder:
         # Distance to travel over horizon
         horizon_dist = speed * horizon_steps * dt
         
-        # Build reference by walking along waypoints
-        current_idx = nearest_idx
-        accumulated_dist = 0.0
-        
         # Helper function to flip heading by 180° if opposite to vehicle heading
         def adjust_heading_if_opposite(seg_heading, vehicle_heading):
             """Flip segment heading by 180° if it's opposite to vehicle heading (>90° difference)."""
-            import math
             heading_diff = seg_heading - vehicle_heading
             # Normalize to [-pi, pi]
             heading_diff = math.atan2(math.sin(heading_diff), math.cos(heading_diff))
@@ -275,16 +459,119 @@ class ReferenceBuilder:
                 return math.atan2(math.sin(flipped), math.cos(flipped))  # Normalize to [-pi, pi]
             return seg_heading
         
+        # Use spline-based reference building if enabled
+        if self.use_splines and len(waypoints) >= 3:
+            try:
+                # Extract a window of waypoints around current position for spline fitting
+                # Use enough waypoints to cover horizon distance plus some margin
+                window_size = max(50, int(horizon_dist / 0.2) + 20)  # Assume ~0.2m spacing
+                start_idx = max(0, nearest_idx - 10)
+                end_idx = min(len(waypoints), nearest_idx + window_size)
+                waypoint_window = waypoints[start_idx:end_idx]
+                
+                if len(waypoint_window) >= 3:
+                    # Fit spline through waypoint window
+                    spline_result = self._fit_spline(waypoint_window)
+                    if spline_result is not None:
+                        tck, u = spline_result
+                        
+                        # Find parameter u0 corresponding to current position (nearest waypoint)
+                        # Map nearest_idx to window index
+                        window_nearest_idx = nearest_idx - start_idx
+                        if window_nearest_idx < len(u):
+                            u0 = u[window_nearest_idx] if len(u) > window_nearest_idx else u[0]
+                        else:
+                            u0 = u[0]
+                        
+                        # Compute arc-length from u0 (supports both 2D and 3D)
+                        u_fine = np.linspace(u0, 1.0, 1000)
+                        points_fine = splev(u_fine, tck)
+                        dx = np.diff(points_fine[0])
+                        dy = np.diff(points_fine[1])
+                        if len(points_fine) >= 3 and is_3d:
+                            # 3D case: use 3D distance
+                            dz = np.diff(points_fine[2])
+                            ds = np.sqrt(dx*dx + dy*dy + dz*dz)
+                        else:
+                            # 2D case: use 2D distance
+                            ds = np.sqrt(dx*dx + dy*dy)
+                        s_cumulative = np.concatenate(([0], np.cumsum(ds)))
+                        total_length = s_cumulative[-1]
+                        
+                        # Sample at uniform arc-length intervals for horizon
+                        for k in range(horizon_steps):
+                            target_s = speed * (k + 1) * dt
+                            
+                            if target_s >= total_length:
+                                # Beyond spline: use last point
+                                u_k = 1.0
+                            else:
+                                # Find u that corresponds to target_s arc-length
+                                u_k = np.interp(target_s, s_cumulative, u_fine)
+                            
+                            # Evaluate spline and derivatives at u_k
+                            point_k = splev(u_k, tck)
+                            deriv_k = splev(u_k, tck, der=1)  # First derivative (tangent)
+                            deriv2_k = splev(u_k, tck, der=2)  # Second derivative (for curvature)
+                            
+                            # Compute heading from tangent (first derivative)
+                            # For 3D, project to XY plane (use only x and y components)
+                            dx_dt = deriv_k[0]
+                            dy_dt = deriv_k[1]
+                            speed_tangent = math.sqrt(dx_dt*dx_dt + dy_dt*dy_dt)
+                            
+                            if speed_tangent > 1e-6:
+                                seg_heading = math.atan2(dy_dt, dx_dt)
+                                psi_ref[k] = adjust_heading_if_opposite(seg_heading, current_heading)
+                                
+                                # Compute curvature from spline derivatives
+                                # For 3D, compute 2D curvature in XY plane (project to XY plane)
+                                # kappa = |x'*y'' - y'*x''| / (x'^2 + y'^2)^(3/2)
+                                d2x_dt2 = deriv2_k[0]
+                                d2y_dt2 = deriv2_k[1]
+                                numerator = abs(dx_dt * d2y_dt2 - dy_dt * d2x_dt2)
+                                denominator = speed_tangent ** 3
+                                if denominator > 1e-9:
+                                    kappa_ref[k] = numerator / denominator
+                                else:
+                                    kappa_ref[k] = 0.0
+                            else:
+                                # Degenerate: use fallback
+                                psi_ref[k] = current_heading
+                                kappa_ref[k] = 0.0
+                        
+                        # Successfully used splines
+                        # Verify arrays before returning
+                        if len(psi_ref) != horizon_steps or len(kappa_ref) != horizon_steps:
+                            raise ValueError("Spline reference arrays have wrong length")
+                        return (psi_ref, kappa_ref, v_ref, nearest_idx)
+            except Exception as e:
+                print(f"[ReferenceBuilder] Spline-based reference building failed: {e}, falling back to linear")
+                # Fall through to linear method
+        
+        # Fallback: Linear interpolation along waypoint segments (original method)
+        # Supports both 2D and 3D waypoints (uses 3D distance for path length, but computes heading/curvature in XY plane)
+        current_idx = nearest_idx
+        accumulated_dist = 0.0
+        
         for k in range(horizon_steps):
             target_dist = speed * (k + 1) * dt
             
             # Find waypoint segment for this step
             while current_idx < len(waypoints) - 1:
-                x0, y0 = waypoints[current_idx]
-                x1, y1 = waypoints[current_idx + 1]
+                wp0 = waypoints[current_idx]
+                wp1 = waypoints[current_idx + 1]
+                x0, y0 = wp0[0], wp0[1]
+                x1, y1 = wp1[0], wp1[1]
                 dx = x1 - x0
                 dy = y1 - y0
-                seg_len = math.sqrt(dx*dx + dy*dy)
+                
+                # Compute segment length (3D if available, otherwise 2D)
+                if is_3d and len(wp0) >= 3 and len(wp1) >= 3:
+                    dz = wp1[2] - wp0[2]
+                    seg_len = math.sqrt(dx*dx + dy*dy + dz*dz)
+                else:
+                    seg_len = math.sqrt(dx*dx + dy*dy)
                 
                 if seg_len < 1e-6:
                     current_idx += 1
@@ -296,27 +583,26 @@ class ReferenceBuilder:
                     ref_x = x0 + u * dx
                     ref_y = y0 + u * dy
                     
-                    # Compute heading (tangent direction)
+                    # Compute heading (tangent direction in XY plane)
                     seg_heading = math.atan2(dy, dx)
                     # Flip by 180° if opposite to vehicle heading
                     psi_ref[k] = adjust_heading_if_opposite(seg_heading, current_heading)
                     
                     # Compute curvature (use 3-point method with smoothing if possible)
-                    # Use points that are curvature_smoothing_num apart for smoother curvature
+                    # For 3D waypoints, curvature is computed in XY plane (project to XY)
                     smoothing_offset = max(1, self.curvature_smoothing_num)
                     if current_idx >= smoothing_offset and current_idx < len(waypoints) - smoothing_offset:
-                        kappa_ref[k] = self.compute_curvature(
-                            waypoints[current_idx - smoothing_offset],
-                            waypoints[current_idx],
-                            waypoints[current_idx + smoothing_offset]
-                        )
+                        # Extract XY coordinates for curvature computation
+                        p0 = (waypoints[current_idx - smoothing_offset][0], waypoints[current_idx - smoothing_offset][1])
+                        p1 = (waypoints[current_idx][0], waypoints[current_idx][1])
+                        p2 = (waypoints[current_idx + smoothing_offset][0], waypoints[current_idx + smoothing_offset][1])
+                        kappa_ref[k] = self.compute_curvature(p0, p1, p2)
                     elif current_idx > 0 and current_idx < len(waypoints) - 1:
                         # Fallback to adjacent points if smoothing not possible
-                        kappa_ref[k] = self.compute_curvature(
-                            waypoints[current_idx - 1],
-                            waypoints[current_idx],
-                            waypoints[current_idx + 1]
-                        )
+                        p0 = (waypoints[current_idx - 1][0], waypoints[current_idx - 1][1])
+                        p1 = (waypoints[current_idx][0], waypoints[current_idx][1])
+                        p2 = (waypoints[current_idx + 1][0], waypoints[current_idx + 1][1])
+                        kappa_ref[k] = self.compute_curvature(p0, p1, p2)
                     
                     break
                 else:

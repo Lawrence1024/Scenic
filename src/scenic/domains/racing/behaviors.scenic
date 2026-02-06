@@ -755,8 +755,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         
         cte_mag_for_speed = abs(cte_for_speed) if cte_for_speed is not None else 0.0
         
-        # Universal max speed limit: 40 mph = 17.88 m/s
-        MAX_SPEED_LIMIT_MS = 17.88  # 40 mph in m/s
+        # Universal max speed limit: Reduced for better robustness without elevation data
+        MAX_SPEED_LIMIT_MS = 15.0  # ~33.5 mph in m/s (reduced from 17.88 m/s / 40 mph for safety margin)
         
         # --- Curvature-based speed reduction (for sharp turns) ---
         # Compute upcoming curvature from waypoints to reduce speed before sharp turns
@@ -823,7 +823,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         # --- CTE-based speed reduction (for MPC speed reference) ---
         # When CTE is large, modify target speed to encourage slowing down
         # This makes the MPC plan appropriate speed when off-track
-        # FIX 2: Gradual speed limiting for CTE 2-5m (not binary threshold)
+        # ENHANCED: More aggressive speed reduction for better robustness without elevation data
         if cte_mag_for_speed >= 10.0:
             # At 10m+ CTE: set target to current speed - 2 m/s (encourages braking)
             cte_target_speed = max(0.0, current_speed - 2.0)
@@ -831,11 +831,20 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             # At 5-10m CTE: set target to current speed (zero throttle)
             cte_target_speed = current_speed
         elif cte_mag_for_speed >= 3.0:
-            # FIX: 3-5m CTE: Limit to 4 m/s (prevent overshooting when approaching track)
+            # 3-5m CTE: Limit to 4 m/s (prevent overshooting when approaching track)
             cte_target_speed = 4.0
         elif cte_mag_for_speed >= 2.0:
-            # FIX: 2-3m CTE: Limit to 5 m/s (prevent overshooting when close to track)
+            # 2-3m CTE: Limit to 5 m/s (prevent overshooting when close to track)
             cte_target_speed = 5.0
+        elif cte_mag_for_speed >= 1.5:
+            # NEW: 1.5-2m CTE: Limit to 6 m/s (early intervention for small deviations)
+            cte_target_speed = 6.0
+        elif cte_mag_for_speed >= 1.0:
+            # NEW: 1.0-1.5m CTE: Limit to 7 m/s (gradual reduction)
+            cte_target_speed = 7.0
+        elif cte_mag_for_speed >= 0.5:
+            # NEW: 0.5-1.0m CTE: Limit to 8 m/s (slight reduction for small errors)
+            cte_target_speed = 8.0
         elif cte_mag_for_speed >= cte_stop_threshold:
             # At 50m+ CTE: aim for very low speed (encourages heavy braking)
             cte_target_speed = target_speed * 0.1
@@ -848,7 +857,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             factor = 0.5 - ((cte_mag_for_speed - cte_throttle_reduction_max) / (cte_slowdown_threshold - cte_throttle_reduction_max)) * 0.2
             cte_target_speed = target_speed * factor
         else:
-            # CTE < 2m: use full target speed (but still respect max speed limit)
+            # CTE < 0.5m: use full target speed (but still respect max speed limit)
             cte_target_speed = target_speed
         
         # --- Combine CTE and curvature speed limits (take minimum) ---

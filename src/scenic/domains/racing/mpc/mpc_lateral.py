@@ -39,7 +39,8 @@ class MPCLateralController:
         # Initialize reference builder
         self.ref_builder = ReferenceBuilder(
             resample_dist=config.traj_resample_dist,
-            curvature_smoothing_num=config.curvature_smoothing_num
+            curvature_smoothing_num=config.curvature_smoothing_num,
+            use_splines=config.use_splines
         )
         
         # Initialize low-pass filter for steering output
@@ -90,7 +91,8 @@ class MPCLateralController:
                           psi_ref: np.ndarray,
                           kappa_ref: np.ndarray,
                           v_ref: np.ndarray,
-                          horizon: int) -> Tuple[csc_matrix, np.ndarray, csc_matrix, np.ndarray, np.ndarray]:
+                          horizon: int,
+                          cte_magnitude: Optional[float] = None) -> Tuple[csc_matrix, np.ndarray, csc_matrix, np.ndarray, np.ndarray]:
         """Build QP matrices for MPC problem.
         
         Args:
@@ -212,6 +214,27 @@ class MPCLateralController:
                 w_u_k = self.config.w_u
                 w_u_vel_k = self.config.w_u_vel
                 w_ddu_k = self.config.w_ddu
+            
+            # CTE-adaptive weight scaling: Increase tracking weights when off-track
+            # This compensates for model uncertainty (e.g., missing elevation data)
+            if cte_magnitude is not None and cte_magnitude > 0.0:
+                if cte_magnitude >= 3.0:
+                    # Very off-track: triple tracking weights for aggressive recovery
+                    cte_multiplier = 3.0
+                elif cte_magnitude >= 1.5:
+                    # Moderately off-track: double tracking weights
+                    cte_multiplier = 2.0
+                elif cte_magnitude >= 0.5:
+                    # Slightly off-track: 1.5x tracking weights
+                    cte_multiplier = 1.5
+                else:
+                    # On-track: no scaling
+                    cte_multiplier = 1.0
+                
+                # Apply multiplier to tracking weights (not control weights)
+                w_ey_k *= cte_multiplier
+                w_epsi_k *= cte_multiplier
+                w_epsi_vel_k *= cte_multiplier
             
             # State cost: w_ey * e_y^2 + w_epsi * e_psi^2 + w_epsi_vel * e_psi^2 * v^2
             P[x_k_idx, x_k_idx] += w_ey_k  # e_y
@@ -437,9 +460,12 @@ class MPCLateralController:
         
         # Build QP matrices
         # Don't catch exceptions - let them propagate to identify bugs
+        # Pass CTE magnitude for adaptive weight scaling
+        cte_mag_for_mpc = abs(e_y) if e_y is not None else (cte_magnitude if cte_magnitude is not None else 0.0)
         P, q, A, l, u = self._build_qp_matrices(
             self.state, psi_ref, kappa_ref, v_ref,
-            self.config.mpc_prediction_horizon
+            self.config.mpc_prediction_horizon,
+            cte_magnitude=cte_mag_for_mpc
         )
         
         # Initialize solver on first solve
@@ -493,6 +519,16 @@ class MPCLateralController:
             print(f"[MPC] Error solving QP: {e}")
             return self._fallback_steering()
     
+    def _is_3d_waypoint(self, waypoint) -> bool:
+        """Check if waypoint is 3D (has z coordinate)."""
+        return len(waypoint) >= 3
+    
+    def _is_3d_waypoints(self, waypoints) -> bool:
+        """Check if waypoints list contains 3D points."""
+        if not waypoints or len(waypoints) == 0:
+            return False
+        return self._is_3d_waypoint(waypoints[0])
+    
     def _compute_errors(self,
                        position: Tuple[float, float],
                        heading: float,
@@ -501,22 +537,26 @@ class MPCLateralController:
         """Compute lateral error (e_y) and heading error (e_psi) from waypoints.
 
         Dynamically selects the best waypoint segment for control based on proximity to vehicle.
+        Supports both 2D (x, y) and 3D (x, y, z) waypoints. For 3D waypoints, CTE is computed
+        in the XY plane (projected to XY plane).
 
         Args:
-            position: Current vehicle position (x, y)
-            heading: Current vehicle heading (radians)
-            waypoints: List of waypoint (x, y) tuples
+            position: Current vehicle position (x, y) or (x, y, z)
+            heading: Current vehicle heading (radians) - yaw angle in XY plane
+            waypoints: List of waypoint (x, y) or (x, y, z) tuples
 
         Returns:
             Tuple of (e_y, e_psi, segment_idx):
-            - e_y: Lateral error (meters), positive = left of path
+            - e_y: Lateral error (meters) in XY plane, positive = left of path
             - e_psi: Heading error (radians), positive = heading left of path direction
             - segment_idx: Index of the waypoint segment being used for control
         """
         if not waypoints or len(waypoints) < 2:
             return (0.0, 0.0, 0)
 
-        px, py = position
+        # Handle both 2D and 3D positions (always use XY for CTE computation)
+        px, py = position[0], position[1]
+        is_3d = self._is_3d_waypoints(waypoints)
 
         # Find the best waypoint segment dynamically
         # CRITICAL: Prefer segments AHEAD of the vehicle, not behind
@@ -533,17 +573,25 @@ class MPCLateralController:
         # Search forward from current position, with limited lookback
         search_end = len(waypoints) - 1
         for i in range(search_start, search_end):
-            x0, y0 = waypoints[i]
-            x1, y1 = waypoints[i + 1]
+            wp0 = waypoints[i]
+            wp1 = waypoints[i + 1]
+            x0, y0 = wp0[0], wp0[1]
+            x1, y1 = wp1[0], wp1[1]
 
             seg_dx = x1 - x0
             seg_dy = y1 - y0
-            seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)
+            # For 3D waypoints, use 3D distance for segment selection, but compute CTE in XY plane
+            if is_3d and len(wp0) >= 3 and len(wp1) >= 3:
+                seg_dz = wp1[2] - wp0[2]
+                seg_len_3d = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy + seg_dz*seg_dz)
+                seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)  # XY projection for CTE
+            else:
+                seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)
 
             if seg_len < 1e-6:
                 continue
 
-            # Project vehicle position onto segment
+            # Project vehicle position onto segment (in XY plane for CTE computation)
             wx = px - x0
             wy = py - y0
             u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
@@ -552,7 +600,7 @@ class MPCLateralController:
             proj_x = x0 + u_proj * seg_dx
             proj_y = y0 + u_proj * seg_dy
 
-            # Distance from vehicle to projection point
+            # Distance from vehicle to projection point (in XY plane)
             dx = px - proj_x
             dy = py - proj_y
             distance = np.sqrt(dx*dx + dy*dy)
@@ -578,17 +626,19 @@ class MPCLateralController:
 
         # Use the best segment found
         waypoint_idx = best_segment_idx
-        x0, y0 = waypoints[waypoint_idx]
-        x1, y1 = waypoints[waypoint_idx + 1]
+        wp0 = waypoints[waypoint_idx]
+        wp1 = waypoints[waypoint_idx + 1]
+        x0, y0 = wp0[0], wp0[1]
+        x1, y1 = wp1[0], wp1[1]
         
         seg_dx = x1 - x0
         seg_dy = y1 - y0
-        seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)
+        seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)  # XY projection for CTE
         
         if seg_len < 1e-6:
-            return (0.0, 0.0)
+            return (0.0, 0.0, waypoint_idx)
         
-        # Project vehicle position onto segment
+        # Project vehicle position onto segment (in XY plane)
         wx = px - x0
         wy = py - y0
         u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)

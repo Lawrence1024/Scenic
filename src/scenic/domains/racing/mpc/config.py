@@ -88,6 +88,9 @@ class MPCConfig:
         # Curvature smoothing
         self.curvature_smoothing_num = config_dict.get('curvature_smoothing_num', 15)  # Points for curvature calculation
         
+        # Spline-based resampling
+        self.use_splines = config_dict.get('use_splines', True)  # Use spline fitting with arc-length parameterization
+        
         # Longitudinal MPC parameters
         self.vehicle_mass = config_dict.get('vehicle_mass', 753.87)  # kg
         self.max_acceleration = config_dict.get('max_acceleration', 20.0)  # m/s^2

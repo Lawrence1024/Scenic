@@ -69,17 +69,40 @@ def load_ttl_region(ttl_folder, ttl_index, dx, dy, ttl_file_name=None):
     pts = []
     with open(ttl_path, newline="") as f:
         r = csv.reader(f)
+        # Check if first line is header (x,y,z or similar)
         try:
-            next(r)  # skip metadata
+            first_line = next(r)
+            # If first line looks like a header (contains 'x' or 'X'), skip it
+            if len(first_line) > 0 and ('x' in first_line[0].lower() or 'X' in first_line[0]):
+                pass  # Already skipped header
+            else:
+                # Not a header, process it as data
+                if len(first_line) >= 2:
+                    try:
+                        x = float(first_line[0]) + dx
+                        y = float(first_line[1]) + dy
+                        if len(first_line) >= 3:
+                            z = float(first_line[2])
+                            pts.append((x, y, z))
+                        else:
+                            pts.append((x, y))
+                    except (ValueError, IndexError):
+                        pass
         except StopIteration:
             pass
+        
         for row in r:
             if not row or len(row) < 2:
                 continue
             try:
                 x = float(row[0]) + dx
                 y = float(row[1]) + dy
-                pts.append((x, y))
+                # Support 3D waypoints if z coordinate is available
+                if len(row) >= 3:
+                    z = float(row[2])
+                    pts.append((x, y, z))
+                else:
+                    pts.append((x, y))
             except Exception:
                 continue
     

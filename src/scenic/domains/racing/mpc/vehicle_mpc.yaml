@@ -15,17 +15,17 @@
     # Steering mapping (to be calibrated)
     steer_scale: null  # Will be calibrated: delta_actual_rad / steer_cmd
     
-    # MPC weights (base weights for moderate curves - increased for better tracking)
-    w_ey: 5.0  # Lateral error weight (increased from 2.0 for better curve tracking)
-    w_epsi: 3.0  # Heading error weight (increased from 2.0 for better curve tracking)
+    # MPC weights (base weights for moderate curves - increased for better tracking and robustness)
+    w_ey: 10.0  # Lateral error weight (doubled from 5.0 for more aggressive tracking)
+    w_epsi: 5.0  # Heading error weight (increased from 3.0 for better heading correction)
     w_u: 0.05  # Control input weight (reduced from 0.1 to allow more steering authority)
     w_du: 0.75  # Control rate weight
-    wT_ey: 5.0  # Terminal lateral error weight
-    wT_epsi: 1.0  # Terminal heading error weight
+    wT_ey: 15.0  # Terminal lateral error weight (increased from 5.0 for better terminal tracking)
+    wT_epsi: 2.0  # Terminal heading error weight (increased from 1.0)
     
-    # Velocity-weighted costs (improved performance at different speeds)
-    w_epsi_vel: 0.5  # Heading error * velocity^2 weight (increased from 0.3 for better high-speed tracking)
-    w_u_vel: 0.15  # Control input * velocity^2 weight (reduced from 0.25 to allow more steering at speed)
+    # Velocity-weighted costs (improved performance at different speeds - critical for high-speed robustness)
+    w_epsi_vel: 1.5  # Heading error * velocity^2 weight (tripled from 0.5 for much better high-speed tracking)
+    w_u_vel: 0.1  # Control input * velocity^2 weight (reduced from 0.15 to allow more steering at speed)
     
     # Steering acceleration penalty (smoother steering, reduces jerk)
     w_ddu: 0.000005  # Steering acceleration weight (reduced from 0.00002 to allow faster steering changes)
@@ -44,9 +44,9 @@
     w_ddu_low_curv: 0.000001  # Steering acceleration weight in low curvature (lighter penalty)
     
     # High curvature weights (for sharp turns - aggressive tracking, fast steering)
-    w_ey_high_curv: 8.0  # Lateral error weight in high curvature (sharp turns - very aggressive)
-    w_epsi_high_curv: 5.0  # Heading error weight in high curvature (sharp turns - very aggressive)
-    w_epsi_vel_high_curv: 0.8  # Velocity-weighted heading error in high curvature (strong at speed)
+    w_ey_high_curv: 15.0  # Lateral error weight in high curvature (increased from 8.0 for very aggressive tracking)
+    w_epsi_high_curv: 8.0  # Heading error weight in high curvature (increased from 5.0)
+    w_epsi_vel_high_curv: 2.0  # Velocity-weighted heading error in high curvature (increased from 0.8 for better high-speed turns)
     w_u_high_curv: 0.02  # Control input weight in high curvature (very low - allow maximum steering)
     w_u_vel_high_curv: 0.05  # Velocity-weighted control input in high curvature (low penalty)
     w_ddu_high_curv: 0.0000005  # Steering acceleration weight in high curvature (very light - allow rapid steering changes)
@@ -62,6 +62,7 @@
     # Waypoint/Reference
     traj_resample_dist: 0.1  # Distance between resampled waypoints (meters) - finer resolution for better tracking
     curvature_smoothing_num: 15  # Number of points for curvature calculation (smoothing window)
+    use_splines: true  # Use spline fitting with arc-length parameterization for smooth reference trajectories
     
     # ControlDesk variable paths (optional - can be overridden)
     controldesk_paths:

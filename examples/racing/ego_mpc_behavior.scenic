@@ -18,7 +18,7 @@ model scenic.domains.racing.model
 # --- Ego car with MPC behavior ---
 # Using main racing road centerline TTL (excluding pitlane)
 
-ego = new RacingCar at (-170.054820,-514.683896), \
+ego = new RacingCar at (-140.425373,-544.609094), \
     with regionContainedIn everywhere, \
     with raceNumber 1, \
     # with ttlFileName 'ttl_17.csv', \
@@ -49,13 +49,13 @@ ego.behavior = FollowRacingLineMPCBehavior(
 # fellow5 = new RacingCar at (-177.555348, -352.917631), with regionContainedIn everywhere
 # fellow6 = new RacingCar at (-174.479231, -454.098250), with regionContainedIn everywhere
 
-fellow0 = new RacingCar at (-168.919391,-519.616376), with regionContainedIn everywhere
-fellow1 = new RacingCar at (-167.350460,-524.427831), with regionContainedIn everywhere
-fellow2 = new RacingCar at (-165.233008,-529.027962), with regionContainedIn everywhere
-fellow3 = new RacingCar at (-162.461970,-533.268075), with regionContainedIn everywhere
-fellow4 = new RacingCar at (-158.981329,-536.960517), with regionContainedIn everywhere
-fellow5 = new RacingCar at (-154.859072,-539.924759), with regionContainedIn everywhere
-fellow6 = new RacingCar at (-150.284419,-542.143765), with regionContainedIn everywhere
+fellow0 = new RacingCar at (-130.271358,-544.854676), with regionContainedIn everywhere
+fellow1 = new RacingCar at (-125.230382,-544.238104), with regionContainedIn everywhere
+fellow2 = new RacingCar at (-120.276175,-543.141248), with regionContainedIn everywhere
+fellow3 = new RacingCar at (-115.465428,-541.552996), with regionContainedIn everywhere
+fellow4 = new RacingCar at (-110.860394,-539.441584), with regionContainedIn everywhere
+fellow5 = new RacingCar at (-106.570478,-536.768906), with regionContainedIn everywhere
+fellow6 = new RacingCar at (-102.738364,-533.488527), with regionContainedIn everywhere
 
 
 
@@ -63,14 +63,7 @@ fellow6 = new RacingCar at (-150.284419,-542.143765), with regionContainedIn eve
 
 
 
-
-
-
-
-
-
-
-fellow7 = new RacingCar at (-145.430430, -543.681887), with regionContainedIn everywhere
+# fellow7 = new RacingCar at (-145.430430, -543.681887), with regionContainedIn everywhere
 # fellow8 = new RacingCar at (-99.975653, -481.458821), with regionContainedIn everywhere
 # fellow9 = new RacingCar at (-115.985953, -382.001237), with regionContainedIn everywhere
 # fellow10 = new RacingCar at (-97.793578, -283.512705), with regionContainedIn everywhere
