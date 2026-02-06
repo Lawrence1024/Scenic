@@ -398,10 +398,11 @@ class ReferenceBuilder:
             last_waypoint_idx: Last known waypoint index
             
         Returns:
-            Tuple of (psi_ref, kappa_ref, v_ref, new_waypoint_idx)
+            Tuple of (psi_ref, kappa_ref, v_ref, grade_ref, new_waypoint_idx)
             - psi_ref: Reference heading array (radians) - yaw angle in XY plane
             - kappa_ref: Reference curvature array (1/meters) - curvature in XY plane
             - v_ref: Reference speed array (m/s) - currently constant
+            - grade_ref: Reference road grade array (radians) - pitch angle (positive = uphill)
             - new_waypoint_idx: Updated waypoint index
         """
         if not waypoints or len(waypoints) < 2:
@@ -410,6 +411,7 @@ class ReferenceBuilder:
                 np.zeros(horizon_steps),
                 np.zeros(horizon_steps),
                 np.full(horizon_steps, speed),
+                np.zeros(horizon_steps),  # grade_ref
                 0
             )
         
@@ -443,6 +445,7 @@ class ReferenceBuilder:
         psi_ref = np.zeros(horizon_steps, dtype=np.float64)
         kappa_ref = np.zeros(horizon_steps, dtype=np.float64)
         v_ref = np.full(horizon_steps, float(speed), dtype=np.float64)  # Constant speed for now
+        grade_ref = np.zeros(horizon_steps, dtype=np.float64)  # Road grade (pitch angle) in radians
         
         # Distance to travel over horizon
         horizon_dist = speed * horizon_steps * dt
@@ -535,16 +538,30 @@ class ReferenceBuilder:
                                     kappa_ref[k] = numerator / denominator
                                 else:
                                     kappa_ref[k] = 0.0
+                                
+                                # Compute road grade (pitch angle) from 3D spline
+                                # grade = atan2(dz, sqrt(dx^2 + dy^2)) - positive = uphill
+                                if is_3d and len(deriv_k) >= 3:
+                                    dz_dt = deriv_k[2]
+                                    speed_3d = math.sqrt(dx_dt*dx_dt + dy_dt*dy_dt + dz_dt*dz_dt)
+                                    if speed_3d > 1e-6:
+                                        # Grade angle: positive = uphill, negative = downhill
+                                        grade_ref[k] = math.atan2(dz_dt, speed_tangent)
+                                    else:
+                                        grade_ref[k] = 0.0
+                                else:
+                                    grade_ref[k] = 0.0
                             else:
                                 # Degenerate: use fallback
                                 psi_ref[k] = current_heading
                                 kappa_ref[k] = 0.0
+                                grade_ref[k] = 0.0
                         
                         # Successfully used splines
                         # Verify arrays before returning
-                        if len(psi_ref) != horizon_steps or len(kappa_ref) != horizon_steps:
+                        if len(psi_ref) != horizon_steps or len(kappa_ref) != horizon_steps or len(grade_ref) != horizon_steps:
                             raise ValueError("Spline reference arrays have wrong length")
-                        return (psi_ref, kappa_ref, v_ref, nearest_idx)
+                        return (psi_ref, kappa_ref, v_ref, grade_ref, nearest_idx)
             except Exception as e:
                 print(f"[ReferenceBuilder] Spline-based reference building failed: {e}, falling back to linear")
                 # Fall through to linear method
@@ -604,6 +621,18 @@ class ReferenceBuilder:
                         p2 = (waypoints[current_idx + 1][0], waypoints[current_idx + 1][1])
                         kappa_ref[k] = self.compute_curvature(p0, p1, p2)
                     
+                    # Compute road grade (pitch angle) from 3D waypoints
+                    # grade = atan2(dz, sqrt(dx^2 + dy^2)) - positive = uphill
+                    if is_3d and len(wp0) >= 3 and len(wp1) >= 3:
+                        dz = wp1[2] - wp0[2]
+                        seg_len_xy = math.sqrt(dx*dx + dy*dy)
+                        if seg_len_xy > 1e-6:
+                            grade_ref[k] = math.atan2(dz, seg_len_xy)
+                        else:
+                            grade_ref[k] = 0.0
+                    else:
+                        grade_ref[k] = 0.0
+                    
                     break
                 else:
                     accumulated_dist += seg_len
@@ -619,9 +648,21 @@ class ReferenceBuilder:
                     seg_heading = math.atan2(dy, dx)
                     # Flip by 180° if opposite to vehicle heading
                     psi_ref[k] = adjust_heading_if_opposite(seg_heading, current_heading)
+                    
+                    # Compute grade from last segment
+                    if is_3d and len(last_seg) >= 3 and len(prev_seg) >= 3:
+                        dz = last_seg[2] - prev_seg[2]
+                        seg_len_xy = math.sqrt(dx*dx + dy*dy)
+                        if seg_len_xy > 1e-6:
+                            grade_ref[k] = math.atan2(dz, seg_len_xy)
+                        else:
+                            grade_ref[k] = 0.0
+                    else:
+                        grade_ref[k] = 0.0
                 else:
                     psi_ref[k] = current_heading
                     kappa_ref[k] = 0.0
+                    grade_ref[k] = 0.0
         
         # Verify arrays have correct shape and length before returning
         # Arrays should already be correctly initialized with shape (horizon_steps,)
@@ -634,6 +675,8 @@ class ReferenceBuilder:
             raise TypeError(f"kappa_ref must be a numpy array, got {type(kappa_ref)}")
         if not isinstance(v_ref, np.ndarray):
             raise TypeError(f"v_ref must be a numpy array, got {type(v_ref)}")
+        if not isinstance(grade_ref, np.ndarray):
+            raise TypeError(f"grade_ref must be a numpy array, got {type(grade_ref)}")
         
         # Ensure arrays are 1D with correct length
         if psi_ref.ndim != 1:
@@ -642,6 +685,8 @@ class ReferenceBuilder:
             raise ValueError(f"kappa_ref must be 1D, got {kappa_ref.ndim}D array with shape {kappa_ref.shape}")
         if v_ref.ndim != 1:
             raise ValueError(f"v_ref must be 1D, got {v_ref.ndim}D array with shape {v_ref.shape}")
+        if grade_ref.ndim != 1:
+            raise ValueError(f"grade_ref must be 1D, got {grade_ref.ndim}D array with shape {grade_ref.shape}")
         
         # Verify arrays have correct length - this is the critical check
         if len(psi_ref) != horizon_steps:
@@ -650,6 +695,8 @@ class ReferenceBuilder:
             raise ValueError(f"kappa_ref length mismatch: expected {horizon_steps}, got {len(kappa_ref)}. Shape: {kappa_ref.shape}, dtype: {kappa_ref.dtype}")
         if len(v_ref) != horizon_steps:
             raise ValueError(f"v_ref length mismatch: expected {horizon_steps}, got {len(v_ref)}. Shape: {v_ref.shape}, dtype: {v_ref.dtype}")
+        if len(grade_ref) != horizon_steps:
+            raise ValueError(f"grade_ref length mismatch: expected {horizon_steps}, got {len(grade_ref)}. Shape: {grade_ref.shape}, dtype: {grade_ref.dtype}")
         
-        return (psi_ref, kappa_ref, v_ref, nearest_idx)
+        return (psi_ref, kappa_ref, v_ref, grade_ref, nearest_idx)
 

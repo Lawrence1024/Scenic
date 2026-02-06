@@ -11,6 +11,7 @@ from scenic.domains.driving.actions import SetThrottleAction, SetBrakeAction, Se
 from scenic.domains.racing.actions import SetMaxSpeedAction, SetTTLAction, SetSpeedLimitAction, SetTTLSelectionAction, SetTargetGapAction, SetStrategyAction, SetPowertrainModeAction, SetScaleFactorAction, SetPush2PassAction, StopCarAction, SetGearAction
 import scenic.domains.racing.model as _racing
 import math
+import numpy as np
 
 # Import waypoint finding utility
 import sys
@@ -935,6 +936,52 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         # Apply universal max speed limit to profile
         v_ref_profile = [min(v, MAX_SPEED_LIMIT_MS) for v in v_ref_profile]
         
+        # --- Build grade profile for longitudinal MPC (if 3D waypoints available) ---
+        grade_profile = None
+        if use_waypoints and wp_list and len(wp_list) >= 2:
+            # Check if waypoints are 3D
+            is_3d_waypoints = len(wp_list[0]) >= 3
+            if is_3d_waypoints:
+                # Build grade profile for longitudinal MPC
+                horizon = _lon_controller.config.mpc_prediction_horizon
+                dt_mpc = _lon_controller.config.mpc_prediction_dt
+                grade_profile = []
+                for k in range(horizon):
+                    # Distance ahead at step k
+                    dist_ahead = current_speed * (k + 1) * dt_mpc
+                    # Find waypoint segment at this distance
+                    wp_idx = wp_last_idx
+                    accumulated_dist = 0.0
+                    while wp_idx < len(wp_list) - 1 and accumulated_dist < dist_ahead:
+                        wp0 = wp_list[wp_idx]
+                        wp1 = wp_list[wp_idx + 1]
+                        dx = float(wp1[0]) - float(wp0[0])
+                        dy = float(wp1[1]) - float(wp0[1])
+                        dz = float(wp1[2]) - float(wp0[2]) if len(wp1) >= 3 and len(wp0) >= 3 else 0.0
+                        seg_len = (dx*dx + dy*dy + dz*dz) ** 0.5
+                        if seg_len < 1e-6:
+                            wp_idx += 1
+                            continue
+                        accumulated_dist += seg_len
+                        if accumulated_dist < dist_ahead:
+                            wp_idx += 1
+                    # Compute grade from segment
+                    if wp_idx < len(wp_list) - 1:
+                        wp0 = wp_list[wp_idx]
+                        wp1 = wp_list[wp_idx + 1]
+                        dx = float(wp1[0]) - float(wp0[0])
+                        dy = float(wp1[1]) - float(wp0[1])
+                        dz = float(wp1[2]) - float(wp0[2]) if len(wp1) >= 3 and len(wp0) >= 3 else 0.0
+                        seg_len_xy = (dx*dx + dy*dy) ** 0.5
+                        if seg_len_xy > 1e-6:
+                            grade = math.atan2(dz, seg_len_xy)
+                        else:
+                            grade = 0.0
+                    else:
+                        grade = 0.0
+                    grade_profile.append(grade)
+                grade_profile = np.array(grade_profile, dtype=np.float64)
+        
         # --- Use MPC for throttle/brake control ---
         # Get current acceleration (estimate from speed if not available)
         dt = simulation().timestep
@@ -951,12 +998,13 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             'gear': getattr(self, 'gear', 0) if manage_gears and hasattr(self, 'setGear') else None
         }
         
-        # Compute throttle/brake using MPC
+        # Compute throttle/brake using MPC (with grade compensation if available)
         try:
             throttle_mpc, brake_mpc = _lon_controller.run_step(
                 vehicle_state_mpc,
                 v_ref_profile,
-                None  # curvature_profile not used in simplified model
+                None,  # curvature_profile not used in simplified model
+                grade_profile  # Road grade profile for gravity compensation
             )
             throttle_mpc = float(throttle_mpc)
             brake_mpc = float(brake_mpc)
@@ -1117,10 +1165,15 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 # If reading fails, MPC will use previous state estimate
                 pass
 
-        # Convert waypoints to list of tuples for MPC
+        # Convert waypoints to list of tuples for MPC (preserve 3D if available)
         waypoints_for_mpc = None
         if wp_list and len(wp_list) >= 2:
-            waypoints_for_mpc = [(float(wp[0]), float(wp[1])) for wp in wp_list]
+            # Check if waypoints are 3D
+            is_3d_waypoints = len(wp_list[0]) >= 3
+            if is_3d_waypoints:
+                waypoints_for_mpc = [(float(wp[0]), float(wp[1]), float(wp[2])) for wp in wp_list]
+            else:
+                waypoints_for_mpc = [(float(wp[0]), float(wp[1])) for wp in wp_list]
 
         # Compute steering using MPC
         # Pass CTE magnitude for adaptive waypoint search

@@ -70,18 +70,23 @@ def load_ttl_region(ttl_folder, ttl_index, dx, dy, ttl_file_name=None):
     with open(ttl_path, newline="") as f:
         r = csv.reader(f)
         # Check if first line is header (x,y,z or similar)
+        has_header = False
         try:
             first_line = next(r)
             # If first line looks like a header (contains 'x' or 'X'), skip it
             if len(first_line) > 0 and ('x' in first_line[0].lower() or 'X' in first_line[0]):
-                pass  # Already skipped header
+                has_header = True
+                # Check if header indicates 3D (has 'z' column)
+                has_z_column = any('z' in col.lower() for col in first_line)
             else:
                 # Not a header, process it as data
+                has_header = False
+                has_z_column = len(first_line) >= 3  # Assume 3D if 3+ columns
                 if len(first_line) >= 2:
                     try:
                         x = float(first_line[0]) + dx
                         y = float(first_line[1]) + dy
-                        if len(first_line) >= 3:
+                        if has_z_column and len(first_line) >= 3:
                             z = float(first_line[2])
                             pts.append((x, y, z))
                         else:
@@ -89,8 +94,9 @@ def load_ttl_region(ttl_folder, ttl_index, dx, dy, ttl_file_name=None):
                     except (ValueError, IndexError):
                         pass
         except StopIteration:
-            pass
+            has_z_column = False
         
+        # Process remaining rows
         for row in r:
             if not row or len(row) < 2:
                 continue
@@ -98,12 +104,14 @@ def load_ttl_region(ttl_folder, ttl_index, dx, dy, ttl_file_name=None):
                 x = float(row[0]) + dx
                 y = float(row[1]) + dy
                 # Support 3D waypoints if z coordinate is available
+                # If CSV has no z column (len(row) < 3), create 2D waypoint (z implicitly 0)
                 if len(row) >= 3:
                     z = float(row[2])
                     pts.append((x, y, z))
                 else:
+                    # No z column: create 2D waypoint (assumes z = 0 for flat surface)
                     pts.append((x, y))
-            except Exception:
+            except (ValueError, IndexError):
                 continue
     
     if len(pts) < 2:

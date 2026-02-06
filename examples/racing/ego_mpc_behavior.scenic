@@ -18,7 +18,7 @@ model scenic.domains.racing.model
 # --- Ego car with MPC behavior ---
 # Using main racing road centerline TTL (excluding pitlane)
 
-ego = new RacingCar at (-140.425373,-544.609094), \
+ego = new RacingCar at (-145.430430,-543.681887), \
     with regionContainedIn everywhere, \
     with raceNumber 1, \
     # with ttlFileName 'ttl_17.csv', \

@@ -232,7 +232,8 @@ class MPCLongitudinalController:
     def run_step(self,
                  vehicle_state: Dict[str, float],
                  v_ref: np.ndarray,
-                 curvature_profile: Optional[np.ndarray] = None) -> Tuple[float, float]:
+                 curvature_profile: Optional[np.ndarray] = None,
+                 grade_profile: Optional[np.ndarray] = None) -> Tuple[float, float]:
         """Compute throttle/brake commands for one control step.
         
         Args:
@@ -241,6 +242,7 @@ class MPCLongitudinalController:
                 - 'acceleration': current acceleration (m/s^2, optional)
             v_ref: Reference speed array for horizon (m/s)
             curvature_profile: Optional curvature profile for speed adaptation (not used in simplified model)
+            grade_profile: Optional road grade profile (radians, positive = uphill) for gravity compensation
             
         Returns:
             Tuple of (throttle, brake) in normalized range [0.0, 1.0]
@@ -312,8 +314,13 @@ class MPCLongitudinalController:
             # Update previous control
             self.prev_accel_cmd = accel_cmd
             
-            # Convert acceleration command to throttle/brake
-            throttle, brake = self._accel_to_throttle_brake(accel_cmd, v)
+            # Get current road grade (for gravity compensation)
+            current_grade = 0.0
+            if grade_profile is not None and len(grade_profile) > 0:
+                current_grade = float(grade_profile[0])
+            
+            # Convert acceleration command to throttle/brake (with gravity compensation)
+            throttle, brake = self._accel_to_throttle_brake(accel_cmd, v, current_grade)
             
             # Apply low-pass filters
             throttle_filtered = self.throttle_filter.update(throttle)
@@ -338,33 +345,52 @@ class MPCLongitudinalController:
                 return 0.0, 0.0
             return self._fallback_control(v, v_ref[0] if len(v_ref) > 0 else v)
     
-    def _accel_to_throttle_brake(self, accel_cmd: float, current_speed: float) -> Tuple[float, float]:
-        """Convert acceleration command to throttle/brake.
+    def _accel_to_throttle_brake(self, accel_cmd: float, current_speed: float, road_grade: float = 0.0) -> Tuple[float, float]:
+        """Convert acceleration command to throttle/brake with gravity compensation.
         
         Args:
             accel_cmd: Desired acceleration (m/s^2)
             current_speed: Current vehicle speed (m/s)
+            road_grade: Road grade angle (radians, positive = uphill, negative = downhill)
             
         Returns:
             Tuple of (throttle, brake) in [0.0, 1.0]
         """
+        g = 9.81  # Gravitational acceleration (m/s^2)
+        
+        # Compute gravity force component along the road
+        # Positive grade (uphill): gravity resists motion (positive force needed)
+        # Negative grade (downhill): gravity assists motion (negative force, reduces needed throttle/brake)
+        gravity_force = self.mass * g * math.sin(road_grade)
+        gravity_accel = gravity_force / self.mass  # Acceleration due to gravity
+        
         if accel_cmd > 0:
             # Accelerating: use throttle
-            # Account for drag and rolling resistance
+            # Account for drag, rolling resistance, and gravity
             drag_force = 0.5 * self.air_density * self.drag_coeff * self.cross_area * current_speed * current_speed
-            rolling_force = self.rolling_resistance * self.mass * 9.81
-            total_resistance = drag_force + rolling_force
+            rolling_force = self.rolling_resistance * self.mass * g
+            total_resistance = drag_force + rolling_force + gravity_force  # Add gravity force
             resistance_accel = total_resistance / self.mass
             
             # Required acceleration = accel_cmd + resistance_accel
+            # Note: gravity_accel is already included in resistance_accel via gravity_force
             required_accel = accel_cmd + resistance_accel
             throttle = min(1.0, max(0.0, required_accel / self.max_accel))
             brake = 0.0
         else:
             # Decelerating: use brake
             throttle = 0.0
+            
+            # For braking, gravity affects the required brake force:
+            # Uphill: gravity helps braking (less brake needed)
+            # Downhill: gravity resists braking (more brake needed)
+            # Effective deceleration needed = |accel_cmd| - gravity_accel
+            # (gravity_accel is negative downhill, so we subtract it)
+            effective_decel = abs(accel_cmd) - gravity_accel
+            effective_decel = max(0.0, effective_decel)  # Don't allow negative brake
+            
             # Brake force needed to achieve deceleration
-            brake = min(1.0, max(0.0, abs(accel_cmd) / self.max_decel))
+            brake = min(1.0, max(0.0, effective_decel / self.max_decel))
         
         return throttle, brake
     

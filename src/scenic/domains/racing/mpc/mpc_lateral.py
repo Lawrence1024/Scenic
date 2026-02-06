@@ -370,7 +370,7 @@ class MPCLateralController:
         
         # Build reference trajectory
         try:
-            psi_ref, kappa_ref, v_ref, new_waypoint_idx = self.ref_builder.build_reference(
+            psi_ref, kappa_ref, v_ref, grade_ref, new_waypoint_idx = self.ref_builder.build_reference(
                 waypoints=waypoints,
                 current_position=(x, y),
                 current_heading=yaw,
@@ -380,6 +380,7 @@ class MPCLateralController:
                 last_waypoint_idx=current_waypoint_idx,
                 cte_magnitude=cte_magnitude
             )
+            # grade_ref is computed but not used by lateral MPC (used by longitudinal MPC)
             # Debug: verify arrays right after build_reference returns
             if len(psi_ref) != self.config.mpc_prediction_horizon:
                 raise ValueError(f"[MPC] CRITICAL: build_reference returned psi_ref with wrong length: expected {self.config.mpc_prediction_horizon}, got {len(psi_ref)}. Shape: {psi_ref.shape}, dtype: {psi_ref.dtype}")
