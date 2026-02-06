@@ -32,6 +32,8 @@ class ReferenceBuilder:
         self._last_nearest_idx = 0
         self._spline_cache = None  # Cache for spline parameters
         self._spline_waypoints = None  # Cache for waypoints used to build spline
+        self._current_s_0 = 0.0  # Current arc-length progress (meters)
+        self._current_u_0 = 0.0  # Current spline parameter value
     
     def _is_3d_waypoint(self, waypoint) -> bool:
         """Check if waypoint is 3D (has z coordinate)."""
@@ -220,6 +222,130 @@ class ReferenceBuilder:
         
         return (u_arc, s_uniform)
     
+    def project_to_spline(self, 
+                         position: Tuple[float, float],
+                         waypoints: List[Tuple[float, float]],
+                         tck=None,
+                         u_param: Optional[np.ndarray] = None) -> Tuple[float, float, int]:
+        """Project vehicle position onto spline to get arc-length progress.
+        
+        Uses iterative projection (Newton-Raphson) to find the closest point on the spline.
+        
+        Args:
+            position: Current vehicle position (x, y) or (x, y, z)
+            waypoints: List of waypoint (x, y) or (x, y, z) tuples
+            tck: Optional pre-computed spline representation (if None, will fit spline)
+            u_param: Optional pre-computed parameter array (if None, will compute)
+            
+        Returns:
+            Tuple of (s_0, u_0, nearest_segment_idx) where:
+            - s_0: Arc-length along spline to projected point (meters)
+            - u_0: Spline parameter value at projected point [0, 1]
+            - nearest_segment_idx: Index of waypoint segment containing projection
+        """
+        if not waypoints or len(waypoints) < 2:
+            return (0.0, 0.0, 0)
+        
+        # Handle both 2D and 3D positions
+        px, py = position[0], position[1]
+        is_3d = self._is_3d_waypoints(waypoints)
+        
+        # Fit spline if not provided
+        if tck is None:
+            spline_result = self._fit_spline(waypoints)
+            if spline_result is None:
+                # Fallback: use distance-based method
+                nearest_idx = self.find_nearest_waypoint(position, waypoints, self._last_nearest_idx)
+                return (0.0, 0.0, nearest_idx)
+            tck, u_param = spline_result
+        
+        # Use Newton-Raphson to find closest point on spline
+        # Start from current progress if available, otherwise use nearest waypoint
+        if self._current_u_0 > 0.0 and self._current_u_0 < 1.0:
+            u_guess = self._current_u_0
+        else:
+            # Find nearest waypoint and use its parameter
+            nearest_idx = self.find_nearest_waypoint(position, waypoints, self._last_nearest_idx)
+            if nearest_idx < len(u_param):
+                u_guess = float(u_param[nearest_idx])
+            else:
+                u_guess = 0.0
+        
+        # Newton-Raphson iteration to minimize distance
+        max_iter = 20
+        tolerance = 1e-6
+        u = np.clip(u_guess, 0.0, 1.0)
+        
+        for _ in range(max_iter):
+            # Evaluate spline and derivatives at current u
+            point = splev(u, tck)
+            deriv = splev(u, tck, der=1)
+            deriv2 = splev(u, tck, der=2)
+            
+            # Compute distance vector and its derivatives
+            dx = px - point[0]
+            dy = py - point[1]
+            if is_3d and len(position) >= 3 and len(point) >= 3:
+                dz = position[2] - point[2]
+                dist_sq = dx*dx + dy*dy + dz*dz
+                # For 3D, project to XY plane for segment selection
+                dist_sq_xy = dx*dx + dy*dy
+            else:
+                dist_sq = dx*dx + dy*dy
+                dist_sq_xy = dist_sq
+            
+            # Gradient of distance^2 with respect to u
+            ddist_sq_du = -2.0 * (dx * deriv[0] + dy * deriv[1])
+            if is_3d and len(position) >= 3 and len(deriv) >= 3:
+                ddist_sq_du += -2.0 * dz * deriv[2]
+            
+            # Hessian (second derivative)
+            d2dist_sq_du2 = 2.0 * (deriv[0]*deriv[0] + deriv[1]*deriv[1] - dx*deriv2[0] - dy*deriv2[1])
+            if is_3d and len(deriv) >= 3 and len(deriv2) >= 3:
+                d2dist_sq_du2 += 2.0 * (deriv[2]*deriv[2] - dz*deriv2[2])
+            
+            # Update u using Newton-Raphson
+            if abs(d2dist_sq_du2) > 1e-9:
+                u_new = u - ddist_sq_du / d2dist_sq_du2
+                u_new = np.clip(u_new, 0.0, 1.0)
+                
+                # Check convergence
+                if abs(u_new - u) < tolerance:
+                    u = u_new
+                    break
+                u = u_new
+            else:
+                # Degenerate case: use bisection
+                break
+        
+        # Compute arc-length s_0 at u
+        u_fine = np.linspace(0, 1, 1000)
+        points_fine = splev(u_fine, tck)
+        dx_fine = np.diff(points_fine[0])
+        dy_fine = np.diff(points_fine[1])
+        if is_3d and len(points_fine) >= 3:
+            dz_fine = np.diff(points_fine[2])
+            ds_fine = np.sqrt(dx_fine*dx_fine + dy_fine*dy_fine + dz_fine*dz_fine)
+        else:
+            ds_fine = np.sqrt(dx_fine*dx_fine + dy_fine*dy_fine)
+        
+        s_cumulative = np.concatenate(([0], np.cumsum(ds_fine)))
+        s_0 = float(np.interp(u, u_fine, s_cumulative))
+        
+        # Find nearest segment index
+        # Map u to waypoint index
+        if len(u_param) > 0:
+            nearest_segment_idx = int(np.interp(u, u_param, np.arange(len(u_param))))
+            nearest_segment_idx = max(0, min(nearest_segment_idx, len(waypoints) - 2))
+        else:
+            nearest_segment_idx = 0
+        
+        # Update progress tracking
+        self._current_s_0 = s_0
+        self._current_u_0 = float(u)
+        
+        return (s_0, float(u), nearest_segment_idx)
+    
     def _resample_waypoints_linear(self, waypoints: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
         """Linear resampling of waypoints (fallback method).
         
@@ -279,13 +405,17 @@ class ReferenceBuilder:
         return resampled
     
     def resample_waypoints(self, waypoints: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
-        """Resample waypoints to uniform spacing using splines and arc-length parameterization.
+        """Resample waypoints with curvature-adaptive spacing using splines and arc-length parameterization.
+        
+        Uses adaptive spacing based on curvature:
+        - Low curvature (|κ| < 0.01, R > 100m): sample every 1.0-2.0m
+        - High curvature (|κ| ≥ 0.01): sample every 0.25-0.5m
         
         Args:
             waypoints: Original waypoint list
             
         Returns:
-            Resampled waypoint list with uniform arc-length spacing
+            Resampled waypoint list with curvature-adaptive arc-length spacing
         """
         if len(waypoints) < 2:
             return waypoints
@@ -293,7 +423,7 @@ class ReferenceBuilder:
         if not self.use_splines:
             return self._resample_waypoints_linear(waypoints)
         
-        # Use spline-based resampling
+        # Use spline-based resampling with curvature-adaptive spacing
         try:
             # Fit spline
             spline_result = self._fit_spline(waypoints)
@@ -303,28 +433,68 @@ class ReferenceBuilder:
             
             tck, u = spline_result
             
-            # Compute total arc-length
+            # Compute total arc-length and curvature profile
             u_fine = np.linspace(0, 1, 1000)
             points_fine = splev(u_fine, tck)
+            deriv_fine = splev(u_fine, tck, der=1)
+            deriv2_fine = splev(u_fine, tck, der=2)
+            
             dx = np.diff(points_fine[0])
             dy = np.diff(points_fine[1])
             ds = np.sqrt(dx*dx + dy*dy)
-            total_length = np.sum(ds)
+            s_cumulative = np.concatenate(([0], np.cumsum(ds)))
+            total_length = s_cumulative[-1]
             
             if total_length < 1e-6:
                 return waypoints
             
-            # Determine number of points based on resample_dist
-            num_points = max(2, int(total_length / self.resample_dist) + 1)
+            # Compute curvature at each fine point
+            curvature = np.zeros(len(u_fine))
+            for i in range(len(u_fine)):
+                dx_dt = deriv_fine[0][i]
+                dy_dt = deriv_fine[1][i]
+                d2x_dt2 = deriv2_fine[0][i]
+                d2y_dt2 = deriv2_fine[1][i]
+                speed_tangent = np.sqrt(dx_dt*dx_dt + dy_dt*dy_dt)
+                if speed_tangent > 1e-9:
+                    numerator = abs(dx_dt * d2y_dt2 - dy_dt * d2x_dt2)
+                    denominator = speed_tangent ** 3
+                    curvature[i] = numerator / denominator if denominator > 1e-9 else 0.0
             
-            # Get arc-length parameterization
-            u_arc, s_arc = self._compute_arc_length_parameterization(tck, u, num_points)
+            # Adaptive resampling: sample more densely in high-curvature regions
+            resampled = []
+            s_current = 0.0
+            min_resample_dist = 0.25  # Minimum spacing in high curvature (0.25m)
+            max_resample_dist = 2.0   # Maximum spacing in low curvature (2.0m)
+            curvature_threshold = 0.01  # 1/m (R = 100m)
             
-            # Evaluate spline at arc-length parameterized points
-            points_arc = splev(u_arc, tck)
+            while s_current < total_length:
+                # Find curvature at current position
+                u_current = np.interp(s_current, s_cumulative, u_fine)
+                kappa_current = float(np.interp(u_current, u_fine, curvature))
+                
+                # Adaptive spacing based on curvature
+                abs_kappa = abs(kappa_current)
+                if abs_kappa >= curvature_threshold:
+                    # High curvature: use fine spacing (0.25-0.5m)
+                    resample_dist_local = min_resample_dist + (0.5 - min_resample_dist) * min(1.0, abs_kappa / 0.1)
+                else:
+                    # Low curvature: use coarse spacing (1.0-2.0m)
+                    resample_dist_local = min_resample_dist + (max_resample_dist - min_resample_dist) * (1.0 - abs_kappa / curvature_threshold)
+                
+                # Evaluate spline at current arc-length
+                point = splev(u_current, tck)
+                if len(point) >= 3:
+                    resampled.append((float(point[0]), float(point[1]), float(point[2])))
+                else:
+                    resampled.append((float(point[0]), float(point[1])))
+                
+                # Advance by adaptive spacing
+                s_current += resample_dist_local
             
-            # Convert to list of tuples
-            resampled = [(float(x), float(y)) for x, y in zip(points_arc[0], points_arc[1])]
+            # Always include last waypoint
+            if len(resampled) == 0 or resampled[-1] != waypoints[-1]:
+                resampled.append(waypoints[-1])
             
             return resampled
             

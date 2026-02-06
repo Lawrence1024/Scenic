@@ -112,6 +112,10 @@ class MPCConfig:
         self.throttle_lpf_cutoff_hz = config_dict.get('throttle_lpf_cutoff_hz', 5.0)
         self.brake_lpf_cutoff_hz = config_dict.get('brake_lpf_cutoff_hz', 5.0)
         
+        # Curvature-based speed limiting
+        self.max_lateral_acceleration = config_dict.get('max_lateral_acceleration', 8.0)  # m/s² (conservative for indoor sim)
+        self.curvature_slew_threshold = config_dict.get('curvature_slew_threshold', 0.05)  # 1/m (curvature threshold for increased slew rate)
+        
         # ControlDesk variable paths (optional, can be overridden)
         self.controldesk_paths = config_dict.get('controldesk_paths', {})
     

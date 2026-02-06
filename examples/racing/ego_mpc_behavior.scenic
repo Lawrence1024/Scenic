@@ -18,11 +18,13 @@ model scenic.domains.racing.model
 # --- Ego car with MPC behavior ---
 # Using main racing road centerline TTL (excluding pitlane)
 
-ego = new RacingCar at (614.659946,-302.782016), \
+# ego = new RacingCar at (614.659946,-302.782016), \
+ego = new RacingCar at (55.766137,88.269387), \
     with regionContainedIn everywhere, \
     with raceNumber 1, \
     # with ttlFileName 'ttl_17.csv', \
     with ttlFileName 'ttl_fellow_test_xodr_all.csv', \
+    # with ttlFileName 'ttl_racing_line_xodr.csv', \
     with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV/transformed'), \
     with ttlDX 0.0, \
     with ttlDY 0.0
@@ -42,12 +44,12 @@ ego.behavior = FollowRacingLineMPCBehavior(
 # Fellow vehicles placed every 100m starting from 200m (s = 200, 300, 400, ..., 3100)
 
 fellow0 = new RacingCar at (616.120555,-297.938762), with regionContainedIn everywhere
-fellow1 = new RacingCar at (617.586835,-293.097982), with regionContainedIn everywhere
-fellow2 = new RacingCar at (618.881724,-288.204668), with regionContainedIn everywhere
-fellow3 = new RacingCar at (619.597641,-283.187822), with regionContainedIn everywhere
-fellow4 = new RacingCar at (619.682079,-278.129827), with regionContainedIn everywhere
-fellow5 = new RacingCar at (618.989290,-273.124863), with regionContainedIn everywhere
-fellow6 = new RacingCar at (617.237850,-268.391681), with regionContainedIn everywhere
+# fellow1 = new RacingCar at (617.586835,-293.097982), with regionContainedIn everywhere
+# fellow2 = new RacingCar at (618.881724,-288.204668), with regionContainedIn everywhere
+# fellow3 = new RacingCar at (619.597641,-283.187822), with regionContainedIn everywhere
+# fellow4 = new RacingCar at (619.682079,-278.129827), with regionContainedIn everywhere
+# fellow5 = new RacingCar at (618.989290,-273.124863), with regionContainedIn everywhere
+# fellow6 = new RacingCar at (617.237850,-268.391681), with regionContainedIn everywhere
 
 
 

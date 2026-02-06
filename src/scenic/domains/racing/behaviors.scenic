@@ -563,116 +563,102 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 pass
         
         # Update waypoint index for MPC
-        # SIMPLIFIED (but robust): advance waypoint index using a hit-threshold, with
-        # pass-through detection to handle large timestep/high speed (can "jump over" a waypoint).
+        # PROGRESS-BASED ADVANCEMENT (from suggestion.md): Advance based on arc-length progress
+        # Instead of radius-based advancement, track cumulative distance along waypoints
+        # and advance when we've progressed past a waypoint segment
         old_wp_idx = wp_last_idx
         if use_waypoints and wp_list and len(wp_list) >= 2:
             try:
-                # Track previous position for pass-through detection
-                if not hasattr(self, '_prev_pos') or self._prev_pos is None:
-                    self._prev_pos = (px, py)
-                prev_px, prev_py = self._prev_pos
-
-                # NOTE: Scenic behaviors.scenic does NOT support nested Python defs.
-                # We compute point-to-segment distance inline below.
-
-                # Calculate distance to current waypoint
-                current_wp_dist = None
-                if wp_last_idx < len(wp_list):
-                    wp_x, wp_y = float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1])
-                    dx = px - wp_x; dy = py - wp_y
-                    current_wp_dist = (dx*dx + dy*dy) ** 0.5
+                # Initialize progress tracking if needed
+                if not hasattr(self, '_waypoint_progress'):
+                    self._waypoint_progress = 0.0  # Cumulative distance along waypoints
+                    self._waypoint_progress_idx = 0  # Waypoint index at last progress update
                 
-                # Hit threshold (meters)
-                #
-                # IMPORTANT:
-                # With large Scenic timesteps (e.g., 1s) and moderate/high speed, we can easily
-                # pass *near* a waypoint without ever getting within a tiny fixed radius (3m).
-                # If we fail to advance, the controller will keep targeting an old waypoint and
-                # can "turn back" (exactly what the log shows for wp=1: min dist ~5.4m).
-                #
-                # So we scale the hit threshold with the actual travel distance over the last step.
-                travel_dx = px - prev_px
-                travel_dy = py - prev_py
-                travel_dist = (travel_dx*travel_dx + travel_dy*travel_dy) ** 0.5
-                HIT_THRESHOLD = 3.0  # base meters
-                # Dynamic component: ~60% of last-step travel, capped to avoid skipping too aggressively
-                dyn_thr = 0.6 * travel_dist
-                if dyn_thr > HIT_THRESHOLD:
-                    HIT_THRESHOLD = dyn_thr
-                if HIT_THRESHOLD > 12.0:
-                    HIT_THRESHOLD = 12.0
-
-                # Advance waypoints only if they're behind vehicle or within close distance
-                # This implements "waypoint chasing" - only advance past waypoints we've actually passed
-                while wp_last_idx < len(wp_list) - 1:
-                    wp_x, wp_y = float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1])
-                    dx_now = px - wp_x; dy_now = py - wp_y
-                    d_now = (dx_now*dx_now + dy_now*dy_now) ** 0.5
-
-                    # Check if waypoint is behind vehicle (in direction of travel)
-                    waypoint_behind = False
-                    if car_heading is not None:
-                        # Vector from vehicle to waypoint
-                        to_wp_x = wp_x - px
-                        to_wp_y = wp_y - py
-                        # Vehicle forward direction
-                        veh_fx = math.cos(car_heading)
-                        veh_fy = math.sin(car_heading)
-                        # Dot product: positive = ahead, negative = behind
-                        dot_product = to_wp_x * veh_fx + to_wp_y * veh_fy
-                        waypoint_behind = dot_product < 0  # Behind if dot product negative
-
-                    # Advance only if: waypoint is behind vehicle OR within close distance (2m) OR pass-through detected
-                    should_advance = waypoint_behind or d_now < 2.0
-
-                    # Pass-through detection: distance from waypoint to (prev_pos -> curr_pos) segment
-                    # Compute point-to-segment distance inline:
-                    ax = prev_px
-                    ay = prev_py
-                    bx = px
-                    by_ = py
-                    vx = bx - ax
-                    vy = by_ - ay
-                    wx0 = wp_x - ax
-                    wy0 = wp_y - ay
-                    vv = vx*vx + vy*vy
-                    if vv <= 1e-12:
-                        # Segment degenerate
-                        d_seg = d_now
+                # Compute cumulative distance from start to current waypoint index
+                # This serves as a proxy for arc-length progress s_0
+                cumulative_dist_to_wp = 0.0
+                for i in range(min(wp_last_idx, len(wp_list) - 1)):
+                    wp0 = wp_list[i]
+                    wp1 = wp_list[i + 1]
+                    dx = float(wp1[0]) - float(wp0[0])
+                    dy = float(wp1[1]) - float(wp0[1])
+                    seg_len = (dx*dx + dy*dy) ** 0.5
+                    cumulative_dist_to_wp += seg_len
+                
+                # Project vehicle position onto current waypoint segment to get progress along segment
+                s_0 = cumulative_dist_to_wp  # Default: progress to segment start
+                if wp_last_idx < len(wp_list) - 1:
+                    wp0 = wp_list[wp_last_idx]
+                    wp1 = wp_list[wp_last_idx + 1]
+                    x0, y0 = float(wp0[0]), float(wp0[1])
+                    x1, y1 = float(wp1[0]), float(wp1[1])
+                    seg_dx = x1 - x0
+                    seg_dy = y1 - y0
+                    seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                    
+                    if seg_len > 1e-6:
+                        # Project vehicle position onto segment
+                        wx = px - x0
+                        wy = py - y0
+                        u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
+                        u_proj = max(0.0, min(1.0, u_proj))
+                        
+                        # Current progress s_0 = cumulative distance to segment start + progress along segment
+                        s_0 = cumulative_dist_to_wp + u_proj * seg_len
+                        
+                        # Advance waypoint index based on progress
+                        # Only advance if we've progressed past the end of the current segment
+                        # This prevents premature skipping when far off-track
+                        while wp_last_idx < len(wp_list) - 1:
+                            # Check if we've progressed past the end of current segment
+                            segment_end_dist = cumulative_dist_to_wp + seg_len
+                            
+                            if s_0 >= segment_end_dist - 0.5:  # Small threshold (0.5m) to handle numerical issues
+                                # Advance to next segment
+                                wp_last_idx += 1
+                                
+                                # Update cumulative distance
+                                cumulative_dist_to_wp = segment_end_dist
+                                
+                                # Compute next segment length
+                                if wp_last_idx < len(wp_list) - 1:
+                                    wp0 = wp_list[wp_last_idx]
+                                    wp1 = wp_list[wp_last_idx + 1]
+                                    x0, y0 = float(wp0[0]), float(wp0[1])
+                                    x1, y1 = float(wp1[0]), float(wp1[1])
+                                    seg_dx = x1 - x0
+                                    seg_dy = y1 - y0
+                                    seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                                    
+                                    # Recompute projection on new segment
+                                    if seg_len > 1e-6:
+                                        wx = px - x0
+                                        wy = py - y0
+                                        u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
+                                        u_proj = max(0.0, min(1.0, u_proj))
+                                        s_0 = cumulative_dist_to_wp + u_proj * seg_len
+                                    else:
+                                        seg_len = 1e-6  # Avoid division by zero
+                                else:
+                                    break
+                            else:
+                                # Haven't progressed past current segment - stop advancing
+                                break
                     else:
-                        t = (wx0*vx + wy0*vy) / vv
-                        if t < 0.0:
-                            t = 0.0
-                        elif t > 1.0:
-                            t = 1.0
-                        cx = ax + t * vx
-                        cy = ay + t * vy
-                        ddx = wp_x - cx
-                        ddy = wp_y - cy
-                        d_seg = (ddx*ddx + ddy*ddy) ** 0.5
-
-                    if waypoint_behind or (d_now < HIT_THRESHOLD) or (d_seg < HIT_THRESHOLD):
-                        if waypoint_behind:
-                            reason = "behind_vehicle"
-                        elif d_now < HIT_THRESHOLD:
-                            reason = "within_radius"
-                        else:
-                            reason = "passed_through"
-                        print(f"[Waypoint Increment] {reason}: advancing {wp_last_idx} -> {wp_last_idx + 1} (d_now={d_now:.2f}m, d_seg={d_seg:.2f}m, travel={travel_dist:.2f}m, thr={HIT_THRESHOLD:.2f}m, dot={dot_product:.2f})")
-                        wp_last_idx += 1
-                        continue
-                    break
-
-                # Update current_wp_dist for logging below
+                        # Degenerate segment - advance to next
+                        if wp_last_idx < len(wp_list) - 1:
+                            wp_last_idx += 1
+                
+                # Update progress tracking
+                self._waypoint_progress = s_0
+                self._waypoint_progress_idx = wp_last_idx
+                
+                # Calculate distance to current waypoint for logging
                 current_wp_dist = None
                 if wp_last_idx < len(wp_list):
                     wp_x, wp_y = float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1])
                     dx = px - wp_x; dy = py - wp_y
                     current_wp_dist = (dx*dx + dy*dy) ** 0.5
-
-                # Store current as previous for next step
-                self._prev_pos = (px, py)
                 
                 # Log current waypoint
                 if wp_last_idx < len(wp_list):
@@ -759,18 +745,30 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         # Universal max speed limit: Reduced for better robustness without elevation data
         MAX_SPEED_LIMIT_MS = 15.0  # ~33.5 mph in m/s (reduced from 17.88 m/s / 40 mph for safety margin)
         
-        # --- Curvature-based speed reduction (for sharp turns) ---
-        # Compute upcoming curvature from waypoints to reduce speed before sharp turns
+        # --- Curvature-based speed gate (from suggestion.md) ---
+        # Formula: v_max(s) = sqrt(a_y_max / (|κ(s)| + ε))
+        # v_ref = min(v_desired, min_{s∈[s_0, s_0+L]} v_max(s))
+        # This ensures vehicle enters turns at appropriate speed
         curvature_speed_limit = target_speed  # Default: no reduction
+        max_lateral_accel = 8.0  # m/s² (conservative for indoor sim, can be configured)
+        curvature_epsilon = 0.001  # Small epsilon to avoid division by zero
+        
         if use_waypoints and wp_list and len(wp_list) >= 3 and wp_last_idx < len(wp_list) - 2:
             try:
-                # Look ahead to compute curvature (use waypoints ahead of current position)
-                # Look ahead distance: ~20-30m (about 1-1.5 seconds at typical speeds)
-                lookahead_dist = 25.0  # meters
+                # Compute curvature-based speed limit over MPC horizon
+                # Look ahead distance: MPC horizon (about 1.75s at typical speeds)
+                horizon = _lon_controller.config.mpc_prediction_horizon if hasattr(_lon_controller, 'config') else 35
+                dt_mpc = _lon_controller.config.mpc_prediction_dt if hasattr(_lon_controller, 'config') else 0.05
+                lookahead_dist = current_speed * horizon * dt_mpc  # Distance over MPC horizon
+                if lookahead_dist < 10.0:
+                    lookahead_dist = 25.0  # Minimum lookahead
+                
                 lookahead_idx = wp_last_idx
                 accumulated_dist = 0.0
+                min_v_max = target_speed  # Track minimum v_max over horizon
                 
-                # Find waypoint index at lookahead distance
+                # Sample curvature along horizon
+                sample_points = []
                 while lookahead_idx < len(wp_list) - 1 and accumulated_dist < lookahead_dist:
                     x0, y0 = float(wp_list[lookahead_idx][0]), float(wp_list[lookahead_idx][1])
                     x1, y1 = float(wp_list[lookahead_idx+1][0]), float(wp_list[lookahead_idx+1][1])
@@ -779,44 +777,38 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     if seg_len < 1e-6:
                         lookahead_idx += 1
                         continue
+                    
+                    # Sample at this segment
+                    sample_points.append((lookahead_idx, accumulated_dist))
                     accumulated_dist += seg_len
                     if accumulated_dist < lookahead_dist:
                         lookahead_idx += 1
                 
-                # Compute curvature using 3-point method at lookahead point
-                if lookahead_idx > 0 and lookahead_idx < len(wp_list) - 1:
-                    p0 = (float(wp_list[lookahead_idx-1][0]), float(wp_list[lookahead_idx-1][1]))
-                    p1 = (float(wp_list[lookahead_idx][0]), float(wp_list[lookahead_idx][1]))
-                    p2 = (float(wp_list[lookahead_idx+1][0]), float(wp_list[lookahead_idx+1][1]))
-                    
-                    # Compute curvature (3-point method)
-                    v1x = p1[0] - p0[0]; v1y = p1[1] - p0[1]
-                    v2x = p2[0] - p1[0]; v2y = p2[1] - p1[1]
-                    cross = v1x * v2y - v1y * v2x
-                    len1 = (v1x*v1x + v1y*v1y) ** 0.5
-                    len2 = (v2x*v2x + v2y*v2y) ** 0.5
-                    if len1 > 1e-6 and len2 > 1e-6:
-                        avg_len = (len1 + len2) / 2.0
-                        if avg_len > 1e-6:
-                            curvature = abs(2.0 * cross / (len1 * len2 * avg_len))  # Absolute curvature
-                            
-                            # Speed reduction based on curvature
-                            # Sharp turns (>0.1 1/m): significant speed reduction
-                            # Moderate turns (0.05-0.1 1/m): moderate reduction
-                            # Gentle turns (<0.05 1/m): minimal reduction
-                            if curvature >= 0.15:
-                                # Very sharp turn: reduce to 40% of target speed
-                                curvature_speed_limit = target_speed * 0.4
-                            elif curvature >= 0.1:
-                                # Sharp turn: reduce to 50% of target speed
-                                curvature_speed_limit = target_speed * 0.5
-                            elif curvature >= 0.05:
-                                # Moderate turn: reduce to 70% of target speed
-                                curvature_speed_limit = target_speed * 0.7
-                            elif curvature >= 0.02:
-                                # Gentle turn: reduce to 85% of target speed
-                                curvature_speed_limit = target_speed * 0.85
-                            # curvature < 0.02: no reduction (straight sections)
+                # Compute curvature at each sample point and apply speed gate
+                for sample_idx, sample_dist in sample_points:
+                    if sample_idx > 0 and sample_idx < len(wp_list) - 1:
+                        p0 = (float(wp_list[sample_idx-1][0]), float(wp_list[sample_idx-1][1]))
+                        p1 = (float(wp_list[sample_idx][0]), float(wp_list[sample_idx][1]))
+                        p2 = (float(wp_list[sample_idx+1][0]), float(wp_list[sample_idx+1][1]))
+                        
+                        # Compute curvature (3-point method)
+                        v1x = p1[0] - p0[0]; v1y = p1[1] - p0[1]
+                        v2x = p2[0] - p1[0]; v2y = p2[1] - p1[1]
+                        cross = v1x * v2y - v1y * v2x
+                        len1 = (v1x*v1x + v1y*v1y) ** 0.5
+                        len2 = (v2x*v2x + v2y*v2y) ** 0.5
+                        if len1 > 1e-6 and len2 > 1e-6:
+                            avg_len = (len1 + len2) / 2.0
+                            if avg_len > 1e-6:
+                                abs_kappa = abs(2.0 * cross / (len1 * len2 * avg_len))
+                                
+                                # Apply speed gate formula: v_max = sqrt(a_y_max / (|κ| + ε))
+                                v_max_at_kappa = (max_lateral_accel / (abs_kappa + curvature_epsilon)) ** 0.5
+                                if v_max_at_kappa < min_v_max:
+                                    min_v_max = v_max_at_kappa
+                
+                # Apply minimum v_max over horizon
+                curvature_speed_limit = min_v_max
             except Exception as e:
                 # If curvature computation fails, use full target speed
                 pass
@@ -906,7 +898,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         if accumulated_dist < dist_ahead:
                             wp_idx += 1
                     
-                    # Compute curvature at this waypoint
+                    # Compute curvature at this waypoint and apply speed gate formula
                     if wp_idx > 0 and wp_idx < len(wp_list) - 1:
                         p0 = (float(wp_list[wp_idx-1][0]), float(wp_list[wp_idx-1][1]))
                         p1 = (float(wp_list[wp_idx][0]), float(wp_list[wp_idx][1]))
@@ -919,16 +911,11 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         if len1 > 1e-6 and len2 > 1e-6:
                             avg_len = (len1 + len2) / 2.0
                             if avg_len > 1e-6:
-                                curvature = abs(2.0 * cross / (len1 * len2 * avg_len))
-                                # Apply same speed reduction logic
-                                if curvature >= 0.15:
-                                    v_ref_profile[k] = target_speed * 0.4
-                                elif curvature >= 0.1:
-                                    v_ref_profile[k] = target_speed * 0.5
-                                elif curvature >= 0.05:
-                                    v_ref_profile[k] = target_speed * 0.7
-                                elif curvature >= 0.02:
-                                    v_ref_profile[k] = target_speed * 0.85
+                                abs_kappa = abs(2.0 * cross / (len1 * len2 * avg_len))
+                                # Apply speed gate formula: v_max = sqrt(a_y_max / (|κ| + ε))
+                                v_max_at_kappa = (max_lateral_accel / (abs_kappa + curvature_epsilon)) ** 0.5
+                                # Use minimum of target speed and curvature-limited speed
+                                v_ref_profile[k] = min(v_ref_profile[k], v_max_at_kappa)
             except Exception as e:
                 # If profile building fails, use constant speed
                 pass
@@ -1347,8 +1334,43 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         # Clamp before slew (only to valid range, no artificial cap)
         steer_pre_slew = max(-1.0, min(1.0, steer_cmd))
 
-        # Slew limiter (increase slew allowance during recovery / big heading error)
-        max_delta_eff = float(max_steer_delta) * (1.0 + 1.5 * rec)
+        # Curvature-aware steering slew limit (from suggestion.md)
+        # In corners (|κ| above threshold): allow 2× faster steering rate
+        curvature_slew_multiplier = 1.0  # Default: normal slew limit
+        curvature_slew_threshold = 0.05  # 1/m (curvature threshold for increased slew rate)
+        
+        # Get current curvature from reference builder if available
+        # Try to get curvature from MPC's reference builder
+        current_curvature = 0.0
+        if use_waypoints and wp_list and len(wp_list) >= 3 and wp_last_idx < len(wp_list) - 2:
+            try:
+                # Compute curvature at current waypoint
+                if wp_last_idx > 0 and wp_last_idx < len(wp_list) - 1:
+                    p0 = (float(wp_list[wp_last_idx-1][0]), float(wp_list[wp_last_idx-1][1]))
+                    p1 = (float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1]))
+                    p2 = (float(wp_list[wp_last_idx+1][0]), float(wp_list[wp_last_idx+1][1]))
+                    v1x = p1[0] - p0[0]; v1y = p1[1] - p0[1]
+                    v2x = p2[0] - p1[0]; v2y = p2[1] - p1[1]
+                    cross = v1x * v2y - v1y * v2x
+                    len1 = (v1x*v1x + v1y*v1y) ** 0.5
+                    len2 = (v2x*v2x + v2y*v2y) ** 0.5
+                    if len1 > 1e-6 and len2 > 1e-6:
+                        avg_len = (len1 + len2) / 2.0
+                        if avg_len > 1e-6:
+                            current_curvature = abs(2.0 * cross / (len1 * len2 * avg_len))
+            except:
+                pass
+        
+        # Scale slew rate based on curvature
+        if current_curvature >= curvature_slew_threshold:
+            # In corners: allow 2× faster steering rate
+            curvature_slew_multiplier = 2.0
+        else:
+            # On straights: normal slew limit
+            curvature_slew_multiplier = 1.0
+        
+        # Slew limiter (increase slew allowance during recovery / big heading error / corners)
+        max_delta_eff = float(max_steer_delta) * (1.0 + 1.5 * rec) * curvature_slew_multiplier
 
         if not hasattr(self, '_last_final_steer'):
             self._last_final_steer = float(steer_pre_slew)

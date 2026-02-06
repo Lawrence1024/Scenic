@@ -102,4 +102,8 @@
     # Longitudinal MPC filters
     throttle_lpf_cutoff_hz: 5.0  # Low-pass filter cutoff for throttle output (Hz)
     brake_lpf_cutoff_hz: 5.0  # Low-pass filter cutoff for brake output (Hz)
+    
+    # Curvature-based speed limiting
+    max_lateral_acceleration: 8.0  # Maximum lateral acceleration (m/s²) - conservative for indoor sim, race grip: 8-12 m/s²
+    curvature_slew_threshold: 0.05  # Curvature threshold (1/m) for increased steering slew rate in corners
 

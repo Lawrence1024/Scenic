@@ -76,3 +76,63 @@ The transformation chain:
 (s, t) → ModelDesk → ControlDesk RD → Inverse Transform → XODR
 ```
 
+## Racing Line Generator
+
+The script `generate_racing_line.py` creates a viable racing line from the centerline using curvature-based optimization.
+
+### Usage
+
+```bash
+python create_new_ttl/generate_racing_line.py
+```
+
+### What It Does
+
+1. **Loads centerline** from `assets/ttls/LS_ENU_TTL_CSV/transformed/ttl_fellow_test_xodr_all.csv`
+2. **Computes curvature** at each point along the path
+3. **Generates racing line** by offsetting from centerline based on:
+   - Curvature magnitude and direction
+   - Lookahead anticipation (50m ahead)
+   - Track width constraints (max 10m deviation)
+4. **Smooths the racing line** using moving average
+5. **Outputs** to `create_new_ttl/ttl_racing_line_xodr.csv` in the same format (x,y,z)
+
+### Racing Line Strategy
+
+- **Left turns** (positive curvature): Offset to right (outside) before turn, cut inside at apex
+- **Right turns** (negative curvature): Offset to left (outside) before turn, cut inside at apex
+- **Straights**: Stay near centerline
+- **Maximum offset**: 75% of track width (7.5m) to leave safety margin
+
+### Configuration
+
+Key parameters (can be modified in the script):
+- `MAX_TRACK_WIDTH = 10.0` meters
+- `CURVATURE_THRESHOLD = 0.005` 1/m (R = 200m)
+- `LOOKAHEAD_DISTANCE = 50.0` meters
+- `SMOOTHING_WINDOW = 5` points
+
+### Output
+
+The script generates:
+- CSV file: `ttl_racing_line_xodr.csv` with x,y,z columns
+- Statistics showing deviation from centerline:
+  - Mean, median, max deviation
+  - Percentage of points exceeding thresholds
+
+Example output:
+```
+Mean deviation: 1.43 m
+Median deviation: 0.18 m
+Max deviation: 7.50 m
+95th percentile: 6.18 m
+Points with deviation > 10m: 0 (0.0%)
+Points with deviation > 5m: 318 (8.9%)
+```
+
+### Notes
+
+- The racing line respects track width constraints (all points within 10m of centerline)
+- Uses curvature-based optimization similar to CiMPCC approach
+- Smooth transitions between straight and corner sections
+- Output format matches the centerline CSV format for easy integration
