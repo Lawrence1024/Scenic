@@ -983,24 +983,24 @@ class DSpaceSimulation(RacingSimulation):
         
         Args:
             agent: The racing agent (RacingCar, etc.)
-            use_mpc: If True, use MPC for lateral control instead of PID
+            use_mpc: If True, use MPC for both lateral and longitudinal control
             mpc_config_path: Path to MPC config YAML file (optional, uses default if None)
             
         Returns:
             A pair of controllers for throttle and steering respectively.
-            If use_mpc=True: (PIDLongitudinalController, MPCLateralController)
+            If use_mpc=True: (MPCLongitudinalController, MPCLateralController)
             If use_mpc=False: (PIDLongitudinalController, PIDLateralController)
         """
         dt = self.timestep
         
-        # Longitudinal controller (always PID for now)
-        from scenic.domains.driving.controllers import PIDLongitudinalController
-        lon_controller = PIDLongitudinalController(K_P=0.8, K_D=0.15, K_I=0.9, dt=dt)
-        
-        # Lateral controller: MPC or PID
+        # Controllers: MPC or PID
         if use_mpc:
             try:
-                from scenic.domains.racing.mpc import MPCLateralController, load_mpc_config
+                from scenic.domains.racing.mpc import (
+                    MPCLongitudinalController,
+                    MPCLateralController,
+                    load_mpc_config
+                )
                 
                 # Load MPC configuration
                 config = load_mpc_config(mpc_config_path)
@@ -1008,24 +1008,36 @@ class DSpaceSimulation(RacingSimulation):
                 # Adapt config to simulation timestep
                 config.adapt_to_timestep(dt)
                 
-                # Create MPC controller
-                mpc_controller = MPCLateralController(config, timestep=dt)
+                # Create both MPC controllers
+                lon_controller = MPCLongitudinalController(config, timestep=dt)
+                lat_controller = MPCLateralController(config, timestep=dt)
                 
                 # Store config in simulation for io_adapter access
                 self.mpc_config = config
                 
-                print(f"[DSpaceSimulation] Using MPC lateral controller (horizon={config.mpc_prediction_horizon}, dt={config.mpc_prediction_dt})")
-                return lon_controller, mpc_controller
+                print(f"[DSpaceSimulation] Using MPC controllers (longitudinal + lateral)")
+                print(f"[DSpaceSimulation] Horizon={config.mpc_prediction_horizon}, dt={config.mpc_prediction_dt}")
+                return lon_controller, lat_controller
             except Exception as e:
-                print(f"[DSpaceSimulation] WARNING: Failed to create MPC controller: {e}")
-                print(f"[DSpaceSimulation] Falling back to PID controller")
+                print(f"[DSpaceSimulation] WARNING: Failed to create MPC controllers: {e}")
+                print(f"[DSpaceSimulation] Falling back to PID controllers")
                 # Fall back to PID
-                from scenic.domains.driving.controllers import PIDLateralController
+                from scenic.domains.driving.controllers import (
+                    PIDLongitudinalController,
+                    PIDLateralController
+                )
+                lon_controller = PIDLongitudinalController(K_P=0.8, K_D=0.15, K_I=0.9, dt=dt)
                 lat_controller = PIDLateralController(K_P=0.3, K_D=0.15, K_I=0.0, dt=dt)
                 return lon_controller, lat_controller
         else:
-            # Standard PID lateral controller
-            from scenic.domains.driving.controllers import PIDLateralController
+            # Standard PID controllers
+            from scenic.domains.driving.controllers import (
+                PIDLongitudinalController,
+                PIDLateralController
+            )
+            lon_controller = PIDLongitudinalController(K_P=0.8, K_D=0.15, K_I=0.9, dt=dt)
+            lat_controller = PIDLateralController(K_P=0.3, K_D=0.15, K_I=0.0, dt=dt)
+            return lon_controller, lat_controller
             lat_controller = PIDLateralController(K_P=0.3, K_D=0.15, K_I=0.0, dt=dt)
             return lon_controller, lat_controller
     

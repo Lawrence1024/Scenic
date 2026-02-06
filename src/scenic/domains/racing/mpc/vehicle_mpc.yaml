@@ -80,4 +80,25 @@
       
       # Write path (from controller.py)
       steering: "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_steering_cmd/Value"
+    
+    # Longitudinal MPC parameters
+    vehicle_mass: 753.87  # kg - from dspace_iac_car.param.yaml
+    max_acceleration: 20.0  # m/s^2 - maximum acceleration
+    max_deceleration: 15.0  # m/s^2 - maximum deceleration (braking)
+    drag_coefficient: 0.881  # from dspace_iac_car.param.yaml
+    cross_sectional_area: 1.0  # m^2 - from dspace_iac_car.param.yaml
+    air_density: 1.2  # kg/m^3 - from dspace_iac_car.param.yaml
+    rolling_resistance: 0.013  # dimensionless - average of front (0.012) and rear (0.015)
+    accel_tau: 0.2  # Acceleration time constant (seconds) - for first-order dynamics
+    
+    # Longitudinal MPC weights
+    w_v: 10.0  # Speed tracking weight (higher = more aggressive speed tracking)
+    w_a: 0.1  # Acceleration smoothness weight (higher = smoother acceleration)
+    w_u_lon: 0.05  # Control input weight (lower = more aggressive control)
+    w_du_lon: 0.5  # Control rate weight (higher = smoother control changes)
+    wT_v: 20.0  # Terminal speed weight (higher = better terminal speed tracking)
+    
+    # Longitudinal MPC filters
+    throttle_lpf_cutoff_hz: 5.0  # Low-pass filter cutoff for throttle output (Hz)
+    brake_lpf_cutoff_hz: 5.0  # Low-pass filter cutoff for brake output (Hz)
 

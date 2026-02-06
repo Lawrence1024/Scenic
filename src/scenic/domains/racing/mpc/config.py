@@ -88,6 +88,27 @@ class MPCConfig:
         # Curvature smoothing
         self.curvature_smoothing_num = config_dict.get('curvature_smoothing_num', 15)  # Points for curvature calculation
         
+        # Longitudinal MPC parameters
+        self.vehicle_mass = config_dict.get('vehicle_mass', 753.87)  # kg
+        self.max_acceleration = config_dict.get('max_acceleration', 20.0)  # m/s^2
+        self.max_deceleration = config_dict.get('max_deceleration', 15.0)  # m/s^2
+        self.drag_coefficient = config_dict.get('drag_coefficient', 0.881)
+        self.cross_sectional_area = config_dict.get('cross_sectional_area', 1.0)  # m^2
+        self.air_density = config_dict.get('air_density', 1.2)  # kg/m^3
+        self.rolling_resistance = config_dict.get('rolling_resistance', 0.013)
+        self.accel_tau = config_dict.get('accel_tau', 0.2)  # Acceleration time constant (s)
+        
+        # Longitudinal MPC weights
+        self.w_v = config_dict.get('w_v', 10.0)  # Speed tracking weight
+        self.w_a = config_dict.get('w_a', 0.1)  # Acceleration smoothness weight
+        self.w_u_lon = config_dict.get('w_u_lon', 0.05)  # Control input weight
+        self.w_du_lon = config_dict.get('w_du_lon', 0.5)  # Control rate weight
+        self.wT_v = config_dict.get('wT_v', 20.0)  # Terminal speed weight
+        
+        # Longitudinal MPC filters
+        self.throttle_lpf_cutoff_hz = config_dict.get('throttle_lpf_cutoff_hz', 5.0)
+        self.brake_lpf_cutoff_hz = config_dict.get('brake_lpf_cutoff_hz', 5.0)
+        
         # ControlDesk variable paths (optional, can be overridden)
         self.controldesk_paths = config_dict.get('controldesk_paths', {})
     

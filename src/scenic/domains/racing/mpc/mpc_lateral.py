@@ -382,7 +382,8 @@ class MPCLateralController:
         e_y, e_psi, mpc_segment_idx = self._compute_errors(
             position=(x, y),
             heading=yaw,
-            waypoints=waypoints
+            waypoints=waypoints,
+            current_waypoint_idx=current_waypoint_idx
         )
 
         # Log the actual reference segment being used for MPC control
@@ -495,7 +496,8 @@ class MPCLateralController:
     def _compute_errors(self,
                        position: Tuple[float, float],
                        heading: float,
-                       waypoints: List[Tuple[float, float]]) -> Tuple[float, float, int]:
+                       waypoints: List[Tuple[float, float]],
+                       current_waypoint_idx: Optional[int] = None) -> Tuple[float, float, int]:
         """Compute lateral error (e_y) and heading error (e_psi) from waypoints.
 
         Dynamically selects the best waypoint segment for control based on proximity to vehicle.
@@ -517,11 +519,20 @@ class MPCLateralController:
         px, py = position
 
         # Find the best waypoint segment dynamically
-        # Choose segment with closest perpendicular distance to vehicle
+        # CRITICAL: Prefer segments AHEAD of the vehicle, not behind
+        # Choose segment with closest perpendicular distance, but bias toward segments ahead
         best_segment_idx = 0
-        best_distance = float('inf')
+        best_score = float('inf')
 
-        for i in range(len(waypoints) - 1):
+        # Start search from current waypoint index if available, otherwise from beginning
+        search_start = 0
+        if current_waypoint_idx is not None and current_waypoint_idx >= 0:
+            # Start searching from a few waypoints before current (to handle lookback)
+            search_start = max(0, current_waypoint_idx - 5)
+        
+        # Search forward from current position, with limited lookback
+        search_end = len(waypoints) - 1
+        for i in range(search_start, search_end):
             x0, y0 = waypoints[i]
             x1, y1 = waypoints[i + 1]
 
@@ -546,8 +557,23 @@ class MPCLateralController:
             dy = py - proj_y
             distance = np.sqrt(dx*dx + dy*dy)
 
-            if distance < best_distance:
-                best_distance = distance
+            # Score: prefer segments where vehicle is projected ahead (u_proj > 0.5)
+            # Penalize segments where vehicle is at the beginning (u_proj < 0.3) - likely behind
+            # Score = distance + penalty for being behind
+            if u_proj < 0.3:
+                # Vehicle is at the beginning of this segment - likely behind, add large penalty
+                behind_penalty = 10.0 * (0.3 - u_proj) / 0.3  # Max 10m penalty when u_proj=0
+            elif u_proj < 0.5:
+                # Vehicle is in first half - small penalty
+                behind_penalty = 2.0 * (0.5 - u_proj) / 0.5  # Max 2m penalty when u_proj=0.3
+            else:
+                # Vehicle is in second half or beyond - no penalty (ahead)
+                behind_penalty = 0.0
+
+            score = distance + behind_penalty
+
+            if score < best_score:
+                best_score = score
                 best_segment_idx = i
 
         # Use the best segment found

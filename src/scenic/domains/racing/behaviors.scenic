@@ -44,8 +44,9 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
     cte_slowdown_threshold = 15.0  # m: start slowing down
     cte_stop_threshold = 50.0      # m: full brake to avoid runaway
 
-    # Get Controllers (Standard Scenic PIDs return -1.0 to 1.0)
-    _lon_controller, _lat_controller = simulation().getRacingControllers(self)
+    # Get Controllers (PID controllers from driving domain - kept for backward compatibility)
+    # Note: For MPC control, use FollowRacingLineMPCBehavior instead
+    _lon_controller, _lat_controller = simulation().getRacingControllers(self, use_mpc=False)
     
     # Gear thresholds (m/s)
     gear_up_thresholds = [0.0, 12.0, 22.0, 32.0, 42.0, 52.0]
@@ -443,7 +444,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
     cte_throttle_reduction_max = 10.0    # m: maximum throttle reduction zone
     min_throttle_at_large_cte = 0.03     # minimum throttle when CTE > 10m
 
-    # Get Controllers: Longitudinal PID + Lateral MPC
+    # Get Controllers: Longitudinal MPC + Lateral MPC
     _lon_controller, _lat_controller = simulation().getRacingControllers(self, use_mpc=True, mpc_config_path=mpc_config_path)
     
     # Gear thresholds (m/s)
@@ -690,13 +691,13 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             except Exception as e:
                 print(f"[FollowRacingLineMPCBehavior] Warning: Waypoint finder error: {e}")
         
-        # --- Longitudinal Control (PID) ---
-        # Compute CTE magnitude early for speed error modification
-        # (We'll compute full CTE later, but need magnitude now for PID tuning)
-        # This makes the PID aware of CTE so it commands braking when off-track
+        # --- Longitudinal Control (MPC) ---
+        # Compute CTE magnitude early for speed reference modification
+        # (We'll compute full CTE later, but need magnitude now for speed planning)
+        # This makes the MPC aware of CTE so it plans appropriate speed when off-track
         # IMPORTANT: Use the updated waypoint index (wp_last_idx) and expand search window
         # to handle cases where vehicle has overshot waypoints
-        cte_for_pid = None
+        cte_for_speed = None
         if use_waypoints and wp_list and len(wp_list) >= 2:
             # CTE estimate for PID tuning (use nearest waypoint segment)
             # Use adaptive search window: expand when vehicle might be far off-track
@@ -737,22 +738,22 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         proj_x = x0 + u_proj * seg_dx
                         proj_y = y0 + u_proj * seg_dy
                         nx = -seg_dy / seg_len; ny = seg_dx / seg_len
-                        cte_for_pid = (px - proj_x)*nx + (py - proj_y)*ny
+                        cte_for_speed = (px - proj_x)*nx + (py - proj_y)*ny
             except:
                 pass
         
         # Fallback: Use TTL Geometry for quick CTE estimate
-        if cte_for_pid is None:
+        if cte_for_speed is None:
             line = (self.ttl if hasattr(self, 'ttl') and self.ttl is not None else mainRacingRoad)
             if hasattr(line, 'signedDistanceTo'):
                 try:
-                    cte_for_pid = line.signedDistanceTo(self.position)
+                    cte_for_speed = line.signedDistanceTo(self.position)
                 except:
-                    cte_for_pid = 0.0
+                    cte_for_speed = 0.0
             else:
-                cte_for_pid = 0.0
+                cte_for_speed = 0.0
         
-        cte_mag_for_pid = abs(cte_for_pid) if cte_for_pid is not None else 0.0
+        cte_mag_for_speed = abs(cte_for_speed) if cte_for_speed is not None else 0.0
         
         # Universal max speed limit: 40 mph = 17.88 m/s
         MAX_SPEED_LIMIT_MS = 17.88  # 40 mph in m/s
@@ -819,36 +820,32 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 # If curvature computation fails, use full target speed
                 pass
         
-        # --- CTE-based speed reduction (existing logic) ---
+        # --- CTE-based speed reduction (for MPC speed reference) ---
         # When CTE is large, modify target speed to encourage slowing down
-        # This makes the PID aware that we want to reduce speed when off-track
-        # The vehicle naturally accelerates even without throttle, so we need to
-        # tell the PID to aim for a lower speed (or even brake) when CTE is large
+        # This makes the MPC plan appropriate speed when off-track
         # FIX 2: Gradual speed limiting for CTE 2-5m (not binary threshold)
-        if cte_mag_for_pid >= 10.0:
+        if cte_mag_for_speed >= 10.0:
             # At 10m+ CTE: set target to current speed - 2 m/s (encourages braking)
-            # This ensures speed_error is negative, commanding braking
             cte_target_speed = max(0.0, current_speed - 2.0)
-        elif cte_mag_for_pid >= 5.0:
+        elif cte_mag_for_speed >= 5.0:
             # At 5-10m CTE: set target to current speed (zero throttle)
-            # This ensures speed_error is near zero, commanding no throttle
             cte_target_speed = current_speed
-        elif cte_mag_for_pid >= 3.0:
+        elif cte_mag_for_speed >= 3.0:
             # FIX: 3-5m CTE: Limit to 4 m/s (prevent overshooting when approaching track)
             cte_target_speed = 4.0
-        elif cte_mag_for_pid >= 2.0:
+        elif cte_mag_for_speed >= 2.0:
             # FIX: 2-3m CTE: Limit to 5 m/s (prevent overshooting when close to track)
             cte_target_speed = 5.0
-        elif cte_mag_for_pid >= cte_stop_threshold:
+        elif cte_mag_for_speed >= cte_stop_threshold:
             # At 50m+ CTE: aim for very low speed (encourages heavy braking)
             cte_target_speed = target_speed * 0.1
-        elif cte_mag_for_pid >= cte_slowdown_threshold:
+        elif cte_mag_for_speed >= cte_slowdown_threshold:
             # Between 15-50m: aim for 30% of target speed (encourages braking)
             factor = 0.3
             cte_target_speed = target_speed * factor
-        elif cte_mag_for_pid >= cte_throttle_reduction_max:
+        elif cte_mag_for_speed >= cte_throttle_reduction_max:
             # Between 10-15m: linear from 50% to 30% of target speed
-            factor = 0.5 - ((cte_mag_for_pid - cte_throttle_reduction_max) / (cte_slowdown_threshold - cte_throttle_reduction_max)) * 0.2
+            factor = 0.5 - ((cte_mag_for_speed - cte_throttle_reduction_max) / (cte_slowdown_threshold - cte_throttle_reduction_max)) * 0.2
             cte_target_speed = target_speed * factor
         else:
             # CTE < 2m: use full target speed (but still respect max speed limit)
@@ -862,16 +859,111 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         effective_target_speed = min(effective_target_speed, MAX_SPEED_LIMIT_MS)
         
         # Debug logging for CTE and curvature-aware speed control
-        if cte_mag_for_pid >= cte_throttle_reduction_start or curvature_speed_limit < target_speed * 0.95:
+        if cte_mag_for_speed >= cte_throttle_reduction_start or curvature_speed_limit < target_speed * 0.95:
             curvature_info = ""
             if curvature_speed_limit < target_speed * 0.95:
                 curvature_info = f", curvature_limit={curvature_speed_limit:.1f}m/s"
-            print(f"[Speed Control] CTE={cte_mag_for_pid:.2f}m, target={target_speed:.1f}m/s -> effective={effective_target_speed:.1f}m/s (CTE_limit={cte_target_speed:.1f}m/s{curvature_info}, current={current_speed:.2f}m/s)")
+            print(f"[Speed Control] CTE={cte_mag_for_speed:.2f}m, target={target_speed:.1f}m/s -> effective={effective_target_speed:.1f}m/s (CTE_limit={cte_target_speed:.1f}m/s{curvature_info}, current={current_speed:.2f}m/s)")
         
-        speed_error = min(self.maxSpeed if hasattr(self, 'maxSpeed') else 200, effective_target_speed) - current_speed
-        throttle_pid = _lon_controller.run_step(speed_error)
-        # Clamp PID output to reasonable range (prevent excessive throttle commands)
-        throttle_pid = max(-1.0, min(1.0, throttle_pid))
+        # --- Build speed reference profile for MPC ---
+        # MPC needs a speed profile over the prediction horizon
+        # Build profile that accounts for curvature and CTE
+        horizon = _lon_controller.config.mpc_prediction_horizon
+        # Build speed reference array (use list, MPC will convert to numpy)
+        v_ref_profile = [float(effective_target_speed)] * horizon
+        
+        # If we have waypoints, build a speed profile that reduces speed for upcoming turns
+        if use_waypoints and wp_list and len(wp_list) >= 2:
+            try:
+                # Build speed profile based on curvature ahead
+                dt = _lon_controller.config.mpc_prediction_dt
+                for k in range(horizon):
+                    # Distance ahead at step k
+                    dist_ahead = current_speed * (k + 1) * dt
+                    
+                    # Find waypoint at this distance
+                    wp_idx = wp_last_idx
+                    accumulated_dist = 0.0
+                    while wp_idx < len(wp_list) - 1 and accumulated_dist < dist_ahead:
+                        x0, y0 = float(wp_list[wp_idx][0]), float(wp_list[wp_idx][1])
+                        x1, y1 = float(wp_list[wp_idx+1][0]), float(wp_list[wp_idx+1][1])
+                        seg_dx = x1 - x0; seg_dy = y1 - y0
+                        seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                        if seg_len < 1e-6:
+                            wp_idx += 1
+                            continue
+                        accumulated_dist += seg_len
+                        if accumulated_dist < dist_ahead:
+                            wp_idx += 1
+                    
+                    # Compute curvature at this waypoint
+                    if wp_idx > 0 and wp_idx < len(wp_list) - 1:
+                        p0 = (float(wp_list[wp_idx-1][0]), float(wp_list[wp_idx-1][1]))
+                        p1 = (float(wp_list[wp_idx][0]), float(wp_list[wp_idx][1]))
+                        p2 = (float(wp_list[wp_idx+1][0]), float(wp_list[wp_idx+1][1]))
+                        v1x = p1[0] - p0[0]; v1y = p1[1] - p0[1]
+                        v2x = p2[0] - p1[0]; v2y = p2[1] - p1[1]
+                        cross = v1x * v2y - v1y * v2x
+                        len1 = (v1x*v1x + v1y*v1y) ** 0.5
+                        len2 = (v2x*v2x + v2y*v2y) ** 0.5
+                        if len1 > 1e-6 and len2 > 1e-6:
+                            avg_len = (len1 + len2) / 2.0
+                            if avg_len > 1e-6:
+                                curvature = abs(2.0 * cross / (len1 * len2 * avg_len))
+                                # Apply same speed reduction logic
+                                if curvature >= 0.15:
+                                    v_ref_profile[k] = target_speed * 0.4
+                                elif curvature >= 0.1:
+                                    v_ref_profile[k] = target_speed * 0.5
+                                elif curvature >= 0.05:
+                                    v_ref_profile[k] = target_speed * 0.7
+                                elif curvature >= 0.02:
+                                    v_ref_profile[k] = target_speed * 0.85
+            except Exception as e:
+                # If profile building fails, use constant speed
+                pass
+        
+        # Apply universal max speed limit to profile
+        v_ref_profile = [min(v, MAX_SPEED_LIMIT_MS) for v in v_ref_profile]
+        
+        # --- Use MPC for throttle/brake control ---
+        # Get current acceleration (estimate from speed if not available)
+        dt = simulation().timestep
+        current_accel = 0.0
+        if hasattr(self, '_prev_speed_mpc'):
+            current_accel = (current_speed - self._prev_speed_mpc) / dt
+            current_accel = max(-15.0, min(20.0, current_accel))  # Clamp to reasonable range
+        self._prev_speed_mpc = current_speed
+        
+        # Build vehicle state for MPC
+        vehicle_state_mpc = {
+            'speed': current_speed,
+            'acceleration': current_accel,
+            'gear': getattr(self, 'gear', 0) if manage_gears and hasattr(self, 'setGear') else None
+        }
+        
+        # Compute throttle/brake using MPC
+        try:
+            throttle_mpc, brake_mpc = _lon_controller.run_step(
+                vehicle_state_mpc,
+                v_ref_profile,
+                None  # curvature_profile not used in simplified model
+            )
+            throttle_mpc = float(throttle_mpc)
+            brake_mpc = float(brake_mpc)
+        except Exception as ex:
+            print(f"[FollowRacingLineMPCBehavior] MPC longitudinal error: {ex}, using fallback")
+            # Fallback: simple proportional control
+            speed_error = effective_target_speed - current_speed
+            if speed_error > 0:
+                throttle_mpc = min(1.0, speed_error * 0.1)
+                brake_mpc = 0.0
+            else:
+                throttle_mpc = 0.0
+                brake_mpc = min(1.0, abs(speed_error) * 0.1)
+        
+        # Use MPC outputs (will be processed by CTE-aware safety envelope below)
+        throttle_pid = throttle_mpc  # Keep variable name for compatibility with existing code
         
         # -------------------------------
         # CTE-aware longitudinal safety
@@ -882,16 +974,16 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             self._was_cte_large = False
 
         # Enter large-CTE mode at 5.5m, exit at 4.5m
-        if cte_mag_for_pid >= 5.5:
+        if cte_mag_for_speed >= 5.5:
             self._was_cte_large = True
-        elif cte_mag_for_pid < 4.5:
+        elif cte_mag_for_speed < 4.5:
             self._was_cte_large = False
 
         SPEED_THRESHOLD_FOR_BRAKE = 2.0
         MIN_THROTTLE_WHEN_STOPPED = 0.10
 
         # Output knobs (IMPORTANT)
-        MAX_BRAKE_NORMAL = 0.25        # speed PID is NOT allowed to exceed this
+        MAX_BRAKE_NORMAL = 0.25        # MPC brake is NOT allowed to exceed this when CTE is small
         MAX_BRAKE_LARGE_CTE = 0.60     # only when CTE is large
         MAX_BRAKE_VERY_LARGE = 0.90    # only when CTE is huge (still not instant 1.0)
         BRAKE_SLEW = 0.15              # per step (dt=1.0) -- adjust if needed
@@ -900,11 +992,11 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         throttle_override = None
 
         # Decide envelope
-        very_large = (cte_mag_for_pid >= 10.0)
-        large = (self._was_cte_large or cte_mag_for_pid >= 5.0)
+        very_large = (cte_mag_for_speed >= 10.0)
+        large = (self._was_cte_large or cte_mag_for_speed >= 5.0)
 
         if very_large:
-            # You’re far off-track: prioritize slowing down, but don’t deadlock at low speed
+            # You're far off-track: prioritize slowing down, but don't deadlock at low speed
             if current_speed > 4.0:
                 throttle_override = 0.0
                 cte_brake = 0.35
@@ -923,16 +1015,16 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 throttle_override = 0.0
                 cte_brake = 0.0
             else:
-                # At low speed, allow the speed PID to work (but we’ll cap brake later)
+                # At low speed, allow MPC to work (but we'll cap brake later)
                 throttle_override = None
                 cte_brake = 0.0
 
         # Apply throttle override if set
         if throttle_override is not None:
-            throttle_pid = throttle_override
+            throttle_mpc = throttle_override
 
         # -------------------------------
-        # Brake cap + conversion + merge + SLEW-LIMIT (drop-in replacement)
+        # Brake cap + merge + SLEW-LIMIT (drop-in replacement)
         # -------------------------------
 
         # Compute a brake cap depending on CTE regime
@@ -943,14 +1035,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         else:
             brake_cap = MAX_BRAKE_NORMAL
 
-        # Convert any negative throttle_pid into a capped brake demand
-        pid_brake = 0.0
-        if throttle_pid < 0.0:
-            pid_brake = min(-throttle_pid, brake_cap)
-            throttle_pid = 0.0  # zero throttle when braking
-
-        # Merge CTE brake + PID brake (both capped)
-        raw_brake = max(float(cte_brake), float(pid_brake))
+        # Merge CTE brake + MPC brake (both capped)
+        raw_brake = max(float(cte_brake), float(brake_mpc))
         raw_brake = min(float(raw_brake), float(brake_cap))
 
         # ---- Guard: do not "slam brake" at (near) standstill ----
@@ -982,7 +1068,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
 
         print(
             f"[BrakeCap DBG] very_large={very_large} large={large} cap={brake_cap:.3f} "
-            f"cte_brake={float(cte_brake):.3f} pid_brake={float(pid_brake):.3f} "
+            f"cte_brake={float(cte_brake):.3f} mpc_brake={float(brake_mpc):.3f} "
             f"prev={prev_brake:.3f} raw={float(raw_brake):.3f} limited={limited} v={float(current_speed):.2f}"
         )
 
@@ -1034,12 +1120,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 vehicle_state,
                 waypoints_for_mpc,
                 None,  # MPC selects segments dynamically
-                cte_magnitude=cte_mag_for_pid
+                cte_magnitude=cte_mag_for_speed
             )
             steer_mpc = float(steer_mpc)
 
-        except Exception as ex:
-            print(f"[FollowRacingLineMPCBehavior] MPC error: {ex}, using fallback")
+        except Exception as e:
+            print(f"[FollowRacingLineMPCBehavior] MPC error: {e}, using fallback")
             steer_mpc = 0.0
 
         # --- CTE-aware safety envelope (for throttle/brake) ---
@@ -1155,7 +1241,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         # --- Steering conditioning + normalization & slew limiting ---
         # Goal: avoid "small CTE but too much/too-late steer" -> overshoot & miss waypoint.
 
-        STEER_GAIN   = 0.75     # 0.6–0.9
+        STEER_GAIN   = 1.0      # Full MPC authority (removed cap)
         CTE_DEADBAND = 0.10     # meters: ignore tiny CTE noise
         CTE_SOFT     = 1.00     # meters: full CTE authority by here
 
@@ -1163,14 +1249,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         MIN_SCALE    = 0.25     # IMPORTANT: never zero steering (prevents late-turn overshoot)
 
         v = float(current_speed) if current_speed is not None else 0.0
-
-        # Base speed steering cap (normalized)
-        if v < 5.0:
-            base_cap = 0.70
-        elif v < 10.0:
-            base_cap = 0.55
-        else:
-            base_cap = 0.45
 
         # Use the same CTE you computed for safety envelope (keep naming consistent!)
         cte_val = float(getattr(_lat_controller, "last_e_y", cte if cte is not None else 0.0))
@@ -1203,11 +1281,9 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         steer_mpc_raw = float(steer_mpc)
         steer_cmd = steer_mpc_raw * STEER_GAIN * scale
 
-        # Cap increases slightly in recovery / large heading error (so you can turn in time)
-        steer_cap = min(1.0, base_cap + 0.25 * rec)
-
-        # Clamp before slew
-        steer_pre_slew = max(-steer_cap, min(steer_cap, max(-1.0, min(1.0, steer_cmd))))
+        # No steering cap - allow full authority [-1, 1]
+        # Clamp before slew (only to valid range, no artificial cap)
+        steer_pre_slew = max(-1.0, min(1.0, steer_cmd))
 
         # Slew limiter (increase slew allowance during recovery / big heading error)
         max_delta_eff = float(max_steer_delta) * (1.0 + 1.5 * rec)
@@ -1238,7 +1314,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         print(
             f"[SteerCond DBG] mpc={steer_mpc_raw:+.3f} gain={STEER_GAIN:.2f} "
             f"cte={cte_val:+.3f} |cte|={cte_mag_local:.3f} psi={psi_mag:.3f} "
-            f"scale={scale:.3f} rec={rec:.2f} v={v:.2f} base_cap={base_cap:.2f} cap={steer_cap:.2f} "
+            f"scale={scale:.3f} rec={rec:.2f} v={v:.2f} "
             f"pre_slew={steer_pre_slew:+.3f} max_d={max_delta_eff:.3f}"
         )
         print(
@@ -1252,16 +1328,9 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         local_throttle_limit = min(local_throttle_limit, throttle_limit)
         
         # SMOOTH DRIVING: Prefer throttle reduction over braking, avoid simultaneous throttle+brake
-        # Combine CTE-based brake with existing brake logic
-        final_brake = max(final_brake, cte_brake)
-        
-        final_throttle = 0.0
-        if throttle_pid >= 0:
-            # Clamp throttle to local_throttle_limit (which includes CTE and speed reductions)
-            final_throttle = max(0.0, min(local_throttle_limit, throttle_pid))
-        else:
-            # If PID commands negative throttle (braking), add to brake
-            final_brake = max(final_brake, min(1.0, abs(throttle_pid)))
+        # Use MPC throttle/brake outputs (already processed by CTE-aware safety above)
+        final_throttle = max(0.0, min(local_throttle_limit, throttle_mpc))
+        final_brake = raw_brake  # Already merged and capped above
         
         # SMOOTH DRIVING FIX: Avoid simultaneous throttle and brake for moderate CTE (5-7m)
         # When CTE is moderate and we have both throttle and brake, prefer throttle reduction

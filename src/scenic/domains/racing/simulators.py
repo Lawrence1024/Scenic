@@ -48,15 +48,42 @@ class RacingSimulation(Simulation):
         
         Args:
             agent: The racing agent (RacingCar, FormulaCar, etc.)
-            use_mpc: If True, use MPC for lateral control instead of PID (optional)
+            use_mpc: If True, use MPC for both lateral and longitudinal control
             mpc_config_path: Path to MPC config YAML file (optional, only used if use_mpc=True)
             
         Returns:
             A pair of controllers for throttle and steering respectively.
-            If use_mpc=True: (PIDLongitudinalController, MPCLateralController)
-            If use_mpc=False: (PIDLongitudinalController, PIDLateralController)
+            If use_mpc=True: (MPCLongitudinalController, MPCLateralController)
+            If use_mpc=False: (PIDLongitudinalController, PIDLateralController) - from driving domain
         """
         dt = self.timestep
+        
+        if use_mpc:
+            # Use MPC controllers (racing library)
+            try:
+                from scenic.domains.racing.mpc import (
+                    MPCLongitudinalController,
+                    MPCLateralController,
+                    load_mpc_config
+                )
+                
+                config = load_mpc_config(mpc_config_path)
+                config.adapt_to_timestep(dt)
+                
+                lon_controller = MPCLongitudinalController(config, timestep=dt)
+                lat_controller = MPCLateralController(config, timestep=dt)
+                
+                return lon_controller, lat_controller
+            except Exception as e:
+                print(f"[RacingSimulation] WARNING: Failed to create MPC controllers: {e}")
+                print(f"[RacingSimulation] Falling back to PID controllers from driving domain")
+                # Fall through to PID controllers below
+        
+        # Fallback: Use PID controllers from driving domain (not racing library)
+        from scenic.domains.driving.controllers import (
+            PIDLongitudinalController,
+            PIDLateralController
+        )
         
         if hasattr(agent, 'isFormulaCar') and agent.isFormulaCar:
             # Formula cars: High-performance controllers
@@ -79,6 +106,9 @@ class RacingSimulation(Simulation):
         Racing line controllers are tuned for smooth, high-speed cornering
         and optimal lap times rather than comfort or safety.
         
+        Note: This method uses PID controllers from the driving domain.
+        For MPC control, use getRacingControllers with use_mpc=True.
+        
         Args:
             agent: The racing agent
             
@@ -86,6 +116,12 @@ class RacingSimulation(Simulation):
             A pair of controllers for throttle and steering respectively.
         """
         dt = self.timestep
+        
+        # Use PID controllers from driving domain (not racing library)
+        from scenic.domains.driving.controllers import (
+            PIDLongitudinalController,
+            PIDLateralController
+        )
         
         if hasattr(agent, 'isFormulaCar') and agent.isFormulaCar:
             # Formula cars: Aggressive racing line following
