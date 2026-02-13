@@ -43,7 +43,7 @@ ego.behavior = FollowRacingLineMPCBehavior(
 # TTL file: ttl_fellow_test_xodr_all.csv (XODR coordinates, transformed from dSPACE)
 # Fellow vehicles placed every 100m starting from 200m (s = 200, 300, 400, ..., 3100)
 
-fellow0 = new RacingCar at (616.120555,-297.938762), with regionContainedIn everywhere
+# fellow0 = new RacingCar at (616.120555,-297.938762), with regionContainedIn everywhere
 # fellow1 = new RacingCar at (617.586835,-293.097982), with regionContainedIn everywhere
 # fellow2 = new RacingCar at (618.881724,-288.204668), with regionContainedIn everywhere
 # fellow3 = new RacingCar at (619.597641,-283.187822), with regionContainedIn everywhere

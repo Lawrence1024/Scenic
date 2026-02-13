@@ -11,7 +11,7 @@ def ensure_fellow_arrays_initialized(sim):
     try:
         num_fellows = 0
         try:
-            # Count fellows from scene objects (excluding ego)
+            # Count fellows from scene objects (excluding ego). Ego is always present; fellows may be 0.
             if hasattr(sim, 'scene') and hasattr(sim.scene, 'objects'):
                 num_fellows = len([o for o in sim.scene.objects if o is not getattr(sim.scene, 'egoObject', None)])
             # Also check _fellow_vehicles dict
@@ -20,9 +20,11 @@ def ensure_fellow_arrays_initialized(sim):
         except Exception:
             pass
         
-        # Default to checking first 5 if we can't determine count
+        # When there are 0 fellows, no fellow arrays need to be populated; mark ready so ego control runs.
         if num_fellows == 0:
-            num_fellows = 5
+            sim._fellow_arrays_initialized = True
+            sim._fellow_index_base = 0
+            return
 
         # More aggressive warm-up: advance more steps and wait for REAL values
         max_attempts = 500  # Increased from 200
