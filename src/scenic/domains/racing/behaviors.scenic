@@ -431,9 +431,9 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
     
     throttle_limit = 1.0
 
-    # Ego: keep a conservative base throttle, we may lower further on large CTE
+    # Ego: base throttle cap (lowered further on large CTE); raised for more throttle on straights
     if self is simulation().scene.egoObject:
-        throttle_limit = 0.1
+        throttle_limit = 0.65
 
     # Steering slew-rate and CTE safety thresholds
     max_steer_delta = 0.2          # per step (normalized units)
@@ -743,13 +743,14 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         cte_mag_for_speed = abs(cte_for_speed) if cte_for_speed is not None else 0.0
         
         # Universal max speed limit: Reduced for better robustness without elevation data
-        MAX_SPEED_LIMIT_MS = 15.0  # ~33.5 mph in m/s (reduced from 17.88 m/s / 40 mph for safety margin)
+        MAX_SPEED_LIMIT_MS = 35.76  # 80 mph in m/s (~129 km/h)
         
         # --- Curvature-based speed gate (from suggestion.md) ---
         # Formula: v_max(s) = sqrt(a_y_max / (|κ(s)| + ε))
         # v_ref = min(v_desired, min_{s∈[s_0, s_0+L]} v_max(s))
         # This ensures vehicle enters turns at appropriate speed
         curvature_speed_limit = target_speed  # Default: no reduction
+        curvature_ahead_max = 0.0  # Max curvature over lookahead (for proactive downshift)
         max_lateral_accel = 8.0  # m/s² (conservative for indoor sim, can be configured)
         curvature_epsilon = 0.001  # Small epsilon to avoid division by zero
         
@@ -801,6 +802,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                             avg_len = (len1 + len2) / 2.0
                             if avg_len > 1e-6:
                                 abs_kappa = abs(2.0 * cross / (len1 * len2 * avg_len))
+                                if abs_kappa > curvature_ahead_max:
+                                    curvature_ahead_max = abs_kappa
                                 
                                 # Apply speed gate formula: v_max = sqrt(a_y_max / (|κ| + ε))
                                 v_max_at_kappa = (max_lateral_accel / (abs_kappa + curvature_epsilon)) ** 0.5
@@ -859,6 +862,17 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         
         # Apply universal max speed limit
         effective_target_speed = min(effective_target_speed, MAX_SPEED_LIMIT_MS)
+        
+        # --- Slew-rate limit on speed reference (smooth ramps into/out of turns) ---
+        # Prevents step changes that cause brake/throttle oscillation
+        dt_slew = _lon_controller.config.mpc_prediction_dt if hasattr(_lon_controller, 'config') else 0.05
+        slew_down_ms = 4.0   # max speed decrease per second (m/s² equivalent for speed)
+        slew_up_ms = 6.0     # max speed increase per second
+        if not hasattr(self, '_last_effective_target_speed'):
+            self._last_effective_target_speed = float(effective_target_speed)
+        last_eff = float(self._last_effective_target_speed)
+        effective_target_speed = max(last_eff - slew_down_ms * dt_slew, min(last_eff + slew_up_ms * dt_slew, float(effective_target_speed)))
+        self._last_effective_target_speed = float(effective_target_speed)
         
         # Debug logging for CTE and curvature-aware speed control
         if cte_mag_for_speed >= cte_throttle_reduction_start or curvature_speed_limit < target_speed * 0.95:
@@ -1411,25 +1425,9 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         # Ensure local_throttle_limit doesn't exceed base throttle_limit
         local_throttle_limit = min(local_throttle_limit, throttle_limit)
         
-        # SMOOTH DRIVING: Prefer throttle reduction over braking, avoid simultaneous throttle+brake
         # Use MPC throttle/brake outputs (already processed by CTE-aware safety above)
         final_throttle = max(0.0, min(local_throttle_limit, throttle_mpc))
         final_brake = raw_brake  # Already merged and capped above
-        
-        # SMOOTH DRIVING FIX: Avoid simultaneous throttle and brake for moderate CTE (5-7m)
-        # When CTE is moderate and we have both throttle and brake, prefer throttle reduction
-        if final_throttle > 0.0 and final_brake > 0.0 and cte_mag >= 5.0 and cte_mag < 7.0:
-            # Moderate CTE: prefer throttle reduction over braking for smoothness
-            if current_speed < 4.0:
-                # Low-moderate speed: remove brake, reduce throttle instead
-                throttle_reduction = final_brake * 0.5  # Reduce throttle by brake amount
-                final_throttle = max(0.0, final_throttle - throttle_reduction)
-                final_brake = 0.0  # Remove brake
-                print(f"[Smooth Driving] CTE={cte_mag:.2f}m, speed={current_speed:.2f}m/s: Removing brake, reducing throttle instead (throttle={final_throttle:.3f}, brake=0.0)")
-            else:
-                # Higher speed: keep brake, remove throttle (brake is necessary)
-                final_throttle = 0.0
-                print(f"[Smooth Driving] CTE={cte_mag:.2f}m, speed={current_speed:.2f}m/s: Removing throttle, keeping brake (throttle=0.0, brake={final_brake:.3f})")
         
         # Apply universal max speed limit: if current speed exceeds limit, reduce throttle/apply brake
         if current_speed > MAX_SPEED_LIMIT_MS:
@@ -1447,6 +1445,14 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 final_brake = max(final_brake, 0.1)  # Light brake
             print(f"[Speed Limit] Speed {current_speed:.2f}m/s exceeds limit {MAX_SPEED_LIMIT_MS:.1f}m/s, applying brake={final_brake:.3f}")
 
+        # Global mutual exclusion: never command throttle and brake at the same time.
+        # When slowing (e.g. for a turn), lift throttle and brake only—no simultaneous throttle+brake.
+        BRAKE_THROTTLE_EXCLUSION_THRESHOLD = 0.05  # treat as "active" above this
+        if final_brake > BRAKE_THROTTLE_EXCLUSION_THRESHOLD:
+            final_throttle = 0.0
+        elif final_throttle > BRAKE_THROTTLE_EXCLUSION_THRESHOLD:
+            final_brake = 0.0
+
         # Store CTE for debugging
         self._current_cte = cte
         
@@ -1457,7 +1463,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             SetBrakeAction(final_brake)
         ]
 
-        # Gear Logic (same as PID behavior)
+        # Gear Logic: proactive downshift before turns + speed-based shifts
         gear_changed = False
         new_gear = None
         if manage_gears and hasattr(self, 'setGear'):
@@ -1471,7 +1477,21 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 print(f"  [Gear] Shifting from {current_gear} to 1 (starting from neutral)")
             
             elif current_speed is not None:
-                if current_gear < 6 and current_speed > gear_up_thresholds[min(current_gear, 5)]:
+                # Proactive downshift before turns (curvature-ahead aware)
+                curvature_very_tight = 0.08   # 1/m, tight turn -> prefer gear 1
+                curvature_tight = 0.05        # 1/m, turn -> prefer one gear lower
+                proactive_downshift = None
+                if curvature_ahead_max >= curvature_very_tight and current_gear >= 2 and current_speed < 12.0:
+                    proactive_downshift = 1  # 2->1 before very tight turn
+                elif curvature_ahead_max >= curvature_tight and current_gear >= 3 and current_speed < 20.0:
+                    proactive_downshift = current_gear - 1  # 3->2 (or 4->3, etc.) before turn
+                if proactive_downshift is not None:
+                    new_gear = proactive_downshift
+                    actions_to_take.append(SetGearAction(new_gear))
+                    self.gear = new_gear
+                    gear_changed = True
+                    print(f"  [Gear] Proactive downshift from {current_gear} to {new_gear} (curvature_ahead={curvature_ahead_max:.3f} 1/m, speed={current_speed:.2f} m/s)")
+                elif current_gear < 6 and current_speed > gear_up_thresholds[min(current_gear, 5)]:
                     new_gear = current_gear + 1
                     actions_to_take.append(SetGearAction(new_gear))
                     self.gear = new_gear

@@ -311,6 +311,17 @@ class MPCLongitudinalController:
             u_0_idx = n_x  # First control is after initial state
             accel_cmd = float(result.x[u_0_idx])
             
+            # Deadbands: avoid brake/throttle oscillation (especially in turns)
+            speed_deadband = getattr(self.config, 'speed_deadband', 0.3)
+            accel_deadband = getattr(self.config, 'accel_deadband', 0.25)
+            v_ref_0 = float(v_ref[0]) if len(v_ref) > 0 else v
+            if abs(v - v_ref_0) < speed_deadband:
+                # Speed near target: blend accel_cmd toward zero to hold current
+                accel_cmd = 0.5 * accel_cmd + 0.5 * self.prev_accel_cmd
+            if abs(accel_cmd) < accel_deadband:
+                # Small command: treat as zero to avoid flip-flop between throttle and brake
+                accel_cmd = 0.0
+            
             # Update previous control
             self.prev_accel_cmd = accel_cmd
             
@@ -319,8 +330,10 @@ class MPCLongitudinalController:
             if grade_profile is not None and len(grade_profile) > 0:
                 current_grade = float(grade_profile[0])
             
-            # Convert acceleration command to throttle/brake (with gravity compensation)
-            throttle, brake = self._accel_to_throttle_brake(accel_cmd, v, current_grade)
+            # Convert acceleration command to throttle/brake (with gravity + creep compensation)
+            throttle, brake = self._accel_to_throttle_brake(
+                accel_cmd, v, current_grade, gear=gear
+            )
             
             # Apply low-pass filters
             throttle_filtered = self.throttle_filter.update(throttle)
@@ -345,13 +358,20 @@ class MPCLongitudinalController:
                 return 0.0, 0.0
             return self._fallback_control(v, v_ref[0] if len(v_ref) > 0 else v)
     
-    def _accel_to_throttle_brake(self, accel_cmd: float, current_speed: float, road_grade: float = 0.0) -> Tuple[float, float]:
-        """Convert acceleration command to throttle/brake with gravity compensation.
+    def _accel_to_throttle_brake(
+        self,
+        accel_cmd: float,
+        current_speed: float,
+        road_grade: float = 0.0,
+        gear: Optional[int] = None,
+    ) -> Tuple[float, float]:
+        """Convert acceleration command to throttle/brake with gravity and creep compensation.
         
         Args:
             accel_cmd: Desired acceleration (m/s^2)
             current_speed: Current vehicle speed (m/s)
             road_grade: Road grade angle (radians, positive = uphill, negative = downhill)
+            gear: Current gear (1-based). If 1 and speed below threshold, creep is applied.
             
         Returns:
             Tuple of (throttle, brake) in [0.0, 1.0]
@@ -364,16 +384,25 @@ class MPCLongitudinalController:
         gravity_force = self.mass * g * math.sin(road_grade)
         gravity_accel = gravity_force / self.mass  # Acceleration due to gravity
         
+        # Gear 1 creep: in gear 1 at low speed, car moves without throttle (idle torque).
+        # So "zero throttle" gives +creep_accel. To hold speed we need less throttle or small brake.
+        creep_accel = 0.0
+        if gear == 1:
+            creep_threshold = getattr(self.config, 'creep_speed_threshold', 3.0)
+            if current_speed < creep_threshold:
+                creep_accel = getattr(self.config, 'creep_accel_gear1', 0.3)
+        
         if accel_cmd > 0:
             # Accelerating: use throttle
-            # Account for drag, rolling resistance, and gravity
+            # Account for drag, rolling resistance, gravity, and creep (creep reduces needed throttle)
             drag_force = 0.5 * self.air_density * self.drag_coeff * self.cross_area * current_speed * current_speed
             rolling_force = self.rolling_resistance * self.mass * g
             total_resistance = drag_force + rolling_force + gravity_force  # Add gravity force
             resistance_accel = total_resistance / self.mass
+            # With creep, zero throttle already gives +creep_accel, so effective resistance is lower
+            resistance_accel = resistance_accel - creep_accel
             
             # Required acceleration = accel_cmd + resistance_accel
-            # Note: gravity_accel is already included in resistance_accel via gravity_force
             required_accel = accel_cmd + resistance_accel
             throttle = min(1.0, max(0.0, required_accel / self.max_accel))
             brake = 0.0
@@ -381,12 +410,9 @@ class MPCLongitudinalController:
             # Decelerating: use brake
             throttle = 0.0
             
-            # For braking, gravity affects the required brake force:
-            # Uphill: gravity helps braking (less brake needed)
-            # Downhill: gravity resists braking (more brake needed)
-            # Effective deceleration needed = |accel_cmd| - gravity_accel
-            # (gravity_accel is negative downhill, so we subtract it)
-            effective_decel = abs(accel_cmd) - gravity_accel
+            # For braking, gravity and creep affect required brake force:
+            # Creep pushes forward, so we need more brake to achieve |accel_cmd| when in gear 1 at low speed
+            effective_decel = abs(accel_cmd) - gravity_accel + creep_accel
             effective_decel = max(0.0, effective_decel)  # Don't allow negative brake
             
             # Brake force needed to achieve deceleration

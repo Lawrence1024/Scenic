@@ -10,7 +10,7 @@
     max_steer_angle: 0.2816  # Maximum front-wheel angle (radians) - from dspace_iac_car.param.yaml
     steer_tau: 0.3  # Steering actuator time constant (seconds) - from aw_lat_mpc.param.yaml
     steer_rate_lim: 6.98  # Steering rate limit (rad/s) - ~400 deg/s for racing performance
-    steer_cmd_max: 70  # Maximum steering command in ControlDesk units
+    steer_cmd_max: 240  # Maximum steering command in ControlDesk units
     
     # Steering mapping (to be calibrated)
     steer_scale: null  # Will be calibrated: delta_actual_rad / steer_cmd
@@ -19,7 +19,7 @@
     w_ey: 10.0  # Lateral error weight (doubled from 5.0 for more aggressive tracking)
     w_epsi: 5.0  # Heading error weight (increased from 3.0 for better heading correction)
     w_u: 0.05  # Control input weight (reduced from 0.1 to allow more steering authority)
-    w_du: 0.75  # Control rate weight
+    w_du: 1.8  # Control rate weight (increased for smoother steering, less left-right overcorrect)
     wT_ey: 15.0  # Terminal lateral error weight (increased from 5.0 for better terminal tracking)
     wT_epsi: 2.0  # Terminal heading error weight (increased from 1.0)
     
@@ -27,8 +27,8 @@
     w_epsi_vel: 1.5  # Heading error * velocity^2 weight (tripled from 0.5 for much better high-speed tracking)
     w_u_vel: 0.1  # Control input * velocity^2 weight (reduced from 0.15 to allow more steering at speed)
     
-    # Steering acceleration penalty (smoother steering, reduces jerk)
-    w_ddu: 0.000005  # Steering acceleration weight (reduced from 0.00002 to allow faster steering changes)
+    # Steering acceleration penalty (smoother steering, reduces jerk and beginner-style overcorrect)
+    w_ddu: 0.00003  # Steering acceleration weight (increased for smoother steering changes)
     
     # Adaptive weights based on curvature
     use_adaptive_weights: true  # Enable adaptive weights based on curvature
@@ -49,15 +49,15 @@
     w_epsi_vel_high_curv: 2.0  # Velocity-weighted heading error in high curvature (increased from 0.8 for better high-speed turns)
     w_u_high_curv: 0.02  # Control input weight in high curvature (very low - allow maximum steering)
     w_u_vel_high_curv: 0.05  # Velocity-weighted control input in high curvature (low penalty)
-    w_ddu_high_curv: 0.0000005  # Steering acceleration weight in high curvature (very light - allow rapid steering changes)
+    w_ddu_high_curv: 0.000003  # Steering acceleration in high curvature (smoother than 0.0000005 to reduce overcorrect)
     
     # Safety thresholds
     admissible_position_error: 30.0  # Stop MPC if position error > this (meters) - increased to 30.0m for sparse waypoints (~25m apart)
     admissible_yaw_error_rad: 2.36  # Stop MPC if yaw error > this (radians, ~135 deg) - increased from 1.57rad to allow MPC when off-track
     max_invalid_count: 10  # Max consecutive solver failures before zeroing steering
     
-    # Filtering
-    steering_lpf_cutoff_hz: 3.0  # Low-pass filter cutoff for steering output (Hz)
+    # Filtering (smoother = lower cutoff; reduces steering jerk and overcorrect)
+    steering_lpf_cutoff_hz: 2.0  # Low-pass filter cutoff for steering output (Hz)
     
     # Waypoint/Reference
     traj_resample_dist: 0.1  # Distance between resampled waypoints (meters) - finer resolution for better tracking
@@ -92,16 +92,24 @@
     rolling_resistance: 0.013  # dimensionless - average of front (0.012) and rear (0.015)
     accel_tau: 0.2  # Acceleration time constant (seconds) - for first-order dynamics
     
-    # Longitudinal MPC weights
+    # Longitudinal MPC weights (smoother throttle/brake = less "full throttle then hard brake")
     w_v: 10.0  # Speed tracking weight (higher = more aggressive speed tracking)
-    w_a: 0.1  # Acceleration smoothness weight (higher = smoother acceleration)
+    w_a: 0.25  # Acceleration smoothness weight (increased for smoother accel/brake)
     w_u_lon: 0.05  # Control input weight (lower = more aggressive control)
-    w_du_lon: 0.5  # Control rate weight (higher = smoother control changes)
+    w_du_lon: 2.0  # Control rate weight (increased for smoother throttle/brake transitions)
     wT_v: 20.0  # Terminal speed weight (higher = better terminal speed tracking)
     
-    # Longitudinal MPC filters
-    throttle_lpf_cutoff_hz: 5.0  # Low-pass filter cutoff for throttle output (Hz)
-    brake_lpf_cutoff_hz: 5.0  # Low-pass filter cutoff for brake output (Hz)
+    # Longitudinal MPC filters (smoother = lower cutoff)
+    throttle_lpf_cutoff_hz: 3.5  # Low-pass filter cutoff for throttle output (Hz)
+    brake_lpf_cutoff_hz: 3.5  # Low-pass filter cutoff for brake output (Hz)
+    
+    # Gear 1 creep (race car: car moves without throttle in gear 1)
+    creep_accel_gear1: 0.3  # m/s^2 equivalent at zero throttle in gear 1
+    creep_speed_threshold: 3.0  # m/s, apply creep compensation below this speed in gear 1
+    
+    # Deadbands (reduce brake/throttle flip-flop in turns)
+    speed_deadband: 0.3  # m/s, hold previous command if |v - v_ref| < this
+    accel_deadband: 0.25  # m/s^2, treat accel_cmd as zero if |accel_cmd| < this
     
     # Curvature-based speed limiting
     max_lateral_acceleration: 8.0  # Maximum lateral acceleration (m/s²) - conservative for indoor sim, race grip: 8-12 m/s²

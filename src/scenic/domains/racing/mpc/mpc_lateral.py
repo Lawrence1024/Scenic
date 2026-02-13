@@ -58,6 +58,14 @@ class MPCLateralController:
         self.invalid_count = 0
         self.last_valid_steering = 0.0
         
+        # Segment selection smoothing: hysteresis only (no advance cap, to avoid lag at high speed)
+        self.last_seg_idx = None  # set after first _compute_errors
+        self._segment_hysteresis_m = getattr(
+            config, 'segment_hysteresis_m', 0.4
+        )  # only switch segment when new score is better by this margin (m)
+        # Reference blend at boundaries: blend heading toward next segment when u_proj >= this
+        self._segment_blend_u_start = getattr(config, 'segment_blend_u_start', 0.7)
+        
         # OSQP solver (will be initialized on first solve)
         self.solver = None
         self._solver_initialized = False
@@ -144,8 +152,8 @@ class MPCLateralController:
         P = np.zeros((n_vars, n_vars))
         q = np.zeros(n_vars)
         
-        # Constraint matrix A (dynamics + constraints)
-        n_constraints = (horizon + 1) * n_x + horizon * n_u  # dynamics + control limits
+        # Constraint matrix A (dynamics + constraints + steering rate limits)
+        n_constraints = (horizon + 1) * n_x + horizon * n_u + horizon  # dynamics + control limits + rate limits
         A = np.zeros((n_constraints, n_vars))
         l = np.zeros(n_constraints)
         u = np.zeros(n_constraints)
@@ -319,6 +327,14 @@ class MPCLateralController:
             l[constraint_idx] = -delta_max
             u[constraint_idx] = delta_max
             constraint_idx += 1
+            
+            # Steering rate limit: |delta_dot| <= steer_rate_lim => |u_k - delta_k| <= steer_rate_lim * tau
+            rate_bound = self.config.steer_rate_lim * tau
+            A[constraint_idx, u_k_idx] = 1.0
+            A[constraint_idx, x_k_idx + 2] = -1.0
+            l[constraint_idx] = -rate_bound
+            u[constraint_idx] = rate_bound
+            constraint_idx += 1
         
         # Terminal cost
         x_N_idx = horizon * (n_x + n_u)
@@ -388,6 +404,10 @@ class MPCLateralController:
                 raise ValueError(f"[MPC] CRITICAL: build_reference returned kappa_ref with wrong length: expected {self.config.mpc_prediction_horizon}, got {len(kappa_ref)}. Shape: {kappa_ref.shape}, dtype: {kappa_ref.dtype}")
             if len(v_ref) != self.config.mpc_prediction_horizon:
                 raise ValueError(f"[MPC] CRITICAL: build_reference returned v_ref with wrong length: expected {self.config.mpc_prediction_horizon}, got {len(v_ref)}. Shape: {v_ref.shape}, dtype: {v_ref.dtype}")
+            # Cap reference curvature to kinematic limit: |kappa| <= kappa_max = tan(delta_max)/L
+            # So the reference is feasible for the kinematic bicycle (no unreachable curvature)
+            kappa_max = math.tan(self.config.max_steer_angle) / self.config.wheel_base
+            kappa_ref = np.clip(kappa_ref, -kappa_max, kappa_max)
         except Exception as e:
             print(f"[MPC] Error building reference: {e}")
             # Try to compute errors for proportional fallback, but don't fail if it doesn't work
@@ -487,15 +507,22 @@ class MPCLateralController:
                 print(f"[MPC] Solver failed: {result.info.status}")
                 return self._fallback_steering()
             
-            # Extract first control input
+            # Extract first control input (MPC outputs feedback part; we add curvature feedforward)
             n_x = 3  # State dimension
             u_0_idx = n_x  # First control is after initial state
-            delta_cmd_rad_raw = float(result.x[u_0_idx])
-            delta_cmd_rad = delta_cmd_rad_raw
+            delta_fb_rad = float(result.x[u_0_idx])
+            # Explicit curvature feedforward: delta_ff = arctan(L * kappa_ref) so MPC only tracks residual
+            L = self.config.wheel_base
+            delta_ff_rad = math.atan(L * float(kappa_ref[0]))
+            delta_cmd_rad_raw = delta_ff_rad + delta_fb_rad
+            delta_cmd_rad = np.clip(delta_cmd_rad_raw, -self.config.max_steer_angle, self.config.max_steer_angle)
             
             # Update previous controls (for next iteration's acceleration penalty)
             self.prev_prev_control = self.prev_control
             self.prev_control = delta_cmd_rad
+            
+            # Store feedforward for debug (optional)
+            self._last_delta_ff_rad = delta_ff_rad
             
             # Convert to normalized steering [-1, 1]
             steer_normalized = np.clip(delta_cmd_rad / self.config.max_steer_angle, -1.0, 1.0)
@@ -503,11 +530,11 @@ class MPCLateralController:
             # Apply low-pass filter
             steer_filtered = self.steering_filter.update(steer_normalized)
 
-            # Debug: solver -> command pipeline
+            # Debug: solver -> command pipeline (incl. feedforward)
             print(
-                f"[MPC Actuation DBG] u0_raw_rad={delta_cmd_rad_raw:+.6f} "
-                f"u0_used_rad={delta_cmd_rad:+.6f} max_steer_angle_rad={self.config.max_steer_angle:.6f} "
-                f"norm={steer_normalized:+.6f} lpf={float(steer_filtered):+.6f}"
+                f"[MPC Actuation DBG] delta_ff={delta_ff_rad:+.6f} delta_fb={delta_fb_rad:+.6f} "
+                f"u0_raw_rad={delta_cmd_rad_raw:+.6f} u0_used_rad={delta_cmd_rad:+.6f} "
+                f"max_steer_rad={self.config.max_steer_angle:.6f} norm={steer_normalized:+.6f} lpf={float(steer_filtered):+.6f}"
             )
             
             # Reset invalid count on success
@@ -564,6 +591,8 @@ class MPCLateralController:
         # Choose segment with closest perpendicular distance, but bias toward segments ahead
         best_segment_idx = 0
         best_score = float('inf')
+        prev_seg_score = None  # score of last step's segment (for hysteresis)
+        last_seg = getattr(self, 'last_seg_idx', None)
 
         # Start search from current waypoint index if available, otherwise from beginning
         search_start = 0
@@ -621,12 +650,18 @@ class MPCLateralController:
 
             score = distance + behind_penalty
 
+            if i == last_seg:
+                prev_seg_score = score
             if score < best_score:
                 best_score = score
                 best_segment_idx = i
 
-        # Use the best segment found
+        # Smooth segment selection: hysteresis only (no advance cap — cap caused lag at high speed)
         waypoint_idx = best_segment_idx
+        if last_seg is not None and 0 <= last_seg < search_end:
+            if prev_seg_score is not None and best_segment_idx != last_seg:
+                if best_score >= prev_seg_score - self._segment_hysteresis_m:
+                    waypoint_idx = last_seg
         wp0 = waypoints[waypoint_idx]
         wp1 = waypoints[waypoint_idx + 1]
         x0, y0 = wp0[0], wp0[1]
@@ -662,6 +697,31 @@ class MPCLateralController:
             # Flip reference heading by 180°
             psi_ref = np.arctan2(np.sin(psi_ref + np.pi), np.cos(psi_ref + np.pi))
             heading_flipped = True
+        
+        # Option A: blend reference heading toward next segment near boundary to avoid discontinuity
+        u_start = self._segment_blend_u_start
+        if u_proj >= u_start and waypoint_idx + 2 <= len(waypoints) - 1:
+            wp0_next = waypoints[waypoint_idx + 1]
+            wp1_next = waypoints[waypoint_idx + 2]
+            x0n, y0n = wp0_next[0], wp0_next[1]
+            x1n, y1n = wp1_next[0], wp1_next[1]
+            seg_dx_next = x1n - x0n
+            seg_dy_next = y1n - y0n
+            seg_len_next = np.sqrt(seg_dx_next*seg_dx_next + seg_dy_next*seg_dy_next)
+            if seg_len_next >= 1e-6:
+                psi_ref_next_orig = np.arctan2(seg_dy_next, seg_dx_next)
+                psi_ref_next = psi_ref_next_orig
+                heading_diff_next = psi_ref_next - heading
+                heading_diff_next = np.arctan2(np.sin(heading_diff_next), np.cos(heading_diff_next))
+                if abs(heading_diff_next) > np.pi / 2:
+                    psi_ref_next = np.arctan2(np.sin(psi_ref_next + np.pi), np.cos(psi_ref_next + np.pi))
+                # Ramp alpha from 0 at u_start to 1 at u_proj=1
+                alpha = min(1.0, (u_proj - u_start) / (1.0 - u_start))
+                # Blend angles via unit vector to avoid wrap
+                psi_ref = np.arctan2(
+                    (1.0 - alpha) * np.sin(psi_ref) + alpha * np.sin(psi_ref_next),
+                    (1.0 - alpha) * np.cos(psi_ref) + alpha * np.cos(psi_ref_next)
+                )
         
         # Compute lateral error (e_y)
         # Normal vector: (-dy, dx) points LEFT of forward direction along segment

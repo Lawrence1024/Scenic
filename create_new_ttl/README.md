@@ -76,6 +76,44 @@ The transformation chain:
 (s, t) → ModelDesk → ControlDesk RD → Inverse Transform → XODR
 ```
 
+## Interactive Map Visualizer
+
+The script `interactive_map_visualizer.py` draws the track and TTLs in one view so you can compare them and zoom/pan.
+
+### Usage
+
+From the Scenic repo root:
+
+```bash
+python create_new_ttl/interactive_map_visualizer.py
+```
+
+### What It Draws (in order)
+
+1. **Track boundaries** from `assets/maps/dSPACE/LagunaSeca.xodr` (left/right edges; main track + pit in gray/black)
+2. **Centerline** from `assets/ttls/LS_ENU_TTL_CSV/transformed/ttl_fellow_test_xodr_all.csv` (blue)
+3. **Aligned line** from `assets/ttls/LS_ENU_TTL_CSV/transformed/temp_aligned_to_centerline.csv` (orange)
+
+Use the matplotlib window toolbar to **zoom** (magnifying glass), **pan** (hand), **save**, or **reset view** (home).
+
+## Main-Track-Only OpenDRIVE (from TTL)
+
+The script `build_main_track_xodr.py` creates a new OpenDRIVE file that has a single road for the main track only (no pit, no junctions). The reference line is the TTL centerline (`ttl_fellow_test_xodr_all.csv`), and left/right lane widths are taken from the source XODR at the closest reference-line position for each TTL point.
+
+### Usage
+
+From the Scenic repo root:
+
+```bash
+python create_new_ttl/build_main_track_xodr.py
+python create_new_ttl/build_main_track_xodr.py --output path/to/out.xodr --xodr path/to/LagunaSeca.xodr --ttl path/to/ttl.csv
+```
+
+### Output
+
+- Default output: `assets/maps/dSPACE/LagunaSeca_MainTrack_FromTTL.xodr`
+- One road, one lane section, left and right driving lanes with widths sampled from the source XODR (main-track roads: The Corkscrew1, Andretti Hairpin1_3). If the source has only one-sided lanes, total width is split equally left/right.
+
 ## Racing Line Generator
 
 The script `generate_racing_line.py` creates a viable racing line from the centerline using curvature-based optimization.

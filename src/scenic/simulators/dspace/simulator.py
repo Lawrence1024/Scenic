@@ -470,10 +470,10 @@ class DSpaceSimulation(RacingSimulation):
                     self._cd.set_var(KEY_BRAKE_REAR, brake_val)
                     print(f"  [ControlDesk] OK - Brake (front/rear) written successfully")
                 
-                # Steering: Scenic uses -1 to 1, ControlDesk expects -70 to +70 (right to left)
-                # Map -1..1 to -70..+70 command range
+                # Steering: Scenic uses -1 to 1, ControlDesk expects -240 to +240 (right to left)
+                # Map -1..1 to -240..+240 command range
                 if steering is not None:
-                    steer_val = -float(max(-1.0, min(1.0, steering)) * 70.0)
+                    steer_val = -float(max(-1.0, min(1.0, steering)) * 240.0)
                     print(f"  [ControlDesk] Setting steering: {steering} -> {steer_val}")
                     self._cd.set_var(KEY_STEERING, steer_val)
                     print(f"  [ControlDesk] OK - Steering written successfully")
@@ -685,10 +685,10 @@ class DSpaceSimulation(RacingSimulation):
         #     except Exception as e:
         #         print(f"  Brake (Rear): [Error reading: {e}]")
         #     
-        #     # Read steering (-70 to +70 command range, -70=right to 70=left)
+        #     # Read steering (-240 to +240 command range, -240=right to 240=left)
         #     try:
         #         steering_val = self._cd.get_var(KEY_STEERING)
-        #         steering_scenic = -steering_val / 70.0  # Convert back to -1 to 1 range
+        #         steering_scenic = -steering_val / 240.0  # Convert back to -1 to 1 range
         #         print(f"  Steering: {steering_val} ({steering_scenic:.3f} normalized)")
         #     except Exception as e:
         #         print(f"  Steering: [Error reading: {e}]")

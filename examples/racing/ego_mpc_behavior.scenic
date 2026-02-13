@@ -18,13 +18,17 @@ model scenic.domains.racing.model
 # --- Ego car with MPC behavior ---
 # Using main racing road centerline TTL (excluding pitlane)
 
-# ego = new RacingCar at (614.659946,-302.782016), \
-ego = new RacingCar at (55.766137,88.269387), \
+# ego = new RacingCar at (614.659946,-302.782016),\
+ego = new RacingCar at (-110.956171,-151.841778,8.331000),\
+# ego = new RacingCar at (55.766137,88.269387), \
     with regionContainedIn everywhere, \
     with raceNumber 1, \
     # with ttlFileName 'ttl_17.csv', \
+    # with ttlFileName 'laguna_main_racing_line', \
+    # with ttlFileName 'laguna_raceable_xy.csv', \
     with ttlFileName 'ttl_fellow_test_xodr_all.csv', \
     # with ttlFileName 'ttl_racing_line_xodr.csv', \
+    # with ttlFileName 'temp_aligned_to_centerline.csv', \
     with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV/transformed'), \
     with ttlDX 0.0, \
     with ttlDY 0.0

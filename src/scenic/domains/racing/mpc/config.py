@@ -42,7 +42,7 @@ class MPCConfig:
         self.w_ey = config_dict.get('w_ey', 2.0)
         self.w_epsi = config_dict.get('w_epsi', 2.0)
         self.w_u = config_dict.get('w_u', 0.1)
-        self.w_du = config_dict.get('w_du', 0.75)
+        self.w_du = config_dict.get('w_du', 1.8)  # Steering rate weight (higher = smoother, less overcorrect)
         self.wT_ey = config_dict.get('wT_ey', 5.0)
         self.wT_epsi = config_dict.get('wT_epsi', 1.0)
         
@@ -51,7 +51,7 @@ class MPCConfig:
         self.w_u_vel = config_dict.get('w_u_vel', 0.25)  # Control input * velocity^2 weight
         
         # Steering acceleration penalty (smoother steering)
-        self.w_ddu = config_dict.get('w_ddu', 0.00002)  # Steering acceleration weight
+        self.w_ddu = config_dict.get('w_ddu', 0.00003)  # Steering acceleration weight (smoother steering)
         
         # Adaptive weights based on curvature (low curvature = straights, high curvature = sharp turns)
         self.use_adaptive_weights = config_dict.get('use_adaptive_weights', True)
@@ -70,7 +70,7 @@ class MPCConfig:
         self.w_epsi_vel_high_curv = config_dict.get('w_epsi_vel_high_curv', 0.8)
         self.w_u_high_curv = config_dict.get('w_u_high_curv', 0.02)
         self.w_u_vel_high_curv = config_dict.get('w_u_vel_high_curv', 0.05)
-        self.w_ddu_high_curv = config_dict.get('w_ddu_high_curv', 0.0000005)
+        self.w_ddu_high_curv = config_dict.get('w_ddu_high_curv', 0.000003)
         
         # Safety thresholds
         self.admissible_position_error = config_dict.get('admissible_position_error', 30.0)  # Default 30.0m for sparse waypoints
@@ -80,10 +80,14 @@ class MPCConfig:
         self.max_invalid_count = config_dict.get('max_invalid_count', 10)
         
         # Filter
-        self.steering_lpf_cutoff_hz = config_dict.get('steering_lpf_cutoff_hz', 3.0)
+        self.steering_lpf_cutoff_hz = config_dict.get('steering_lpf_cutoff_hz', 2.0)  # Smoother steering output
         
         # Waypoint/Reference
         self.traj_resample_dist = config_dict.get('traj_resample_dist', 0.1)  # Finer resolution (0.1m vs 0.2m)
+        # Segment selection smoothing: only switch segment when new score is better by this margin (m)
+        self.segment_hysteresis_m = config_dict.get('segment_hysteresis_m', 0.4)
+        # Reference blend at boundaries: blend toward next segment when u_proj >= this (0 = start, 1 = end)
+        self.segment_blend_u_start = config_dict.get('segment_blend_u_start', 0.7)
         
         # Curvature smoothing
         self.curvature_smoothing_num = config_dict.get('curvature_smoothing_num', 15)  # Points for curvature calculation
@@ -103,14 +107,22 @@ class MPCConfig:
         
         # Longitudinal MPC weights
         self.w_v = config_dict.get('w_v', 10.0)  # Speed tracking weight
-        self.w_a = config_dict.get('w_a', 0.1)  # Acceleration smoothness weight
+        self.w_a = config_dict.get('w_a', 0.25)  # Acceleration smoothness weight (smoother throttle/brake)
         self.w_u_lon = config_dict.get('w_u_lon', 0.05)  # Control input weight
-        self.w_du_lon = config_dict.get('w_du_lon', 0.5)  # Control rate weight
+        self.w_du_lon = config_dict.get('w_du_lon', 2.0)  # Control rate weight (smoother throttle/brake)
         self.wT_v = config_dict.get('wT_v', 20.0)  # Terminal speed weight
         
         # Longitudinal MPC filters
-        self.throttle_lpf_cutoff_hz = config_dict.get('throttle_lpf_cutoff_hz', 5.0)
-        self.brake_lpf_cutoff_hz = config_dict.get('brake_lpf_cutoff_hz', 5.0)
+        self.throttle_lpf_cutoff_hz = config_dict.get('throttle_lpf_cutoff_hz', 3.5)
+        self.brake_lpf_cutoff_hz = config_dict.get('brake_lpf_cutoff_hz', 3.5)
+        
+        # Gear 1 creep (race car idle torque: car moves without throttle in gear 1)
+        self.creep_accel_gear1 = config_dict.get('creep_accel_gear1', 0.3)  # m/s^2 equivalent at zero throttle
+        self.creep_speed_threshold = config_dict.get('creep_speed_threshold', 3.0)  # m/s, apply creep below this
+        
+        # Deadbands to avoid brake/throttle oscillation (especially in turns)
+        self.speed_deadband = config_dict.get('speed_deadband', 0.3)  # m/s, hold command if |v - v_ref| < this
+        self.accel_deadband = config_dict.get('accel_deadband', 0.25)  # m/s^2, zero accel_cmd if |accel_cmd| < this
         
         # Curvature-based speed limiting
         self.max_lateral_acceleration = config_dict.get('max_lateral_acceleration', 8.0)  # m/s² (conservative for indoor sim)

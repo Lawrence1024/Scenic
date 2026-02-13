@@ -29,11 +29,18 @@ if scenic_path.exists():
     sys.path.insert(0, str(scenic_path))
 
 # Configuration
-MAX_TRACK_WIDTH = 10.0  # Maximum lateral offset from centerline (meters)
+MAX_TRACK_WIDTH = 10.0  # Track width for reference (meters)
+MAX_RACING_LINE_OFFSET = 2.0  # Maximum lateral offset from centerline (meters) - conservative to stay on track
 MIN_TRACK_WIDTH = 0.5   # Minimum lateral offset (for smooth transitions)
-CURVATURE_THRESHOLD = 0.005  # Curvature threshold for corner detection (1/m, R=200m)
-LOOKAHEAD_DISTANCE = 50.0  # Distance to look ahead for corner detection (meters)
+CURVATURE_THRESHOLD = 0.008  # Curvature threshold for corner detection (1/m) - only offset on sharper turns
+LOOKAHEAD_DISTANCE = 15.0  # Distance to look ahead (meters) - shorter = less "swing" before turn
 SMOOTHING_WINDOW = 5  # Number of points for smoothing offsets
+# On corner exit (curvature decreasing = past apex), taper offset back toward centerline so we don't
+# stay outside and run off track. 0.0 = centerline on exit, 1.0 = same as approach (can run off).
+EXIT_TAPER = 0.2  # Use only 20% of offset on exit - pull back to centerline after apex
+# Turn-in: start pulling toward apex this many meters before the apex (sharp curves). Larger = turn in
+# earlier so we don't run out of track on U-turns; smaller = later turn-in.
+TURN_IN_DISTANCE = 25.0  # meters before apex to start turning in
 
 
 def compute_curvature(p0: Tuple[float, float], 
@@ -136,38 +143,35 @@ def compute_optimal_offset(curvature: float,
                           track_width: float = MAX_TRACK_WIDTH) -> float:
     """Compute optimal lateral offset for racing line.
     
-    Racing line strategy:
-    - Left turns (positive curvature): offset to right (outside) before turn, cut inside at apex
-    - Right turns (negative curvature): offset to left (outside) before turn, cut inside at apex
-    - Straights: stay near centerline
+    Conservative strategy to stay on track:
+    - Small offset only on sharper turns (no huge swing before corner)
+    - Left turns: slight offset right (outside); right turns: slight offset left
+    - Straights and mild curves: stay on centerline
     
     Args:
         curvature: Current curvature (1/m)
         lookahead_curvature: Curvature ahead (for anticipation)
-        track_width: Maximum track width (meters)
+        track_width: Track width for reference (meters)
         
     Returns:
         Lateral offset in meters (positive = left, negative = right)
     """
-    # Use lookahead curvature for anticipation
-    effective_curvature = 0.7 * curvature + 0.3 * lookahead_curvature
+    # Use lookahead for mild anticipation only (reduced weight = less early swing)
+    effective_curvature = 0.85 * curvature + 0.15 * lookahead_curvature
     
     abs_curvature = abs(effective_curvature)
     
-    # For straights (low curvature), stay near centerline
+    # For straights and mild curves, stay on centerline
     if abs_curvature < CURVATURE_THRESHOLD:
         return 0.0
     
-    # For corners, compute optimal offset
-    # Maximum offset is proportional to curvature, but capped at track width
-    # Use 70-80% of track width for racing line (leave margin)
-    max_offset = 0.75 * track_width
+    # Cap offset so we don't swing far outside (stay on track)
+    max_offset = MAX_RACING_LINE_OFFSET
     
-    # Scale offset based on curvature magnitude
-    # Higher curvature = more offset needed
-    curvature_factor = min(1.0, abs_curvature / 0.05)  # Normalize to max curvature of 0.05 1/m
+    # Scale offset by curvature - only use full offset on very sharp turns
+    curvature_factor = min(1.0, abs_curvature / 0.03)  # 0.03 1/m ~ R=33m for full offset
     
-    # Offset direction: opposite of turn direction
+    # Offset direction: opposite of turn direction (outside before apex)
     # Left turn (positive curvature) -> offset right (negative)
     # Right turn (negative curvature) -> offset left (positive)
     offset = -np.sign(effective_curvature) * max_offset * curvature_factor
@@ -227,6 +231,28 @@ def generate_racing_line(centerline: List[Tuple[float, float]],
         dist = math.sqrt(dx*dx + dy*dy)
         cumulative_dist.append(cumulative_dist[-1] + dist)
     
+    # Curvature derivative: positive = entering corner, negative = exiting (past apex)
+    curvature_derivative = [0.0] * n
+    for i in range(1, n - 1):
+        curvature_derivative[i] = curvature[i + 1] - curvature[i - 1]  # simple discrete derivative
+    curvature_derivative[0] = curvature_derivative[1]
+    curvature_derivative[-1] = curvature_derivative[-2]
+    
+    # Find apex indices (local maxima of |curvature|) for turn-in
+    apex_indices = []
+    for i in range(1, n - 1):
+        if abs(curvature[i]) >= abs(curvature[i - 1]) and abs(curvature[i]) >= abs(curvature[i + 1]):
+            if abs(curvature[i]) >= CURVATURE_THRESHOLD:
+                apex_indices.append(i)
+    
+    # For each point, distance to next apex along path (for turn-in scaling)
+    def distance_to_next_apex(idx: int) -> float:
+        """Distance from point idx to the next apex ahead. Returns inf if no apex ahead."""
+        for apex in apex_indices:
+            if apex >= idx:
+                return cumulative_dist[apex] - cumulative_dist[idx]
+        return float("inf")
+    
     # Compute optimal offsets
     offsets = []
     for i in range(n):
@@ -239,6 +265,15 @@ def generate_racing_line(centerline: List[Tuple[float, float]],
         
         lookahead_curvature = curvature[lookahead_idx] if lookahead_idx < n else curvature[i]
         offset = compute_optimal_offset(curvature[i], lookahead_curvature, track_width)
+        # Turn-in: within TURN_IN_DISTANCE of apex, pull toward centerline so we don't stay
+        # outside too long and run out of track on sharp curves / U-turns
+        dist_apex = distance_to_next_apex(i)
+        if dist_apex <= TURN_IN_DISTANCE and dist_apex >= 0 and abs(curvature[i]) >= CURVATURE_THRESHOLD:
+            turn_in_scale = dist_apex / TURN_IN_DISTANCE  # 0 at apex, 1 at TURN_IN_DISTANCE before
+            offset *= turn_in_scale
+        # On corner exit (curvature decreasing), taper offset so we return toward centerline
+        elif curvature_derivative[i] < -1e-6 and abs(curvature[i]) >= CURVATURE_THRESHOLD:
+            offset *= EXIT_TAPER
         offsets.append(offset)
     
     # Smooth offsets
@@ -329,10 +364,12 @@ def main():
     print(f"Loaded {len(centerline)} centerline points")
     
     # Generate racing line
-    print(f"\nGenerating racing line...")
-    print(f"  Max track width: {MAX_TRACK_WIDTH}m")
+    print(f"\nGenerating racing line (conservative: small offset, taper on exit)...")
+    print(f"  Max racing line offset: {MAX_RACING_LINE_OFFSET}m")
     print(f"  Curvature threshold: {CURVATURE_THRESHOLD} 1/m")
     print(f"  Lookahead distance: {LOOKAHEAD_DISTANCE}m")
+    print(f"  Exit taper: {EXIT_TAPER} (pull back to centerline after apex)")
+    print(f"  Turn-in distance: {TURN_IN_DISTANCE}m (start turning in before apex on sharp curves)")
     
     racing_line = generate_racing_line(centerline, MAX_TRACK_WIDTH)
     

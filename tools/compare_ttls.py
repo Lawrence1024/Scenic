@@ -1016,8 +1016,17 @@ def check_ttl_in_bounds(ttl_points: List[Tuple[float, float]],
     }
 
 
-def extract_track_boundaries(xodr_path: str) -> Optional[Dict]:
+def extract_track_boundaries(
+    xodr_path: str,
+    main_track_road_names: Optional[Tuple[str, ...]] = None,
+) -> Optional[Dict]:
     """Extract track boundaries and centerline from XODR file.
+    
+    Args:
+        xodr_path: Path to the OpenDRIVE file.
+        main_track_road_names: If given, only roads with name in this tuple are included
+            for left/right boundary segments (pit is always separate). Use for maps that
+            have junction roads so you get a single consistent track envelope.
     
     Returns:
         Dictionary with:
@@ -1070,6 +1079,11 @@ def extract_track_boundaries(xodr_path: str) -> Optional[Dict]:
         
         for road in network.roads:
             is_pit_lane = road in pit_lane_roads
+            # If main_track_road_names is set, skip non-pit roads that aren't in the list (e.g. junctions)
+            if main_track_road_names is not None and not is_pit_lane:
+                road_name = getattr(road, 'name', '') or ''
+                if road_name.strip() not in main_track_road_names:
+                    continue
             for lane in road.lanes:
                 # Centerline
                 if hasattr(lane, 'centerline') and lane.centerline:
