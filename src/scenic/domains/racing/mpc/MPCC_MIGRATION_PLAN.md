@@ -4,6 +4,47 @@ This document outlines a path from the current **trajectory-tracking MPC** to a 
 
 ---
 
+## For AI agents
+
+- **Purpose:** Executable migration plan. Implement phases in order (Phase 1 → 2 → 3). Phase 0 is already done.
+- **Scope:** Lateral MPC in `src/scenic/domains/racing/mpc/` (mpc_lateral.py, reference_builder.py, config). Longitudinal/behavior in racing domain may need changes for velocity profile (see Observed behaviors and Implementation notes).
+- **Key files:** `mpc_lateral.py`, `reference_builder.py`, `config.py`, `vehicle_mpc.yaml`.
+- **Success:** Observed issues (see Observed behaviors) are reduced or eliminated; contouring + progress cost in place; velocity profile smooth and anticipatory where added.
+
+---
+
+## 0. Observed behaviors (from run logs and visualization)
+
+These are the behaviors this plan aims to fix or improve. Evidence comes from `run.log` and in-sim visualization.
+
+### Throttle/brake oscillation
+
+- **What:** Controller flips between full throttle (e.g. throttle=0.65) and braking (brake=0.1) every few steps.
+- **Log evidence:** Repeated pattern: `throttle=0.650, brake=0.000` for several steps, then `[Speed Limit] Speed 35.84m/s exceeds limit 35.8m/s, applying brake=0.100`, then `throttle=0.000, brake=0.100`, then back to full throttle.
+- **Cause:** Speed target is a hard limit (e.g. 35.8 m/s). As soon as speed exceeds it, throttle is cut and brake applied; when speed drops below, full throttle resumes. No deadband or smooth transition.
+- **Goal:** Smooth, anticipatory speed control (e.g. curvature-based velocity profile, slow-in before bends) so we do not ride the limit and oscillate.
+
+### Speed over 100 km/h when entering a turn
+
+- **What:** Vehicle enters a turn at very high speed (e.g. 35.5–35.9 m/s, about 129 km/h).
+- **Log evidence:** `Speed: 35.84 m/s` (and similar) for many consecutive steps on approach to bends; segment_heading about -104 deg with very small steering (-0.001 to -0.008).
+- **Cause:** No anticipatory speed reduction; speed is held at a constant cap until already in the turn. No slow-in (reduce speed before the turn).
+- **Goal:** Velocity profile that reduces speed before the turn (curvature-based or progress-based), so we are not at 100+ km/h when steering is required.
+
+### Did not steer left in time (missed turn)
+
+- **What:** Vehicle fails to turn left enough and runs wide to the right of the path.
+- **Log evidence:** CTE about -10 to -12 m (RIGHT); vehicle heading about -73 deg, path segment heading about -49 deg; position far right of path. Speed has dropped to about 17–18 m/s with heavy braking (brake=0.35) after missing the turn.
+- **Cause:** Entered the turn too fast; lateral controller did not (or could not) apply enough steering in time. Combination of (1) speed too high for the curvature and (2) reactive rather than anticipatory control.
+- **Goal:** Slow down before the turn (velocity profile) and follow path (contouring); avoid too fast, miss turn, then brake hard.
+
+### What we already fixed (and what they do not fix)
+
+- **Segment blending + hysteresis:** Address lateral steering oscillation at segment boundaries (left–right–left). Do not fix throttle/brake oscillation or too fast into turn.
+- **Quick fixes (w_du, w_ddu, LPF, w_du_lon, w_a):** Smooth reaction (less aggressive steering and pedal changes). Do not fix the binary speed limit that causes throttle/brake flip or anticipation (slow-in, steer earlier).
+
+---
+
 ## 1. Current vs MPCC-Style
 
 | Aspect | Current (trajectory-tracking MPC) | MPCC-style |
@@ -47,7 +88,8 @@ References: ETH Zurich MPCC (e.g. [Liniger MPCC](https://github.com/alexliniger/
 3. **Preview in s:** Build reference (ψ_ref, κ_ref, v_ref) as a function of **s** (not just waypoint index), so the horizon is “s_0, s_0 + Δs_1, …” with consistent spacing in arc length (or time with v_ref).
 4. **No cost change yet:** Keep current cost (e_y, e_ψ, u, du, ddu). This phase is mainly refactor for s-based reference.
 
-**Deliverables:** Reference builder and lateral MPC use s; state or ref_builder output includes s_0 and s along horizon.
+- **Files to touch:** `reference_builder.py`, `mpc_lateral.py`, `config.py`, `vehicle_mpc.yaml` (if new params).
+- **Success criteria:** Reference builder and lateral MPC use s; state or ref_builder output includes s_0 and s along horizon; existing behavior unchanged (no cost change).
 
 ### Phase 2: Add lag error and progress incentive
 
@@ -57,18 +99,19 @@ References: ETH Zurich MPCC (e.g. [Liniger MPCC](https://github.com/alexliniger/
 2. **Progress term:** Add a negative cost (or reward) for progress made over the horizon, e.g. `-Q_progress * (s_N - s_0)` so the optimizer prefers advancing along the path. Tune Q_progress vs Q_contour so we don’t sacrifice tracking.
 3. **Balance:** Keep contouring (e_y, e_ψ) and input/rate penalties; tune Q_lag and Q_progress so behavior is smooth and not overly aggressive.
 
-**Deliverables:** Cost function includes lag and progress terms; tuning guidelines in config/comments.
+- **Files to touch:** `mpc_lateral.py` (cost), `config.py`, `vehicle_mpc.yaml` (Q_lag, Q_progress).
+- **Success criteria:** Cost function includes lag and progress terms; tuning guidelines in config or comments; backward-compat option (e.g. zero Q_progress/Q_lag) for A/B test.
 
 ### Phase 3: Full MPCC-style formulation (optional)
 
-**Goal:** Align with standard MPCC: progress as part of dynamics, contouring + lag + progress in cost.
-
-1. **Augmented state:** Add progress s (or θ) as a state; dynamics: s_{k+1} = s_k + f(v, ψ, path) (e.g. from path tangent and speed). May require path curvature κ(s) and heading ψ(s) along path.
-2. **Contouring + lag cost:** Standard MPCC cost: contouring error (e_y), lag error (s_ref - s), and progress reward.
-3. **Solver:** If dynamics become nonlinear in s, may need NMPC or linearization; current QP may suffice if we keep a linearized progress update.
-4. **References:** Use ETH/MPCC papers and open-source code for exact cost and dynamics formulations.
-
-**Deliverables:** MPCC-style lateral controller with progress state and contouring/lag/progress cost; validation on same tracks as current MPC.
+- **Goal:** Align with standard MPCC: progress as part of dynamics, contouring + lag + progress in cost.
+- **Files to touch:** `mpc_lateral.py` (dynamics, cost, possibly solver), `reference_builder.py`, `config.py`, `vehicle_mpc.yaml`.
+- **Concrete steps:**
+  1. Augmented state: Add progress s (or θ) as a state; dynamics: s_{k+1} = s_k + f(v, ψ, path) (e.g. from path tangent and speed). May require path curvature κ(s) and heading ψ(s) along path.
+  2. Contouring + lag cost: Standard MPCC cost: contouring error (e_y), lag error (s_ref - s), and progress reward.
+  3. Solver: If dynamics become nonlinear in s, may need NMPC or linearization; current QP may suffice if we keep a linearized progress update.
+  4. References: Use ETH/MPCC papers and open-source code for exact cost and dynamics formulations.
+- **Success criteria:** MPCC-style lateral controller with progress state and contouring/lag/progress cost; validation on same tracks as current MPC.
 
 ---
 
@@ -96,3 +139,14 @@ References: ETH Zurich MPCC (e.g. [Liniger MPCC](https://github.com/alexliniger/
 - **Longitudinal:** `w_a` 0.1 → 0.25; `w_du_lon` 1.0 → 2.0; throttle/brake LPF 5.0 → 3.5 Hz.
 
 These favor smoother steering and throttle/brake and reduce “beginner-style” overcorrect; they are independent of the MPCC migration.
+
+---
+
+## 7. Quick reference for agents (phase → files → check)
+
+| Phase | Main files | What to change | After edit, verify |
+|-------|------------|----------------|--------------------|
+| 0 | (done) | — | — |
+| 1 | `reference_builder.py`, `mpc_lateral.py`, `config.py` | Expose s along path; compute s_0; build ref in s; no cost change | Ref has s_0 and s on horizon; behavior same as before |
+| 2 | `mpc_lateral.py`, `config.py`, `vehicle_mpc.yaml` | Add Q_lag, Q_progress to cost; config keys Q_lag, Q_progress | Cost terms present; optional zero weights for A/B |
+| 3 | `mpc_lateral.py`, `reference_builder.py`, `config.py`, `vehicle_mpc.yaml` | Progress in dynamics; full MPCC cost; solver if needed | Progress state; contouring+lag+progress cost; same tracks |
