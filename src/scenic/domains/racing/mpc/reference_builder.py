@@ -6,7 +6,7 @@ for smooth, continuous trajectories.
 """
 
 import numpy as np
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union
 import math
 from scipy.interpolate import splprep, splev, UnivariateSpline
 
@@ -174,7 +174,9 @@ class ReferenceBuilder:
                 tck, u = splprep([x, y], s=0, k=min(3, len(waypoints)-1), per=0)
             return (tck, u)
         except Exception as e:
-            print(f"[ReferenceBuilder] Spline fitting failed: {e}, falling back to linear")
+            if not getattr(ReferenceBuilder, '_spline_fallback_logged', False):
+                print(f"[ReferenceBuilder] Spline fitting failed: {e}, falling back to linear")
+                ReferenceBuilder._spline_fallback_logged = True
             return None
     
     def _compute_arc_length_parameterization(self, tck, u_param: np.ndarray, num_points: int) -> Tuple[np.ndarray, np.ndarray]:
@@ -294,14 +296,14 @@ class ReferenceBuilder:
                 dist_sq = dx*dx + dy*dy
                 dist_sq_xy = dist_sq
             
-            # Gradient of distance^2 with respect to u
+            # Gradient of distance^2 with respect to u (only use dz when we set it above)
             ddist_sq_du = -2.0 * (dx * deriv[0] + dy * deriv[1])
-            if is_3d and len(position) >= 3 and len(deriv) >= 3:
+            if is_3d and len(position) >= 3 and len(point) >= 3 and len(deriv) >= 3:
                 ddist_sq_du += -2.0 * dz * deriv[2]
             
             # Hessian (second derivative)
             d2dist_sq_du2 = 2.0 * (deriv[0]*deriv[0] + deriv[1]*deriv[1] - dx*deriv2[0] - dy*deriv2[1])
-            if is_3d and len(deriv) >= 3 and len(deriv2) >= 3:
+            if is_3d and len(position) >= 3 and len(point) >= 3 and len(deriv) >= 3 and len(deriv2) >= 3:
                 d2dist_sq_du2 += 2.0 * (deriv[2]*deriv[2] - dz*deriv2[2])
             
             # Update u using Newton-Raphson
@@ -499,8 +501,9 @@ class ReferenceBuilder:
             return resampled
             
         except Exception as e:
-            print(f"[ReferenceBuilder] Spline resampling failed: {e}, falling back to linear")
-            # Fallback to linear resampling
+            if not getattr(ReferenceBuilder, '_spline_fallback_logged', False):
+                print(f"[ReferenceBuilder] Spline resampling failed: {e}, falling back to linear")
+                ReferenceBuilder._spline_fallback_logged = True
             return self._resample_waypoints_linear(waypoints)
     
     def compute_curvature(self, 
@@ -553,8 +556,18 @@ class ReferenceBuilder:
                        dt: float,
                        speed: float,
                        last_waypoint_idx: Optional[int] = None,
-                       cte_magnitude: Optional[float] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
-        """Build reference trajectory for MPC horizon.
+                       cte_magnitude: Optional[float] = None,
+                       v_ref_profile: Optional[Union[List[float], np.ndarray]] = None
+                       ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, float, np.ndarray]:
+        """Build reference trajectory for MPC horizon (Phase 1: s-based parameterization).
+        
+        Path is parameterized by arc length s. Current progress s_0 is computed by
+        projecting the vehicle onto the path; the horizon is built as s_0, s_0+Δs_1, ...
+        with Δs_k from speed (constant) or from v_ref_profile when provided (trajectory-aware).
+        
+        When v_ref_profile is provided, lateral and longitudinal MPC share the same speed
+        plan so the controller "sees the whole trajectory" and avoids over-brake then throttle
+        or over-steer then correct.
         
         Supports both 2D (x, y) and 3D (x, y, z) waypoints.
         
@@ -564,25 +577,35 @@ class ReferenceBuilder:
             current_heading: Current vehicle heading (radians)
             horizon_steps: Number of prediction steps
             dt: Time step (seconds)
-            speed: Current vehicle speed (m/s)
+            speed: Current vehicle speed (m/s) - used when v_ref_profile is None
             last_waypoint_idx: Last known waypoint index
+            cte_magnitude: Optional CTE magnitude for adaptive search
+            v_ref_profile: Optional speed profile over horizon (m/s). If length matches
+                horizon_steps, used for v_ref and for s_horizon (s_k = s_0 + sum(v_ref[0:k+1]*dt)).
             
         Returns:
-            Tuple of (psi_ref, kappa_ref, v_ref, grade_ref, new_waypoint_idx)
+            Tuple of (psi_ref, kappa_ref, v_ref, grade_ref, new_waypoint_idx, s_0, s_horizon)
             - psi_ref: Reference heading array (radians) - yaw angle in XY plane
             - kappa_ref: Reference curvature array (1/meters) - curvature in XY plane
-            - v_ref: Reference speed array (m/s) - currently constant
+            - v_ref: Reference speed array (m/s) - from v_ref_profile or constant speed
             - grade_ref: Reference road grade array (radians) - pitch angle (positive = uphill)
             - new_waypoint_idx: Updated waypoint index
+            - s_0: Current progress along path (arc length from path start to projected position, meters)
+            - s_horizon: Arc length at each horizon step (length horizon_steps), meters
         """
+        horizon_steps = int(horizon_steps)
         if not waypoints or len(waypoints) < 2:
             # Return zero references if no waypoints
+            s_horizon = np.zeros(max(1, horizon_steps), dtype=np.float64)
+            v_ref = np.array(v_ref_profile, dtype=np.float64) if (v_ref_profile is not None and len(v_ref_profile) == horizon_steps) else np.full(horizon_steps, speed)
             return (
                 np.zeros(horizon_steps),
                 np.zeros(horizon_steps),
-                np.full(horizon_steps, speed),
+                v_ref,
                 np.zeros(horizon_steps),  # grade_ref
-                0
+                0,
+                0.0,   # s_0
+                s_horizon
             )
         
         # Check if waypoints are 3D
@@ -606,19 +629,21 @@ class ReferenceBuilder:
             adaptive_search=True, cte_magnitude=cte_estimate
         )
         
-        # Ensure horizon_steps is a positive integer
-        horizon_steps = int(horizon_steps)
         if horizon_steps <= 0:
             raise ValueError(f"horizon_steps must be > 0, got {horizon_steps}")
         
         # Build reference arrays - ensure they are 1D numpy arrays
         psi_ref = np.zeros(horizon_steps, dtype=np.float64)
         kappa_ref = np.zeros(horizon_steps, dtype=np.float64)
-        v_ref = np.full(horizon_steps, float(speed), dtype=np.float64)  # Constant speed for now
+        if v_ref_profile is not None and len(v_ref_profile) == horizon_steps:
+            v_ref = np.asarray(v_ref_profile, dtype=np.float64)
+            if v_ref.ndim != 1:
+                v_ref = np.ravel(v_ref)[:horizon_steps]
+            horizon_dist = float(np.sum(v_ref) * dt)
+        else:
+            v_ref = np.full(horizon_steps, float(speed), dtype=np.float64)
+            horizon_dist = speed * horizon_steps * dt
         grade_ref = np.zeros(horizon_steps, dtype=np.float64)  # Road grade (pitch angle) in radians
-        
-        # Distance to travel over horizon
-        horizon_dist = speed * horizon_steps * dt
         
         # Helper function to flip heading by 180° if opposite to vehicle heading
         def adjust_heading_if_opposite(seg_heading, vehicle_heading):
@@ -648,38 +673,33 @@ class ReferenceBuilder:
                     if spline_result is not None:
                         tck, u = spline_result
                         
-                        # Find parameter u0 corresponding to current position (nearest waypoint)
-                        # Map nearest_idx to window index
-                        window_nearest_idx = nearest_idx - start_idx
-                        if window_nearest_idx < len(u):
-                            u0 = u[window_nearest_idx] if len(u) > window_nearest_idx else u[0]
-                        else:
-                            u0 = u[0]
+                        # Phase 1: Current progress s_0 = arc length from path (window) start to projected position
+                        s_0, u_0, _ = self.project_to_spline(
+                            current_position, waypoint_window, tck=tck, u_param=u
+                        )
                         
-                        # Compute arc-length from u0 (supports both 2D and 3D)
-                        u_fine = np.linspace(u0, 1.0, 1000)
+                        # Full window arc-length parameterization (u from 0 to 1)
+                        u_fine = np.linspace(0.0, 1.0, 1000)
                         points_fine = splev(u_fine, tck)
                         dx = np.diff(points_fine[0])
                         dy = np.diff(points_fine[1])
                         if len(points_fine) >= 3 and is_3d:
-                            # 3D case: use 3D distance
                             dz = np.diff(points_fine[2])
                             ds = np.sqrt(dx*dx + dy*dy + dz*dz)
                         else:
-                            # 2D case: use 2D distance
                             ds = np.sqrt(dx*dx + dy*dy)
                         s_cumulative = np.concatenate(([0], np.cumsum(ds)))
                         total_length = s_cumulative[-1]
                         
-                        # Sample at uniform arc-length intervals for horizon
+                        # Horizon in s: use v_ref so lateral MPC sees same trajectory as longitudinal (smooth turns, no overshoot)
+                        s_horizon = np.zeros(horizon_steps, dtype=np.float64)
                         for k in range(horizon_steps):
-                            target_s = speed * (k + 1) * dt
+                            target_s = s_0 + dt * float(np.sum(v_ref[:k + 1]))
+                            s_horizon[k] = min(target_s, total_length)
                             
                             if target_s >= total_length:
-                                # Beyond spline: use last point
                                 u_k = 1.0
                             else:
-                                # Find u that corresponds to target_s arc-length
                                 u_k = np.interp(target_s, s_cumulative, u_fine)
                             
                             # Evaluate spline and derivatives at u_k
@@ -727,111 +747,101 @@ class ReferenceBuilder:
                                 kappa_ref[k] = 0.0
                                 grade_ref[k] = 0.0
                         
-                        # Successfully used splines
-                        # Verify arrays before returning
+                        # Successfully used splines (Phase 1: return s_0 and s_horizon)
                         if len(psi_ref) != horizon_steps or len(kappa_ref) != horizon_steps or len(grade_ref) != horizon_steps:
                             raise ValueError("Spline reference arrays have wrong length")
-                        return (psi_ref, kappa_ref, v_ref, grade_ref, nearest_idx)
+                        return (psi_ref, kappa_ref, v_ref, grade_ref, nearest_idx, float(s_0), s_horizon)
             except Exception as e:
-                print(f"[ReferenceBuilder] Spline-based reference building failed: {e}, falling back to linear")
+                if not getattr(ReferenceBuilder, '_spline_fallback_logged', False):
+                    print(f"[ReferenceBuilder] Spline-based reference building failed: {e}, falling back to linear")
+                    ReferenceBuilder._spline_fallback_logged = True
                 # Fall through to linear method
         
-        # Fallback: Linear interpolation along waypoint segments (original method)
-        # Supports both 2D and 3D waypoints (uses 3D distance for path length, but computes heading/curvature in XY plane)
-        current_idx = nearest_idx
-        accumulated_dist = 0.0
+        # Fallback: Linear interpolation along waypoint segments (Phase 1: s-based)
+        # Precompute cumulative arc length from path start: s_cumulative_waypoints[i] = length to waypoint i
+        s_cumulative_waypoints = [0.0]
+        for i in range(1, len(waypoints)):
+            wp0, wp1 = waypoints[i - 1], waypoints[i]
+            dx = wp1[0] - wp0[0]
+            dy = wp1[1] - wp0[1]
+            if is_3d and len(wp0) >= 3 and len(wp1) >= 3:
+                dz = wp1[2] - wp0[2]
+                seg_len = math.sqrt(dx*dx + dy*dy + dz*dz)
+            else:
+                seg_len = math.sqrt(dx*dx + dy*dy)
+            s_cumulative_waypoints.append(s_cumulative_waypoints[-1] + seg_len)
+        total_length = s_cumulative_waypoints[-1]
+        
+        # Current progress s_0: project current position onto segment at nearest_idx
+        seg_idx_0 = min(nearest_idx, len(waypoints) - 2)
+        wp0 = waypoints[seg_idx_0]
+        wp1 = waypoints[seg_idx_0 + 1]
+        x0, y0 = wp0[0], wp0[1]
+        x1, y1 = wp1[0], wp1[1]
+        seg_dx, seg_dy = x1 - x0, y1 - y0
+        seg_len_0 = math.sqrt(seg_dx*seg_dx + seg_dy*seg_dy) if (seg_dx or seg_dy) else 1e-9
+        wx = current_position[0] - x0
+        wy = current_position[1] - y0
+        u_proj = np.clip((wx*seg_dx + wy*seg_dy) / (seg_len_0*seg_len_0), 0.0, 1.0)
+        s_0 = s_cumulative_waypoints[seg_idx_0] + u_proj * (s_cumulative_waypoints[seg_idx_0 + 1] - s_cumulative_waypoints[seg_idx_0])
+        
+        s_horizon = np.zeros(horizon_steps, dtype=np.float64)
         
         for k in range(horizon_steps):
-            target_dist = speed * (k + 1) * dt
+            target_s = s_0 + dt * float(np.sum(v_ref[:k + 1]))
+            s_horizon[k] = min(target_s, total_length)
+            target_s = s_horizon[k]
             
-            # Find waypoint segment for this step
-            while current_idx < len(waypoints) - 1:
-                wp0 = waypoints[current_idx]
-                wp1 = waypoints[current_idx + 1]
-                x0, y0 = wp0[0], wp0[1]
-                x1, y1 = wp1[0], wp1[1]
-                dx = x1 - x0
-                dy = y1 - y0
+            # Find segment j such that s_cumulative_waypoints[j] <= target_s < s_cumulative_waypoints[j+1]
+            j = 0
+            while j < len(waypoints) - 1 and s_cumulative_waypoints[j + 1] <= target_s:
+                j += 1
+            current_idx = min(j, len(waypoints) - 2)
+            
+            wp0 = waypoints[current_idx]
+            wp1 = waypoints[current_idx + 1]
+            x0, y0 = wp0[0], wp0[1]
+            x1, y1 = wp1[0], wp1[1]
+            dx = x1 - x0
+            dy = y1 - y0
+            if is_3d and len(wp0) >= 3 and len(wp1) >= 3:
+                dz = wp1[2] - wp0[2]
+                seg_len = math.sqrt(dx*dx + dy*dy + dz*dz)
+            else:
+                seg_len = math.sqrt(dx*dx + dy*dy)
+            
+            if seg_len < 1e-6:
+                psi_ref[k] = current_heading
+                kappa_ref[k] = 0.0
+                grade_ref[k] = 0.0
+            else:
+                u = (target_s - s_cumulative_waypoints[current_idx]) / seg_len
+                u = max(0.0, min(1.0, u))
+                ref_x = x0 + u * dx
+                ref_y = y0 + u * dy
                 
-                # Compute segment length (3D if available, otherwise 2D)
+                seg_heading = math.atan2(dy, dx)
+                psi_ref[k] = adjust_heading_if_opposite(seg_heading, current_heading)
+                
+                smoothing_offset = max(1, self.curvature_smoothing_num)
+                if current_idx >= smoothing_offset and current_idx < len(waypoints) - smoothing_offset:
+                    p0 = (waypoints[current_idx - smoothing_offset][0], waypoints[current_idx - smoothing_offset][1])
+                    p1 = (waypoints[current_idx][0], waypoints[current_idx][1])
+                    p2 = (waypoints[current_idx + smoothing_offset][0], waypoints[current_idx + smoothing_offset][1])
+                    kappa_ref[k] = self.compute_curvature(p0, p1, p2)
+                elif current_idx > 0 and current_idx < len(waypoints) - 1:
+                    p0 = (waypoints[current_idx - 1][0], waypoints[current_idx - 1][1])
+                    p1 = (waypoints[current_idx][0], waypoints[current_idx][1])
+                    p2 = (waypoints[current_idx + 1][0], waypoints[current_idx + 1][1])
+                    kappa_ref[k] = self.compute_curvature(p0, p1, p2)
+                else:
+                    kappa_ref[k] = 0.0
+                
                 if is_3d and len(wp0) >= 3 and len(wp1) >= 3:
                     dz = wp1[2] - wp0[2]
-                    seg_len = math.sqrt(dx*dx + dy*dy + dz*dz)
+                    seg_len_xy = math.sqrt(dx*dx + dy*dy)
+                    grade_ref[k] = math.atan2(dz, seg_len_xy) if seg_len_xy > 1e-6 else 0.0
                 else:
-                    seg_len = math.sqrt(dx*dx + dy*dy)
-                
-                if seg_len < 1e-6:
-                    current_idx += 1
-                    continue
-                
-                if accumulated_dist + seg_len >= target_dist:
-                    # Interpolate within this segment
-                    u = (target_dist - accumulated_dist) / seg_len
-                    ref_x = x0 + u * dx
-                    ref_y = y0 + u * dy
-                    
-                    # Compute heading (tangent direction in XY plane)
-                    seg_heading = math.atan2(dy, dx)
-                    # Flip by 180° if opposite to vehicle heading
-                    psi_ref[k] = adjust_heading_if_opposite(seg_heading, current_heading)
-                    
-                    # Compute curvature (use 3-point method with smoothing if possible)
-                    # For 3D waypoints, curvature is computed in XY plane (project to XY)
-                    smoothing_offset = max(1, self.curvature_smoothing_num)
-                    if current_idx >= smoothing_offset and current_idx < len(waypoints) - smoothing_offset:
-                        # Extract XY coordinates for curvature computation
-                        p0 = (waypoints[current_idx - smoothing_offset][0], waypoints[current_idx - smoothing_offset][1])
-                        p1 = (waypoints[current_idx][0], waypoints[current_idx][1])
-                        p2 = (waypoints[current_idx + smoothing_offset][0], waypoints[current_idx + smoothing_offset][1])
-                        kappa_ref[k] = self.compute_curvature(p0, p1, p2)
-                    elif current_idx > 0 and current_idx < len(waypoints) - 1:
-                        # Fallback to adjacent points if smoothing not possible
-                        p0 = (waypoints[current_idx - 1][0], waypoints[current_idx - 1][1])
-                        p1 = (waypoints[current_idx][0], waypoints[current_idx][1])
-                        p2 = (waypoints[current_idx + 1][0], waypoints[current_idx + 1][1])
-                        kappa_ref[k] = self.compute_curvature(p0, p1, p2)
-                    
-                    # Compute road grade (pitch angle) from 3D waypoints
-                    # grade = atan2(dz, sqrt(dx^2 + dy^2)) - positive = uphill
-                    if is_3d and len(wp0) >= 3 and len(wp1) >= 3:
-                        dz = wp1[2] - wp0[2]
-                        seg_len_xy = math.sqrt(dx*dx + dy*dy)
-                        if seg_len_xy > 1e-6:
-                            grade_ref[k] = math.atan2(dz, seg_len_xy)
-                        else:
-                            grade_ref[k] = 0.0
-                    else:
-                        grade_ref[k] = 0.0
-                    
-                    break
-                else:
-                    accumulated_dist += seg_len
-                    current_idx += 1
-            
-            # If we've reached the end, use last waypoint
-            if current_idx >= len(waypoints) - 1:
-                if len(waypoints) >= 2:
-                    last_seg = waypoints[-1]
-                    prev_seg = waypoints[-2]
-                    dx = last_seg[0] - prev_seg[0]
-                    dy = last_seg[1] - prev_seg[1]
-                    seg_heading = math.atan2(dy, dx)
-                    # Flip by 180° if opposite to vehicle heading
-                    psi_ref[k] = adjust_heading_if_opposite(seg_heading, current_heading)
-                    
-                    # Compute grade from last segment
-                    if is_3d and len(last_seg) >= 3 and len(prev_seg) >= 3:
-                        dz = last_seg[2] - prev_seg[2]
-                        seg_len_xy = math.sqrt(dx*dx + dy*dy)
-                        if seg_len_xy > 1e-6:
-                            grade_ref[k] = math.atan2(dz, seg_len_xy)
-                        else:
-                            grade_ref[k] = 0.0
-                    else:
-                        grade_ref[k] = 0.0
-                else:
-                    psi_ref[k] = current_heading
-                    kappa_ref[k] = 0.0
                     grade_ref[k] = 0.0
         
         # Verify arrays have correct shape and length before returning
@@ -868,5 +878,5 @@ class ReferenceBuilder:
         if len(grade_ref) != horizon_steps:
             raise ValueError(f"grade_ref length mismatch: expected {horizon_steps}, got {len(grade_ref)}. Shape: {grade_ref.shape}, dtype: {grade_ref.dtype}")
         
-        return (psi_ref, kappa_ref, v_ref, grade_ref, nearest_idx)
+        return (psi_ref, kappa_ref, v_ref, grade_ref, nearest_idx, float(s_0), s_horizon)
 

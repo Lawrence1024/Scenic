@@ -57,12 +57,6 @@ def read_ego_state(sim, obj):
         # Normalize to [-pi, pi]
         yaw_rad = math.atan2(math.sin(yaw_rad_raw), math.cos(yaw_rad_raw))
 
-        # Debug: show raw and normalized heading (in degrees) for sign/frame validation
-        print(
-            f"[Yaw Readback] raw_yaw_deg={yaw_deg:.3f} raw_yaw_rad={yaw_rad_raw:.3f} "
-            f"-> normalized -> heading_rad={yaw_rad:.3f} heading_deg={yaw_rad*180.0/math.pi:.3f}"
-        )
-        
         # 3. Read Velocity
         # Inputs are km/h, Scenic uses m/s
         vx_kmh = float(sim._cd.get_var(path_vx))

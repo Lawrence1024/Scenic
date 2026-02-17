@@ -38,10 +38,89 @@ These are the behaviors this plan aims to fix or improve. Evidence comes from `r
 - **Cause:** Entered the turn too fast; lateral controller did not (or could not) apply enough steering in time. Combination of (1) speed too high for the curvature and (2) reactive rather than anticipatory control.
 - **Goal:** Slow down before the turn (velocity profile) and follow path (contouring); avoid too fast, miss turn, then brake hard.
 
+### Lateral oscillation (CTE) — analysis and fixes
+
+- **What (from run.log):** CTE oscillates small (±0.18 m), then drifts to one side (-1.0 to -1.3 m), then overcorrects to the other side (+3.3 → +5.2 m). Steering flips and grows (e.g. steer 0.098 then -0.47).
+- **Root causes:** (1) No CTE deadzone — small e_y is penalized so the controller constantly corrects. (2) Very low lateral weight on straights (w_ey_low_curv = 0.01) allows drift. (3) Abrupt switch at curvature thresholds (low/mid/high) causes sudden weight jump and overcorrection. (4) CTE multiplier (1.5x–3x when off-track) can make recovery too aggressive and overshoot.
+- **Fix plan (Phase 3+ oscillation fixes):**
+  1. **CTE deadzone:** Config `cte_deadzone` (e.g. 0.2 m). Before building MPC state, clamp e_y to 0 when |e_y| < deadzone so the MPC does not correct for tiny errors.
+  2. **Cap CTE multiplier:** Config `cte_multiplier_max` (e.g. 1.5). When off-track, limit the tracking-weight multiplier to avoid over-aggressive recovery.
+  3. **Raise w_ey_low_curv:** Increase from 0.01 to ~0.05–0.1 so the car does not drift as much on straights.
+  4. **Smooth curvature weight blending:** Interpolate weights (e.g. w_ey) between low/mid/high using curvature instead of step switches at thresholds.
+- **Status:** [x] Done (implemented). Re-run and check run.log to confirm behavior.
+
+### Trajectory-consistent control (smooth turns, avoid overshoot)
+- **Goal:** Controller sees the whole trajectory so we don’t over-brake then throttle, or over-steer left then correct right.
+- **Implementation:** Behavior builds a single speed profile `v_ref_profile` (curvature + CTE limits) and passes it to both longitudinal MPC and lateral MPC. Reference builder accepts optional `v_ref_profile`; when provided, `v_ref` and `s_horizon` are built from it so lateral progress/lag cost matches the planned speed. Lateral and longitudinal thus share the same trajectory.
+- **Softer CTE speed limits:** 2–3 m CTE → 7 m/s (was 5 m/s), 3–5 m CTE → 6 m/s (was 4 m/s) to avoid crawling in turns while still staying cautious off-line.
+- **Status:** [x] Done (reference_builder.py, mpc_lateral.run_step, behaviors.scenic).
+
+### Run-off track fix (Laguna Seca)
+- **Issue:** Car ran off at ~7% lap (sharp turn): waypoint distances grew to 4.5 m, full brake/steer recovery. Cause: entered turn at ~35 m/s with curvature 0.037 (needs ~15 m/s); lookahead and slew were too small to slow in time.
+- **Fixes in behaviors.scenic:** (1) **Longer curvature lookahead:** minimum 85 m when speed > 15 m/s so sharp turns (Corkscrew, hairpins) are seen early. (2) **Faster slew-down:** slew_down_ms 4.0 → 7.0 so speed reference can drop in time. (3) **Curvature speed margin:** v_max in turns = 88% of theoretical (curvature_speed_margin = 0.88) for run-off margin. Same margin applied in v_ref_profile build.
+- **Status:** [x] Done.
+
+### How do we make sharp turns?
+
+**Question:** How do we avoid “too fast, didn’t turn in time” (high speed, then late steer/brake, CTE and waypoint distance growing)?
+
+**Principle (from literature):** Autonomous racing uses **curvature-integrated velocity profiling** and **slow-in, fast-out**: the reference speed is reduced *before* the turn based on curvature ahead, so the vehicle is already at a safe speed when the bend tightens. Methods like CiMPCC and VPMPCC map centerline curvature to a reference velocity and encode it in the optimization; we achieve a similar effect in the behavior layer by computing a curvature-based speed limit over a long lookahead and applying a stricter margin when any significant curvature is ahead.
+
+**What we do (behaviors.scenic):**
+
+1. **See the turn early (lookahead):**
+   - Minimum lookahead **85 m** when speed > 15 m/s (so we see sharp turns like the Corkscrew).
+   - At **high speed** (e.g. > 25 m/s), minimum lookahead **120 m**.
+   - At **very high speed** (e.g. > 40 m/s, 140 mph cap), minimum lookahead **250 m** so we see sharp turns (e.g. κ≈0.1) in time to brake without lowering max speed (braking from 46 m/s at 7 m/s/s needs ~5.5 s ≈ 250 m).
+
+2. **Curvature-based speed limit:**
+   - Along the lookahead we sample curvature (3-point method) and compute v_max at each point as `margin × sqrt(a_y_max / κ)`.
+   - **Base margin:** 88% of theoretical (curvature_speed_margin = 0.88) for general run-off margin.
+   - **Slow-in:** When max curvature in lookahead > 0.015 we apply a stricter margin (82%); when **κ > 0.05** (very sharp) we use **75%** so we slow enough for sharp bends without capping max speed on straights.
+
+3. **Slew and sharing:**
+   - **slew_down_ms = 7.0** so the speed reference can drop quickly when the limit drops (brake in time).
+   - Single **v_ref_profile** (curvature + CTE limits) is passed to both lateral and longitudinal MPC so both “see” the same planned slowdown.
+
+**Summary:** We make sharp turns by (1) looking far enough ahead to see the sharp part of the bend, (2) limiting speed by curvature with a safety margin, (3) using a stricter margin when any bend is ahead (slow-in), and (4) allowing the reference to slew down fast and sharing it with both controllers.
+
+### Smoothness (steering oscillation + sharp brake/throttle)
+- **Observed (run.log):** (1) Steering: large step changes and sign flips (e.g. steer -0.001 → 0.595 in 50 steps near end of lap; 0.22 → 0.39 → -0.05 earlier). (2) Brake/throttle: sharp brake (e.g. 0.25) then within 50 steps back to full throttle (0.65), or speed limit brake 0.1 then throttle; no deadband so controller flips at exactly 35.8 m/s.
+- **Goal:** Smoother steering (less left–right oscillation) and smoother brake–throttle transitions (no sharp brake then sharp throttle).
+- **Implemented (done):**
+  1. **Speed limit deadband + hysteresis (behaviors.scenic):** `SPEED_LIMIT_DEADBAND = 0.5` m/s. Brake only when speed > limit + 0.5; once braking, stay in limit until speed < limit − 0.5. Reduces flip-flop at 35.8 m/s.
+  2. **Steering rate weight (vehicle_mpc.yaml):** `w_du` 1.8 → 2.2 so MPC penalizes steering rate more (smoother steer).
+  3. **Steering LPF (vehicle_mpc.yaml):** `steering_lpf_cutoff_hz` 2.0 → 1.5 for smoother steering output.
+  4. **Speed reference slew-up (behaviors.scenic):** `slew_up_ms` 6.0 → 5.0 so after a turn the speed reference ramps up slightly slower; throttle recovery is less abrupt.
+- **Status:** [x] Done. Re-run and check run.log for reduced oscillation and smoother pedal transitions.
+- **If still needed (to tune):** Increase `w_du` or lower LPF further; widen speed deadband (e.g. 0.7 m/s); or add explicit throttle ramp after brake release in behavior.
+
 ### What we already fixed (and what they do not fix)
 
 - **Segment blending + hysteresis:** Address lateral steering oscillation at segment boundaries (left–right–left). Do not fix throttle/brake oscillation or too fast into turn.
 - **Quick fixes (w_du, w_ddu, LPF, w_du_lon, w_a):** Smooth reaction (less aggressive steering and pedal changes). Do not fix the binary speed limit that causes throttle/brake flip or anticipation (slow-in, steer earlier).
+- **ReferenceBuilder spline `dz` bug:** With 2D position `(x, y)` and a 3D spline, `dz` was never set but was used in gradient/hessian in `project_to_spline()`, causing "cannot access local variable 'dz'" and forcing linear fallback every step (worsening L–R oscillation). Fixed by using `dz` only when `len(position) >= 3` and `len(point) >= 3` (and `len(deriv)`, `len(deriv2)` for hessian). Spline path is now used when possible; Phase 2 contouring+progress will help further.
+- **Log cleanup:** Noisy per-step prints removed or throttled in MPC, behavior, dSPACE model, and readback (spline fallback logged once per run; step summary every 50 steps; WAYPOINT HIT kept).
+
+### Summary: what is done vs what to fix/tune
+
+| Item | Status | Where |
+|------|--------|--------|
+| Run-off track (Laguna Seca) | Done | Lookahead 85 m, slew_down 7, curvature margin 0.88 |
+| **Sharp turns (slow-in, see turn early)** | Done | Lookahead 120 m when speed>25 m/s, 250 m when >40 m/s; slow-in 82% (κ>0.015), 75% (κ>0.05) (behaviors.scenic) |
+| Trajectory-consistent control (v_ref_profile shared) | Done | reference_builder, mpc_lateral, behaviors |
+| Lateral oscillation (CTE deadzone, weight blend) | Done | config + mpc_lateral |
+| **Smoothness: steering oscillation** | Done | w_du 2.2, steering_lpf 1.5 Hz |
+| **Smoothness: sharp brake then throttle** | Done | Speed limit deadband 0.5 m/s + hysteresis, slew_up 5.0 |
+| **End-of-lap throttle (TTL wrap)** | Done | Curvature lookahead wraps waypoints so we see straight after loop; TTL gap first/last ~0.68 m (doc) |
+| Further tuning if needed | Optional | Widen deadband; throttle ramp after brake; increase w_du_lon |
+
+### TTL loop and end-of-lap throttle (why we didn’t throttle hard on the “straight” at the end)
+
+- **TTL CSV (ttl_fellow_test_xodr_all.csv):** The file has 3591 waypoints (indices 0–3590). The **first** point is (55.766, 88.269) and the **last** is (56.156, 88.827). The distance between them is **~0.68 m** — so the TTL does **not** form a perfect closed loop; there is a small gap between the end and the start.
+- **Why we didn’t throttle hard towards the end of the log:** The waypoint list was **not wrapped**. When `wp_last_idx` is in the 3570s, the curvature lookahead runs out at index 3590 after only the remaining segments (~14 segments, ~6 m). So (1) we never “see” the straight after the loop (waypoints 0, 1, 2, …), and (2) the short stretch we do see is the final curve into the start, so `curvature_ahead_max` can be non-zero and the slow-in cap keeps the speed limit low. The controller therefore never gets a “long straight ahead” signal and doesn’t command full speed.
+- **Fix (done):** Curvature lookahead in `behaviors.scenic` now **wraps** waypoint indices: when we reach the end of the list we continue with indices 0, 1, 2, … (and stop after one full lap to avoid infinite loop). Curvature is computed with modulo indexing so the segment 3590→0 is included. Near the end of the lap we now see the straight after the loop and can throttle up.
+- **Optional:** To make the TTL a perfect loop, append the first point to the CSV or adjust the last point so it coincides with the first (within tolerance).
 
 ---
 
@@ -79,39 +158,46 @@ References: ETH Zurich MPCC (e.g. [Liniger MPCC](https://github.com/alexliniger/
 - [x] Increased steering rate and acceleration penalties (w_du, w_ddu) and lower LPF cutoffs for smoother output.
 - [x] Increased longitudinal smoothness (w_a, w_du_lon, throttle/brake LPF).
 
-### Phase 1: Path parameterization and progress state (pre-MPCC)
+### Phase 1: Path parameterization and progress state (pre-MPCC) — **DONE**
 
 **Goal:** Introduce arc-length parameterization and a “progress” notion so we can later add lag/progress terms.
 
-1. **Path as τ(s):** Ensure the reference path is available as a smooth function of arc length s (spline or resampled waypoints with s). ReferenceBuilder already uses splines; expose or compute s along the path.
-2. **Current progress s_0:** At each step, compute current progress s_0 (e.g. projection onto path, or s at closest point). Pass s_0 into the controller.
-3. **Preview in s:** Build reference (ψ_ref, κ_ref, v_ref) as a function of **s** (not just waypoint index), so the horizon is “s_0, s_0 + Δs_1, …” with consistent spacing in arc length (or time with v_ref).
-4. **No cost change yet:** Keep current cost (e_y, e_ψ, u, du, ddu). This phase is mainly refactor for s-based reference.
+- [x] **Path as τ(s):** Reference path is a smooth function of arc length s (spline or linear). ReferenceBuilder exposes s via `project_to_spline` and s_cumulative.
+- [x] **Current progress s_0:** At each step, s_0 from projection onto path; returned from `build_reference()` and stored as `_last_s_0` on the lateral controller.
+- [x] **Preview in s:** Horizon s_k = s_0 + speed·(k+1)·dt; reference sampled at those s; `build_reference()` returns `s_horizon`.
+- [x] **No cost change:** Cost unchanged (e_y, e_ψ, u, du, ddu).
 
-- **Files to touch:** `reference_builder.py`, `mpc_lateral.py`, `config.py`, `vehicle_mpc.yaml` (if new params).
-- **Success criteria:** Reference builder and lateral MPC use s; state or ref_builder output includes s_0 and s along horizon; existing behavior unchanged (no cost change).
+- **Files touched:** `reference_builder.py`, `mpc_lateral.py`; tests in `test_reference_builder.py`, `test_mpc_lateral.py`.
+- **Success criteria:** Met: ref returns (..., s_0, s_horizon); MPC stores `_last_s_0`, `_last_s_horizon`; behavior unchanged.
 
-### Phase 2: Add lag error and progress incentive
+### After Phase 1: What to visualize
+
+- **Progress s_0 over time:** Log or plot `lat_controller._last_s_0` each step (e.g. in run.log or a small CSV). It should increase monotonically along the lap and reset or wrap when the path is closed.
+- **Horizon in s:** Log `lat_controller._last_s_horizon` (array of length horizon_steps). Check that s_horizon[k] ≈ s_0 + speed·(k+1)·dt and that the spacing is consistent.
+- **Reference consistency:** Overlay the reference points (x(s_k), y(s_k)) for the current horizon on the track map; they should lie on the path and advance with the vehicle.
+- **Behavior parity:** Compare a short run (e.g. one lap) before vs after Phase 1: steering, throttle/brake, and lap time should be effectively unchanged (no cost change).
+
+### Phase 2: Add lag error and progress incentive — **DONE**
 
 **Goal:** Move cost toward MPCC: penalize “falling behind” and reward “making progress.”
 
-1. **Lag error:** Define desired progress s_ref(t) or s_ref(k) (e.g. from speed profile). Add term to cost: `Q_lag * (s_ref - s)^2` at each step (or only at terminal).
-2. **Progress term:** Add a negative cost (or reward) for progress made over the horizon, e.g. `-Q_progress * (s_N - s_0)` so the optimizer prefers advancing along the path. Tune Q_progress vs Q_contour so we don’t sacrifice tracking.
-3. **Balance:** Keep contouring (e_y, e_ψ) and input/rate penalties; tune Q_lag and Q_progress so behavior is smooth and not overly aggressive.
+- [x] **Lag error:** Cost term `Q_lag * (s_ref_k - s_k)^2` at each step (s_ref from s_horizon; s_ref_0 = s_0).
+- [x] **Progress term:** Terminal cost `-Q_progress * (s_N - s_0)` (linear in q so optimizer prefers advancing).
+- [x] **Config:** `Q_lag`, `Q_progress` in config.py and vehicle_mpc.yaml; default 0.0 for backward compat / A-B test.
+- [x] **Balance:** Contouring (e_y, e_psi) and input/rate penalties unchanged; tune Q_lag and Q_progress (e.g. 0.01–0.1 lag, 0.001–0.01 progress) for smooth behavior.
 
-- **Files to touch:** `mpc_lateral.py` (cost), `config.py`, `vehicle_mpc.yaml` (Q_lag, Q_progress).
-- **Success criteria:** Cost function includes lag and progress terms; tuning guidelines in config or comments; backward-compat option (e.g. zero Q_progress/Q_lag) for A/B test.
+- **Files touched:** `mpc_lateral.py` (cost, state n_x=4, dynamics, run_step), `config.py`, `vehicle_mpc.yaml`.
+- **Success criteria:** Met: cost includes lag and progress; zero weights = trajectory-tracking only; tests pass.
 
-### Phase 3: Full MPCC-style formulation (optional)
+### Phase 3: Full MPCC-style formulation — **DONE**
 
 - **Goal:** Align with standard MPCC: progress as part of dynamics, contouring + lag + progress in cost.
-- **Files to touch:** `mpc_lateral.py` (dynamics, cost, possibly solver), `reference_builder.py`, `config.py`, `vehicle_mpc.yaml`.
-- **Concrete steps:**
-  1. Augmented state: Add progress s (or θ) as a state; dynamics: s_{k+1} = s_k + f(v, ψ, path) (e.g. from path tangent and speed). May require path curvature κ(s) and heading ψ(s) along path.
-  2. Contouring + lag cost: Standard MPCC cost: contouring error (e_y), lag error (s_ref - s), and progress reward.
-  3. Solver: If dynamics become nonlinear in s, may need NMPC or linearization; current QP may suffice if we keep a linearized progress update.
-  4. References: Use ETH/MPCC papers and open-source code for exact cost and dynamics formulations.
-- **Success criteria:** MPCC-style lateral controller with progress state and contouring/lag/progress cost; validation on same tracks as current MPC.
+- [x] **Augmented state:** State [e_y, e_psi, delta, s]; progress dynamics s_{k+1} = s_k + v_ref_k*dt (linearized; full MPCC s_dot = v*cos(e_psi)).
+- [x] **Contouring + lag + progress cost:** Contouring (e_y, e_psi), lag Q_lag*(s_ref - s)^2, progress reward -Q_progress*(s_N - s_0). All active by default.
+- [x] **Solver:** QP with linearized progress; OSQP with relaxed tolerances and accept "solved inaccurate" (Phase 2 fix).
+- [x] **Defaults:** Q_lag=0.02, Q_progress=0.005 in config and YAML so MPCC cost is on by default; set both to 0 for trajectory-tracking only.
+- **Files touched:** `mpc_lateral.py` (docstrings, progress comment), `config.py`, `vehicle_mpc.yaml`.
+- **Success criteria:** Met: MPCC-style lateral controller; contouring+lag+progress cost active by default; same tracks usable; analyze behaviors and tune as integrated project.
 
 ---
 
@@ -147,6 +233,7 @@ These favor smoother steering and throttle/brake and reduce “beginner-style”
 | Phase | Main files | What to change | After edit, verify |
 |-------|------------|----------------|--------------------|
 | 0 | (done) | — | — |
-| 1 | `reference_builder.py`, `mpc_lateral.py`, `config.py` | Expose s along path; compute s_0; build ref in s; no cost change | Ref has s_0 and s on horizon; behavior same as before |
-| 2 | `mpc_lateral.py`, `config.py`, `vehicle_mpc.yaml` | Add Q_lag, Q_progress to cost; config keys Q_lag, Q_progress | Cost terms present; optional zero weights for A/B |
-| 3 | `mpc_lateral.py`, `reference_builder.py`, `config.py`, `vehicle_mpc.yaml` | Progress in dynamics; full MPCC cost; solver if needed | Progress state; contouring+lag+progress cost; same tracks |
+| 1 | `reference_builder.py`, `mpc_lateral.py` | (done) Expose s; compute s_0; build ref in s; no cost change | Ref returns s_0, s_horizon; MPC stores them; behavior same |
+| 2 | `mpc_lateral.py`, `config.py`, `vehicle_mpc.yaml` | (done) Add progress state s, Q_lag, Q_progress; config keys | Cost terms present; Q_lag/Q_progress=0 for A/B |
+| 3 | `mpc_lateral.py`, `config.py`, `vehicle_mpc.yaml` | (done) MPCC cost on by default; docstrings; Q_lag/Q_progress defaults | Contouring+lag+progress active; set to 0 for tracking-only |
+| 3+ | `mpc_lateral.py`, `config.py`, `vehicle_mpc.yaml` | (done) Oscillation: CTE deadzone, cte_multiplier_max, w_ey_low_curv, smooth curvature blend | Re-run and verify via run.log |

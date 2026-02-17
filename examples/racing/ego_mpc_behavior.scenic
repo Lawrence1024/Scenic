@@ -35,7 +35,7 @@ ego = new RacingCar at (-110.956171,-151.841778,8.331000),\
 
 # Use MPC behavior for improved racing performance
 ego.behavior = FollowRacingLineMPCBehavior(
-    target_speed=30,      # 30 m/s (~108 km/h)
+    target_speed=60,      # 60 m/s (~216 km/h) nominal; capped at 140 mph (62.58 m/s) by MAX_SPEED_LIMIT_MS
     manage_gears=True,    # Auto gear shifting
     use_waypoints=True,   # Use waypoint-based control
     lookahead=20.0,       # 20m lookahead distance

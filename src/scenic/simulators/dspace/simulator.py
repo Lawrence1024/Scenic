@@ -67,9 +67,26 @@ class DSpaceSimulation(RacingSimulation):
         self._ext_index_base = 0
         
         ts = kwargs.pop("timestep", None) or sim.timestep
-        self.batch_steps = getattr(sim, 'batch_steps', 1)
+        _batch_steps = getattr(sim, 'batch_steps', 1)
+        # Pass only parameters that Simulation.__init__ accepts (avoids TypeError from
+        # extra kwargs or int/callable confusion). Do NOT set self.batch_steps before
+        # super().__init__ so the parent never sees an int attribute that could be
+        # mistaken for the step() method.
+        parent_kwargs = {
+            "maxSteps": kwargs.get("maxSteps"),
+            "name": kwargs.get("name"),
+            "timestep": ts,
+            "replay": kwargs.get("replay"),
+            "enableReplay": kwargs.get("enableReplay", True),
+            "allowPickle": kwargs.get("allowPickle", False),
+            "enableDivergenceCheck": kwargs.get("enableDivergenceCheck", False),
+            "divergenceTolerance": kwargs.get("divergenceTolerance", 0),
+            "continueAfterDivergence": kwargs.get("continueAfterDivergence", False),
+            "verbosity": kwargs.get("verbosity", 0),
+        }
+        super().__init__(scene, **parent_kwargs)
+        self.batch_steps = _batch_steps
         print(f"[DSpaceSimulation] timestep: {ts}, batch_steps: {self.batch_steps}")
-        super().__init__(scene, timestep=ts, **kwargs)
 
     # --- TTL (Target Trajectory Line) loading utilities ---
     def _load_ttl_region(self):

@@ -1,11 +1,14 @@
-"""MPC lateral controller for racing vehicles.
+"""MPC lateral controller for racing vehicles (MPCC-style, Phase 3).
 
-Implements Model Predictive Control for lateral (steering) control,
-replacing PID controllers with predictive control for better racing performance.
+Implements Model Predictive Contouring Control (MPCC): state [e_y, e_psi, delta, s]
+with contouring cost (e_y, e_psi), lag cost Q_lag*(s_ref - s)^2, and progress
+reward -Q_progress*(s_N - s_0). Progress dynamics: s_{k+1} = s_k + v_ref_k*dt
+(linearized; full MPCC would use s_dot = v*cos(e_psi)). Set Q_lag=0, Q_progress=0
+for pure trajectory-tracking mode.
 """
 
 import numpy as np
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Union
 import osqp
 from scipy.sparse import csc_matrix
 
@@ -16,10 +19,10 @@ import math
 
 
 class MPCLateralController:
-    """MPC-based lateral controller for racing vehicles.
+    """MPCC-style lateral controller: contouring + lag + progress cost.
     
-    Uses Model Predictive Control to compute optimal steering commands
-    for tracking a reference trajectory defined by waypoints.
+    State: [e_y, e_psi, delta, s]. Cost: contouring (e_y, e_psi), lag (s_ref - s)^2,
+    progress reward at terminal. Progress dynamics linearized as s_{k+1} = s_k + v_ref*dt.
     """
     
     def __init__(self, config: MPCConfig, timestep: float = 0.05):
@@ -49,8 +52,8 @@ class MPCLateralController:
             dt=timestep
         )
         
-        # State: [e_y, e_psi, delta]
-        self.state = np.zeros(3)
+        # State: [e_y, e_psi, delta, s] (Phase 2: s = progress for lag/progress cost)
+        self.state = np.zeros(4)
         self.prev_control = 0.0  # Previous steering command (for rate penalty)
         self.prev_prev_control = 0.0  # Previous-previous steering command (for acceleration penalty)
         
@@ -76,8 +79,8 @@ class MPCLateralController:
         Args:
             horizon: Prediction horizon steps
         """
-        # Problem size
-        n_x = 3  # state dimension
+        # Problem size (Phase 2: state includes progress s for lag/progress cost)
+        n_x = 4  # state dimension [e_y, e_psi, delta, s]
         n_u = 1  # control dimension
         n_vars = horizon * n_u + (horizon + 1) * n_x
         
@@ -91,7 +94,9 @@ class MPCLateralController:
         l = np.zeros(n_vars)
         u = np.zeros(n_vars)
         
-        self.solver.setup(P, q, A, l, u, verbose=False, warm_start=True)
+        # Higher max_iter and relaxed tolerances for Phase 2 QP (larger problem) to avoid "maximum iterations reached" / "solved inaccurate"
+        self.solver.setup(P, q, A, l, u, verbose=False, warm_start=True,
+                         max_iter=20000, eps_abs=5e-4, eps_rel=5e-4)
         self._solver_initialized = True
     
     def _build_qp_matrices(self,
@@ -100,15 +105,20 @@ class MPCLateralController:
                           kappa_ref: np.ndarray,
                           v_ref: np.ndarray,
                           horizon: int,
-                          cte_magnitude: Optional[float] = None) -> Tuple[csc_matrix, np.ndarray, csc_matrix, np.ndarray, np.ndarray]:
+                          cte_magnitude: Optional[float] = None,
+                          s_0: Optional[float] = None,
+                          s_horizon: Optional[np.ndarray] = None) -> Tuple[csc_matrix, np.ndarray, csc_matrix, np.ndarray, np.ndarray]:
         """Build QP matrices for MPC problem.
         
         Args:
-            state: Current state [e_y, e_psi, delta]
+            state: Current state [e_y, e_psi, delta] or [e_y, e_psi, delta, s_0]
             psi_ref: Reference heading array (radians)
             kappa_ref: Reference curvature array (1/meters)
             v_ref: Reference speed array (m/s)
             horizon: Prediction horizon steps
+            cte_magnitude: Optional CTE magnitude for adaptive weights
+            s_0: Current progress along path (arc length, m). If None, 0 is used and s_horizon built from v_ref.
+            s_horizon: Reference progress at each horizon step (length horizon). If None, built from v_ref.
             
         Returns:
             Tuple of (P, q, A, l, u) for QP: minimize 0.5*x'*P*x + q'*x
@@ -120,57 +130,60 @@ class MPCLateralController:
             raise ValueError(f"horizon must be > 0, got {horizon}")
         
         # Ensure all reference arrays are 1D numpy arrays with correct shape
-        # Arrays should already be correct from build_reference, but validate them
         if not isinstance(psi_ref, np.ndarray):
             raise TypeError(f"psi_ref must be a numpy array, got {type(psi_ref)}")
         if not isinstance(kappa_ref, np.ndarray):
             raise TypeError(f"kappa_ref must be a numpy array, got {type(kappa_ref)}")
         if not isinstance(v_ref, np.ndarray):
             raise TypeError(f"v_ref must be a numpy array, got {type(v_ref)}")
+        if psi_ref.ndim != 1 or kappa_ref.ndim != 1 or v_ref.ndim != 1:
+            raise ValueError("psi_ref, kappa_ref, v_ref must be 1D")
+        if len(psi_ref) != horizon or len(kappa_ref) != horizon or len(v_ref) != horizon:
+            raise ValueError("reference arrays length must equal horizon")
         
-        # Ensure arrays are 1D
-        if psi_ref.ndim != 1:
-            raise ValueError(f"psi_ref must be 1D, got {psi_ref.ndim}D array with shape {psi_ref.shape}")
-        if kappa_ref.ndim != 1:
-            raise ValueError(f"kappa_ref must be 1D, got {kappa_ref.ndim}D array with shape {kappa_ref.shape}")
-        if v_ref.ndim != 1:
-            raise ValueError(f"v_ref must be 1D, got {v_ref.ndim}D array with shape {v_ref.shape}")
-        
-        # Verify arrays have correct length
-        if len(psi_ref) != horizon:
-            raise ValueError(f"psi_ref length mismatch: expected {horizon}, got {len(psi_ref)}. Shape: {psi_ref.shape}, dtype: {psi_ref.dtype}")
-        if len(kappa_ref) != horizon:
-            raise ValueError(f"kappa_ref length mismatch: expected {horizon}, got {len(kappa_ref)}. Shape: {kappa_ref.shape}, dtype: {kappa_ref.dtype}")
-        if len(v_ref) != horizon:
-            raise ValueError(f"v_ref length mismatch: expected {horizon}, got {len(v_ref)}. Shape: {v_ref.shape}, dtype: {v_ref.dtype}")
-        
-        n_x = 3
+        # Phase 2: state includes progress s [e_y, e_psi, delta, s]
+        n_x = 4
         n_u = 1
         n_vars = horizon * n_u + (horizon + 1) * n_x
+        
+        # State: pad to length 4 if needed
+        state = np.asarray(state, dtype=np.float64)
+        if state.size == 3:
+            s_0_val = float(s_0) if s_0 is not None else 0.0
+            state = np.append(state, s_0_val)
+        if state.size != 4:
+            raise ValueError(f"state must have 3 or 4 elements, got {state.size}")
+        
+        # Reference progress for lag cost: s_ref at step k = s_horizon[k-1] for k>=1, s_ref_0 = s_0
+        dt = self.config.mpc_prediction_dt
+        if s_horizon is None or len(s_horizon) != horizon:
+            s_0_val = float(state[3])
+            s_horizon = np.array([s_0_val + np.sum(v_ref[:i + 1]) * dt for i in range(horizon)], dtype=np.float64)
+        else:
+            s_horizon = np.asarray(s_horizon, dtype=np.float64)
+        s_0_val = float(state[3])
         
         # Cost matrix P (quadratic)
         P = np.zeros((n_vars, n_vars))
         q = np.zeros(n_vars)
         
-        # Constraint matrix A (dynamics + constraints + steering rate limits)
-        n_constraints = (horizon + 1) * n_x + horizon * n_u + horizon  # dynamics + control limits + rate limits
+        # Constraint matrix: (horizon+1)*n_x initial + horizon*(n_x + n_u + 2) per step (n_x dynamics + control + rate)
+        n_constraints = (horizon + 1) * n_x + horizon * (n_x + n_u + 2)
         A = np.zeros((n_constraints, n_vars))
         l = np.zeros(n_constraints)
         u = np.zeros(n_constraints)
         
-        # Variable ordering: [x_0, u_0, x_1, u_1, ..., x_N]
-        # x_k indices: k * (n_x + n_u)
-        # u_k indices: k * (n_x + n_u) + n_x
-        
+        # Variable ordering: [x_0, u_0, x_1, u_1, ..., x_N]; x_k = [e_y, e_psi, delta, s]
         dt = self.config.mpc_prediction_dt
         L = self.config.wheel_base
         tau = self.config.steer_tau
         delta_max = self.config.max_steer_angle
+        Q_lag = getattr(self.config, 'Q_lag', 0.0)
+        Q_progress = getattr(self.config, 'Q_progress', 0.0)
         
-        # Build cost and constraints
         constraint_idx = 0
         
-        # Initial state constraint: x_0 = state
+        # Initial state constraint: x_0 = state (4 components)
         for i in range(n_x):
             A[constraint_idx, i] = 1.0
             l[constraint_idx] = state[i]
@@ -187,33 +200,19 @@ class MPCLateralController:
             kappa_k = kappa_ref[k]
             psi_ref_k = psi_ref[k]
             
-            # Select weights based on curvature (three regions: low, moderate, high)
+            # Select weights based on curvature; smooth blend between low and high (oscillation fix)
             if self.config.use_adaptive_weights:
                 abs_kappa = abs(kappa_k)
-                if abs_kappa < self.config.low_curvature_threshold:
-                    # Low curvature (straight sections) - relaxed tracking
-                    w_ey_k = self.config.w_ey_low_curv
-                    w_epsi_k = self.config.w_epsi_low_curv
-                    w_epsi_vel_k = self.config.w_epsi_vel_low_curv
-                    w_u_k = self.config.w_u_low_curv
-                    w_u_vel_k = self.config.w_u_vel_low_curv
-                    w_ddu_k = self.config.w_ddu_low_curv
-                elif abs_kappa >= self.config.high_curvature_threshold:
-                    # High curvature (sharp turns) - aggressive tracking, fast steering
-                    w_ey_k = self.config.w_ey_high_curv
-                    w_epsi_k = self.config.w_epsi_high_curv
-                    w_epsi_vel_k = self.config.w_epsi_vel_high_curv
-                    w_u_k = self.config.w_u_high_curv
-                    w_u_vel_k = self.config.w_u_vel_high_curv
-                    w_ddu_k = self.config.w_ddu_high_curv
-                else:
-                    # Moderate curvature (normal curves) - base weights
-                    w_ey_k = self.config.w_ey
-                    w_epsi_k = self.config.w_epsi
-                    w_epsi_vel_k = self.config.w_epsi_vel
-                    w_u_k = self.config.w_u
-                    w_u_vel_k = self.config.w_u_vel
-                    w_ddu_k = self.config.w_ddu
+                low_t = self.config.low_curvature_threshold
+                high_t = self.config.high_curvature_threshold
+                t = (abs_kappa - low_t) / (high_t - low_t) if high_t > low_t else 0.0
+                t = max(0.0, min(1.0, t))
+                w_ey_k = (1.0 - t) * self.config.w_ey_low_curv + t * self.config.w_ey_high_curv
+                w_epsi_k = (1.0 - t) * self.config.w_epsi_low_curv + t * self.config.w_epsi_high_curv
+                w_epsi_vel_k = (1.0 - t) * self.config.w_epsi_vel_low_curv + t * self.config.w_epsi_vel_high_curv
+                w_u_k = (1.0 - t) * self.config.w_u_low_curv + t * self.config.w_u_high_curv
+                w_u_vel_k = (1.0 - t) * self.config.w_u_vel_low_curv + t * self.config.w_u_vel_high_curv
+                w_ddu_k = (1.0 - t) * self.config.w_ddu_low_curv + t * self.config.w_ddu_high_curv
             else:
                 # Adaptive weights disabled - use base weights for all
                 w_ey_k = self.config.w_ey
@@ -223,23 +222,18 @@ class MPCLateralController:
                 w_u_vel_k = self.config.w_u_vel
                 w_ddu_k = self.config.w_ddu
             
-            # CTE-adaptive weight scaling: Increase tracking weights when off-track
-            # This compensates for model uncertainty (e.g., missing elevation data)
+            # CTE-adaptive weight scaling: increase tracking when off-track; cap to avoid overcorrection (oscillation fix)
             if cte_magnitude is not None and cte_magnitude > 0.0:
                 if cte_magnitude >= 3.0:
-                    # Very off-track: triple tracking weights for aggressive recovery
                     cte_multiplier = 3.0
                 elif cte_magnitude >= 1.5:
-                    # Moderately off-track: double tracking weights
                     cte_multiplier = 2.0
                 elif cte_magnitude >= 0.5:
-                    # Slightly off-track: 1.5x tracking weights
                     cte_multiplier = 1.5
                 else:
-                    # On-track: no scaling
                     cte_multiplier = 1.0
-                
-                # Apply multiplier to tracking weights (not control weights)
+                cap = getattr(self.config, 'cte_multiplier_max', 2.0)
+                cte_multiplier = min(cte_multiplier, cap)
                 w_ey_k *= cte_multiplier
                 w_epsi_k *= cte_multiplier
                 w_epsi_vel_k *= cte_multiplier
@@ -247,6 +241,12 @@ class MPCLateralController:
             # State cost: w_ey * e_y^2 + w_epsi * e_psi^2 + w_epsi_vel * e_psi^2 * v^2
             P[x_k_idx, x_k_idx] += w_ey_k  # e_y
             P[x_k_idx + 1, x_k_idx + 1] += w_epsi_k + w_epsi_vel_k * v_k * v_k  # e_psi (with velocity weighting)
+            
+            # Phase 2: lag error cost Q_lag * (s_ref_k - s_k)^2
+            if Q_lag != 0:
+                s_ref_k = s_horizon[k - 1] if k >= 1 else s_0_val
+                P[x_k_idx + 3, x_k_idx + 3] += Q_lag
+                q[x_k_idx + 3] -= 2.0 * Q_lag * s_ref_k
             
             # Control cost: w_u * u^2 + w_u_vel * u^2 * v^2
             P[u_k_idx, u_k_idx] += w_u_k + w_u_vel_k * v_k * v_k
@@ -322,6 +322,13 @@ class MPCLateralController:
             u[constraint_idx] = 0.0
             constraint_idx += 1
             
+            # Phase 3 MPCC: progress dynamics s_{k+1} = s_k + v_ref_k*dt (linearized; full: s_dot = v*cos(e_psi))
+            A[constraint_idx, x_k_idx + 3] = -1.0  # -s_k
+            A[constraint_idx, x_kp1_idx + 3] = 1.0  # s_{k+1}
+            l[constraint_idx] = v_k * dt
+            u[constraint_idx] = v_k * dt
+            constraint_idx += 1
+            
             # Control limits: |u_k| <= delta_max
             A[constraint_idx, u_k_idx] = 1.0
             l[constraint_idx] = -delta_max
@@ -340,6 +347,9 @@ class MPCLateralController:
         x_N_idx = horizon * (n_x + n_u)
         P[x_N_idx, x_N_idx] += self.config.wT_ey
         P[x_N_idx + 1, x_N_idx + 1] += self.config.wT_epsi
+        # Phase 2: progress reward -Q_progress * (s_N - s_0) => linear term in q for s_N
+        if Q_progress != 0:
+            q[x_N_idx + 3] -= Q_progress  # minimize -Q_progress*s_N => reward progress
         
         # Convert to sparse
         P_sparse = csc_matrix(P)
@@ -351,8 +361,13 @@ class MPCLateralController:
                  vehicle_state: Dict[str, float],
                  waypoints: List[Tuple[float, float]],
                  current_waypoint_idx: Optional[int] = None,
-                 cte_magnitude: Optional[float] = None) -> float:
+                 cte_magnitude: Optional[float] = None,
+                 v_ref_profile: Optional[Union[List[float], np.ndarray]] = None) -> float:
         """Compute steering command for one control step.
+        
+        When v_ref_profile is provided (same profile used by longitudinal MPC), the
+        lateral reference (s_horizon) matches the planned speed so the controller
+        sees the whole trajectory and avoids over-steer then correct.
         
         Args:
             vehicle_state: Dictionary with keys:
@@ -363,6 +378,9 @@ class MPCLateralController:
                 - 'gear': current gear (optional, for checking if in neutral)
             waypoints: List of waypoint (x, y) tuples
             current_waypoint_idx: Current waypoint index (for efficiency)
+            cte_magnitude: Optional CTE magnitude for adaptive search
+            v_ref_profile: Optional speed profile over horizon (m/s). Pass the same
+                profile used by longitudinal MPC for trajectory-consistent control.
             
         Returns:
             Steering command in normalized range [-1.0, 1.0]
@@ -384,9 +402,10 @@ class MPCLateralController:
             # Very slow or stopped AND gear unknown - return zero steering
             return 0.0
         
-        # Build reference trajectory
+        # Build reference trajectory (Phase 1: returns s_0 and s_horizon for MPCC)
         try:
-            psi_ref, kappa_ref, v_ref, grade_ref, new_waypoint_idx = self.ref_builder.build_reference(
+            (psi_ref, kappa_ref, v_ref, grade_ref, new_waypoint_idx,
+             s_0, s_horizon) = self.ref_builder.build_reference(
                 waypoints=waypoints,
                 current_position=(x, y),
                 current_heading=yaw,
@@ -394,8 +413,12 @@ class MPCLateralController:
                 dt=self.config.mpc_prediction_dt,
                 speed=speed,
                 last_waypoint_idx=current_waypoint_idx,
-                cte_magnitude=cte_magnitude
+                cte_magnitude=cte_magnitude,
+                v_ref_profile=v_ref_profile
             )
+            # Phase 1: store progress s_0 and s along horizon for logging / Phase 2 (no cost change yet)
+            self._last_s_0 = s_0
+            self._last_s_horizon = s_horizon
             # grade_ref is computed but not used by lateral MPC (used by longitudinal MPC)
             # Debug: verify arrays right after build_reference returns
             if len(psi_ref) != self.config.mpc_prediction_horizon:
@@ -430,9 +453,6 @@ class MPCLateralController:
             current_waypoint_idx=current_waypoint_idx
         )
 
-        # Log the actual reference segment being used for MPC control
-        print(f"[MPC Reference] Using segment {mpc_segment_idx} (waypoints {mpc_segment_idx} -> {mpc_segment_idx+1}) for control")
-        
         # Compute reference heading for logging (extract from _compute_errors logic)
         # NOTE: Use different variable name to avoid shadowing the psi_ref array from build_reference
         psi_ref_logging = None
@@ -450,6 +470,11 @@ class MPCLateralController:
                     heading_diff = np.arctan2(np.sin(heading_diff), np.cos(heading_diff))
                     if abs(heading_diff) > np.pi / 2:  # > 90 degrees
                         psi_ref_logging = np.arctan2(np.sin(psi_ref_logging + np.pi), np.cos(psi_ref_logging + np.pi))
+        
+        # CTE deadzone (oscillation fix): treat small lateral errors as on-track so MPC does not overcorrect
+        dz = getattr(self.config, 'cte_deadzone', 0.0)
+        if dz > 0 and abs(e_y) < dz:
+            e_y = 0.0
         
         # Safety check: disable MPC if errors too large
         # Use proportional fallback to prevent catch-22 (large error → no steering → larger error)
@@ -477,16 +502,17 @@ class MPCLateralController:
             # Fallback: use previous state estimate
             delta = self.state[2] if hasattr(self, 'state') and len(self.state) > 2 else 0.0
         
-        self.state = np.array([e_y, e_psi, delta])
+        # State [e_y, e_psi, delta, s_0] for Phase 2 (progress s used in lag/progress cost)
+        self.state = np.array([e_y, e_psi, delta, s_0], dtype=np.float64)
         
-        # Build QP matrices
-        # Don't catch exceptions - let them propagate to identify bugs
-        # Pass CTE magnitude for adaptive weight scaling
+        # Build QP matrices (Phase 2: pass s_0 and s_horizon for lag/progress cost)
         cte_mag_for_mpc = abs(e_y) if e_y is not None else (cte_magnitude if cte_magnitude is not None else 0.0)
         P, q, A, l, u = self._build_qp_matrices(
             self.state, psi_ref, kappa_ref, v_ref,
             self.config.mpc_prediction_horizon,
-            cte_magnitude=cte_mag_for_mpc
+            cte_magnitude=cte_mag_for_mpc,
+            s_0=s_0,
+            s_horizon=s_horizon
         )
         
         # Initialize solver on first solve
@@ -499,16 +525,23 @@ class MPCLateralController:
             # OSQP requires matrix structure to remain constant for updates
             # Since our matrices may have different sparsity patterns each step,
             # we need to setup with actual matrices each time
-            # (This is acceptable for MPC as setup is fast compared to solve)
-            self.solver.setup(P, q, A, l, u, verbose=False, warm_start=True)
+            self.solver.setup(P, q, A, l, u, verbose=False, warm_start=True,
+                             max_iter=20000, eps_abs=5e-4, eps_rel=5e-4)
             result = self.solver.solve()
             
-            if result.info.status != 'solved':
+            # Accept "solved" and "solved inaccurate" (solution meets relaxed tolerances, usable for control)
+            if result.info.status not in ('solved', 'solved inaccurate'):
                 print(f"[MPC] Solver failed: {result.info.status}")
                 return self._fallback_steering()
+            if result.info.status == 'solved inaccurate':
+                # Log occasionally (first time, then every 500 occurrences)
+                step = getattr(self, '_inaccurate_log_count', 0)
+                if step % 500 == 0:
+                    print(f"[MPC] Solver returned solved inaccurate (using solution); residual norm may be elevated")
+                self._inaccurate_log_count = step + 1
             
             # Extract first control input (MPC outputs feedback part; we add curvature feedforward)
-            n_x = 3  # State dimension
+            n_x = 4  # State dimension [e_y, e_psi, delta, s] (Phase 2)
             u_0_idx = n_x  # First control is after initial state
             delta_fb_rad = float(result.x[u_0_idx])
             # Explicit curvature feedforward: delta_ff = arctan(L * kappa_ref) so MPC only tracks residual
@@ -530,13 +563,6 @@ class MPCLateralController:
             # Apply low-pass filter
             steer_filtered = self.steering_filter.update(steer_normalized)
 
-            # Debug: solver -> command pipeline (incl. feedforward)
-            print(
-                f"[MPC Actuation DBG] delta_ff={delta_ff_rad:+.6f} delta_fb={delta_fb_rad:+.6f} "
-                f"u0_raw_rad={delta_cmd_rad_raw:+.6f} u0_used_rad={delta_cmd_rad:+.6f} "
-                f"max_steer_rad={self.config.max_steer_angle:.6f} norm={steer_normalized:+.6f} lpf={float(steer_filtered):+.6f}"
-            )
-            
             # Reset invalid count on success
             self.invalid_count = 0
             self.last_valid_steering = steer_filtered
@@ -744,29 +770,6 @@ class MPCLateralController:
         if heading_flipped:
             e_y = -e_y
         
-        # Diagnostic logging
-        vehicle_heading_deg = heading * 180.0 / np.pi
-        seg_heading_deg = psi_ref_original * 180.0 / np.pi
-        heading_diff_deg = heading_diff * 180.0 / np.pi
-        flipped_heading_deg = psi_ref * 180.0 / np.pi if heading_flipped else None
-        print(
-            f"[MPC Errors DBG] seg_idx={waypoint_idx} "
-            f"wp0=({x0:.2f},{y0:.2f}) wp1=({x1:.2f},{y1:.2f}) "
-            f"seg_d=({seg_dx:.2f},{seg_dy:.2f}) seg_len={seg_len:.3f} "
-            f"u_proj={u_proj:.3f} proj=({proj_x:.2f},{proj_y:.2f}) "
-            f"n=({nx:.3f},{ny:.3f})"
-        )
-        print(
-            f"[MPC Error Computation] Vehicle heading={vehicle_heading_deg:.1f}deg, "
-            f"Segment heading={seg_heading_deg:.1f}deg, diff={heading_diff_deg:.1f}deg, flip={heading_flipped}"
-        )
-        if heading_flipped:
-            print(f"[MPC Error Computation] HEADING FLIPPED: {seg_heading_deg:.1f}deg -> {flipped_heading_deg:.1f}deg (for heading alignment only, normal vector unchanged)")
-        print(
-            f"[MPC Error Computation] CTE_raw={e_y_raw:.3f}m ({'LEFT' if e_y_raw > 0 else 'RIGHT'}), "
-            f"CTE_used={e_y:.3f}m ({'LEFT' if e_y > 0 else 'RIGHT'})"
-        )
-        
         # Heading error: difference between reference and actual
         # Normalize to [-pi, pi]
         # Use e_psi = vehicle_heading - reference_heading (matches the discrete model sign)
@@ -774,9 +777,7 @@ class MPCLateralController:
         # normalize to [-pi, pi]
         e_psi = math.atan2(math.sin(e_psi), math.cos(e_psi))
         e_psi = np.arctan2(np.sin(e_psi), np.cos(e_psi))  # Normalize to [-pi, pi]
-        e_psi_deg = e_psi * 180.0 / np.pi
         # Expose last errors for outer behavior logic (conditioning/safety/debug)
-        print(f"[MPC Error Computation] Final errors: e_y={e_y:.3f}m, e_psi={e_psi:.3f}rad ({e_psi_deg:.1f}deg)")
         self.last_e_y = float(e_y)
         self.last_e_psi = float(e_psi)
         self.last_seg_idx = int(waypoint_idx)

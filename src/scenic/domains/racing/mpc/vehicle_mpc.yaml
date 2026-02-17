@@ -19,7 +19,7 @@
     w_ey: 10.0  # Lateral error weight (doubled from 5.0 for more aggressive tracking)
     w_epsi: 5.0  # Heading error weight (increased from 3.0 for better heading correction)
     w_u: 0.05  # Control input weight (reduced from 0.1 to allow more steering authority)
-    w_du: 1.8  # Control rate weight (increased for smoother steering, less left-right overcorrect)
+    w_du: 2.2  # Control rate weight (increased further for smoother steering, reduce end-of-lap oscillation)
     wT_ey: 15.0  # Terminal lateral error weight (increased from 5.0 for better terminal tracking)
     wT_epsi: 2.0  # Terminal heading error weight (increased from 1.0)
     
@@ -30,13 +30,17 @@
     # Steering acceleration penalty (smoother steering, reduces jerk and beginner-style overcorrect)
     w_ddu: 0.00003  # Steering acceleration weight (increased for smoother steering changes)
     
+    # Phase 3 MPCC: contouring + lag + progress (set both to 0 for pure trajectory-tracking / A-B test)
+    Q_lag: 0.02     # Lag error: penalize (s_ref - s)^2 at each step; reduces "falling behind" and centerline obsession
+    Q_progress: 0.005  # Progress reward: -Q_progress*(s_N - s_0) at terminal; favors advancing along path
+    
     # Adaptive weights based on curvature
     use_adaptive_weights: true  # Enable adaptive weights based on curvature
     low_curvature_threshold: 0.02  # Curvature threshold (1/m) below which low curvature weights are used
     high_curvature_threshold: 0.1  # Curvature threshold (1/m) above which high curvature weights are used (for sharp turns)
     
-    # Low curvature weights (for straight sections - relaxed tracking)
-    w_ey_low_curv: 0.01  # Lateral error weight in low curvature (straights)
+    # Low curvature weights (for straight sections - relaxed but not zero to avoid drift)
+    w_ey_low_curv: 0.05  # Lateral error weight in low curvature (raised from 0.01 to reduce straight-line drift)
     w_epsi_low_curv: 0.0  # Heading error weight in low curvature
     w_epsi_vel_low_curv: 0.3  # Velocity-weighted heading error in low curvature
     w_u_low_curv: 1.0  # Control input weight in low curvature
@@ -51,13 +55,17 @@
     w_u_vel_high_curv: 0.05  # Velocity-weighted control input in high curvature (low penalty)
     w_ddu_high_curv: 0.000003  # Steering acceleration in high curvature (smoother than 0.0000005 to reduce overcorrect)
     
+    # Oscillation fixes (Phase 3+): reduce small oscillation and overcorrection
+    cte_deadzone: 0.2       # (m) treat |e_y| < this as 0 so MPC does not correct tiny errors
+    cte_multiplier_max: 1.5 # cap on off-track tracking-weight multiplier (was 3x; 1.5 avoids overshoot)
+    
     # Safety thresholds
     admissible_position_error: 30.0  # Stop MPC if position error > this (meters) - increased to 30.0m for sparse waypoints (~25m apart)
     admissible_yaw_error_rad: 2.36  # Stop MPC if yaw error > this (radians, ~135 deg) - increased from 1.57rad to allow MPC when off-track
     max_invalid_count: 10  # Max consecutive solver failures before zeroing steering
     
     # Filtering (smoother = lower cutoff; reduces steering jerk and overcorrect)
-    steering_lpf_cutoff_hz: 2.0  # Low-pass filter cutoff for steering output (Hz)
+    steering_lpf_cutoff_hz: 1.5  # Low-pass filter cutoff (reduced from 2.0 for smoother steering, less oscillation)
     
     # Waypoint/Reference
     traj_resample_dist: 0.1  # Distance between resampled waypoints (meters) - finer resolution for better tracking

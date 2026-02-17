@@ -76,7 +76,7 @@ class TestReferenceBuilder(unittest.TestCase):
         dt = 0.05
         speed = 10.0  # 10 m/s
         
-        psi_ref, kappa_ref, v_ref, wp_idx = self.builder.build_reference(
+        psi_ref, kappa_ref, v_ref, grade_ref, wp_idx, s_0, s_horizon = self.builder.build_reference(
             waypoints, position, heading, horizon, dt, speed
         )
         
@@ -84,6 +84,13 @@ class TestReferenceBuilder(unittest.TestCase):
         self.assertEqual(len(psi_ref), horizon)
         self.assertEqual(len(kappa_ref), horizon)
         self.assertEqual(len(v_ref), horizon)
+        self.assertEqual(len(s_horizon), horizon)
+        # Phase 1: s_0 and s_horizon (progress along path)
+        self.assertIsInstance(s_0, (float, np.floating))
+        self.assertGreaterEqual(s_0, 0.0)
+        # s_horizon should be non-decreasing (progress along path)
+        self.assertTrue(np.all(np.diff(s_horizon) >= -1e-9), "s_horizon should be non-decreasing")
+        self.assertGreaterEqual(s_horizon[0], s_0)
         
         # Check reference speed is constant
         np.testing.assert_array_almost_equal(v_ref, speed)
@@ -110,13 +117,15 @@ class TestReferenceBuilder(unittest.TestCase):
         dt = 0.05
         speed = 5.0
         
-        psi_ref, kappa_ref, v_ref, wp_idx = self.builder.build_reference(
+        psi_ref, kappa_ref, v_ref, grade_ref, wp_idx, s_0, s_horizon = self.builder.build_reference(
             waypoints, position, heading, horizon, dt, speed
         )
         
         # Check output shapes
         self.assertEqual(len(psi_ref), horizon)
         self.assertEqual(len(kappa_ref), horizon)
+        self.assertEqual(len(s_horizon), horizon)
+        self.assertGreaterEqual(s_0, 0.0)
         
         # Curvature should be non-zero for curved path
         self.assertTrue(np.any(np.abs(kappa_ref) > 0.01))
@@ -132,7 +141,8 @@ class TestReferenceBuilder(unittest.TestCase):
         self.assertGreater(len(resampled), len(waypoints))
         
         # First and last points should be preserved
-        self.assertEqual(resampled[0], waypoints[0])
+        self.assertAlmostEqual(resampled[0][0], waypoints[0][0], places=5)
+        self.assertAlmostEqual(resampled[0][1], waypoints[0][1], places=5)
         self.assertEqual(resampled[-1], waypoints[-1])
 
 

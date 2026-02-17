@@ -84,28 +84,21 @@ class DSPACERacingCar(RacingCar, _DSpaceVehicle, Steers, HasManualTransmission, 
     # Steers protocol implementation (for driving domain actions)
     def setThrottle(self, throttle):
         """Set throttle using driving domain protocol."""
-        print(f"[DSPACERacingCar.setThrottle] Called with throttle={throttle}")
-        # Store for later application via simulator
         if not hasattr(self, '_control_state'):
             self._control_state = {}
         self._control_state['throttle'] = float(throttle)
-        print(f"[DSPACERacingCar.setThrottle] Stored in _control_state: {self._control_state}")
     
     def setSteering(self, steering):
         """Set steering using driving domain protocol."""
-        print(f"[DSPACERacingCar.setSteering] Called with steering={steering}")
         if not hasattr(self, '_control_state'):
             self._control_state = {}
         self._control_state['steering'] = float(steering)
-        print(f"[DSPACERacingCar.setSteering] Stored in _control_state: {self._control_state}")
     
     def setBraking(self, braking):
         """Set braking using driving domain protocol."""
-        print(f"[DSPACERacingCar.setBraking] Called with braking={braking}")
         if not hasattr(self, '_control_state'):
             self._control_state = {}
         self._control_state['braking'] = float(braking)
-        print(f"[DSPACERacingCar.setBraking] Stored in _control_state: {self._control_state}")
     
     def setHandbrake(self, handbrake):
         """Set handbrake (not implemented in dSPACE yet)."""

@@ -53,12 +53,16 @@ class MPCConfig:
         # Steering acceleration penalty (smoother steering)
         self.w_ddu = config_dict.get('w_ddu', 0.00003)  # Steering acceleration weight (smoother steering)
         
+        # Phase 2/3 MPCC: lag error and progress incentive (set both to 0 for trajectory-tracking only)
+        self.Q_lag = config_dict.get('Q_lag', 0.02)   # Lag error: Q_lag * (s_ref - s)^2 per step (default active for Phase 3)
+        self.Q_progress = config_dict.get('Q_progress', 0.005)  # Progress reward: -Q_progress * (s_N - s_0) at terminal
+        
         # Adaptive weights based on curvature (low curvature = straights, high curvature = sharp turns)
         self.use_adaptive_weights = config_dict.get('use_adaptive_weights', True)
         self.low_curvature_threshold = config_dict.get('low_curvature_threshold', 0.02)  # 1/m
         self.high_curvature_threshold = config_dict.get('high_curvature_threshold', 0.1)  # 1/m
         # Low curvature weights (for straights)
-        self.w_ey_low_curv = config_dict.get('w_ey_low_curv', 0.01)
+        self.w_ey_low_curv = config_dict.get('w_ey_low_curv', 0.05)  # raised from 0.01 to reduce straight-line drift (oscillation fix)
         self.w_epsi_low_curv = config_dict.get('w_epsi_low_curv', 0.0)
         self.w_epsi_vel_low_curv = config_dict.get('w_epsi_vel_low_curv', 0.3)
         self.w_u_low_curv = config_dict.get('w_u_low_curv', 1.0)
@@ -71,6 +75,10 @@ class MPCConfig:
         self.w_u_high_curv = config_dict.get('w_u_high_curv', 0.02)
         self.w_u_vel_high_curv = config_dict.get('w_u_vel_high_curv', 0.05)
         self.w_ddu_high_curv = config_dict.get('w_ddu_high_curv', 0.000003)
+        
+        # Oscillation fixes (Phase 3+): CTE deadzone and cap on off-track weight scaling
+        self.cte_deadzone = config_dict.get('cte_deadzone', 0.2)  # (m) treat |e_y| < this as 0 so MPC does not overcorrect small errors
+        self.cte_multiplier_max = config_dict.get('cte_multiplier_max', 1.5)  # cap on tracking-weight multiplier when off-track (avoid over-aggressive recovery)
         
         # Safety thresholds
         self.admissible_position_error = config_dict.get('admissible_position_error', 30.0)  # Default 30.0m for sparse waypoints

@@ -52,7 +52,7 @@ class TestMPCLateralController(unittest.TestCase):
         waypoints = [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)]
         waypoint_idx = 0
         
-        e_y, e_psi = self.controller._compute_errors(
+        e_y, e_psi, _ = self.controller._compute_errors(
             position, heading, waypoints, waypoint_idx
         )
         
@@ -75,15 +75,15 @@ class TestMPCLateralController(unittest.TestCase):
         waypoints = [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)]
         waypoint_idx = 0
         
-        e_y, e_psi = self.controller._compute_errors(
+        e_y, e_psi, _ = self.controller._compute_errors(
             position, heading, waypoints, waypoint_idx
         )
         
         # On path, so e_y should be small
         self.assertAlmostEqual(e_y, 0.0, places=1)
         
-        # Heading error should be negative (pointing left when should be straight)
-        self.assertLess(e_psi, 0.0)
+        # e_psi = heading - psi_ref: vehicle pointing left (heading=0.2) with path straight (0) => e_psi > 0
+        self.assertGreater(e_psi, 0.0)
     
     def test_fallback_steering(self):
         """Test fallback steering behavior."""

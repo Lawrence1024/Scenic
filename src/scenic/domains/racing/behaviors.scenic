@@ -433,7 +433,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
 
     # Ego: base throttle cap (lowered further on large CTE); raised for more throttle on straights
     if self is simulation().scene.egoObject:
-        throttle_limit = 0.65
+        throttle_limit = 1.0   # No cap so MPC can reach 140 mph on straights (IAC vehicle)
 
     # Steering slew-rate and CTE safety thresholds
     max_steer_delta = 0.2          # per step (normalized units)
@@ -672,8 +672,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         progress_pct = (self._waypoints_passed / len(wp_list)) * 100.0 if len(wp_list) > 0 else 0.0
                         print(f"[FollowRacingLineMPCBehavior] WAYPOINT HIT: index {old_wp_idx} -> {wp_last_idx} at ({current_wp_x:.2f}, {current_wp_y:.2f}), distance={current_wp_dist:.2f}m")
                         print(f"[FollowRacingLineMPCBehavior] Progress: {self._waypoints_passed} waypoints passed ({progress_pct:.1f}% of {len(wp_list)} total waypoints)")
-                    else:
-                        print(f"[FollowRacingLineMPCBehavior] Waypoint index: {wp_last_idx} at ({current_wp_x:.2f}, {current_wp_y:.2f}), distance={current_wp_dist:.2f}m")
                 
             except Exception as e:
                 print(f"[FollowRacingLineMPCBehavior] Warning: Waypoint finder error: {e}")
@@ -743,75 +741,95 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         cte_mag_for_speed = abs(cte_for_speed) if cte_for_speed is not None else 0.0
         
         # Universal max speed limit: Reduced for better robustness without elevation data
-        MAX_SPEED_LIMIT_MS = 35.76  # 80 mph in m/s (~129 km/h)
+        MAX_SPEED_LIMIT_MS = 62.58  # 140 mph in m/s (~225 km/h) for IAC vehicle capability
         
         # --- Curvature-based speed gate (from suggestion.md) ---
         # Formula: v_max(s) = sqrt(a_y_max / (|κ(s)| + ε))
         # v_ref = min(v_desired, min_{s∈[s_0, s_0+L]} v_max(s))
-        # This ensures vehicle enters turns at appropriate speed
+        # This ensures vehicle enters turns at appropriate speed (Laguna Seca: see turns early to avoid run-off)
         curvature_speed_limit = target_speed  # Default: no reduction
         curvature_ahead_max = 0.0  # Max curvature over lookahead (for proactive downshift)
         max_lateral_accel = 8.0  # m/s² (conservative for indoor sim, can be configured)
         curvature_epsilon = 0.001  # Small epsilon to avoid division by zero
+        curvature_speed_margin = 0.88  # Use 88% of theoretical v_max in turns (safety margin for run-off avoidance)
         
-        if use_waypoints and wp_list and len(wp_list) >= 3 and wp_last_idx < len(wp_list) - 2:
+        if use_waypoints and wp_list and len(wp_list) >= 3:
             try:
-                # Compute curvature-based speed limit over MPC horizon
-                # Look ahead distance: MPC horizon (about 1.75s at typical speeds)
+                # Compute curvature-based speed limit over MPC horizon (waypoint indices wrap at end of lap)
+                # Look ahead: ensure we see turns early enough to brake (Laguna Seca Corkscrew/hairpins)
                 horizon = _lon_controller.config.mpc_prediction_horizon if hasattr(_lon_controller, 'config') else 35
                 dt_mpc = _lon_controller.config.mpc_prediction_dt if hasattr(_lon_controller, 'config') else 0.05
                 lookahead_dist = current_speed * horizon * dt_mpc  # Distance over MPC horizon
                 if lookahead_dist < 10.0:
-                    lookahead_dist = 25.0  # Minimum lookahead
+                    lookahead_dist = 25.0  # Minimum at very low speed
+                # At high speed, need enough distance to brake before turn (avoid run-off).
+                # Braking from v to v_turn at slew_down m/s takes (v - v_turn)/slew_down seconds; distance ~ v * T.
+                # At 46 m/s, 7 m/s/s slew: need ~5.5 s -> ~250 m to see turn and slow to ~8 m/s for sharp bend.
+                min_lookahead_for_braking = 85.0   # m when 15 < speed <= 25
+                if current_speed > 40.0:
+                    min_lookahead_for_braking = 250.0  # m at very high speed: see sharp turn in time (e.g. k=0.1) without capping max speed
+                elif current_speed > 25.0:
+                    min_lookahead_for_braking = 120.0  # m at high speed
+                if lookahead_dist < min_lookahead_for_braking and current_speed > 15.0:
+                    lookahead_dist = min_lookahead_for_braking
                 
                 lookahead_idx = wp_last_idx
                 accumulated_dist = 0.0
                 min_v_max = target_speed  # Track minimum v_max over horizon
+                n_wp = len(wp_list)
                 
-                # Sample curvature along horizon
+                # Sample curvature along horizon; wrap waypoints so near end-of-lap we see the straight after the loop
                 sample_points = []
-                while lookahead_idx < len(wp_list) - 1 and accumulated_dist < lookahead_dist:
+                while accumulated_dist < lookahead_dist:
+                    next_idx = (lookahead_idx + 1) % n_wp
                     x0, y0 = float(wp_list[lookahead_idx][0]), float(wp_list[lookahead_idx][1])
-                    x1, y1 = float(wp_list[lookahead_idx+1][0]), float(wp_list[lookahead_idx+1][1])
+                    x1, y1 = float(wp_list[next_idx][0]), float(wp_list[next_idx][1])
                     seg_dx = x1 - x0; seg_dy = y1 - y0
                     seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
                     if seg_len < 1e-6:
-                        lookahead_idx += 1
+                        lookahead_idx = next_idx
                         continue
-                    
-                    # Sample at this segment
                     sample_points.append((lookahead_idx, accumulated_dist))
                     accumulated_dist += seg_len
-                    if accumulated_dist < lookahead_dist:
-                        lookahead_idx += 1
+                    lookahead_idx = next_idx
+                    if lookahead_idx == wp_last_idx and len(sample_points) > 1:
+                        break  # wrapped full lap
                 
-                # Compute curvature at each sample point and apply speed gate
+                # Compute curvature at each sample point (use modulo so indices 0 and n_wp-1 are valid)
                 for sample_idx, sample_dist in sample_points:
-                    if sample_idx > 0 and sample_idx < len(wp_list) - 1:
-                        p0 = (float(wp_list[sample_idx-1][0]), float(wp_list[sample_idx-1][1]))
-                        p1 = (float(wp_list[sample_idx][0]), float(wp_list[sample_idx][1]))
-                        p2 = (float(wp_list[sample_idx+1][0]), float(wp_list[sample_idx+1][1]))
-                        
-                        # Compute curvature (3-point method)
-                        v1x = p1[0] - p0[0]; v1y = p1[1] - p0[1]
-                        v2x = p2[0] - p1[0]; v2y = p2[1] - p1[1]
-                        cross = v1x * v2y - v1y * v2x
-                        len1 = (v1x*v1x + v1y*v1y) ** 0.5
-                        len2 = (v2x*v2x + v2y*v2y) ** 0.5
-                        if len1 > 1e-6 and len2 > 1e-6:
-                            avg_len = (len1 + len2) / 2.0
-                            if avg_len > 1e-6:
-                                abs_kappa = abs(2.0 * cross / (len1 * len2 * avg_len))
-                                if abs_kappa > curvature_ahead_max:
-                                    curvature_ahead_max = abs_kappa
-                                
-                                # Apply speed gate formula: v_max = sqrt(a_y_max / (|κ| + ε))
-                                v_max_at_kappa = (max_lateral_accel / (abs_kappa + curvature_epsilon)) ** 0.5
-                                if v_max_at_kappa < min_v_max:
-                                    min_v_max = v_max_at_kappa
+                    i0 = (sample_idx - 1) % n_wp
+                    i1 = sample_idx % n_wp
+                    i2 = (sample_idx + 1) % n_wp
+                    p0 = (float(wp_list[i0][0]), float(wp_list[i0][1]))
+                    p1 = (float(wp_list[i1][0]), float(wp_list[i1][1]))
+                    p2 = (float(wp_list[i2][0]), float(wp_list[i2][1]))
+                    # Compute curvature (3-point method)
+                    v1x = p1[0] - p0[0]; v1y = p1[1] - p0[1]
+                    v2x = p2[0] - p1[0]; v2y = p2[1] - p1[1]
+                    cross = v1x * v2y - v1y * v2x
+                    len1 = (v1x*v1x + v1y*v1y) ** 0.5
+                    len2 = (v2x*v2x + v2y*v2y) ** 0.5
+                    if len1 > 1e-6 and len2 > 1e-6:
+                        avg_len = (len1 + len2) / 2.0
+                        if avg_len > 1e-6:
+                            abs_kappa = abs(2.0 * cross / (len1 * len2 * avg_len))
+                            if abs_kappa > curvature_ahead_max:
+                                curvature_ahead_max = abs_kappa
+                            # Apply speed gate formula: v_max = sqrt(a_y_max / (|κ| + ε)); apply safety margin
+                            v_max_at_kappa = curvature_speed_margin * (max_lateral_accel / (abs_kappa + curvature_epsilon)) ** 0.5
+                            if v_max_at_kappa < min_v_max:
+                                min_v_max = v_max_at_kappa
                 
                 # Apply minimum v_max over horizon
                 curvature_speed_limit = min_v_max
+                # Slow-in for sharp turns: when any significant curvature is ahead, cap speed more aggressively
+                # so we are already slow when the turn tightens (avoids "too fast, didn't turn in time").
+                if curvature_ahead_max > 0.015:
+                    # Stricter margin when curvature is high (e.g. k>0.05) so we slow enough for sharp bends without capping max speed elsewhere
+                    slow_in_margin = 0.75 if curvature_ahead_max > 0.05 else 0.82
+                    v_max_slow_in = slow_in_margin * (max_lateral_accel / (curvature_ahead_max + curvature_epsilon)) ** 0.5
+                    if v_max_slow_in < curvature_speed_limit:
+                        curvature_speed_limit = v_max_slow_in
             except Exception as e:
                 # If curvature computation fails, use full target speed
                 pass
@@ -827,11 +845,11 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             # At 5-10m CTE: set target to current speed (zero throttle)
             cte_target_speed = current_speed
         elif cte_mag_for_speed >= 3.0:
-            # 3-5m CTE: Limit to 4 m/s (prevent overshooting when approaching track)
-            cte_target_speed = 4.0
+            # 3-5m CTE: Limit to 6 m/s (softer: avoid crawl in turns while still cautious off-line)
+            cte_target_speed = 6.0
         elif cte_mag_for_speed >= 2.0:
-            # 2-3m CTE: Limit to 5 m/s (prevent overshooting when close to track)
-            cte_target_speed = 5.0
+            # 2-3m CTE: Limit to 7 m/s (softer: smooth turns at higher speed, reduce brake-then-throttle)
+            cte_target_speed = 7.0
         elif cte_mag_for_speed >= 1.5:
             # NEW: 1.5-2m CTE: Limit to 6 m/s (early intervention for small deviations)
             cte_target_speed = 6.0
@@ -864,22 +882,16 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         effective_target_speed = min(effective_target_speed, MAX_SPEED_LIMIT_MS)
         
         # --- Slew-rate limit on speed reference (smooth ramps into/out of turns) ---
-        # Prevents step changes that cause brake/throttle oscillation
+        # Prevents step changes that cause brake/throttle oscillation.
+        # Faster slew-down so we can slow in time for sharp turns (Laguna Seca run-off fix).
         dt_slew = _lon_controller.config.mpc_prediction_dt if hasattr(_lon_controller, 'config') else 0.05
-        slew_down_ms = 4.0   # max speed decrease per second (m/s² equivalent for speed)
-        slew_up_ms = 6.0     # max speed increase per second
+        slew_down_ms = 7.0   # max speed decrease per second (raised from 4.0 so we brake in time for turns)
+        slew_up_ms = 5.0     # max speed increase per second (reduced from 6.0 for smoother throttle recovery after turns)
         if not hasattr(self, '_last_effective_target_speed'):
             self._last_effective_target_speed = float(effective_target_speed)
         last_eff = float(self._last_effective_target_speed)
         effective_target_speed = max(last_eff - slew_down_ms * dt_slew, min(last_eff + slew_up_ms * dt_slew, float(effective_target_speed)))
         self._last_effective_target_speed = float(effective_target_speed)
-        
-        # Debug logging for CTE and curvature-aware speed control
-        if cte_mag_for_speed >= cte_throttle_reduction_start or curvature_speed_limit < target_speed * 0.95:
-            curvature_info = ""
-            if curvature_speed_limit < target_speed * 0.95:
-                curvature_info = f", curvature_limit={curvature_speed_limit:.1f}m/s"
-            print(f"[Speed Control] CTE={cte_mag_for_speed:.2f}m, target={target_speed:.1f}m/s -> effective={effective_target_speed:.1f}m/s (CTE_limit={cte_target_speed:.1f}m/s{curvature_info}, current={current_speed:.2f}m/s)")
         
         # --- Build speed reference profile for MPC ---
         # MPC needs a speed profile over the prediction horizon
@@ -926,8 +938,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                             avg_len = (len1 + len2) / 2.0
                             if avg_len > 1e-6:
                                 abs_kappa = abs(2.0 * cross / (len1 * len2 * avg_len))
-                                # Apply speed gate formula: v_max = sqrt(a_y_max / (|κ| + ε))
-                                v_max_at_kappa = (max_lateral_accel / (abs_kappa + curvature_epsilon)) ** 0.5
+                                # Apply speed gate formula with same safety margin as curvature_speed_limit
+                                v_max_at_kappa = curvature_speed_margin * (max_lateral_accel / (abs_kappa + curvature_epsilon)) ** 0.5
                                 # Use minimum of target speed and curvature-limited speed
                                 v_ref_profile[k] = min(v_ref_profile[k], v_max_at_kappa)
             except Exception as e:
@@ -1124,13 +1136,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         self._last_raw_brake = float(raw_brake)
         final_brake = max(0.0, min(1.0, raw_brake))
 
-        print(
-            f"[BrakeCap DBG] very_large={very_large} large={large} cap={brake_cap:.3f} "
-            f"cte_brake={float(cte_brake):.3f} mpc_brake={float(brake_mpc):.3f} "
-            f"prev={prev_brake:.3f} raw={float(raw_brake):.3f} limited={limited} v={float(current_speed):.2f}"
-        )
-
-        
         # --- Lateral Control (MPC) ---
         # Build vehicle state for MPC
         vehicle_state = {
@@ -1183,7 +1188,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 vehicle_state,
                 waypoints_for_mpc,
                 None,  # MPC selects segments dynamically
-                cte_magnitude=cte_mag_for_speed
+                cte_magnitude=cte_mag_for_speed,
+                v_ref_profile=v_ref_profile  # Same trajectory as longitudinal: smooth turns, avoid over-steer then correct
             )
             steer_mpc = float(steer_mpc)
 
@@ -1409,19 +1415,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         # If your vehicle turns the wrong way, flip HERE (and also flip steer_actual readback below).
         final_steer_ds = final_steer   # negative = right, positive = left (your dSPACE convention)
 
-        print(
-            f"[SteerCond DBG] mpc={steer_mpc_raw:+.3f} gain={STEER_GAIN:.2f} "
-            f"cte={cte_val:+.3f} |cte|={cte_mag_local:.3f} psi={psi_mag:.3f} "
-            f"scale={scale:.3f} rec={rec:.2f} v={v:.2f} "
-            f"pre_slew={steer_pre_slew:+.3f} max_d={max_delta_eff:.3f}"
-        )
-        print(
-            f"[Steer Slew DBG] pre={steer_pre_slew:+.3f} prev={prev_steer:+.3f} "
-            f"delta={steer_delta:+.3f} limited={limited} final={final_steer:+.3f} ds={final_steer_ds:+.3f}"
-        )
-
-
-
         # Ensure local_throttle_limit doesn't exceed base throttle_limit
         local_throttle_limit = min(local_throttle_limit, throttle_limit)
         
@@ -1429,21 +1422,29 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         final_throttle = max(0.0, min(local_throttle_limit, throttle_mpc))
         final_brake = raw_brake  # Already merged and capped above
         
-        # Apply universal max speed limit: if current speed exceeds limit, reduce throttle/apply brake
-        if current_speed > MAX_SPEED_LIMIT_MS:
-            # Speed exceeds limit: reduce throttle and apply brake
+        # Apply universal max speed limit with deadband + hysteresis (smooth brake/throttle, no flip-flop)
+        SPEED_LIMIT_DEADBAND = 0.5  # m/s: trigger brake when speed > limit+deadband; release when speed < limit-deadband
+        speed_limit_applied_this_step = False
+        was_limit_active = getattr(self, '_speed_limit_active', False)
+        if current_speed > MAX_SPEED_LIMIT_MS + SPEED_LIMIT_DEADBAND:
+            self._speed_limit_active = True
+        if current_speed < MAX_SPEED_LIMIT_MS - SPEED_LIMIT_DEADBAND:
+            self._speed_limit_active = False
+        if self._speed_limit_active and current_speed > MAX_SPEED_LIMIT_MS - SPEED_LIMIT_DEADBAND:
+            # In hysteresis band or above: apply limit to avoid sharp brake then sharp throttle
+            speed_limit_applied_this_step = True
             speed_excess = current_speed - MAX_SPEED_LIMIT_MS
-            # More aggressive braking for larger excess
             if speed_excess > 2.0:
                 final_throttle = 0.0
-                final_brake = max(final_brake, 0.5)  # Strong brake
+                final_brake = max(final_brake, 0.5)
             elif speed_excess > 1.0:
                 final_throttle = 0.0
-                final_brake = max(final_brake, 0.3)  # Moderate brake
+                final_brake = max(final_brake, 0.3)
             else:
-                final_throttle = max(0.0, final_throttle * 0.5)  # Reduce throttle
-                final_brake = max(final_brake, 0.1)  # Light brake
-            print(f"[Speed Limit] Speed {current_speed:.2f}m/s exceeds limit {MAX_SPEED_LIMIT_MS:.1f}m/s, applying brake={final_brake:.3f}")
+                final_throttle = max(0.0, final_throttle * 0.5)
+                final_brake = max(final_brake, 0.1)
+            step_for_log = getattr(self, '_behavior_step_count', 0) + 1
+            print(f"[Speed Limit] step={step_for_log} Speed {current_speed:.2f}m/s exceeds limit {MAX_SPEED_LIMIT_MS:.1f}m/s, applying brake={final_brake:.3f}")
 
         # Global mutual exclusion: never command throttle and brake at the same time.
         # When slowing (e.g. for a turn), lift throttle and brake only—no simultaneous throttle+brake.
@@ -1455,6 +1456,19 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
 
         # Store CTE for debugging
         self._current_cte = cte
+
+        # ---- Detailed drive logging (heavy brake / near stop / speed drop) ----
+        # Use step_for_log (not _step) to avoid shadowing the behavior's _step() method
+        step_for_log = getattr(self, '_behavior_step_count', 0) + 1
+        _last_speed = getattr(self, '_last_speed', None)
+        if final_brake > 0.25:
+            cte_show = float(cte) if cte is not None else 0.0
+            print(f"[Drive] Heavy brake: step={step_for_log} speed={current_speed:.2f}m/s brake={final_brake:.3f} throttle={final_throttle:.3f} | speed_limit={speed_limit_applied_this_step} cte={cte_show:.2f}m brake_mpc={brake_mpc:.3f}")
+        if current_speed is not None and current_speed < 6.0:
+            print(f"[Drive] Low speed: step={step_for_log} speed={current_speed:.2f}m/s brake={final_brake:.3f} throttle={final_throttle:.3f}")
+        if _last_speed is not None and current_speed is not None and (current_speed - _last_speed) < -4.0:
+            print(f"[Drive] Speed drop: step={step_for_log} from {_last_speed:.2f} to {current_speed:.2f} m/s (delta={current_speed - _last_speed:.2f})")
+        self._last_speed = float(current_speed) if current_speed is not None else 0.0
         
         # Build Action List 
         actions_to_take = [
@@ -1511,41 +1525,9 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             self._behavior_step_count = 0
         
         gear_val = getattr(self, 'gear', 0)
-        print(f"\n[FollowRacingLineMPC] Step {self._behavior_step_count}:")
-        print(f"  Position: ({px:.2f}, {py:.2f})")
-        print(f"  Speed: {current_speed:.2f} m/s")
-        print(f"  CTE: {cte:.3f} m {'(LEFT)' if cte > 0 else '(RIGHT)'}")
-        
-        # Add waypoint information
-        if use_waypoints and wp_list and len(wp_list) >= 2 and wp_last_idx is not None:
-            if wp_last_idx < len(wp_list):
-                current_wp = wp_list[wp_last_idx]
-                current_wp_x, current_wp_y = float(current_wp[0]), float(current_wp[1])
-                # Calculate distance to current waypoint
-                dx_to_wp = px - current_wp_x
-                dy_to_wp = py - current_wp_y
-                dist_to_wp = (dx_to_wp*dx_to_wp + dy_to_wp*dy_to_wp) ** 0.5         
-                print(f"  Waypoint advancement: index={wp_last_idx}, coord=({current_wp_x:.2f}, {current_wp_y:.2f}), distance={dist_to_wp:.2f}m")
-                
-                # Next waypoint information
-                if wp_last_idx < len(wp_list) - 1:
-                    next_wp = wp_list[wp_last_idx + 1]
-                    next_wp_x, next_wp_y = float(next_wp[0]), float(next_wp[1])
-                    # Calculate segment heading (orientation)
-                    seg_dx = next_wp_x - current_wp_x
-                    seg_dy = next_wp_y - current_wp_y
-                    seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
-                    if seg_len > 1e-6:
-                        seg_heading = math.atan2(seg_dy, seg_dx)  # radians
-                        seg_heading_deg = seg_heading * 180.0 / math.pi
-                        print(f"  Next waypoint: index={wp_last_idx + 1}, coord=({next_wp_x:.2f}, {next_wp_y:.2f}), segment_heading={seg_heading_deg:.1f}deg")
-                elif wp_last_idx == len(wp_list) - 1:
-                    print(f"  Next waypoint: N/A (at last waypoint)")
-        else:
-            print(f"  Current waypoint: N/A (no waypoints available)")
-        
-        print(f"  MPC steering: {steer_mpc:.3f} -> {final_steer:.3f} (after slew limit)")
-        print(f"  Final controls: throttle={final_throttle:.3f}, brake={final_brake:.3f}, steer={final_steer:.3f}, gear={gear_val}")
+        # Log step summary every 50 steps; include curvature_ahead for turn context
+        if self._behavior_step_count % 50 == 0:
+            print(f"[FollowRacingLineMPC] Step {self._behavior_step_count}: pos=({px:.2f},{py:.2f}) speed={current_speed:.2f}m/s CTE={cte:.3f}m steer={final_steer:.3f} throttle={final_throttle:.3f} brake={final_brake:.3f} gear={gear_val} curv_ahead={curvature_ahead_max:.3f}")
 
         # Execute all actions together
         take actions_to_take
