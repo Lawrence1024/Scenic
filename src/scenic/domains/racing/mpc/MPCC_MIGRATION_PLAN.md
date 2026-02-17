@@ -94,6 +94,14 @@ These are the behaviors this plan aims to fix or improve. Evidence comes from `r
   4. **Speed reference slew-up (behaviors.scenic):** `slew_up_ms` 6.0 → 5.0 so after a turn the speed reference ramps up slightly slower; throttle recovery is less abrupt.
 - **Status:** [x] Done. Re-run and check run.log for reduced oscillation and smoother pedal transitions.
 - **If still needed (to tune):** Increase `w_du` or lower LPF further; widen speed deadband (e.g. 0.7 m/s); or add explicit throttle ramp after brake release in behavior.
+- **Over-braking on new TTL:** If run.log shows brake too much → throttle to compensate, consider: curvature_speed_margin or slow-in margins (82%/75%) for racing-line TTL, or throttle ramp after brake release.
+
+### Racing-line TTL (ttl_racing_line_xodr.csv) — status and new behavior
+
+- **TTL:** Curvature-capped racing line (κ ≤ 0.097 1/m) in `assets/ttls/.../transformed/ttl_racing_line_xodr.csv`. Path is feasible; no run-off from infeasible curvature.
+- **Comparison vs centerline (ttl_fellow_test_xodr_all.csv):** With the centerline TTL, lateral following and speed profile are the baseline. With the racing-line TTL, lateral following remains good (path is feasible). The **new** observed issue is **over-braking then throttle to compensate**: curvature-based slow-in often reduces speed too much (e.g. 42→8 m/s, 35→10 m/s); the controller then applies throttle to recover. Pattern: brake=0.25 for many steps → speed drops to 8–15 m/s → throttle 0.05–1.0. Sometimes with large CTE (4–10 m) so throttle remains limited. Log evidence (with timestamps in run.log): e.g. Step 200→250 (brake then full throttle), 1250→1300 (36→13 m/s then low throttle), 1950→2100 (42→8 m/s, CTE 6.9 m), 2850→2900 (35→10 m/s, CTE 9.7 m).
+- **Goal:** Reduce over-braking so we don’t overslow into turns, then need to throttle hard to compensate.
+- **Status:** [x] Tuned (general fixes applicable to both centerline and racing-line TTL): (1) curvature_speed_margin 88%→90%, slow-in 82%/75%→85%/78%; (2) throttle ramp after brake release (10 steps, cap 0.25→1.0).
 
 ### What we already fixed (and what they do not fix)
 
@@ -101,6 +109,7 @@ These are the behaviors this plan aims to fix or improve. Evidence comes from `r
 - **Quick fixes (w_du, w_ddu, LPF, w_du_lon, w_a):** Smooth reaction (less aggressive steering and pedal changes). Do not fix the binary speed limit that causes throttle/brake flip or anticipation (slow-in, steer earlier).
 - **ReferenceBuilder spline `dz` bug:** With 2D position `(x, y)` and a 3D spline, `dz` was never set but was used in gradient/hessian in `project_to_spline()`, causing "cannot access local variable 'dz'" and forcing linear fallback every step (worsening L–R oscillation). Fixed by using `dz` only when `len(position) >= 3` and `len(point) >= 3` (and `len(deriv)`, `len(deriv2)` for hessian). Spline path is now used when possible; Phase 2 contouring+progress will help further.
 - **Log cleanup:** Noisy per-step prints removed or throttled in MPC, behavior, dSPACE model, and readback (spline fallback logged once per run; step summary every 50 steps; WAYPOINT HIT kept).
+- **Log timestamps:** Run logs include simulation time `t=Xs` (e.g. `t=2.50s`) so runs with different TTLs or configs can be compared systematically. Time is step × dt with dt=0.05 s (scenario time_step).
 
 ### Summary: what is done vs what to fix/tune
 
@@ -113,6 +122,8 @@ These are the behaviors this plan aims to fix or improve. Evidence comes from `r
 | **Smoothness: steering oscillation** | Done | w_du 2.2, steering_lpf 1.5 Hz |
 | **Smoothness: sharp brake then throttle** | Done | Speed limit deadband 0.5 m/s + hysteresis, slew_up 5.0 |
 | **End-of-lap throttle (TTL wrap)** | Done | Curvature lookahead wraps waypoints so we see straight after loop; TTL gap first/last ~0.68 m (doc) |
+| **Racing-line TTL (feasible path)** | Done | Curvature cap in generate_racing_line.py; ttl_racing_line_xodr.csv |
+| **Over-braking then throttle** | Done | curvature_speed_margin 90%, slow-in 85%/78%; throttle ramp after brake (behaviors.scenic) |
 | Further tuning if needed | Optional | Widen deadband; throttle ramp after brake; increase w_du_lon |
 
 ### TTL loop and end-of-lap throttle (why we didn’t throttle hard on the “straight” at the end)

@@ -82,9 +82,10 @@ class VehicleController:
                 steer_val = float(max(-1.0, min(1.0, control['steering']))) * 240.0
                 self.cd.set_var(KEY_STEERING, steer_val)
             
-            # Debug every 50 steps
+            # Debug every 50 steps; t = step * 0.05s for comparison across runs
             if obj._ego_control_count % 50 == 0:
-                print(f"[EgoControl #{obj._ego_control_count}] Writing: throttle={throttle_scenic:.3f}->{throttle_scenic*100:.1f}, brake={brake_scenic:.3f}->{brake_scenic*100:.1f}, steer={steer_scenic:.3f}->{-steer_scenic*240:.1f}")
+                t_log = obj._ego_control_count * 0.05
+                print(f"[EgoControl] t={t_log:.2f}s #{obj._ego_control_count} Writing: throttle={throttle_scenic:.3f}->{throttle_scenic*100:.1f}, brake={brake_scenic:.3f}->{brake_scenic*100:.1f}, steer={steer_scenic:.3f}->{-steer_scenic*240:.1f}")
                 
         except Exception as e:
             print(f"[VehicleController:EgoControl] Error: {e}")

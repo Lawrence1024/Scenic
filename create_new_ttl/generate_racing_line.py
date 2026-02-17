@@ -34,13 +34,20 @@ MAX_RACING_LINE_OFFSET = 2.0  # Maximum lateral offset from centerline (meters) 
 MIN_TRACK_WIDTH = 0.5   # Minimum lateral offset (for smooth transitions)
 CURVATURE_THRESHOLD = 0.008  # Curvature threshold for corner detection (1/m) - only offset on sharper turns
 LOOKAHEAD_DISTANCE = 15.0  # Distance to look ahead (meters) - shorter = less "swing" before turn
-SMOOTHING_WINDOW = 5  # Number of points for smoothing offsets
+SMOOTHING_WINDOW = 13  # Number of points for smoothing offsets (larger = fewer kinks, feasible curvature)
 # On corner exit (curvature decreasing = past apex), taper offset back toward centerline so we don't
 # stay outside and run off track. 0.0 = centerline on exit, 1.0 = same as approach (can run off).
 EXIT_TAPER = 0.2  # Use only 20% of offset on exit - pull back to centerline after apex
 # Turn-in: start pulling toward apex this many meters before the apex (sharp curves). Larger = turn in
 # earlier so we don't run out of track on U-turns; smaller = later turn-in.
 TURN_IN_DISTANCE = 25.0  # meters before apex to start turning in
+
+# Kinematic curvature limit: vehicle cannot follow path with |kappa| > this (1/m).
+# kappa_max = tan(max_steer_angle) / wheel_base (e.g. 0.2816 rad, 2.9718 m -> ~0.0973)
+KAPPA_MAX = 0.097
+# Post-process: blend racing line toward centerline where curvature exceeds KAPPA_MAX (iterations).
+CURVATURE_CAP_ITERATIONS = 25
+CURVATURE_BLEND_ALPHA = 0.35  # per-iteration blend toward centerline at hot spots
 
 
 def compute_curvature(p0: Tuple[float, float], 
@@ -177,6 +184,92 @@ def compute_optimal_offset(curvature: float,
     offset = -np.sign(effective_curvature) * max_offset * curvature_factor
     
     return offset
+
+
+def compute_racing_line_curvature(racing_line: List[Tuple[float, float, float]]) -> List[float]:
+    """Compute curvature at each point of the racing line (2D projection)."""
+    n = len(racing_line)
+    curvature = [0.0] * n
+    if n < 3:
+        return curvature
+    points_2d = [(p[0], p[1]) for p in racing_line]
+    for i in range(1, n - 1):
+        curvature[i] = compute_curvature(points_2d[i - 1], points_2d[i], points_2d[i + 1])
+    curvature[0] = curvature[1]
+    curvature[-1] = curvature[-2]
+    return curvature
+
+
+def smooth_polyline(points: List[Tuple[float, float, float]], window: int) -> List[Tuple[float, float, float]]:
+    """Smooth a polyline with a moving average (x, y, z). Reduces kinks and curvature spikes."""
+    n = len(points)
+    if n < window or window < 2:
+        return points
+    half = window // 2
+    out = []
+    for i in range(n):
+        start = max(0, i - half)
+        end = min(n, i + half + 1)
+        count = end - start
+        x = sum(points[j][0] for j in range(start, end)) / count
+        y = sum(points[j][1] for j in range(start, end)) / count
+        z = sum(points[j][2] if len(points[j]) >= 3 else 0.0 for j in range(start, end)) / count
+        out.append((x, y, z))
+    return out
+
+
+def cap_curvature_to_limit(
+    racing_line: List[Tuple[float, float, float]],
+    centerline: List[Tuple[float, float, float]],
+    kappa_max: float = KAPPA_MAX,
+    kappa_target: Optional[float] = None,
+    max_iterations: int = CURVATURE_CAP_ITERATIONS,
+    blend_alpha: float = CURVATURE_BLEND_ALPHA,
+    smooth_window: int = 21,
+    alpha_smooth_window: Optional[int] = None,
+) -> List[Tuple[float, float, float]]:
+    """Ensure path curvature stays within kinematic limit.
+    First smooth the racing line to remove kinks, then blend toward centerline in
+    high-curvature regions using a smoothed blend weight to avoid new kinks.
+    """
+    if kappa_target is None:
+        kappa_target = kappa_max
+    if alpha_smooth_window is None:
+        alpha_smooth_window = smooth_window
+    n = len(racing_line)
+    if n != len(centerline) or n < 3:
+        return racing_line
+    # Smooth the racing line to reduce curvature spikes from offset transitions
+    line = list(smooth_polyline(racing_line, smooth_window))
+    for _ in range(max_iterations):
+        curvature = compute_racing_line_curvature(line)
+        max_k = max(abs(k) for k in curvature)
+        if max_k <= kappa_target:
+            break
+        # Blend weight: 0 where curvature is OK, higher where it exceeds target (smoothed)
+        alpha_raw = [0.0] * n
+        for i in range(n):
+            if abs(curvature[i]) > kappa_target:
+                excess = min(1.0, (abs(curvature[i]) - kappa_target) / 0.15)
+                alpha_raw[i] = blend_alpha * (0.3 + 0.7 * excess)
+        # Smooth the blend weight so we don't create discontinuities
+        half = min(alpha_smooth_window // 2, n // 2)
+        alpha_smooth = [0.0] * n
+        for i in range(n):
+            start = max(0, i - half)
+            end = min(n, i + half + 1)
+            alpha_smooth[i] = sum(alpha_raw[j] for j in range(start, end)) / (end - start)
+        for i in range(n):
+            if alpha_smooth[i] > 1e-6:
+                c = centerline[i]
+                line[i] = (
+                    (1.0 - alpha_smooth[i]) * line[i][0] + alpha_smooth[i] * c[0],
+                    (1.0 - alpha_smooth[i]) * line[i][1] + alpha_smooth[i] * c[1],
+                    (1.0 - alpha_smooth[i]) * line[i][2] + alpha_smooth[i] * (c[2] if len(c) >= 3 else 0.0),
+                )
+    # Final light smooth to remove any remaining micro-kinks (reduces 3-point curvature spikes)
+    line = smooth_polyline(line, 5)
+    return line
 
 
 def smooth_offsets(offsets: List[float], window: int = SMOOTHING_WINDOW) -> List[float]:
@@ -373,9 +466,29 @@ def main():
     
     racing_line = generate_racing_line(centerline, MAX_TRACK_WIDTH)
     
-    # Save racing line
+    # Cap curvature to kinematic limit so the vehicle can follow the path
+    print(f"\nCapping curvature to <= {KAPPA_MAX} 1/m (kinematic limit)...")
+    kappa_before = compute_racing_line_curvature(racing_line)
+    max_kappa_before = max(abs(k) for k in kappa_before)
+    racing_line = cap_curvature_to_limit(
+        racing_line, centerline,
+        kappa_max=KAPPA_MAX,
+        max_iterations=CURVATURE_CAP_ITERATIONS,
+        blend_alpha=CURVATURE_BLEND_ALPHA,
+    )
+    kappa_after = compute_racing_line_curvature(racing_line)
+    max_kappa_after = max(abs(k) for k in kappa_after)
+    print(f"  Max |kappa| before: {max_kappa_before:.4f} 1/m, after: {max_kappa_after:.4f} 1/m")
+    if max_kappa_after > KAPPA_MAX:
+        print(f"  [WARNING] Some curvature still above {KAPPA_MAX}; consider increasing CURVATURE_CAP_ITERATIONS or CURVATURE_BLEND_ALPHA")
+    
+    # Save racing line (script dir and transformed folder for drop-in use)
     print(f"\nSaving racing line to: {output_path}")
     save_racing_line(racing_line, str(output_path))
+    transformed_path = project_root / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "transformed" / "ttl_racing_line_xodr.csv"
+    if transformed_path != output_path:
+        save_racing_line(racing_line, str(transformed_path))
+        print(f"Also saved to: {transformed_path}")
     
     # Statistics
     print("\n" + "=" * 70)
@@ -397,6 +510,9 @@ def main():
     print(f"95th percentile: {np.percentile(deviations, 95):.2f} m")
     print(f"\nPoints with deviation > 10m: {np.sum(deviations > 10.0)} ({100*np.sum(deviations > 10.0)/len(deviations):.1f}%)")
     print(f"Points with deviation > 5m: {np.sum(deviations > 5.0)} ({100*np.sum(deviations > 5.0)/len(deviations):.1f}%)")
+    kappa_final = np.array(kappa_after)
+    above = np.sum(np.abs(kappa_final) > KAPPA_MAX)
+    print(f"\nCurvature feasibility: points with |kappa| > {KAPPA_MAX}: {above} ({100*above/len(kappa_final):.1f}%)")
     
     print("\n" + "=" * 70)
     print("Done!")

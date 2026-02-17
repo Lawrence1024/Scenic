@@ -133,7 +133,8 @@ python create_new_ttl/generate_racing_line.py
    - Lookahead anticipation (50m ahead)
    - Track width constraints (max 10m deviation)
 4. **Smooths the racing line** using moving average
-5. **Outputs** to `create_new_ttl/ttl_racing_line_xodr.csv` in the same format (x,y,z)
+5. **Caps curvature** to the vehicle kinematic limit (κ_max ≈ 0.097 1/m) so the path is followable by the MPC
+6. **Outputs** to `create_new_ttl/ttl_racing_line_xodr.csv` and to `assets/ttls/LS_ENU_TTL_CSV/transformed/ttl_racing_line_xodr.csv` (same format: x,y,z)
 
 ### Racing Line Strategy
 

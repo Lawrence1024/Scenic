@@ -69,6 +69,7 @@
     
     # Waypoint/Reference
     traj_resample_dist: 0.1  # Distance between resampled waypoints (meters) - finer resolution for better tracking
+    segment_stick_cte_m: 1.5  # When |CTE| > this (m), do not switch segment — avoids reference flip and steer oscillation (generic, any TTL)
     curvature_smoothing_num: 15  # Number of points for curvature calculation (smoothing window)
     use_splines: true  # Use spline fitting with arc-length parameterization for smooth reference trajectories
     

@@ -66,6 +66,8 @@ class MPCLateralController:
         self._segment_hysteresis_m = getattr(
             config, 'segment_hysteresis_m', 0.4
         )  # only switch segment when new score is better by this margin (m)
+        # When |CTE| > this (m), stick to current segment to avoid reference flip (generic, any TTL)
+        self._segment_stick_cte_m = getattr(config, 'segment_stick_cte_m', 1.5)
         # Reference blend at boundaries: blend heading toward next segment when u_proj >= this
         self._segment_blend_u_start = getattr(config, 'segment_blend_u_start', 0.7)
         
@@ -445,12 +447,14 @@ class MPCLateralController:
                 return self._fallback_steering(e_y=None, e_psi=None)
         
         # Compute current state [e_y, e_psi, delta]
-        # MPC now dynamically selects the best segment each step
+        # MPC now dynamically selects the best segment each step; pass prev CTE so we stick to segment when far off line
+        prev_e_y = float(self.state[0]) if hasattr(self, 'state') and self.state is not None and len(self.state) > 0 else None
         e_y, e_psi, mpc_segment_idx = self._compute_errors(
             position=(x, y),
             heading=yaw,
             waypoints=waypoints,
-            current_waypoint_idx=current_waypoint_idx
+            current_waypoint_idx=current_waypoint_idx,
+            prev_e_y=prev_e_y
         )
 
         # Compute reference heading for logging (extract from _compute_errors logic)
@@ -587,17 +591,19 @@ class MPCLateralController:
                        position: Tuple[float, float],
                        heading: float,
                        waypoints: List[Tuple[float, float]],
-                       current_waypoint_idx: Optional[int] = None) -> Tuple[float, float, int]:
+                       current_waypoint_idx: Optional[int] = None,
+                       prev_e_y: Optional[float] = None) -> Tuple[float, float, int]:
         """Compute lateral error (e_y) and heading error (e_psi) from waypoints.
 
         Dynamically selects the best waypoint segment for control based on proximity to vehicle.
-        Supports both 2D (x, y) and 3D (x, y, z) waypoints. For 3D waypoints, CTE is computed
-        in the XY plane (projected to XY plane).
+        When |prev_e_y| > segment_stick_cte_m, keeps current segment to avoid reference flip and
+        steer oscillation (generic for any TTL). Supports both 2D (x, y) and 3D (x, y, z) waypoints.
 
         Args:
             position: Current vehicle position (x, y) or (x, y, z)
             heading: Current vehicle heading (radians) - yaw angle in XY plane
             waypoints: List of waypoint (x, y) or (x, y, z) tuples
+            prev_e_y: Previous lateral error (m); when |prev_e_y| > threshold, segment is not switched
 
         Returns:
             Tuple of (e_y, e_psi, segment_idx):
@@ -683,11 +689,30 @@ class MPCLateralController:
                 best_segment_idx = i
 
         # Smooth segment selection: hysteresis only (no advance cap — cap caused lag at high speed)
+        # In bends (high curvature), use stronger hysteresis so we don't switch segment and cause steer flip (generic: curvature in 1/m)
         waypoint_idx = best_segment_idx
+        effective_hysteresis_m = self._segment_hysteresis_m
+        if last_seg is not None and 0 <= last_seg < search_end and last_seg >= 1 and last_seg + 1 < len(waypoints):
+            p0 = (waypoints[last_seg - 1][0], waypoints[last_seg - 1][1])
+            p1 = (waypoints[last_seg][0], waypoints[last_seg][1])
+            p2 = (waypoints[last_seg + 1][0], waypoints[last_seg + 1][1])
+            v1x = p1[0] - p0[0]; v1y = p1[1] - p0[1]
+            v2x = p2[0] - p1[0]; v2y = p2[1] - p1[1]
+            cross = v1x * v2y - v1y * v2x
+            len1 = np.sqrt(v1x*v1x + v1y*v1y)
+            len2 = np.sqrt(v2x*v2x + v2y*v2y)
+            if len1 > 1e-6 and len2 > 1e-6:
+                avg_len = (len1 + len2) / 2.0
+                abs_kappa = abs(2.0 * cross / (len1 * len2 * avg_len))
+                effective_hysteresis_m = self._segment_hysteresis_m * (1.0 + min(abs_kappa * 5.0, 1.5))
         if last_seg is not None and 0 <= last_seg < search_end:
             if prev_seg_score is not None and best_segment_idx != last_seg:
-                if best_score >= prev_seg_score - self._segment_hysteresis_m:
+                if best_score >= prev_seg_score - effective_hysteresis_m:
                     waypoint_idx = last_seg
+        # When far off line (|CTE| > threshold), stick to current segment to avoid reference flip and steer oscillation (generic for any TTL)
+        stick_m = getattr(self, '_segment_stick_cte_m', 1.5)
+        if prev_e_y is not None and abs(prev_e_y) >= stick_m and last_seg is not None and 0 <= last_seg < search_end:
+            waypoint_idx = last_seg
         wp0 = waypoints[waypoint_idx]
         wp1 = waypoints[waypoint_idx + 1]
         x0, y0 = wp0[0], wp0[1]

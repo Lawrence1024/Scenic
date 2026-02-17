@@ -1,0 +1,11 @@
+{
+  "log_path": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\run.log",
+  "run_timestamp_utc": "2026-02-17T13:45:41.816807+00:00",
+  "total_time_s": 151.45,
+  "t_end": 151.45,
+  "n_waypoints": 2544,
+  "n_mpc_samples": 65,
+  "mean_abs_cte_m": 1.774369230769231,
+  "max_abs_cte_m": 11.972,
+  "ttl_name": "ttl_fellow_test_xodr_all.csv"
+}

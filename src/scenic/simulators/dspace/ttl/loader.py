@@ -1,5 +1,7 @@
 import os
 import csv
+from datetime import datetime, timezone
+
 from scenic.core.regions import PolylineRegion
 
 
@@ -193,6 +195,14 @@ def attach_ttl(sim, obj, vehicle_type="vehicle"):
             setattr(obj, "ttl", region)
             name = ttl_file if ttl_file else f"ttl_{ttl_index}.csv"
             print(f"[TTL] Assigned TTL PolylineRegion to {vehicle_type} ({name})")
+            # Log run identifier for analysis scripts (TTL, timestamp, optional edit_note for config/ideas)
+            if vehicle_type == "ego":
+                ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                edit_note = str(scene_params.get("edit_note", "") or scene_params.get("editNote", "")).strip().replace("\n", " ")
+                if edit_note:
+                    print(f"[RacingRun] TTL={name} run_timestamp={ts} edit_note={edit_note}")
+                else:
+                    print(f"[RacingRun] TTL={name} run_timestamp={ts}")
             # Only set waypoints if they weren't already set manually (e.g., via "with waypoints")
             if pts and not hasattr(obj, "waypoints"):
                 setattr(obj, "waypoints", list(pts))

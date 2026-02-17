@@ -94,6 +94,8 @@ class MPCConfig:
         self.traj_resample_dist = config_dict.get('traj_resample_dist', 0.1)  # Finer resolution (0.1m vs 0.2m)
         # Segment selection smoothing: only switch segment when new score is better by this margin (m)
         self.segment_hysteresis_m = config_dict.get('segment_hysteresis_m', 0.4)
+        # When |CTE| > this (m), do not switch segment — stick to current segment to avoid reference flip and steer oscillation (generic, any TTL)
+        self.segment_stick_cte_m = config_dict.get('segment_stick_cte_m', 1.5)
         # Reference blend at boundaries: blend toward next segment when u_proj >= this (0 = start, 1 = end)
         self.segment_blend_u_start = config_dict.get('segment_blend_u_start', 0.7)
         

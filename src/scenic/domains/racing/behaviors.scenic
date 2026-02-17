@@ -21,6 +21,11 @@ _tools_path = os.path.join(_scenic_root, 'tools')
 if _tools_path not in sys.path:
     sys.path.insert(0, _tools_path)
 from get_map_bounds import find_best_racing_waypoint
+from scenic.domains.racing.segments import (
+    build_waypoint_segment_map,
+    get_segment_at_waypoint,
+    get_segment_label,
+)
 
 behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoints=True, lookahead=20.0):
     """Follow the car's TTL using controllers.
@@ -568,6 +573,21 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         # and advance when we've progressed past a waypoint segment
         old_wp_idx = wp_last_idx
         if use_waypoints and wp_list and len(wp_list) >= 2:
+            # Build OpenDRIVE-based segment map once (conventional Laguna Seca = main racing roads only; pit excluded)
+            if not hasattr(self, '_waypoint_segment_map') or self._waypoint_segment_map is None:
+                try:
+                    scene = simulation().scene
+                    track = (getattr(scene, 'params', None) or {}).get('track') or getattr(scene, 'track', None)
+                    if track is not None:
+                        self._waypoint_segment_map = build_waypoint_segment_map(wp_list, track)
+                        num_seg = len(set(seg_id for seg_id, _ in self._waypoint_segment_map)) if self._waypoint_segment_map else 0
+                        print(f"[FollowRacingLineMPCBehavior] Segment map built from OpenDRIVE ({num_seg} segments); log will show segment N [name] for performance analysis")
+                    else:
+                        self._waypoint_segment_map = None
+                        print(f"[FollowRacingLineMPCBehavior] Segment map not built (no track in scene); log will show segment ?")
+                except Exception as e:
+                    self._waypoint_segment_map = None
+                    print(f"[FollowRacingLineMPCBehavior] Segment map not built: {e}; log will show segment ?")
             try:
                 # Initialize progress tracking if needed
                 if not hasattr(self, '_waypoint_progress'):
@@ -670,8 +690,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                             self._waypoints_passed = 0
                         self._waypoints_passed += 1
                         progress_pct = (self._waypoints_passed / len(wp_list)) * 100.0 if len(wp_list) > 0 else 0.0
-                        print(f"[FollowRacingLineMPCBehavior] WAYPOINT HIT: index {old_wp_idx} -> {wp_last_idx} at ({current_wp_x:.2f}, {current_wp_y:.2f}), distance={current_wp_dist:.2f}m")
-                        print(f"[FollowRacingLineMPCBehavior] Progress: {self._waypoints_passed} waypoints passed ({progress_pct:.1f}% of {len(wp_list)} total waypoints)")
+                        step_wp = getattr(self, '_behavior_step_count', 0)
+                        t_wp = step_wp * 0.05
+                        seg_wp = get_segment_at_waypoint(wp_last_idx, getattr(self, '_waypoint_segment_map', None))
+                        seg_str = f" {get_segment_label(*seg_wp)}" if seg_wp is not None else " segment ?"
+                        print(f"[FollowRacingLineMPCBehavior] t={t_wp:.2f}s WAYPOINT HIT: index {old_wp_idx} -> {wp_last_idx} at ({current_wp_x:.2f}, {current_wp_y:.2f}), distance={current_wp_dist:.2f}m{seg_str}")
+                        print(f"[FollowRacingLineMPCBehavior] t={t_wp:.2f}s Progress: {self._waypoints_passed} waypoints passed ({progress_pct:.1f}% of {len(wp_list)} total waypoints)")
                 
             except Exception as e:
                 print(f"[FollowRacingLineMPCBehavior] Warning: Waypoint finder error: {e}")
@@ -751,7 +775,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         curvature_ahead_max = 0.0  # Max curvature over lookahead (for proactive downshift)
         max_lateral_accel = 8.0  # m/s² (conservative for indoor sim, can be configured)
         curvature_epsilon = 0.001  # Small epsilon to avoid division by zero
-        curvature_speed_margin = 0.88  # Use 88% of theoretical v_max in turns (safety margin for run-off avoidance)
+        curvature_speed_margin = 0.92  # Use 92% of theoretical v_max (generic: less over-braking, less throttle compensation; works for any TTL)
         
         if use_waypoints and wp_list and len(wp_list) >= 3:
             try:
@@ -824,9 +848,9 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 curvature_speed_limit = min_v_max
                 # Slow-in for sharp turns: when any significant curvature is ahead, cap speed more aggressively
                 # so we are already slow when the turn tightens (avoids "too fast, didn't turn in time").
+                # Generic tuning (any TTL): 82%/88% reduces over-braking then throttle-to-compensate.
                 if curvature_ahead_max > 0.015:
-                    # Stricter margin when curvature is high (e.g. k>0.05) so we slow enough for sharp bends without capping max speed elsewhere
-                    slow_in_margin = 0.75 if curvature_ahead_max > 0.05 else 0.82
+                    slow_in_margin = 0.82 if curvature_ahead_max > 0.05 else 0.88
                     v_max_slow_in = slow_in_margin * (max_lateral_accel / (curvature_ahead_max + curvature_epsilon)) ** 0.5
                     if v_max_slow_in < curvature_speed_limit:
                         curvature_speed_limit = v_max_slow_in
@@ -835,29 +859,28 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 pass
         
         # --- CTE-based speed reduction (for MPC speed reference) ---
-        # When CTE is large, modify target speed to encourage slowing down
-        # This makes the MPC plan appropriate speed when off-track
-        # ENHANCED: More aggressive speed reduction for better robustness without elevation data
+        # Generic: no TTL or segment IDs; only |CTE| so we slow when off-line on any track.
+        # When CTE is large, cap target speed so the car can recover instead of running off.
         if cte_mag_for_speed >= 10.0:
-            # At 10m+ CTE: set target to current speed - 2 m/s (encourages braking)
-            cte_target_speed = max(0.0, current_speed - 2.0)
+            # 10m+ CTE: strong decel and hard cap so we don't maintain high speed off-track
+            cte_target_speed = min(3.0, max(0.0, current_speed - 4.0))
         elif cte_mag_for_speed >= 5.0:
-            # At 5-10m CTE: set target to current speed (zero throttle)
-            cte_target_speed = current_speed
+            # 5-10m CTE: cap speed (was current_speed -> run-off). Cap at 5 m/s so MPC brakes.
+            cte_target_speed = min(5.0, current_speed)
         elif cte_mag_for_speed >= 3.0:
-            # 3-5m CTE: Limit to 6 m/s (softer: avoid crawl in turns while still cautious off-line)
-            cte_target_speed = 6.0
+            # 3-5m CTE: limit to 5 m/s (earlier recovery, any track)
+            cte_target_speed = 5.0
         elif cte_mag_for_speed >= 2.0:
-            # 2-3m CTE: Limit to 7 m/s (softer: smooth turns at higher speed, reduce brake-then-throttle)
-            cte_target_speed = 7.0
+            # 2-3m CTE: limit to 6 m/s
+            cte_target_speed = 6.0
         elif cte_mag_for_speed >= 1.5:
-            # NEW: 1.5-2m CTE: Limit to 6 m/s (early intervention for small deviations)
+            # 1.5-2m CTE: limit to 6 m/s (early intervention)
             cte_target_speed = 6.0
         elif cte_mag_for_speed >= 1.0:
-            # NEW: 1.0-1.5m CTE: Limit to 7 m/s (gradual reduction)
+            # 1.0-1.5m CTE: limit to 7 m/s
             cte_target_speed = 7.0
         elif cte_mag_for_speed >= 0.5:
-            # NEW: 0.5-1.0m CTE: Limit to 8 m/s (slight reduction for small errors)
+            # 0.5-1.0m CTE: limit to 8 m/s
             cte_target_speed = 8.0
         elif cte_mag_for_speed >= cte_stop_threshold:
             # At 50m+ CTE: aim for very low speed (encourages heavy braking)
@@ -882,11 +905,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         effective_target_speed = min(effective_target_speed, MAX_SPEED_LIMIT_MS)
         
         # --- Slew-rate limit on speed reference (smooth ramps into/out of turns) ---
-        # Prevents step changes that cause brake/throttle oscillation.
-        # Faster slew-down so we can slow in time for sharp turns (Laguna Seca run-off fix).
+        # When CTE is large, allow faster slew-down so the CTE speed cap takes effect quickly (generic run-off fix).
         dt_slew = _lon_controller.config.mpc_prediction_dt if hasattr(_lon_controller, 'config') else 0.05
-        slew_down_ms = 7.0   # max speed decrease per second (raised from 4.0 so we brake in time for turns)
-        slew_up_ms = 5.0     # max speed increase per second (reduced from 6.0 for smoother throttle recovery after turns)
+        slew_down_ms = 12.0 if cte_mag_for_speed >= 3.0 else 7.0   # faster ramp-down when off-line
+        slew_up_ms = 5.0     # max speed increase per second
         if not hasattr(self, '_last_effective_target_speed'):
             self._last_effective_target_speed = float(effective_target_speed)
         last_eff = float(self._last_effective_target_speed)
@@ -1043,49 +1065,50 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         if not hasattr(self, '_was_cte_large'):
             self._was_cte_large = False
 
-        # Enter large-CTE mode at 5.5m, exit at 4.5m
-        if cte_mag_for_speed >= 5.5:
+        # Enter large-CTE mode at 4.5m, exit at 3.5m (earlier intervention, generic)
+        if cte_mag_for_speed >= 4.5:
             self._was_cte_large = True
-        elif cte_mag_for_speed < 4.5:
+        elif cte_mag_for_speed < 3.5:
             self._was_cte_large = False
 
         SPEED_THRESHOLD_FOR_BRAKE = 2.0
         MIN_THROTTLE_WHEN_STOPPED = 0.10
 
-        # Output knobs (IMPORTANT)
-        MAX_BRAKE_NORMAL = 0.25        # MPC brake is NOT allowed to exceed this when CTE is small
-        MAX_BRAKE_LARGE_CTE = 0.60     # only when CTE is large
-        MAX_BRAKE_VERY_LARGE = 0.90    # only when CTE is huge (still not instant 1.0)
-        BRAKE_SLEW = 0.15              # per step (dt=1.0) -- adjust if needed
+        # Output knobs (generic: no TTL/segment; avoid run-off by braking sooner when |CTE| is large)
+        MAX_BRAKE_NORMAL = 0.25        # MPC brake cap when CTE is small
+        MAX_BRAKE_LARGE_CTE = 0.65     # 4.5-10m CTE: allow stronger brake to recover
+        MAX_BRAKE_VERY_LARGE = 0.90    # 10m+ CTE: strong brake, still not instant 1.0
+        BRAKE_SLEW = 0.15              # per step
 
         cte_brake = 0.0
         throttle_override = None
 
-        # Decide envelope
         very_large = (cte_mag_for_speed >= 10.0)
-        large = (self._was_cte_large or cte_mag_for_speed >= 5.0)
+        large = (self._was_cte_large or cte_mag_for_speed >= 4.5)
 
         if very_large:
-            # You're far off-track: prioritize slowing down, but don't deadlock at low speed
+            # Far off-track: strong brake so we don't maintain speed (generic fix for run-off)
             if current_speed > 4.0:
                 throttle_override = 0.0
-                cte_brake = 0.35
+                cte_brake = 0.50
             elif current_speed > SPEED_THRESHOLD_FOR_BRAKE:
                 throttle_override = 0.0
-                cte_brake = 0.20
+                cte_brake = 0.30
             else:
                 throttle_override = MIN_THROTTLE_WHEN_STOPPED
                 cte_brake = 0.0
         elif large:
-            # Moderate off-track: prefer coasting; only light braking at higher speeds
-            if current_speed > 6.0:
+            # 4.5-10m CTE: meaningful brake at higher speed so speed comes down (was too light)
+            if current_speed > 8.0:
                 throttle_override = 0.0
-                cte_brake = 0.10
+                cte_brake = 0.25
+            elif current_speed > 5.0:
+                throttle_override = 0.0
+                cte_brake = 0.15
             elif current_speed > 3.0:
                 throttle_override = 0.0
-                cte_brake = 0.0
+                cte_brake = 0.05
             else:
-                # At low speed, allow MPC to work (but we'll cap brake later)
                 throttle_override = None
                 cte_brake = 0.0
 
@@ -1454,20 +1477,39 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         elif final_throttle > BRAKE_THROTTLE_EXCLUSION_THRESHOLD:
             final_brake = 0.0
 
+        # Throttle ramp after brake release: avoid jumping from full brake to full throttle (generic, any TTL)
+        THROTTLE_RAMP_STEPS = 12   # ~0.6 s at 0.05 s/step
+        THROTTLE_RAMP_START = 0.2  # throttle cap at first step after brake
+        was_braking = getattr(self, '_last_brake_heavy', False)
+        self._last_brake_heavy = (final_brake > 0.2)
+        ramp_remaining = getattr(self, '_throttle_ramp_steps_remaining', 0)
+        if was_braking and final_brake < BRAKE_THROTTLE_EXCLUSION_THRESHOLD:
+            ramp_remaining = THROTTLE_RAMP_STEPS
+        if ramp_remaining > 0:
+            # Linear ramp: cap throttle so it increases smoothly over THROTTLE_RAMP_STEPS
+            step_in_ramp = THROTTLE_RAMP_STEPS - ramp_remaining
+            throttle_cap = THROTTLE_RAMP_START + (1.0 - THROTTLE_RAMP_START) * (step_in_ramp / THROTTLE_RAMP_STEPS)
+            final_throttle = min(final_throttle, throttle_cap)
+            self._throttle_ramp_steps_remaining = ramp_remaining - 1
+        else:
+            self._throttle_ramp_steps_remaining = 0
+
         # Store CTE for debugging
         self._current_cte = cte
 
         # ---- Detailed drive logging (heavy brake / near stop / speed drop) ----
         # Use step_for_log (not _step) to avoid shadowing the behavior's _step() method
+        # Timestamp t = step * 0.05s for systematic comparison across runs (scenario time_step)
         step_for_log = getattr(self, '_behavior_step_count', 0) + 1
+        t_log = step_for_log * 0.05
         _last_speed = getattr(self, '_last_speed', None)
         if final_brake > 0.25:
             cte_show = float(cte) if cte is not None else 0.0
-            print(f"[Drive] Heavy brake: step={step_for_log} speed={current_speed:.2f}m/s brake={final_brake:.3f} throttle={final_throttle:.3f} | speed_limit={speed_limit_applied_this_step} cte={cte_show:.2f}m brake_mpc={brake_mpc:.3f}")
+            print(f"[Drive] t={t_log:.2f}s step={step_for_log} Heavy brake: speed={current_speed:.2f}m/s brake={final_brake:.3f} throttle={final_throttle:.3f} | speed_limit={speed_limit_applied_this_step} cte={cte_show:.2f}m brake_mpc={brake_mpc:.3f}")
         if current_speed is not None and current_speed < 6.0:
-            print(f"[Drive] Low speed: step={step_for_log} speed={current_speed:.2f}m/s brake={final_brake:.3f} throttle={final_throttle:.3f}")
+            print(f"[Drive] t={t_log:.2f}s step={step_for_log} Low speed: speed={current_speed:.2f}m/s brake={final_brake:.3f} throttle={final_throttle:.3f}")
         if _last_speed is not None and current_speed is not None and (current_speed - _last_speed) < -4.0:
-            print(f"[Drive] Speed drop: step={step_for_log} from {_last_speed:.2f} to {current_speed:.2f} m/s (delta={current_speed - _last_speed:.2f})")
+            print(f"[Drive] t={t_log:.2f}s step={step_for_log} Speed drop: from {_last_speed:.2f} to {current_speed:.2f} m/s (delta={current_speed - _last_speed:.2f})")
         self._last_speed = float(current_speed) if current_speed is not None else 0.0
         
         # Build Action List 
@@ -1525,9 +1567,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             self._behavior_step_count = 0
         
         gear_val = getattr(self, 'gear', 0)
-        # Log step summary every 50 steps; include curvature_ahead for turn context
+        # Log step summary every 50 steps; include t= and OpenDRIVE-based segment for segment performance analysis
         if self._behavior_step_count % 50 == 0:
-            print(f"[FollowRacingLineMPC] Step {self._behavior_step_count}: pos=({px:.2f},{py:.2f}) speed={current_speed:.2f}m/s CTE={cte:.3f}m steer={final_steer:.3f} throttle={final_throttle:.3f} brake={final_brake:.3f} gear={gear_val} curv_ahead={curvature_ahead_max:.3f}")
+            t_log = self._behavior_step_count * 0.05
+            seg = get_segment_at_waypoint(wp_last_idx, getattr(self, '_waypoint_segment_map', None))
+            segment_str = f" {get_segment_label(*seg)}" if seg is not None else " segment ?"
+            print(f"[FollowRacingLineMPC] t={t_log:.2f}s Step {self._behavior_step_count}: pos=({px:.2f},{py:.2f}) speed={current_speed:.2f}m/s CTE={cte:.3f}m steer={final_steer:.3f} throttle={final_throttle:.3f} brake={final_brake:.3f} gear={gear_val} curv_ahead={curvature_ahead_max:.3f}{segment_str}")
 
         # Execute all actions together
         take actions_to_take

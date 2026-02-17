@@ -36,22 +36,24 @@ param mainLineRoadId = None  # e.g., "2117817291" for Laguna Seca
 
 ## Create racing track from the network
 
-#: The racing track, extending the road network with racing features
-track: RacingTrack = createRacingTrack(
-    globalParameters.map, 
+# Create track first so it's in scope for this module; then expose as param for scene.params['track'].
+# Segments for Laguna Seca follow the conventional OpenDRIVE layout (main racing roads only).
+_track = createRacingTrack(
+    globalParameters.map,
     direction=globalParameters.trackDirection,
     pitLaneRoadId=globalParameters.pitLaneRoadId,
     pitLaneRoadName=globalParameters.pitLaneRoadName,
     mainLineRoadId=globalParameters.mainLineRoadId,
     **globalParameters.map_options
 )
+param track = _track
 
 # Replace the generic network with our racing track's network
-network = track.network
+network = _track.network
 
 # Store road segment IDs in params for simulator access
-param pitLaneRoadIds = [str(track.pitLaneRoad.id)] if track.pitLaneRoad else []
-param mainRacingRoadIds = [str(r.id) for r in track._mainRacingRoads] if track._mainRacingRoads else []
+param pitLaneRoadIds = [str(_track.pitLaneRoad.id)] if _track.pitLaneRoad else []
+param mainRacingRoadIds = [str(r.id) for r in _track._mainRacingRoads] if _track._mainRacingRoads else []
 
 ## Racing-specific regions
 
@@ -62,16 +64,16 @@ param mainRacingRoadIds = [str(r.id) for r in track._mainRacingRoads] if track._
 
 # Build pitLaneRoad region from identified pit lane road if available
 pitLaneRoad: Region = (
-    UnionRegion(*[lane for lane in track.pitLaneRoad.lanes])
-    if track.pitLaneRoad and track.pitLaneRoad.lanes and len(track.pitLaneRoad.lanes) > 1
-    else (track.pitLaneRoad.lanes[0] if track.pitLaneRoad and track.pitLaneRoad.lanes else nowhere)
+    UnionRegion(*[lane for lane in _track.pitLaneRoad.lanes])
+    if _track.pitLaneRoad and _track.pitLaneRoad.lanes and len(_track.pitLaneRoad.lanes) > 1
+    else (_track.pitLaneRoad.lanes[0] if _track.pitLaneRoad and _track.pitLaneRoad.lanes else nowhere)
 )
 
 # Main racing road is the rest of the road excluding pitLaneRoad
 mainRacingRoad: Region = road.difference(pitLaneRoad)
 
 # Keep racingLine as the TTL default (can be overridden by actions)
-racingLine: Region = track.racingLine.region if hasattr(track, 'racingLine') and track.racingLine else mainRacingRoad
+racingLine: Region = _track.racingLine.region if hasattr(_track, 'racingLine') and _track.racingLine else mainRacingRoad
 
 #: Start/finish line region
 # TODO: Create actual start/finish line region from track data
@@ -81,7 +83,7 @@ racingLine: Region = track.racingLine.region if hasattr(track, 'racingLine') and
 # Generate starting grid if requested
 if globalParameters.generateStartingGrid:
     #: List of starting grid positions
-    startingGrid = track.generateStartingGrid(
+    startingGrid = _track.generateStartingGrid(
         numPositions=globalParameters.startingGridPositions,
         spacing=globalParameters.startingGridSpacing
     )
@@ -179,7 +181,7 @@ def isOnRacingLine(car, tolerance=2.0):
     Returns:
         Boolean indicating if car is within tolerance of racing line
     """
-    if track.racingLine is None:
+    if _track.racingLine is None:
         return True  # No racing line defined, always on it
     
     # Check distance to racing line
@@ -195,11 +197,11 @@ def distanceToSectorEnd(car):
     Returns:
         Distance in meters, or None if not in a sector
     """
-    sector = track.getSectorAt(car.position)
+    sector = _track.getSectorAt(car.position)
     if sector is None:
         return None
-    
-    current_distance = track.distanceAlongTrack(car.position)
+
+    current_distance = _track.distanceAlongTrack(car.position)
     if current_distance is None:
         return None
     
@@ -216,12 +218,12 @@ def carsAheadInSector(car, sector=None):
         List of cars ahead in the sector
     """
     if sector is None:
-        sector = track.getSectorAt(car.position)
-    
+        sector = _track.getSectorAt(car.position)
+
     if sector is None:
         return []
-    
-    current_distance = track.distanceAlongTrack(car.position)
+
+    current_distance = _track.distanceAlongTrack(car.position)
     if current_distance is None:
         return []
     
@@ -230,7 +232,7 @@ def carsAheadInSector(car, sector=None):
         if obj is car or not isinstance(obj, RacingCar):
             continue
         
-        obj_distance = track.distanceAlongTrack(obj.position)
+        obj_distance = _track.distanceAlongTrack(obj.position)
         if obj_distance is None:
             continue
         

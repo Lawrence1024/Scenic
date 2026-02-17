@@ -616,7 +616,8 @@ class DSpaceSimulation(RacingSimulation):
                 return
         
         if self._execute_count % 50 == 1:
-            print(f"[executeActions #{self._execute_count}] Executing actions for {len(self.scene.objects)} objects")
+            t_log = (self._execute_count - 1) * self.timestep
+            print(f"[executeActions] t={t_log:.2f}s #{self._execute_count} Executing actions for {len(self.scene.objects)} objects")
         
         # First, let actions apply themselves (this calls setThrottle, setSteering, etc.)
         super().executeActions(allActions)
@@ -926,28 +927,31 @@ class DSpaceSimulation(RacingSimulation):
                         print(f"[step #1] [WARN] Failed to set SingleStepTime: {e}")
             
             if self._step_count <= 5 or self._step_count % 50 == 1:
-                print(f"[step #{self._step_count}] Batching: advancing by {effective_step_size:.4f}s (control frequency={control_frequency:.1f}Hz)...")
+                t_log = self._step_count * effective_step_size
+                print(f"[step] t={t_log:.2f}s #{self._step_count} Batching: advancing by {effective_step_size:.4f}s (control frequency={control_frequency:.1f}Hz)...")
             
             # Execute single step with larger step size (one pause/continue cycle)
             success = cd_session.step(self._cd, effective_step_size)
             
             if self._step_count <= 5:
+                t_log = self._step_count * effective_step_size
                 if success:
-                    print(f"[step #{self._step_count}] [OK] Batched step completed (advanced {effective_step_size:.4f}s)")
+                    print(f"[step] t={t_log:.2f}s #{self._step_count} [OK] Batched step completed (advanced {effective_step_size:.4f}s)")
                 else:
-                    print(f"[step #{self._step_count}] [WARN] Batched step failed (using time.sleep fallback)")
+                    print(f"[step] t={t_log:.2f}s #{self._step_count} [WARN] Batched step failed (using time.sleep fallback)")
         else:
             # Single step (no batching) - use original timestep
             if self._step_count <= 5 or self._step_count % 50 == 1:
-                print(f"[step #{self._step_count}] Advancing simulation by {self.timestep}s...")
+                t_log = self._step_count * self.timestep
+                print(f"[step] t={t_log:.2f}s #{self._step_count} Advancing simulation by {self.timestep}s...")
             
             success = cd_session.step(self._cd, self.timestep)
             
             if self._step_count <= 5:
                 if success:
-                    print(f"[step #{self._step_count}] [OK] Step completed")
+                    print(f"[step] t={t_log:.2f}s #{self._step_count} [OK] Step completed")
                 else:
-                    print(f"[step #{self._step_count}] [WARN] Step failed (using time.sleep fallback)")
+                    print(f"[step] t={t_log:.2f}s #{self._step_count} [WARN] Step failed (using time.sleep fallback)")
         
         # NOTE: Debug exit removed - simulation should run for full duration
         # If you need to limit steps for testing, use --time parameter in scenic command

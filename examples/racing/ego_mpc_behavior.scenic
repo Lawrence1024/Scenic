@@ -7,7 +7,9 @@
 param map = localPath('../../assets/maps/dSPACE/LagunaSeca.xodr')
 param use2DMap = True
 param time_step = 0.05 
-param batch_steps = 1   
+param batch_steps = 1
+# Optional: describe this run for analysis (logged as [RacingRun] edit_note=... and stored in result_data)
+# param edit_note = 'baseline'  # e.g. 'higher lookahead', 'curvature cap 0.08', 'TTL v2'   
 
 # --- Driving world model (brings in Car/road/behaviors) ---
 model scenic.domains.driving.model
@@ -26,8 +28,10 @@ ego = new RacingCar at (-110.956171,-151.841778,8.331000),\
     # with ttlFileName 'ttl_17.csv', \
     # with ttlFileName 'laguna_main_racing_line', \
     # with ttlFileName 'laguna_raceable_xy.csv', \
-    with ttlFileName 'ttl_fellow_test_xodr_all.csv', \
-    # with ttlFileName 'ttl_racing_line_xodr.csv', \
+
+    # with ttlFileName 'ttl_fellow_test_xodr_all.csv', \
+    with ttlFileName 'ttl_racing_line_xodr.csv', \
+    
     # with ttlFileName 'temp_aligned_to_centerline.csv', \
     with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV/transformed'), \
     with ttlDX 0.0, \
