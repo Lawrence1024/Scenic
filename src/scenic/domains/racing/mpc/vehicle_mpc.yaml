@@ -37,7 +37,8 @@
     # Adaptive weights based on curvature
     use_adaptive_weights: true  # Enable adaptive weights based on curvature
     low_curvature_threshold: 0.02  # Curvature threshold (1/m) below which low curvature weights are used
-    high_curvature_threshold: 0.1  # Curvature threshold (1/m) above which high curvature weights are used (for sharp turns)
+    high_curvature_threshold: 0.07  # Curvature (1/m) above which high curvature weights are used (reverted from 0.06; 0.06 did not improve seg 43/27; stronger weights preferred)
+    run_edit_note: "high_curvature_threshold=0.07 w_ey_high_curv=22 w_epsi_high_curv=12"  # Logged as [RacingRun] edit_note for analyze_racing_log / result_data (identifies what tuning produced the run)
     
     # Low curvature weights (for straight sections - relaxed but not zero to avoid drift)
     w_ey_low_curv: 0.05  # Lateral error weight in low curvature (raised from 0.01 to reduce straight-line drift)
@@ -47,9 +48,9 @@
     w_u_vel_low_curv: 0.25  # Velocity-weighted control input in low curvature
     w_ddu_low_curv: 0.000001  # Steering acceleration weight in low curvature (lighter penalty)
     
-    # High curvature weights (for sharp turns - aggressive tracking, fast steering)
-    w_ey_high_curv: 15.0  # Lateral error weight in high curvature (increased from 8.0 for very aggressive tracking)
-    w_epsi_high_curv: 8.0  # Heading error weight in high curvature (increased from 5.0)
+    # High curvature weights (for sharp turns - aggressive tracking, reduce high CTE in segments like 43/44)
+    w_ey_high_curv: 22.0  # Lateral error weight in high curvature (increased from 18.0 for tighter tracking in sharp bends after 0.06 threshold did not help)
+    w_epsi_high_curv: 12.0  # Heading error weight in high curvature (increased from 10.0)
     w_epsi_vel_high_curv: 2.0  # Velocity-weighted heading error in high curvature (increased from 0.8 for better high-speed turns)
     w_u_high_curv: 0.02  # Control input weight in high curvature (very low - allow maximum steering)
     w_u_vel_high_curv: 0.05  # Velocity-weighted control input in high curvature (low penalty)

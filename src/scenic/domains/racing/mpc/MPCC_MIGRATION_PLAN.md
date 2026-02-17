@@ -103,6 +103,26 @@ These are the behaviors this plan aims to fix or improve. Evidence comes from `r
 - **Goal:** Reduce over-braking so we don’t overslow into turns, then need to throttle hard to compensate.
 - **Status:** [x] Tuned (general fixes applicable to both centerline and racing-line TTL): (1) curvature_speed_margin 88%→90%, slow-in 82%/75%→85%/78%; (2) throttle ramp after brake release (10 steps, cap 0.25→1.0).
 
+### ttl_racing_line_xodr run (post run-off fix) — high CTE in curves and end-of-straight
+
+- **Run (result_data/ttl_racing_line_xodr):** 70.6% progress (2536 waypoints), 148.4 s, no run-off; CTE-based braking triggered in segment 44 (~4.5 m) and car slowed. The generic CTE/speed fix prevented run-off but lateral error remained high in places.
+- **Evidence (segments.csv):** Segment **43 (curve)** mean |CTE| 7.99 m, **max 11.98 m** (worst). Segment **44 (straight)** max 4.56 m (heavy brake here). Other curves with 5–6 m: 19, 29, 45, 7.
+- **Latest run (run.log added to result_data):** `analyze_racing_log --log run.log` was run; results written to `result_data/ttl_racing_line_xodr/`. Summary: **148.45 s**, **2512 waypoint hits** (~69.9% of 3591), **max |CTE| 11.77 m**. Segment-level CTE (from sampled MPC steps in log): **Segment 43** mean 7.68 m, max **11.77 m**; **Segment 44** mean 1.10 m, max **4.49 m** (heavy brake at end of run); **Segment 27** max 8.54 m; **Segment 45** max 6.10 m; **Segment 37** 4.48 m; **Segment 19** 3.97 m; **Segment 32** (straight) 3.98 m. Comparison with `ttl_fellow_test_xodr_all` (centerline): racing-line run is ~3 s faster (148 vs 151 s); segment 43/44 max CTE are similar (11.77 vs 11.97, 4.49 vs 4.49). Some segments (4, 7, 18, 19) show higher CTE on racing-line; others (12, 29) are better. Use `compare_racing_results` for full segment-by-segment comparison.
+- **Run with high_curvature_threshold=0.06 (edit_note in log → summary.json):** Run.log from 2026-02-17 had `[RacingRun] ... edit_note=high_curvature_threshold=0.06`. Analyzer now prefers `[RacingRun]` over `[TTL] Assigned` so edit_note and run_timestamp are stored in `result_data/ttl_racing_line_xodr/summary.json` and shown in `compare_racing_results`. **Findings for this run:** 148.45 s, **2537 waypoint hits** (70.6%), **max |CTE| 12.02 m**. Segment **43 (curve)** mean 7.92 m, max **12.02 m** (worst); **44 (straight)** max **4.49 m** (heavy brake at end); **27 (curve)** mean 6.16 m, max **10.56 m**; **45** max 5.96 m; **37** max 4.33 m; **8 (straight)** max 4.34 m; **18** max 4.57 m. **Comparison vs run with threshold 0.07:** With 0.06, segment 43 max CTE increased slightly (12.02 vs 11.77 m) and segment 27 worsened (10.56 vs 8.54 m); segment 44 unchanged (4.49 m). So lowering the threshold did not improve the worst segments and may have expanded “high curvature” into more segments (e.g. 27, 8, 10, 12) with mixed effect. **Comparison vs centerline (ttl_fellow_test_xodr_all):** Racing-line (0.06) is better in segments 4 (0.26 vs 3.26 m), 19 (0.69 vs 0.61), 29 (2.15 vs 5.92), 38 (0.03 vs 0.12); worse in 8 (4.34 vs 0.99), 10 (2.44 vs 0.17), 12 (3.48 vs 3.14), 27 (10.56 vs 5.91), 43 (12.02 vs 11.97), 44 (4.49 vs 4.49).
+- **Implications for MPC:**
+  1. **Sharp curves (e.g. segment 43):** Either we still enter too fast (curvature speed / slow-in) or the lateral controller cannot correct in time (preview, contouring weight, or horizon). Improve by: (a) stricter slow-in for very high curvature (κ > 0.08); (b) higher contouring weight in high curvature so MPC prioritizes reducing e_y in tight bends; (c) longer effective preview when speed is high so the bend is seen earlier.
+  2. **End-of-straight (segment 44):** High CTE (4.5 m) and heavy brake suggest either carry-over from segment 43 (exiting 43 with large error) or speed still too high at 43→44 transition. Improve by: tighter curvature-based speed at exit of the preceding sharp curve (stricter slow-in) so we enter 44 with lower speed and smaller error.
+  3. **Data-driven tuning (generic):** Use `result_data/<run_id>/segments.csv` (mean_abs_cte_m, max_abs_cte_m per segment) and `compare_racing_results` to find which segments consistently have high CTE across runs. Apply only **generic** fixes: curvature-based speed limits, curvature-dependent MPC weights, preview/lookahead. No segment-ID or TTL-specific logic in the MPC.
+- **Goal:** Reduce max |CTE| in curves (e.g. segment 43 < 6 m) and in segment 44 (< 3 m) while keeping no run-off; smooth speed and steering through 43→44.
+- **Status:** [x] Done (code changes). (1) **Behaviors:** Stricter slow-in for κ > 0.08 (margin 74%); minimum lookahead 120 m when speed > 20 m/s so sharp bends are fully seen. (2) **MPC config:** high_curvature_threshold 0.1 → 0.07, then **0.06** (with run_edit_note in vehicle_mpc.yaml so analyze_racing_log tags results). w_ey_high_curv 18, w_epsi_high_curv 10. Run with 0.06 analyzed; segment 43/27 did not improve (see above). Next: try weight increases or revert threshold.
+- **Potential MPC improvements (from run.log analysis and 0.06 run):**
+  1. **High curvature (after trying 0.06):** Lowering threshold to 0.06 did not reduce max CTE in segment 43/27; segment 27 got worse. **Proposal:** Revert `high_curvature_threshold` to **0.07** and instead increase **w_ey_high_curv** (e.g. 18 → 22) and **w_epsi_high_curv** (e.g. 10 → 12) so contouring is stronger only where we already classify as high curvature, without expanding that zone.
+  2. **Preview/horizon:** In high curvature, use a longer effective horizon or more path points so the MPC sees more of the bend ahead (reduces late correction in segment 43).
+  3. **Slower entry into sharp curves:** Stricter slow-in for very high κ (e.g. margin 70% for κ > 0.09) or earlier trigger so segment-43-type curves are taken slower.
+  4. **Segment 44 (end-of-straight):** Ensure speed is reduced before the 43→44 transition (stricter slow-in at exit of 43); optionally cap speed when |CTE| is already high to avoid heavy CTE-based braking.
+  5. **Logging:** Increase MPC step log frequency (or log every step to a separate file) so `analyze_racing_log` gets full per-segment CTE statistics instead of ~61 samples per run.
+  6. **Analyzer (edit_note):** Fixed so that when `[RacingRun]` appears after `[TTL] Assigned` in the log, the analyzer still captures **edit_note** and **run_timestamp** and writes them to summary.json (and compare_racing_results shows them). Update `run_edit_note` in vehicle_mpc.yaml for each tuning change so runs are tagged.
+
 ### What we already fixed (and what they do not fix)
 
 - **Segment blending + hysteresis:** Address lateral steering oscillation at segment boundaries (left–right–left). Do not fix throttle/brake oscillation or too fast into turn.
@@ -116,7 +136,7 @@ These are the behaviors this plan aims to fix or improve. Evidence comes from `r
 | Item | Status | Where |
 |------|--------|--------|
 | Run-off track (Laguna Seca) | Done | Lookahead 85 m, slew_down 7, curvature margin 0.88 |
-| **Sharp turns (slow-in, see turn early)** | Done | Lookahead 120 m when speed>25 m/s, 250 m when >40 m/s; slow-in 82% (κ>0.015), 75% (κ>0.05) (behaviors.scenic) |
+| **Sharp turns (slow-in, see turn early)** | Done | Lookahead 120 m when speed>20 m/s, 250 m when >40 m/s; slow-in 74% (κ>0.08), 82% (κ>0.05), 88% (κ>0.015) (behaviors.scenic) |
 | Trajectory-consistent control (v_ref_profile shared) | Done | reference_builder, mpc_lateral, behaviors |
 | Lateral oscillation (CTE deadzone, weight blend) | Done | config + mpc_lateral |
 | **Smoothness: steering oscillation** | Done | w_du 2.2, steering_lpf 1.5 Hz |
@@ -124,6 +144,7 @@ These are the behaviors this plan aims to fix or improve. Evidence comes from `r
 | **End-of-lap throttle (TTL wrap)** | Done | Curvature lookahead wraps waypoints so we see straight after loop; TTL gap first/last ~0.68 m (doc) |
 | **Racing-line TTL (feasible path)** | Done | Curvature cap in generate_racing_line.py; ttl_racing_line_xodr.csv |
 | **Over-braking then throttle** | Done | curvature_speed_margin 90%, slow-in 85%/78%; throttle ramp after brake (behaviors.scenic) |
+| **High CTE in curves (seg 43, 19, 29, 45) and segment 44 (ttl_racing_line_xodr)** | In progress | Stricter slow-in κ>0.08 (74%); lookahead ≥120 m; high_curvature_threshold 0.06 tried → seg 43/27 no improvement (max 12.02 m, 10.56 m). Next: revert to 0.07 and try w_ey_high_curv 22, w_epsi_high_curv 12; use run_edit_note to tag runs. |
 | Further tuning if needed | Optional | Widen deadband; throttle ramp after brake; increase w_du_lon |
 
 ### TTL loop and end-of-lap throttle (why we didn’t throttle hard on the “straight” at the end)

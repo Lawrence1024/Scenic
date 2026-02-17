@@ -796,7 +796,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     min_lookahead_for_braking = 120.0  # m at high speed
                 if lookahead_dist < min_lookahead_for_braking and current_speed > 15.0:
                     lookahead_dist = min_lookahead_for_braking
-                
+                # When speed is high, use at least 120 m lookahead so sharp bends (e.g. segment 43) are fully seen and we slow in time.
+                if current_speed > 20.0 and lookahead_dist < 120.0:
+                    lookahead_dist = max(lookahead_dist, 120.0)
+
                 lookahead_idx = wp_last_idx
                 accumulated_dist = 0.0
                 min_v_max = target_speed  # Track minimum v_max over horizon
@@ -848,9 +851,14 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 curvature_speed_limit = min_v_max
                 # Slow-in for sharp turns: when any significant curvature is ahead, cap speed more aggressively
                 # so we are already slow when the turn tightens (avoids "too fast, didn't turn in time").
-                # Generic tuning (any TTL): 82%/88% reduces over-braking then throttle-to-compensate.
+                # Very sharp turns (κ > 0.08): use 74% margin to reduce high CTE (e.g. segment 43 run).
                 if curvature_ahead_max > 0.015:
-                    slow_in_margin = 0.82 if curvature_ahead_max > 0.05 else 0.88
+                    if curvature_ahead_max > 0.08:
+                        slow_in_margin = 0.74   # Very sharp: stricter so we enter segment 43-type curves slower
+                    elif curvature_ahead_max > 0.05:
+                        slow_in_margin = 0.82
+                    else:
+                        slow_in_margin = 0.88
                     v_max_slow_in = slow_in_margin * (max_lateral_accel / (curvature_ahead_max + curvature_epsilon)) ** 0.5
                     if v_max_slow_in < curvature_speed_limit:
                         curvature_speed_limit = v_max_slow_in

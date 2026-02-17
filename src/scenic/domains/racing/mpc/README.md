@@ -78,6 +78,7 @@ mpc/
 - **Decision:** Use YAML config files (compatible with ROS-style parameter format)
 - **Location:** `src/scenic/domains/racing/mpc/vehicle_mpc.yaml`
 - **Adaptation:** Config adapts to Scenic `timestep` automatically
+- **After changing config:** An iteration (simulation run) **must be run** so the new tuning is exercised; then run `analyze_racing_log --log run.log` and optionally `compare_racing_results` to verify. Update `run_edit_note` in `vehicle_mpc.yaml` when you change tuning (e.g. threshold or weights) so result_data and comparison tables are tagged with what produced each run.
 
 ### ControlDesk Integration
 - **Read Paths:** Use existing `read_ego_state()` / `read_fellow_state()` functions

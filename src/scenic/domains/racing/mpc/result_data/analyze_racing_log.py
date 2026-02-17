@@ -94,12 +94,12 @@ def _parse_log_with_encoding(
                         edit_note = (rm.group(3) or "").strip()
                         if edit_note:
                             run_info["edit_note"] = edit_note
-                        run_info_filled = True
+                        run_info_filled = True  # only stop looking when we have [RacingRun] (so we get edit_note)
                     else:
                         tm = RE_TTL_ASSIGNED_EGO.search(line)
                         if tm:
                             run_info["ttl_name"] = tm.group(1).strip()
-                            run_info_filled = True
+                            # do not set run_info_filled: [RacingRun] often appears next and has edit_note/run_timestamp
                 time_m = RE_TIME.search(line)
                 seg_m = RE_SEGMENT.search(line)
                 if not time_m or not seg_m:

@@ -1,11 +1,13 @@
 {
   "log_path": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\run.log",
-  "run_timestamp_utc": "2026-02-17T14:25:50.379120+00:00",
-  "total_time_s": 148.4,
-  "t_end": 148.4,
-  "n_waypoints": 2536,
+  "run_timestamp_utc": "2026-02-17T15:23:12.949536+00:00",
+  "total_time_s": 148.45,
+  "t_end": 148.45,
+  "n_waypoints": 2537,
   "n_mpc_samples": 61,
-  "mean_abs_cte_m": 1.8634262295081967,
-  "max_abs_cte_m": 11.98,
-  "ttl_name": "ttl_racing_line_xodr.csv"
+  "mean_abs_cte_m": 1.8089344262295082,
+  "max_abs_cte_m": 12.02,
+  "ttl_name": "ttl_racing_line_xodr.csv",
+  "run_timestamp": "2026-02-17T15:05:59Z",
+  "edit_note": "high_curvature_threshold=0.06"
 }
