@@ -20,8 +20,6 @@ from pathlib import Path
 
 import matplotlib
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-import matplotlib.colors as mcolors
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
@@ -122,23 +120,18 @@ def main():
     print(f"Total segments: {total} (threshold={args.threshold})")
     print("Segments are deterministic for the same OpenDRIVE map and threshold.")
 
-    # One color per segment (cyclic colormap)
+    # Alternating colors for consecutive segments (2 colors)
+    COLOR_A = "tab:blue"
+    COLOR_B = "tab:orange"
     fig, ax = plt.subplots(1, 1, figsize=(12, 10))
-    try:
-        cmap = matplotlib.colormaps.get_cmap("turbo")
-    except AttributeError:
-        cmap = cm.get_cmap("turbo")
-    except Exception:
-        cmap = cm.get_cmap("rainbow")
-    colors = [cmap(i / max(1, total - 1)) for i in range(total)]
 
-    for seg_id, road_idx, s_start, s_end, seg_type, centerline in all_segments:
+    for i, (seg_id, road_idx, s_start, s_end, seg_type, centerline) in enumerate(all_segments):
         pts = get_segment_polyline(centerline, s_start, s_end)
         if len(pts) < 2:
             continue
         xs = [p[0] for p in pts]
         ys = [p[1] for p in pts]
-        color = colors[seg_id - 1]
+        color = COLOR_A if i % 2 == 0 else COLOR_B
         ax.plot(xs, ys, color=color, linewidth=2.5, solid_capstyle="round")
 
     ax.set_aspect("equal")
@@ -147,8 +140,8 @@ def main():
     ax.set_title(f"Racing track segments (n={total}) — curve/straight from curvature threshold={args.threshold}")
     ax.legend(
         handles=[
-            Line2D([0], [0], color="tab:red", linewidth=2, label="curve"),
-            Line2D([0], [0], color="tab:blue", linewidth=2, label="straight"),
+            Line2D([0], [0], color=COLOR_A, linewidth=2, label="segment (even index)"),
+            Line2D([0], [0], color=COLOR_B, linewidth=2, label="segment (odd index)"),
             Patch(facecolor="none", edgecolor="none", label=f"{total} segments total"),
         ],
         loc="upper left",
