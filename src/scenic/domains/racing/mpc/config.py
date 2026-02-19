@@ -78,6 +78,9 @@ class MPCConfig:
         
         # Oscillation fixes (Phase 3+): CTE deadzone and cap on off-track weight scaling
         self.cte_deadzone = config_dict.get('cte_deadzone', 0.2)  # (m) treat |e_y| < this as 0 so MPC does not overcorrect small errors
+        # To-Do 2: conditional deadzone — only apply when association is good (match_dist < this) and curvature ahead is low
+        self.deadzone_dist_ok_m = config_dict.get('deadzone_dist_ok_m', 1.0)  # (m) max match_dist to allow deadzone; above = BLOCKED_MATCH_BAD
+        self.curv_deadzone_max = config_dict.get('curv_deadzone_max', 0.04)  # (1/m) max curv_ahead_max to allow deadzone; never deadzone in moderate curvature (e.g. 0.03-0.05)
         self.cte_multiplier_max = config_dict.get('cte_multiplier_max', 1.5)  # cap on tracking-weight multiplier when off-track (avoid over-aggressive recovery)
         
         # Safety thresholds
@@ -98,6 +101,9 @@ class MPCConfig:
         self.segment_stick_cte_m = config_dict.get('segment_stick_cte_m', 1.5)
         # Reference blend at boundaries: blend toward next segment when u_proj >= this (0 = start, 1 = end)
         self.segment_blend_u_start = config_dict.get('segment_blend_u_start', 0.7)
+        # Reference continuity gate: reject candidate segment if match is weak (avoid reference snap at curve entry)
+        self.max_wp_match_dist_m = config_dict.get('max_wp_match_dist_m', 3.0)  # (m) max perpendicular distance to accept segment switch
+        self.max_s_jump_m = config_dict.get('max_s_jump_m', 4.0)  # (m) max along-path progress jump per tick; reject if exceeded
         
         # Curvature smoothing
         self.curvature_smoothing_num = config_dict.get('curvature_smoothing_num', 15)  # Points for curvature calculation

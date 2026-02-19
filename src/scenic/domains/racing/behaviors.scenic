@@ -701,69 +701,62 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 print(f"[FollowRacingLineMPCBehavior] Warning: Waypoint finder error: {e}")
         
         # --- Longitudinal Control (MPC) ---
-        # Compute CTE magnitude early for speed reference modification
-        # (We'll compute full CTE later, but need magnitude now for speed planning)
-        # This makes the MPC aware of CTE so it plans appropriate speed when off-track
-        # IMPORTANT: Use the updated waypoint index (wp_last_idx) and expand search window
-        # to handle cases where vehicle has overshot waypoints
-        cte_for_speed = None
+        # To-Do D: Use projection-based CTE (same geometry as MPCC) everywhere. CTE magnitude for speed
+        # comes from previous step's waypoint-based e_y (MPCC uses same polyline and projection).
+        cte_mag_for_speed = getattr(self, '_last_waypoint_cte_for_speed', 0.0)
+        # Legacy CTE (lookahead-based) only for To-Do E mismatch guard — compute for mismatch check
+        self._legacy_cte_this_tick = None
         if use_waypoints and wp_list and len(wp_list) >= 2:
-            # CTE estimate for PID tuning (use nearest waypoint segment)
-            # Use adaptive search window: expand when vehicle might be far off-track
             try:
                 nearest_idx = wp_last_idx
                 best_d2 = 1e18
-                # Adaptive search window: start with larger window to handle overshoot
-                # Base: ±50 waypoints (~10m at 0.2m spacing)
-                # If we find a waypoint far from current index, expand search
-                search_window = 50  # Increased from 10
+                search_window = 50
                 for i in range(max(0, wp_last_idx - search_window), min(len(wp_list), wp_last_idx + search_window)):
                     wx, wy = float(wp_list[i][0]), float(wp_list[i][1])
-                    dx = px - wx; dy = py - wy
-                    d2 = dx*dx + dy*dy
+                    d2 = (px - wx)**2 + (py - wy)**2
                     if d2 < best_d2:
-                        best_d2 = d2; nearest_idx = i
-                
-                # If nearest waypoint is far from wp_last_idx, expand search further
+                        best_d2 = d2
+                        nearest_idx = i
                 if abs(nearest_idx - wp_last_idx) > search_window * 0.8:
-                    # Nearest waypoint is near edge of search window, expand search
-                    expanded_window = search_window * 2
-                    for i in range(max(0, wp_last_idx - expanded_window), min(len(wp_list), wp_last_idx + expanded_window)):
+                    for i in range(max(0, wp_last_idx - 2*search_window), min(len(wp_list), wp_last_idx + 2*search_window)):
                         wx, wy = float(wp_list[i][0]), float(wp_list[i][1])
-                        dx = px - wx; dy = py - wy
-                        d2 = dx*dx + dy*dy
+                        d2 = (px - wx)**2 + (py - wy)**2
                         if d2 < best_d2:
-                            best_d2 = d2; nearest_idx = i
-                
+                            best_d2 = d2
+                            nearest_idx = i
                 if nearest_idx < len(wp_list) - 1:
                     x0, y0 = float(wp_list[nearest_idx][0]), float(wp_list[nearest_idx][1])
                     x1, y1 = float(wp_list[nearest_idx+1][0]), float(wp_list[nearest_idx+1][1])
-                    seg_dx = x1 - x0; seg_dy = y1 - y0
+                    seg_dx = x1 - x0
+                    seg_dy = y1 - y0
                     seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
                     if seg_len > 1e-6:
-                        wx = px - x0; wy = py - y0
-                        u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
-                        u_proj = max(0.0, min(1.0, u_proj))
+                        u_proj = max(0.0, min(1.0, ((px - x0)*seg_dx + (py - y0)*seg_dy) / (seg_len*seg_len)))
                         proj_x = x0 + u_proj * seg_dx
                         proj_y = y0 + u_proj * seg_dy
-                        nx = -seg_dy / seg_len; ny = seg_dx / seg_len
-                        cte_for_speed = (px - proj_x)*nx + (py - proj_y)*ny
-            except:
+                        nx = -seg_dy / seg_len
+                        ny = seg_dx / seg_len
+                        if car_heading is not None:
+                            seg_heading = math.atan2(seg_dy, seg_dx)
+                            hd = math.atan2(math.sin(seg_heading - car_heading), math.cos(seg_heading - car_heading))
+                            if abs(hd) > math.pi / 2:
+                                nx, ny = -nx, -ny
+                        self._legacy_cte_this_tick = (px - proj_x)*nx + (py - proj_y)*ny
+            except Exception:
                 pass
-        
-        # Fallback: Use TTL Geometry for quick CTE estimate
-        if cte_for_speed is None:
-            line = (self.ttl if hasattr(self, 'ttl') and self.ttl is not None else mainRacingRoad)
-            if hasattr(line, 'signedDistanceTo'):
-                try:
-                    cte_for_speed = line.signedDistanceTo(self.position)
-                except:
-                    cte_for_speed = 0.0
-            else:
-                cte_for_speed = 0.0
-        
-        cte_mag_for_speed = abs(cte_for_speed) if cte_for_speed is not None else 0.0
-        
+        if self._legacy_cte_this_tick is None and hasattr(self, 'ttl') and self.ttl is not None and hasattr(self.ttl, 'signedDistanceTo'):
+            try:
+                self._legacy_cte_this_tick = self.ttl.signedDistanceTo(self.position)
+            except Exception:
+                self._legacy_cte_this_tick = 0.0
+        if self._legacy_cte_this_tick is None:
+            self._legacy_cte_this_tick = 0.0
+        # To-Do B fallback (kept for compatibility): when mismatch was detected, trust waypoint CTE for speed
+        if getattr(self, '_cte_mismatch_trust_waypoint', False) and getattr(self, '_cte_mismatch_steps_remaining', 0) > 0:
+            cte_mag_for_speed = getattr(self, '_last_waypoint_cte_for_speed', 0.0)
+            self._cte_mismatch_steps_remaining = getattr(self, '_cte_mismatch_steps_remaining', 0) - 1
+            if self._cte_mismatch_steps_remaining <= 0:
+                self._cte_mismatch_trust_waypoint = False
         # Universal max speed limit: Reduced for better robustness without elevation data
         MAX_SPEED_LIMIT_MS = 62.58  # 140 mph in m/s (~225 km/h) for IAC vehicle capability
         
@@ -1220,84 +1213,37 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 waypoints_for_mpc,
                 None,  # MPC selects segments dynamically
                 cte_magnitude=cte_mag_for_speed,
-                v_ref_profile=v_ref_profile  # Same trajectory as longitudinal: smooth turns, avoid over-steer then correct
+                v_ref_profile=v_ref_profile,  # Same trajectory as longitudinal: smooth turns, avoid over-steer then correct
+                curvature_ahead_max=curvature_ahead_max  # For deadzone eligibility: never deadzone in moderate curvature (curv_ahead_max < curv_deadzone_max)
             )
             steer_mpc = float(steer_mpc)
 
         except Exception as e:
             print(f"[FollowRacingLineMPCBehavior] MPC error: {e}, using fallback")
             steer_mpc = 0.0
+        # Keep waypoint-based CTE (e_y_mpc) for mismatch fallback (used when behavior CTE disagrees)
+        if getattr(_lat_controller, '_log_mpc_e_y', None) is not None:
+            self._last_waypoint_cte_for_speed = abs(getattr(_lat_controller, '_log_mpc_e_y'))
 
         # --- CTE-aware safety envelope (for throttle/brake) ---
-        # Compute CTE for safety checks (similar to PID behavior)
-        cte = None
-        if use_waypoints and wp_list and len(wp_list) >= 2:
-            # Use lookahead segment for CTE calculation
-            Ld = float(lookahead)
-            rem = Ld
-            j = wp_last_idx
-            found_target = False
-            lookahead_seg_idx = wp_last_idx
-
-            while rem > 0.0 and j < len(wp_list) - 1:
-                x0, y0 = float(wp_list[j][0]), float(wp_list[j][1])
-                x1, y1 = float(wp_list[j+1][0]), float(wp_list[j+1][1])
-                seg_dx = x1 - x0
-                seg_dy = y1 - y0
-                seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
-
-                if seg_len <= 1e-6:
-                    j += 1
-                    continue
-
-                lookahead_seg_idx = j
-
-                if rem <= seg_len:
-                    found_target = True
-                    break
-                else:
-                    rem -= seg_len
-                    j += 1
-
-            if found_target:
-                x0, y0 = float(wp_list[lookahead_seg_idx][0]), float(wp_list[lookahead_seg_idx][1])
-                x1, y1 = float(wp_list[lookahead_seg_idx+1][0]), float(wp_list[lookahead_seg_idx+1][1])
-                seg_dx = x1 - x0
-                seg_dy = y1 - y0
-                seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
-
-                if seg_len > 1e-6:
-                    wx = px - x0
-                    wy = py - y0
-                    u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
-                    u_proj = max(0.0, min(1.0, u_proj))
-                    proj_x = x0 + u_proj * seg_dx
-                    proj_y = y0 + u_proj * seg_dy
-
-                    # Compute normal vector: (-dy, dx) points LEFT of forward direction
-                    nx = -seg_dy / seg_len
-                    ny = seg_dx / seg_len
-
-                    # Apply heading flip logic to match MPC's internal CTE calculation
-                    if car_heading is not None:
-                        seg_heading = math.atan2(seg_dy, seg_dx)
-                        heading_diff = seg_heading - car_heading
-                        heading_diff = math.atan2(math.sin(heading_diff), math.cos(heading_diff))
-                        if abs(heading_diff) > math.pi / 2:
-                            nx = -nx
-                            ny = -ny
-
-                    cte = (px - proj_x)*nx + (py - proj_y)*ny
-
-        # Fallback: Use TTL Geometry if waypoints didn't provide CTE
-        if cte is None:
-            line = (self.ttl if hasattr(self, 'ttl') and self.ttl is not None else mainRacingRoad)
-            if hasattr(line, 'signedDistanceTo'):
-                cte = line.signedDistanceTo(self.position)
-            else:
-                cte = 0.0
-
+        # To-Do D: Use projection-based CTE (same geometry as MPCC). cte_to_waypoints = MPCC e_y from chosen segment.
+        cte = float(getattr(_lat_controller, 'last_e_y', getattr(_lat_controller, '_log_mpc_e_y', 0.0)))
+        # To-Do E: If mismatch triggers, force cte := cte_to_waypoints for this tick and print loud warning (fatal guard).
+        _md = getattr(_lat_controller, '_log_match_dist_m', None)
+        _ey = getattr(_lat_controller, '_log_mpc_e_y', None)
+        _legacy = getattr(self, '_legacy_cte_this_tick', None)
+        if _legacy is not None and _md is not None and _ey is not None:
+            if abs(_legacy) > 2.0 and _md < 1.0 and abs(_ey) < 0.5:
+                print(f"[FollowRacingLineMPC] *** CTE MISMATCH (fatal guard): legacy_cte={_legacy:.2f}m, match_dist_m={_md:.3f}m, e_y_mpc={_ey:.3f}m -> forcing cte_behavior := cte_to_waypoints for this tick")
+                cte = float(_ey)
         cte_mag = abs(cte)
+        # Heading diff for steering conditioning (segment direction vs vehicle heading, wrapped to [-pi, pi])
+        heading_diff = 0.0
+        if car_heading is not None and use_waypoints and wp_list and len(wp_list) >= 2 and wp_last_idx < len(wp_list) - 1:
+            x0, y0 = float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1])
+            x1, y1 = float(wp_list[wp_last_idx+1][0]), float(wp_list[wp_last_idx+1][1])
+            seg_heading = math.atan2(y1 - y0, x1 - x0)
+            heading_diff = math.atan2(math.sin(seg_heading - car_heading), math.cos(seg_heading - car_heading))
         local_throttle_limit = throttle_limit
         final_brake = 0.0
 
@@ -1581,6 +1527,109 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             seg = get_segment_at_waypoint(wp_last_idx, getattr(self, '_waypoint_segment_map', None))
             segment_str = f" {get_segment_label(*seg)}" if seg is not None else " segment ?"
             print(f"[FollowRacingLineMPC] t={t_log:.2f}s Step {self._behavior_step_count}: pos=({px:.2f},{py:.2f}) speed={current_speed:.2f}m/s CTE={cte:.3f}m steer={final_steer:.3f} throttle={final_throttle:.3f} brake={final_brake:.3f} gear={gear_val} curv_ahead={curvature_ahead_max:.3f}{segment_str}")
+            # Ref continuity / gate logging (todo1: match_dist, gate ACCEPT/REJECT, s_ref/dS_ref/s_jump_flag, segment_prev->new, stick_blocked, e_y_mpc vs cte_behavior)
+            _lc = _lat_controller
+            _md = getattr(_lc, '_log_match_dist_m', None)
+            _gs = getattr(_lc, '_log_gate_status', '?')
+            _gr = getattr(_lc, '_log_gate_reason', None)
+            _sr = getattr(_lc, '_log_s_ref', None)
+            _ds = getattr(_lc, '_log_delta_s_ref', None)
+            _sj = getattr(_lc, '_log_s_jump_flag', False)
+            _sp = getattr(_lc, '_log_segment_prev', None)
+            _sn = getattr(_lc, '_log_segment_new', None)
+            _st = getattr(_lc, '_log_stick_blocked', False)
+            _ey = getattr(_lc, '_log_mpc_e_y', None)
+            _md_s = f"{_md:.3f}" if _md is not None else "?"
+            _gr_s = f" reason={_gr}" if _gr else ""
+            _sr_s = f"{_sr:.2f}" if _sr is not None else "?"
+            _ds_s = f"{_ds:.3f}" if _ds is not None else "?"
+            _seg_s = f"{_sp}->{_sn}" if _sp is not None else f"->{_sn}"
+            _ey_s = f"{_ey:.3f}" if _ey is not None else "?"
+            cte_b = float(cte) if cte is not None else 0.0
+            _legacy_s = f"{getattr(self, '_legacy_cte_this_tick', 0):.3f}" if getattr(self, '_legacy_cte_this_tick', None) is not None else "?"
+            print(f"[FollowRacingLineMPC] ref_log match_dist_m={_md_s} gate={_gs}{_gr_s} s_ref={_sr_s} dS_ref={_ds_s} s_jump_flag={1 if _sj else 0} seg={_seg_s} stick={1 if _st else 0} e_y_mpc={_ey_s} cte_behavior={cte_b:.3f} legacy_cte={_legacy_s}")
+            # To-Do A: CTE cross-check (cte_to_waypoints = e_y_mpc; cte_behavior now uses same geometry)
+            _rp = getattr(_lc, '_log_ref_point', None)
+            _ego = getattr(_lc, '_log_ego', None)
+            _cte_wp_s = _ey_s
+            _rp_s = f"({_rp[0]:.3f},{_rp[1]:.3f})" if _rp is not None and len(_rp) >= 2 else "?"
+            _ego_s = f"({_ego[0]:.3f},{_ego[1]:.3f})" if _ego is not None and len(_ego) >= 2 else "?"
+            print(f"[FollowRacingLineMPC] ct_crosscheck cte_to_waypoints={_cte_wp_s} cte_behavior={cte_b:.3f} ref_point={_rp_s} ego={_ego_s}")
+            # To-Do B/E: Mismatch guard (legacy vs waypoint) — when triggered, fatal guard already forced cte:=cte_to_waypoints this tick
+            if _md is not None and _ey is not None:
+                _leg = getattr(self, '_legacy_cte_this_tick', None)
+                if _leg is not None and abs(_leg) > 2.0 and _md < 1.0 and abs(_ey) < 0.5:
+                    self._cte_mismatch_trust_waypoint = True
+                    self._cte_mismatch_steps_remaining = 20
+                    self._last_waypoint_cte_for_speed = abs(_ey)
+            if _ey is not None:
+                self._last_waypoint_cte_for_speed = abs(_ey)
+            # To-Do C: Polyline identity (behavior CTE, MPCC waypoints, segment map) — n_pts, first/last, total length, id
+            _pts_b = wp_list if (use_waypoints and wp_list) else None
+            if _pts_b is None or len(_pts_b) == 0:
+                _pw = "behavior_cte_polyline: n=0"
+            else:
+                _n_b = len(_pts_b)
+                _f_b = (float(_pts_b[0][0]), float(_pts_b[0][1])) if len(_pts_b[0]) >= 2 else (0, 0)
+                _l_b = (float(_pts_b[-1][0]), float(_pts_b[-1][1])) if len(_pts_b[-1]) >= 2 else (0, 0)
+                _len_b = 0.0
+                for _i in range(len(_pts_b) - 1):
+                    _a, _b = _pts_b[_i], _pts_b[_i + 1]
+                    _len_b += ((float(_b[0]) - float(_a[0]))**2 + (float(_b[1]) - float(_a[1]))**2) ** 0.5
+                _pw = f"behavior_cte_polyline: id={id(_pts_b)} n={_n_b} first=({_f_b[0]:.2f},{_f_b[1]:.2f}) last=({_l_b[0]:.2f},{_l_b[1]:.2f}) length={_len_b:.2f}m"
+            _pts_m = waypoints_for_mpc if waypoints_for_mpc else None
+            if _pts_m is None or len(_pts_m) == 0:
+                _pm = "mpcc_waypoint_polyline: n=0"
+            else:
+                _n_m = len(_pts_m)
+                _f_m = (float(_pts_m[0][0]), float(_pts_m[0][1])) if len(_pts_m[0]) >= 2 else (0, 0)
+                _l_m = (float(_pts_m[-1][0]), float(_pts_m[-1][1])) if len(_pts_m[-1]) >= 2 else (0, 0)
+                _len_m = 0.0
+                for _i in range(len(_pts_m) - 1):
+                    _a, _b = _pts_m[_i], _pts_m[_i + 1]
+                    _len_m += ((float(_b[0]) - float(_a[0]))**2 + (float(_b[1]) - float(_a[1]))**2) ** 0.5
+                _pm = f"mpcc_waypoint_polyline: id={id(_pts_m)} n={_n_m} first=({_f_m[0]:.2f},{_f_m[1]:.2f}) last=({_l_m[0]:.2f},{_l_m[1]:.2f}) length={_len_m:.2f}m"
+            _smap = getattr(self, '_waypoint_segment_map', None)
+            if _smap is not None and len(_smap) > 0:
+                _seg_first = _smap[0]
+                _seg_last = _smap[-1]
+                _sm_s = f"segment_map: id={id(_smap)} n={len(_smap)} first_seg=({_seg_first[0]},{_seg_first[1]}) last_seg=({_seg_last[0]},{_seg_last[1]})"
+            else:
+                _sm_s = "segment_map: (none)"
+            print(f"[FollowRacingLineMPC] polyline_check {_pw} | {_pm} | {_sm_s}")
+
+        # Supplement log (Todo2): deadzone decision, association, curvature, steering — every 10 ticks or when deadzone state changes
+        _lc2 = _lat_controller
+        _dz_app = getattr(_lc2, '_log_deadzone_applied', False)
+        _last_dz = getattr(self, '_last_deadzone_applied', None)
+        _dz_changed = (_last_dz is not None and _dz_app != _last_dz)
+        self._last_deadzone_applied = _dz_app
+        if (self._behavior_step_count % 10 == 0) or _dz_changed:
+            _dz_m = getattr(_lc2, '_log_dz_cte_m', None)
+            _cte_used = getattr(_lc2, '_log_cte_used_for_control', None)
+            _cte_raw = getattr(_lc2, '_log_cte_raw', None)
+            _reason = getattr(_lc2, '_log_deadzone_reason', '?')
+            _match_d = getattr(_lc2, '_log_match_dist_m', None)
+            _gate_ok = getattr(_lc2, '_log_gate_accept', None)
+            _seg_id = getattr(_lc2, '_log_segment_id', None)
+            _kappa = getattr(_lc2, '_log_kappa_ref_at_proj', None)
+            _creg = getattr(_lc2, '_log_curv_regime', '?')
+            _s_raw = getattr(_lc2, '_log_steer_mpc_raw', None)
+            _s_caps = getattr(_lc2, '_log_steer_after_caps', None)
+            _s_lpf = getattr(_lc2, '_log_steer_after_lpf', None)
+            _s_rate = getattr(_lc2, '_log_steer_rate', None)
+            _curv_ahd = curvature_ahead_max
+            _dz_m_s = f"{_dz_m:.3f}" if _dz_m is not None else "?"
+            _cte_used_s = f"{_cte_used:.3f}" if _cte_used is not None else "?"
+            _cte_raw_s = f"{_cte_raw:.3f}" if _cte_raw is not None else "?"
+            _match_s = f"{_match_d:.3f}" if _match_d is not None else "?"
+            _kappa_s = f"{_kappa:.3f}" if _kappa is not None else "?"
+            _curv_ahd_s = f"{_curv_ahd:.3f}" if _curv_ahd is not None else "?"
+            _s_raw_s = f"{_s_raw:.3f}" if _s_raw is not None else "?"
+            _s_caps_s = f"{_s_caps:.3f}" if _s_caps is not None else "?"
+            _s_lpf_s = f"{_s_lpf:.3f}" if _s_lpf is not None else "?"
+            _s_rate_s = f"{_s_rate:.3f}" if _s_rate is not None else "?"
+            print(f"[FollowRacingLineMPC] deadzone_log deadzone_applied={_dz_app} dz_cte_m={_dz_m_s} cte_used_for_control={_cte_used_s} cte_raw={_cte_raw_s} deadzone_reason={_reason} match_dist_m={_match_s} gate_accept={_gate_ok} segment_id={_seg_id} curv_ahead_max={_curv_ahd_s} curv_regime={_creg} kappa_ref_at_proj={_kappa_s} steer_mpc_raw={_s_raw_s} steer_after_caps={_s_caps_s} steer_after_lpf={_s_lpf_s} steer_rate={_s_rate_s}")
 
         # Execute all actions together
         take actions_to_take

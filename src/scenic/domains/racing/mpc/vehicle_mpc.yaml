@@ -57,7 +57,9 @@
     w_ddu_high_curv: 0.000003  # Steering acceleration in high curvature (smoother than 0.0000005 to reduce overcorrect)
     
     # Oscillation fixes (Phase 3+): reduce small oscillation and overcorrection
-    cte_deadzone: 0.2       # (m) treat |e_y| < this as 0 so MPC does not correct tiny errors
+    cte_deadzone: 0.2       # (m) treat |e_y| < this as 0 so MPC does not correct tiny errors (Todo2: only when association good + curv low)
+    deadzone_dist_ok_m: 1.0 # (m) max match_dist to allow deadzone; above = BLOCKED_MATCH_BAD (Todo2 conditional deadzone)
+    curv_deadzone_max: 0.04 # (1/m) max curv_ahead_max to allow deadzone; never deadzone in moderate curvature (e.g. 0.03-0.05)
     cte_multiplier_max: 1.5 # cap on off-track tracking-weight multiplier (was 3x; 1.5 avoids overshoot)
     
     # Safety thresholds
@@ -71,6 +73,9 @@
     # Waypoint/Reference
     traj_resample_dist: 0.1  # Distance between resampled waypoints (meters) - finer resolution for better tracking
     segment_stick_cte_m: 1.5  # When |CTE| > this (m), do not switch segment — avoids reference flip and steer oscillation (generic, any TTL)
+    # Reference continuity gate (To-Do 1): reject segment switch when association weak or progress non-monotonic
+    max_wp_match_dist_m: 3.0  # (m) max perpendicular distance to accept segment switch; reject if candidate match point farther
+    max_s_jump_m: 4.0  # (m) max along-path progress jump per tick; reject switch if new segment implies larger jump
     curvature_smoothing_num: 15  # Number of points for curvature calculation (smoothing window)
     use_splines: true  # Use spline fitting with arc-length parameterization for smooth reference trajectories
     

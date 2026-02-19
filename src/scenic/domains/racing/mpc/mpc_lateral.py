@@ -70,6 +70,9 @@ class MPCLateralController:
         self._segment_stick_cte_m = getattr(config, 'segment_stick_cte_m', 1.5)
         # Reference blend at boundaries: blend heading toward next segment when u_proj >= this
         self._segment_blend_u_start = getattr(config, 'segment_blend_u_start', 0.7)
+        # Reference continuity gate: don't swap to a segment when association is weak (curve-approach stability)
+        self._max_wp_match_dist_m = getattr(config, 'max_wp_match_dist_m', 3.0)
+        self._max_s_jump_m = getattr(config, 'max_s_jump_m', 4.0)
         
         # OSQP solver (will be initialized on first solve)
         self.solver = None
@@ -364,7 +367,8 @@ class MPCLateralController:
                  waypoints: List[Tuple[float, float]],
                  current_waypoint_idx: Optional[int] = None,
                  cte_magnitude: Optional[float] = None,
-                 v_ref_profile: Optional[Union[List[float], np.ndarray]] = None) -> float:
+                 v_ref_profile: Optional[Union[List[float], np.ndarray]] = None,
+                 curvature_ahead_max: Optional[float] = None) -> float:
         """Compute steering command for one control step.
         
         When v_ref_profile is provided (same profile used by longitudinal MPC), the
@@ -383,6 +387,8 @@ class MPCLateralController:
             cte_magnitude: Optional CTE magnitude for adaptive search
             v_ref_profile: Optional speed profile over horizon (m/s). Pass the same
                 profile used by longitudinal MPC for trajectory-consistent control.
+            curvature_ahead_max: Optional max curvature (1/m) over lookahead; used for deadzone eligibility
+                (require curv_ahead_max < curv_deadzone_max so we never deadzone in moderate curvature).
             
         Returns:
             Steering command in normalized range [-1.0, 1.0]
@@ -456,6 +462,8 @@ class MPCLateralController:
             current_waypoint_idx=current_waypoint_idx,
             prev_e_y=prev_e_y
         )
+        # Log MPCC internal e_y (before deadzone) for comparison with behavior CTE on same tick
+        self._log_mpc_e_y = float(e_y)
 
         # Compute reference heading for logging (extract from _compute_errors logic)
         # NOTE: Use different variable name to avoid shadowing the psi_ref array from build_reference
@@ -475,10 +483,46 @@ class MPCLateralController:
                     if abs(heading_diff) > np.pi / 2:  # > 90 degrees
                         psi_ref_logging = np.arctan2(np.sin(psi_ref_logging + np.pi), np.cos(psi_ref_logging + np.pi))
         
-        # CTE deadzone (oscillation fix): treat small lateral errors as on-track so MPC does not overcorrect
-        dz = getattr(self.config, 'cte_deadzone', 0.0)
-        if dz > 0 and abs(e_y) < dz:
+        # To-Do 2: Conditional CTE deadzone — only apply when |CTE| small AND association good AND curv_ahead_max < curv_deadzone_max
+        dz = getattr(self.config, 'cte_deadzone', 0.2)
+        dist_ok = getattr(self.config, 'deadzone_dist_ok_m', 1.0)
+        curv_dz_max = getattr(self.config, 'curv_deadzone_max', 0.04)  # never deadzone in moderate curvature (e.g. 0.03-0.05)
+        low_t = getattr(self.config, 'low_curvature_threshold', 0.02)
+        high_t = getattr(self.config, 'high_curvature_threshold', 0.1)
+        cte_raw = float(e_y)
+        match_dist_m = getattr(self, '_log_match_dist_m', None)
+        kappa_at_proj = float(kappa_ref[0]) if kappa_ref is not None and len(kappa_ref) > 0 else 0.0
+        abs_kappa = abs(kappa_at_proj)
+        # Explicitly require curv_ahead_max < curv_deadzone_max (not just regime == LOW) so we never deadzone in moderate curvature
+        curv_ok = (curvature_ahead_max is not None and curvature_ahead_max < curv_dz_max)
+        ct_small = (dz > 0 and abs(cte_raw) < dz)
+        match_good = (match_dist_m is not None and match_dist_m < dist_ok)
+        deadzone_applied = bool(ct_small and match_good and curv_ok)
+        if deadzone_applied:
             e_y = 0.0
+            deadzone_reason = "CTE_SMALL,MATCH_GOOD,CURV_LOW"
+        else:
+            if not ct_small:
+                deadzone_reason = "BLOCKED_CTE_BIG"
+            elif not match_good:
+                deadzone_reason = "BLOCKED_MATCH_BAD"
+            else:
+                deadzone_reason = "BLOCKED_CURV_HIGH"
+        cte_used_for_control = float(e_y)
+        curv_regime = "LOW" if abs_kappa < low_t else ("HIGH" if abs_kappa >= high_t else "MID")
+        self._log_deadzone_applied = deadzone_applied
+        self._log_dz_cte_m = dz
+        self._log_cte_used_for_control = cte_used_for_control
+        self._log_cte_raw = cte_raw
+        self._log_deadzone_reason = deadzone_reason
+        self._log_kappa_ref_at_proj = kappa_at_proj
+        self._log_curv_regime = curv_regime
+        self._log_gate_accept = (getattr(self, '_log_gate_status', '') == 'ACCEPT')
+        self._log_segment_id = getattr(self, 'last_seg_idx', None)
+        self._log_s_ref_for_dz = getattr(self, '_log_s_ref', None)
+        # Tripwire: deadzone must never apply when |cte_raw|>0.5 or match_dist_m>1.5
+        if deadzone_applied and (abs(cte_raw) > 0.5 or (match_dist_m is not None and match_dist_m > 1.5)):
+            print(f"[MPC] *** DEADZONE TRIPWIRE: deadzone_applied=True but |cte_raw|={abs(cte_raw):.3f}m or match_dist_m={match_dist_m} — Todo2 miswired / unsafe")
         
         # Safety check: disable MPC if errors too large
         # Use proportional fallback to prevent catch-22 (large error → no steering → larger error)
@@ -566,6 +610,13 @@ class MPCLateralController:
             
             # Apply low-pass filter
             steer_filtered = self.steering_filter.update(steer_normalized)
+            # Supplement log: steering pipeline (Todo2 validation)
+            self._log_steer_mpc_raw = float(steer_normalized)
+            self._log_steer_after_caps = float(steer_normalized)
+            self._log_steer_after_lpf = float(steer_filtered)
+            _prev_lpf = getattr(self, '_last_steer_filtered_for_rate', None)
+            self._log_steer_rate = (float(steer_filtered) - _prev_lpf) / self.timestep if _prev_lpf is not None else 0.0
+            self._last_steer_filtered_for_rate = float(steer_filtered)
 
             # Reset invalid count on success
             self.invalid_count = 0
@@ -612,6 +663,18 @@ class MPCLateralController:
             - segment_idx: Index of the waypoint segment being used for control
         """
         if not waypoints or len(waypoints) < 2:
+            # No waypoints: set log defaults so ref_log line does not use stale values
+            self._log_match_dist_m = None
+            self._log_gate_status = 'ACCEPT'
+            self._log_gate_reason = None
+            self._log_s_ref = None
+            self._log_delta_s_ref = 0.0
+            self._log_s_jump_flag = False
+            self._log_segment_prev = None
+            self._log_segment_new = 0
+            self._log_stick_blocked = False
+            self._log_ref_point = None
+            self._log_ego = None
             return (0.0, 0.0, 0)
 
         # Handle both 2D and 3D positions (always use XY for CTE computation)
@@ -623,6 +686,7 @@ class MPCLateralController:
         # Choose segment with closest perpendicular distance, but bias toward segments ahead
         best_segment_idx = 0
         best_score = float('inf')
+        best_match_dist = float('inf')  # perpendicular distance for continuity gate
         prev_seg_score = None  # score of last step's segment (for hysteresis)
         last_seg = getattr(self, 'last_seg_idx', None)
 
@@ -687,6 +751,35 @@ class MPCLateralController:
             if score < best_score:
                 best_score = score
                 best_segment_idx = i
+                best_match_dist = distance
+
+        # Reference continuity gate: reject candidate if too far or non-monotonic progress (data association)
+        gate_reason = None  # for logging: None = accept; 'too_far' | 'backward' | 's_jump' = reject reason
+        max_wp_dist = getattr(self, '_max_wp_match_dist_m', 3.0)
+        max_s_jump = getattr(self, '_max_s_jump_m', 4.0)
+        if last_seg is not None and 0 <= last_seg < search_end and best_segment_idx != last_seg:
+            reject_candidate = False
+            if best_match_dist > max_wp_dist:
+                gate_reason = 'too_far'
+                reject_candidate = True  # association weak: match point too far
+            elif best_segment_idx < last_seg:
+                gate_reason = 'backward'
+                reject_candidate = True  # progress went backwards
+            elif best_segment_idx > last_seg:
+                # Along-path distance from last_seg to best_segment_idx (sum segment lengths)
+                s_jump = 0.0
+                for k in range(last_seg, best_segment_idx):
+                    if k + 1 < len(waypoints):
+                        w0, w1 = waypoints[k], waypoints[k + 1]
+                        dx = w1[0] - w0[0]
+                        dy = w1[1] - w0[1]
+                        s_jump += np.sqrt(dx*dx + dy*dy)
+                if s_jump > max_s_jump:
+                    gate_reason = 's_jump'
+                    reject_candidate = True  # progress jumped forward too much
+            if reject_candidate:
+                best_segment_idx = last_seg
+                # best_match_dist for retained segment not needed for downstream (we keep last_seg)
 
         # Smooth segment selection: hysteresis only (no advance cap — cap caused lag at high speed)
         # In bends (high curvature), use stronger hysteresis so we don't switch segment and cause steer flip (generic: curvature in 1/m)
@@ -711,8 +804,10 @@ class MPCLateralController:
                     waypoint_idx = last_seg
         # When far off line (|CTE| > threshold), stick to current segment to avoid reference flip and steer oscillation (generic for any TTL)
         stick_m = getattr(self, '_segment_stick_cte_m', 1.5)
+        waypoint_idx_before_stick = waypoint_idx
         if prev_e_y is not None and abs(prev_e_y) >= stick_m and last_seg is not None and 0 <= last_seg < search_end:
             waypoint_idx = last_seg
+        stick_blocked = (waypoint_idx_before_stick != waypoint_idx)
         wp0 = waypoints[waypoint_idx]
         wp1 = waypoints[waypoint_idx + 1]
         x0, y0 = wp0[0], wp0[1]
@@ -723,6 +818,17 @@ class MPCLateralController:
         seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)  # XY projection for CTE
         
         if seg_len < 1e-6:
+            self._log_match_dist_m = None
+            self._log_gate_status = getattr(self, '_log_gate_status', 'ACCEPT')
+            self._log_gate_reason = getattr(self, '_log_gate_reason', None)
+            self._log_s_ref = getattr(self, '_log_s_ref', None)
+            self._log_delta_s_ref = 0.0
+            self._log_s_jump_flag = False
+            self._log_segment_prev = last_seg
+            self._log_segment_new = waypoint_idx
+            self._log_stick_blocked = stick_blocked
+            self._log_ref_point = None
+            self._log_ego = (float(px), float(py))
             return (0.0, 0.0, waypoint_idx)
         
         # Project vehicle position onto segment (in XY plane)
@@ -802,6 +908,29 @@ class MPCLateralController:
         # normalize to [-pi, pi]
         e_psi = math.atan2(math.sin(e_psi), math.cos(e_psi))
         e_psi = np.arctan2(np.sin(e_psi), np.cos(e_psi))  # Normalize to [-pi, pi]
+        # --- Reference/segment logging for diagnostics (todo1 gate, continuity, MPCC vs behavior CTE) ---
+        match_dist_m = float(np.sqrt((px - proj_x)**2 + (py - proj_y)**2))
+        s_ref_cum = 0.0
+        for k in range(0, waypoint_idx):
+            if k + 1 < len(waypoints):
+                w0, w1 = waypoints[k], waypoints[k + 1]
+                d = np.sqrt((w1[0] - w0[0])**2 + (w1[1] - w0[1])**2)
+                s_ref_cum += d
+        s_ref = s_ref_cum + float(u_proj * seg_len)
+        last_s_ref = getattr(self, '_last_s_ref', None)
+        delta_s_ref = float(s_ref - last_s_ref) if last_s_ref is not None else 0.0
+        self._last_s_ref = s_ref
+        self._log_match_dist_m = match_dist_m
+        self._log_gate_status = 'REJECT' if gate_reason else 'ACCEPT'
+        self._log_gate_reason = gate_reason  # None or 'too_far' | 'backward' | 's_jump'
+        self._log_s_ref = s_ref
+        self._log_delta_s_ref = delta_s_ref
+        self._log_s_jump_flag = (gate_reason == 's_jump')
+        self._log_segment_prev = last_seg  # may be None on first step
+        self._log_segment_new = waypoint_idx
+        self._log_stick_blocked = stick_blocked
+        self._log_ref_point = (float(proj_x), float(proj_y))  # CTE cross-check: projection used for match_dist
+        self._log_ego = (float(px), float(py))
         # Expose last errors for outer behavior logic (conditioning/safety/debug)
         self.last_e_y = float(e_y)
         self.last_e_psi = float(e_psi)
