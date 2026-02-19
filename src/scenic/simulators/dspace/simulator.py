@@ -26,6 +26,7 @@ from .geometry.route_mapping import detect_track_segment, assign_route_for_segme
 from .modeldesk.routes import set_route as routes_set_route
 from .controldesk import session as cd_session
 from .geometry.params import get_map_path
+from .steer_io import road_rad_to_dspace_value, log_startup_once, DELTA_MAX_RAD, THETA_SW_MAX_DEG, R
 
 
 
@@ -487,12 +488,20 @@ class DSpaceSimulation(RacingSimulation):
                     self._cd.set_var(KEY_BRAKE_REAR, brake_val)
                     print(f"  [ControlDesk] OK - Brake (front/rear) written successfully")
                 
-                # Steering: Scenic uses -1 to 1, ControlDesk expects -240 to +240 (right to left)
-                # Map -1..1 to -240..+240 command range
+                # Steering: plan — steering is road wheel angle (rad). Single conversion here (only place 240 appears).
                 if steering is not None:
-                    steer_val = -float(max(-1.0, min(1.0, steering)) * 240.0)
-                    print(f"  [ControlDesk] Setting steering: {steering} -> {steer_val}")
-                    self._cd.set_var(KEY_STEERING, steer_val)
+                    log_startup_once()
+                    delta_cmd_rad = float(steering)
+                    theta_sw_deg_sent = road_rad_to_dspace_value(delta_cmd_rad)
+                    self._cd.set_var(KEY_STEERING, theta_sw_deg_sent)
+                    u_norm = delta_cmd_rad / DELTA_MAX_RAD
+                    steer_norm = u_norm
+                    sat_io = abs(theta_sw_deg_sent) >= 0.99 * THETA_SW_MAX_DEG
+                    cmd_value_sent = theta_sw_deg_sent  # exact float written to Const_steering_cmd/Value (fix.md)
+                    # fix.md checklist: cmd_value_sent, theta_sw_deg_sent, steer_norm, delta_cmd_rad, delta_max, R
+                    print(f"[STEER_IO] u_norm={u_norm:.4f} delta_cmd_rad={delta_cmd_rad:.4f} steer_norm={steer_norm:.4f} theta_sw_deg_sent={theta_sw_deg_sent:.2f} cmd_value_sent={cmd_value_sent:.2f} delta_max={DELTA_MAX_RAD:.4f} R={R:.2f}")
+                    print(f"[IO] theta_sw_deg_sent={theta_sw_deg_sent:.2f} u_norm={u_norm:.4f} delta_cmd_rad={delta_cmd_rad:.4f} R={R:.2f} sat_io={sat_io}")
+                    print(f"  [ControlDesk] Setting steering: {delta_cmd_rad:.4f} rad -> {theta_sw_deg_sent:.2f} deg")
                     print(f"  [ControlDesk] OK - Steering written successfully")
                 
                 # Note: Velocity control not available in VesiInterface manual control

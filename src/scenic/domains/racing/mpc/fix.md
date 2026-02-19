@@ -1,186 +1,121 @@
-Got it. If **MPC decides the path is infeasible**, an **emergency stop** is a good safety behavior. Right now your logs show multiple bugs that prevent that from working consistently. Here’s a concrete “to-do list” to fix them.
+I read the new long `run.log` (front + the `[STEER_CAL]` block).
 
-> Note: I can’t re-open older expired uploads, but your recent `run.log` excerpts already show the failure patterns clearly (index resets to 0, throttle/brake mismatch, “brake latched” still throttling, etc.).
+### The good news
 
----
+You **did add the `[STEER_CAL]` lines** successfully — I see **221** of them, with fields:
+`v, yaw_rps, delta_cmd_rad, L, kappa_meas, kappa_pred, curv_err, kappa_ratio`.
 
-# Emergency-stop behavior: what it must guarantee
+### The blocker
 
-When infeasible is detected, the system must enforce **one invariant**:
+In this entire log, **`yaw_rps` is always `0.0000`** (every single `[STEER_CAL]` line). As a result:
 
-✅ **If emergency_stop = True → throttle = 0, brake = BRAKE_MAX, and no other module can override it.**
+* `kappa_meas` is always **0**
+* `curv_err` becomes just `-kappa_pred`
 
-Everything below is aimed at making that invariant true.
+So this log **cannot validate the steering-unit mapping via curvature** yet — it only tells us your *predicted* curvature, not what the vehicle actually did.
 
----
+That almost certainly means your yaw-rate signal source is either:
 
-# A. Fix the infeasibility detection and make it stable
+* not wired / always zero in the channel you’re reading, or
+* being rounded to 0 due to formatting/units, or
+* you’re accidentally logging the wrong field.
 
-### A1) Compute vehicle max curvature correctly
-
-You already log things like:
-
-* `kappa_veh_max = tan(delta_max) / L`
-
-Make sure:
-
-* `delta_max` is the **actual physical steering limit used by both MPC and simulator**
-* `L` is correct (wheelbase used by the MPC kinematic model)
-
-### A2) Compute reference curvature consistently (avoid spikes from kinks)
-
-Even with 1m waypoints, curvature estimates can spike at kinks. Use one of:
-
-* spline curvature from derivatives (preferred), or
-* 3-point circle curvature on **smoothed/resampled** points
-
-### A3) Add hysteresis / debounce for infeasible flag
-
-To avoid “infeasible flips on/off” at 20 Hz:
-
-* Enter infeasible if `max_kappa > 1.05 * kappa_veh_max` for **M consecutive steps** (e.g. M=3)
-* Exit infeasible only if `max_kappa < 0.95 * kappa_veh_max` for **N steps** (e.g. N=10)
-
-This prevents emergency stop chattering.
+Also note: some older uploads in this chat have expired on my side. Your current file is fine, but if you want me to compare against older baselines, you’ll need to re-upload those logs.
 
 ---
 
-# B. Fix progress + waypoint state bugs (these currently corrupt everything)
+## What to add to make this a fair “already running” analysis (no special experiment)
 
-### B1) Stop “progress resets to 0” forever
+You don’t need wheel radians. You just need **one reliable measured yaw rate** (or an equivalent you can compute).
 
-Your log showed patterns like:
+### Option 1 (best): compute yaw rate yourself from heading (no extra sim signals needed)
 
-* `advancing XXXX -> 0 (global_s0=0.00m)`
-* then sync back
+Most stacks already have ego heading/yaw angle (ψ). Log:
 
-Fix rules:
+* `psi_rad` (heading)
+* `dt`
 
-* **Never set global progress to 0** except at initialization.
-* If projection fails, **keep last valid global_s0**.
+Then compute and log:
 
-### B2) Make “global_s0” truly global (not window-local)
+* `yaw_rps_est = wrapToPi(psi_now - psi_prev) / dt`
 
-If you project onto a window spline, `s0` is local. You must compute:
+This avoids the “yaw rate channel stuck at 0” problem entirely.
 
-* `global_s0 = cum_s[start_idx] + s0_local`
+**Log line (per tick or every N ticks):**
 
-And `cum_s[]` must be precomputed along the full track once.
-
-### B3) Derive waypoint index from global_s0 (don’t do idx += 1)
-
-Use bisect:
-
-* `idx = bisect_right(cum_s, global_s0) - 1`
-
-This prevents “index stuck” and prevents random jumps.
-
-### B4) Ensure *one source of truth* for progress/index
-
-Right now you have:
-
-* behavior index
-* MPC segment index
-* ref_builder progress
-
-Pick one and sync all others from it (recommended: **global_s0**).
-If you keep `[Waypoint Sync]`, it should be a one-way sync from global_s0-derived index, not from “whatever MPC chose”.
-
----
-
-# C. Fix longitudinal control conflicts (this is why “stop” doesn’t actually stop)
-
-### C1) Make throttle/brake mutually exclusive and controlled in ONE place
-
-Your logs showed:
-
-* “mode=RECOVERY_BRAKE_LATCHED” but applied throttle was still high
-* LongControl printed throttle≠Final controls
-
-Fix:
-
-* Have **exactly one function** assemble final `throttle, brake`.
-* Everything else outputs a desired **acceleration** or a speed reference, not raw throttle/brake.
-
-### C2) Emergency stop must override at the very last layer
-
-Right before `setThrottle()`/`setBraking()`:
-
-```python
-if emergency_stop:
-    throttle = 0.0
-    brake = BRAKE_MAX
+```
+[STEER_CAL] v=... psi=... yaw_rps_est=... delta_cmd_rad=... L=... kappa_meas=... kappa_pred=... curv_err=...
 ```
 
-And **do not** modify throttle/brake after this.
+Where:
 
-### C3) Verify logs match applied commands
+* `kappa_meas = yaw_rps_est / max(v, 0.5)`
 
-Add one log line that prints:
+### Option 2: compute curvature from trajectory geometry (also robust)
 
-* computed final controls
-* and immediately after, the values passed into the simulator
+If you already log position `(x,y)`:
 
-Success criterion:
-
-* When emergency_stop triggers, you always see:
-
-  * `Final controls: throttle=0.000 brake=BRAKE_MAX`
-  * `setThrottle(0.0)`
-  * `setBraking(BRAKE_MAX)`
-
-### C4) Remove/disable any code that “adds throttle back”
-
-Common culprits:
-
-* traction / anti-stall “minimum throttle”
-* speed controller that always outputs some throttle
-* smoothing filter that blends previous throttle
-* “throttle floor” logic
-
-In emergency stop mode, all of these must be bypassed.
+* compute curvature from 3 consecutive points (or use heading derivative again).
+  This is slightly noisier but works even if heading is noisy.
 
 ---
 
-# D. Fix any remaining “waypoint increment” logic that can desync state
+## You also need one IO log to resolve the “240 unit” question cleanly
 
-### D1) Disable radius-based waypoint increment when using splines/progress
+Right now, I **still don’t see any log line showing the actual number you send to dSPACE**.
 
-Your log still showed `within_radius: advancing ...` which can cause skipping.
-When `use_splines=True`, disable it entirely.
+Add:
 
-### D2) Make nearest_idx selection consistent
+* `cmd_value_sent` (the exact float written to `Const_steering_cmd/Value`)
+* `theta_sw_deg_sent` (same as cmd_value_sent if you believe it’s wheel-deg)
+* `steer_norm`
+* `delta_cmd_rad`
+* `R_used`
 
-If your spline window is anchored on `nearest_idx`, ensure nearest_idx itself is computed from the **same reference** each step (same waypoint list, same coordinate frame).
+**Example:**
 
----
+```
+[STEER_IO] u_norm=... delta_cmd_rad=... steer_norm=... theta_sw_deg_sent=... R=...
+```
 
-# E. Add the emergency-stop trigger where it matters
+With this, we can verify:
 
-### E1) Trigger based on feasibility margin
-
-Recommended trigger:
-
-* `if max_kappa > kappa_veh_max * (1 + margin)` where margin 5–10%
-
-### E2) Optional: also trigger if “saturated steering + error diverging”
-
-This covers cases where curvature estimates miss a corner:
-
-* If `abs(steer) > 0.95` and `abs(cte_mpc)` increases for K steps (e.g. 5), then emergency stop.
+* `theta_sw_deg_sent ≈ steer_norm * 240`
+* and `steer_norm ≈ delta_cmd_rad / 0.2816`
 
 ---
 
-# Minimal implementation order (fastest path to “it works”)
+## What “correct” will look like once yaw is real
 
-1. **Implement emergency_stop override at final actuator layer** (C2).
-2. **Fix throttle/brake pipeline so it can’t be overwritten** (C1, C4).
-3. **Fix global_s0 + index reset-to-0 bug** (B1–B3).
-4. **Add feasibility hysteresis + trigger** (A3, E1).
-5. **Disable radius-based increments when splines on** (D1).
+On steady cornering (ignoring transient moments):
 
-That sequence will give you a reliable emergency stop even before you perfect the racing behavior.
+* `sign(kappa_meas) == sign(kappa_pred)` almost always
+* `kappa_meas` should be the same order as `kappa_pred` (not 10× off)
+* `curv_err = kappa_meas - kappa_pred` should be centered near 0 with some bias/noise
+
+If instead you see something like `kappa_meas ≈ 15× kappa_pred`, that would indicate you’re mixing steering wheel vs road wheel units.
 
 ---
 
-If you paste the last ~40 lines of the control loop where you compute `Final controls` and call `setThrottle/setBraking`, I can tell you exactly where to insert the emergency-stop override and which lines to remove to prevent later overwrites.
+## Concrete checklist for your next run (10 seconds is enough)
+
+Add these logs:
+
+1. **Heading-based yaw rate**
+
+* `psi_rad`, `yaw_rps_est`
+
+2. **IO command value**
+
+* `cmd_value_sent` to `Const_steering_cmd/Value`
+
+3. **Existing control**
+
+* `delta_cmd_rad`, `delta_max`, `steer_norm`
+
+That’s it. Then I can definitively tell you whether the 240 scaling is:
+
+* steering wheel degrees (very likely), or
+* something else.
+
+If you paste a snippet of your code where you fetch “yaw rate” (the thing currently printing 0.0000), I can also tell you what likely signal/name is wrong and how to replace it with the heading-derivative method.

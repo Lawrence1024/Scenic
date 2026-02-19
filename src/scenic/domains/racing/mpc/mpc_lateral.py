@@ -77,6 +77,8 @@ class MPCLateralController:
         # OSQP solver (will be initialized on first solve)
         self.solver = None
         self._solver_initialized = False
+        # To-Do 4.1: saturation counter (increment when |steer_mpc_raw| > 0.98)
+        self._saturation_count = 0
     
     def _initialize_solver(self, horizon: int):
         """Initialize OSQP solver for QP problem.
@@ -182,7 +184,9 @@ class MPCLateralController:
         dt = self.config.mpc_prediction_dt
         L = self.config.wheel_base
         tau = self.config.steer_tau
-        delta_max = self.config.max_steer_angle
+        delta_max_base = self.config.max_steer_angle
+        high_curv_threshold = getattr(self.config, 'high_curvature_threshold', 0.1)
+        max_steer_high_curv = getattr(self.config, 'max_steer_angle_high_curv', None)
         Q_lag = getattr(self.config, 'Q_lag', 0.0)
         Q_progress = getattr(self.config, 'Q_progress', 0.0)
         
@@ -204,6 +208,8 @@ class MPCLateralController:
             v_k = v_ref[k]
             kappa_k = kappa_ref[k]
             psi_ref_k = psi_ref[k]
+            # Todo 4: curvature feedforward — u_k is delta_fb; steering = delta_ff_k + u_k
+            delta_ff_k = math.atan(L * kappa_k)
             
             # Select weights based on curvature; smooth blend between low and high (oscillation fix)
             if self.config.use_adaptive_weights:
@@ -255,12 +261,16 @@ class MPCLateralController:
             
             # Control cost: w_u * u^2 + w_u_vel * u^2 * v^2
             P[u_k_idx, u_k_idx] += w_u_k + w_u_vel_k * v_k * v_k
+            # w_ff_track * (delta - delta_ff)^2 = w_ff_track * u_k^2 (u = delta_fb) — shrink feedback relative to feedforward
+            w_ff_track = getattr(self.config, 'w_ff_track', 0.2)
+            P[u_k_idx, u_k_idx] += 2.0 * w_ff_track
             
-            # Control rate cost: w_du * (u_k - u_{k-1})^2
+            # Control rate cost: w_du * (u_k - u_{k-1})^2 (u = delta_fb; compare to previous delta_fb)
             if k == 0:
-                # First step: compare to previous control
+                # First step: compare to previous delta_fb (prev_control was total = delta_ff + delta_fb)
+                prev_delta_fb = self.prev_control - getattr(self, '_last_delta_ff_rad', 0.0)
                 P[u_k_idx, u_k_idx] += self.config.w_du
-                q[u_k_idx] -= 2.0 * self.config.w_du * self.prev_control
+                q[u_k_idx] -= 2.0 * self.config.w_du * prev_delta_fb
             else:
                 # Compare to previous step
                 u_km1_idx = (k - 1) * (n_x + n_u) + n_x
@@ -269,24 +279,21 @@ class MPCLateralController:
                 P[u_k_idx, u_km1_idx] -= self.config.w_du
                 P[u_km1_idx, u_k_idx] -= self.config.w_du
             
-            # Steering acceleration cost: w_ddu * (u_k - 2*u_{k-1} + u_{k-2})^2
-            # This penalizes rapid changes in steering rate (jerk)
+            # Steering acceleration cost: w_ddu * (u_k - 2*u_{k-1} + u_{k-2})^2 (u = delta_fb)
             if k == 0:
-                # First step: compare to previous two controls
-                # (u_0 - 2*u_{-1} + u_{-2})^2 = u_0^2 - 4*u_0*u_{-1} + 4*u_{-1}^2 + 2*u_0*u_{-2} - 4*u_{-1}*u_{-2} + u_{-2}^2
+                prev_delta_fb = self.prev_control - getattr(self, '_last_delta_ff_rad', 0.0)
+                prev_prev_delta_fb = self.prev_prev_control - getattr(self, '_last_delta_ff_prev_rad', 0.0)
                 P[u_k_idx, u_k_idx] += w_ddu_k
-                q[u_k_idx] -= 4.0 * w_ddu_k * self.prev_control
-                q[u_k_idx] += 2.0 * w_ddu_k * self.prev_prev_control
+                q[u_k_idx] -= 2.0 * w_ddu_k * (2.0 * prev_delta_fb - prev_prev_delta_fb)
             elif k == 1:
-                # Second step: compare to previous step and previous-previous control
                 u_km1_idx = (k - 1) * (n_x + n_u) + n_x
-                # (u_1 - 2*u_0 + u_{-1})^2
+                prev_prev_delta_fb = self.prev_prev_control - getattr(self, '_last_delta_ff_prev_rad', 0.0)
                 P[u_k_idx, u_k_idx] += w_ddu_k
                 P[u_km1_idx, u_km1_idx] += 4.0 * w_ddu_k
                 P[u_k_idx, u_km1_idx] -= 4.0 * w_ddu_k
                 P[u_km1_idx, u_k_idx] -= 4.0 * w_ddu_k
-                q[u_k_idx] += 2.0 * w_ddu_k * self.prev_prev_control
-                q[u_km1_idx] -= 4.0 * w_ddu_k * self.prev_prev_control
+                q[u_k_idx] += 2.0 * w_ddu_k * prev_prev_delta_fb
+                q[u_km1_idx] -= 4.0 * w_ddu_k * prev_prev_delta_fb
             else:
                 # Compare to previous two steps
                 u_km1_idx = (k - 1) * (n_x + n_u) + n_x
@@ -311,20 +318,22 @@ class MPCLateralController:
             u[constraint_idx] = 0.0
             constraint_idx += 1
             
-            # e_psi_{k+1} = e_psi_k + (v_k/L) * delta_k * dt - v_k * kappa_ref_k * dt
+            # Todo 4: e_psi with steering = delta_ff_k + u_k (u_k = delta_fb)
+            # e_psi_{k+1} = e_psi_k + (v_k/L)*(delta_ff_k + u_k)*dt - v_k*kappa_k*dt
             A[constraint_idx, x_k_idx + 1] = 1.0  # e_psi_k
-            A[constraint_idx, x_k_idx + 2] = (v_k / L) * dt  # delta_k
+            A[constraint_idx, u_k_idx] = (v_k / L) * dt  # u_k (delta_fb)
             A[constraint_idx, x_kp1_idx + 1] = -1.0  # -e_psi_{k+1}
-            l[constraint_idx] = -v_k * kappa_k * dt  # curvature feedforward
-            u[constraint_idx] = -v_k * kappa_k * dt
+            rhs = (v_k / L) * delta_ff_k * dt - v_k * kappa_k * dt
+            l[constraint_idx] = rhs
+            u[constraint_idx] = rhs
             constraint_idx += 1
             
-            # delta_{k+1} = delta_k + (dt/tau) * (u_k - delta_k)
+            # delta_{k+1} = delta_k + (dt/tau)*((delta_ff_k + u_k) - delta_k)
             A[constraint_idx, x_k_idx + 2] = 1.0 - dt/tau  # delta_k
             A[constraint_idx, u_k_idx] = dt/tau  # u_k
             A[constraint_idx, x_kp1_idx + 2] = -1.0  # -delta_{k+1}
-            l[constraint_idx] = 0.0
-            u[constraint_idx] = 0.0
+            l[constraint_idx] = (dt / tau) * delta_ff_k
+            u[constraint_idx] = (dt / tau) * delta_ff_k
             constraint_idx += 1
             
             # Phase 3 MPCC: progress dynamics s_{k+1} = s_k + v_ref_k*dt (linearized; full: s_dot = v*cos(e_psi))
@@ -334,18 +343,21 @@ class MPCLateralController:
             u[constraint_idx] = v_k * dt
             constraint_idx += 1
             
-            # Control limits: |u_k| <= delta_max
+            # Control limits: |delta_ff_k + u_k| <= delta_max_k (To-Do 4.2: higher cap in high curvature if max_steer_angle_high_curv set)
+            delta_max_k = delta_max_base
+            if max_steer_high_curv is not None and abs(kappa_k) >= high_curv_threshold:
+                delta_max_k = max_steer_high_curv
             A[constraint_idx, u_k_idx] = 1.0
-            l[constraint_idx] = -delta_max
-            u[constraint_idx] = delta_max
+            l[constraint_idx] = -delta_max_k - delta_ff_k
+            u[constraint_idx] = delta_max_k - delta_ff_k
             constraint_idx += 1
             
-            # Steering rate limit: |delta_dot| <= steer_rate_lim => |u_k - delta_k| <= steer_rate_lim * tau
+            # Steering rate: |(delta_ff_k + u_k) - delta_k| <= steer_rate_lim * tau
             rate_bound = self.config.steer_rate_lim * tau
             A[constraint_idx, u_k_idx] = 1.0
             A[constraint_idx, x_k_idx + 2] = -1.0
-            l[constraint_idx] = -rate_bound
-            u[constraint_idx] = rate_bound
+            l[constraint_idx] = -rate_bound - delta_ff_k
+            u[constraint_idx] = rate_bound - delta_ff_k
             constraint_idx += 1
         
         # Terminal cost
@@ -596,33 +608,90 @@ class MPCLateralController:
             L = self.config.wheel_base
             delta_ff_rad = math.atan(L * float(kappa_ref[0]))
             delta_cmd_rad_raw = delta_ff_rad + delta_fb_rad
-            delta_cmd_rad = np.clip(delta_cmd_rad_raw, -self.config.max_steer_angle, self.config.max_steer_angle)
+            # To-Do 4.2: use higher steer cap in high curvature if max_steer_angle_high_curv set
+            kappa_at_proj_0 = float(kappa_ref[0]) if kappa_ref is not None and len(kappa_ref) > 0 else 0.0
+            high_t = getattr(self.config, 'high_curvature_threshold', 0.1)
+            current_delta_max = self.config.max_steer_angle
+            if getattr(self.config, 'max_steer_angle_high_curv', None) is not None and abs(kappa_at_proj_0) >= high_t:
+                current_delta_max = self.config.max_steer_angle_high_curv
+            delta_clamped_rad = np.clip(delta_cmd_rad_raw, -current_delta_max, current_delta_max)
+            # Step 2 (plan): rate limit output in rad/s inside controller
+            rate_max_radps = getattr(self.config, 'steer_rate_limit_output_radps', 1.0)
+            dt_step = self.timestep
+            delta_prev_rad = getattr(self, '_delta_prev_output_rad', 0.0)
+            delta_cmd_rad = float(np.clip(
+                delta_clamped_rad,
+                delta_prev_rad - rate_max_radps * dt_step,
+                delta_prev_rad + rate_max_radps * dt_step
+            ))
+            self._delta_prev_output_rad = delta_cmd_rad
             
             # Update previous controls (for next iteration's acceleration penalty)
             self.prev_prev_control = self.prev_control
             self.prev_control = delta_cmd_rad
             
-            # Store feedforward for debug (optional)
+            # Todo 4: store feedforward/feedback for next step's w_du/w_ddu and for logging
+            self._last_delta_ff_prev_rad = getattr(self, '_last_delta_ff_rad', 0.0)
             self._last_delta_ff_rad = delta_ff_rad
+            self._last_delta_fb_rad = delta_fb_rad
             
-            # Convert to normalized steering [-1, 1]
-            steer_normalized = np.clip(delta_cmd_rad / self.config.max_steer_angle, -1.0, 1.0)
+            # Feedforward validation logs (delta_ff, delta_fb, delta_total, kappa_ref, v)
+            kappa_at_proj = kappa_at_proj_0
+            self._log_delta_ff = float(delta_ff_rad)
+            self._log_delta_fb = float(delta_fb_rad)
+            self._log_delta_total = float(delta_cmd_rad_raw)
+            self._log_delta_cmd_rad = float(delta_cmd_rad)  # post-MPC clamp (command side)
+            self._log_current_delta_max = float(current_delta_max)
+            self._log_kappa_ref = kappa_at_proj if kappa_ref is not None and len(kappa_ref) > 0 else None
+            self._log_v = float(speed)
             
-            # Apply low-pass filter
-            steer_filtered = self.steering_filter.update(steer_normalized)
-            # Supplement log: steering pipeline (Todo2 validation)
-            self._log_steer_mpc_raw = float(steer_normalized)
-            self._log_steer_after_caps = float(steer_normalized)
-            self._log_steer_after_lpf = float(steer_filtered)
-            _prev_lpf = getattr(self, '_last_steer_filtered_for_rate', None)
-            self._log_steer_rate = (float(steer_filtered) - _prev_lpf) / self.timestep if _prev_lpf is not None else 0.0
-            self._last_steer_filtered_for_rate = float(steer_filtered)
+            # Sanity tripwires for feedforward validation
+            _eps = 0.01  # rad
+            _k_min = 0.005  # 1/m, avoid noise when curvature near zero
+            if abs(delta_ff_rad) > abs(delta_cmd_rad_raw) + _eps:
+                print(f"[MPC] *** FF TRIPWIRE 1: abs(delta_ff)={abs(delta_ff_rad):.4f} > abs(delta_total)+eps={abs(delta_cmd_rad_raw) + _eps:.4f} — suspicious (ff dominating unexpectedly)")
+            if abs(kappa_at_proj) > _k_min and ((delta_ff_rad > 0) != (kappa_at_proj > 0)):
+                print(f"[MPC] *** FF TRIPWIRE 2: sign(delta_ff) != sign(kappa_ref_at_proj) with |kappa_ref|={abs(kappa_at_proj):.4f} > {_k_min} — likely sign/axis mismatch")
+            
+            # Plan: output is road wheel angle (rad). Normalized only for debug logs.
+            steer_norm_debug = float(np.clip(delta_cmd_rad / current_delta_max, -1.0, 1.0))
+            self._log_steer_mpc_raw = steer_norm_debug
+            self._log_steer_after_caps = steer_norm_debug
+            self._log_steer_after_lpf = steer_norm_debug  # no LPF on output; IO adapter converts rad→dSPACE
+            delta_rate_radps = (delta_cmd_rad - delta_prev_rad) / dt_step if dt_step > 0 else 0.0
+            self._log_steer_rate = delta_rate_radps
+            
+            # Plan A) [CTRL] log: delta_raw_rad, delta_clamped_rad, delta_cmd_rad, delta_max_rad, rate_max_radps, delta_rate_radps, sat_mag, sat_rate
+            sat_mag = abs(delta_cmd_rad_raw) > current_delta_max
+            sat_rate = abs(delta_clamped_rad - delta_prev_rad) > rate_max_radps * dt_step
+            self._log_ctrl_delta_raw_rad = float(delta_cmd_rad_raw)
+            self._log_ctrl_delta_clamped_rad = float(delta_clamped_rad)
+            self._log_ctrl_delta_cmd_rad = float(delta_cmd_rad)
+            self._log_ctrl_delta_max_rad = float(current_delta_max)
+            self._log_ctrl_rate_max_radps = float(rate_max_radps)
+            self._log_ctrl_delta_rate_radps = float(delta_rate_radps)
+            self._log_ctrl_sat_mag = bool(sat_mag)
+            self._log_ctrl_sat_rate = bool(sat_rate)
+            # Log every 10 ticks to verify constraints without flooding (plan A)
+            _ctrl_log_count = getattr(self, '_ctrl_log_count', 0)
+            if _ctrl_log_count % 10 == 0:
+                print(f"[CTRL] delta_raw_rad={delta_cmd_rad_raw:.4f} delta_clamped_rad={delta_clamped_rad:.4f} delta_cmd_rad={delta_cmd_rad:.4f} delta_max_rad={current_delta_max:.4f} rate_max_radps={rate_max_radps} delta_rate_radps={delta_rate_radps:.4f} sat_mag={sat_mag} sat_rate={sat_rate}")
+            self._ctrl_log_count = _ctrl_log_count + 1
+
+            # To-Do 4.1: saturation counter (use rad: sat when |delta_cmd_rad| near delta_max)
+            if abs(steer_norm_debug) > 0.98:
+                self._saturation_count = getattr(self, '_saturation_count', 0) + 1
+                _seg = getattr(self, '_log_segment_id', None)
+                _cte = getattr(self, '_log_cte_raw', None)
+                _cte_s = f"{_cte:.3f}" if _cte is not None else "?"
+                print(f"[MPC] SATURATION #{self._saturation_count} delta_max_used={current_delta_max:.4f} segment_id={_seg} v={self._log_v:.3f} kappa_ref_at_proj={kappa_at_proj:.4f} cte_raw={_cte_s} delta_total={delta_cmd_rad_raw:.4f} delta_ff={delta_ff_rad:.4f} delta_fb={delta_fb_rad:.4f}")
 
             # Reset invalid count on success
             self.invalid_count = 0
-            self.last_valid_steering = steer_filtered
+            self.last_valid_steering = delta_cmd_rad  # now in rad
             
-            return float(steer_filtered)
+            # Plan Step 1: controller returns steer_road_rad (rad), not normalized
+            return float(delta_cmd_rad)
             
         except Exception as e:
             print(f"[MPC] Error solving QP: {e}")
@@ -949,9 +1018,10 @@ class MPCLateralController:
             e_psi: Heading error (radians). Optional, used for additional correction.
             
         Returns:
-            Steering command in normalized range [-1.0, 1.0]
+            Steering command in road wheel angle (rad), same contract as run_step (plan).
         """
         self.invalid_count += 1
+        delta_max = self.config.max_steer_angle
         
         # Proportional fallback: use error-based steering to correct large deviations
         # This prevents the catch-22: large error → MPC disabled → zero steering → larger error
@@ -1006,29 +1076,25 @@ class MPCLateralController:
                 
                 steer_proportional += steer_heading
             
-            # Combine with last valid steering (weighted average)
+            # Proportional term in rad (steer_proportional was in [-1,1])
+            steer_proportional_rad = max(-delta_max, min(delta_max, steer_proportional * delta_max))
+            # Combine with last valid steering (weighted average), both in rad
             if self.invalid_count <= self.config.max_invalid_count and abs(self.last_valid_steering) > 0.01:
-                # Blend: more proportional as invalid count increases
                 blend_factor = min(self.invalid_count / self.config.max_invalid_count, 1.0)
-                steer = (1.0 - blend_factor) * self.last_valid_steering + blend_factor * steer_proportional
+                steer_rad = (1.0 - blend_factor) * self.last_valid_steering + blend_factor * steer_proportional_rad
             else:
-                # Use pure proportional after max invalid count or if no valid steering
-                steer = steer_proportional
-            
-            # Clamp to valid range
-            steer = max(-1.0, min(1.0, steer))
-            
-            # CRITICAL: Negate steering for dSPACE sign convention (same as MPC output above)
-            steer = -steer
-            
-            print(f"[MPC Fallback] Using proportional steering: {steer:.3f} (e_y={e_y:.2f}m, e_psi={e_psi:.2f}rad if available)")
-            return float(steer)
+                steer_rad = steer_proportional_rad
+            steer_rad = max(-delta_max, min(delta_max, steer_rad))
+            self._delta_prev_output_rad = steer_rad
+            print(f"[MPC Fallback] Using proportional steering: {steer_rad:.4f} rad (e_y={e_y:.2f}m, e_psi={e_psi:.2f}rad if available)")
+            return float(steer_rad)
         
         # Fallback to old behavior if no error information available
         if self.invalid_count <= self.config.max_invalid_count:
-            # Hold last valid steering
-            return self.last_valid_steering
+            out_rad = self.last_valid_steering
+            self._delta_prev_output_rad = out_rad
+            return out_rad
         else:
-            # Zero steering after max invalid count (should rarely happen now)
+            self._delta_prev_output_rad = 0.0
             return 0.0
 

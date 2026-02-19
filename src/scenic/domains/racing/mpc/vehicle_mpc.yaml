@@ -8,8 +8,11 @@
     # Vehicle geometry
     wheel_base: 2.9718  # Wheelbase (meters) - from dspace_iac_car.param.yaml
     max_steer_angle: 0.2816  # Maximum front-wheel angle (radians) - from dspace_iac_car.param.yaml
+    # To-Do 4.2: if vehicle/VEOS accepts more angle in sharp bends, set to e.g. 0.35 to reduce steer=1.0 saturation; else leave null
+    max_steer_angle_high_curv: null  # (rad) optional higher cap when |kappa| >= high_curvature_threshold
     steer_tau: 0.3  # Steering actuator time constant (seconds) - from aw_lat_mpc.param.yaml
-    steer_rate_lim: 6.98  # Steering rate limit (rad/s) - ~400 deg/s for racing performance
+    steer_rate_lim: 6.98  # QP internal rate limit (rad/s)
+    steer_rate_limit_output_radps: 1.0  # output rate limit (rad/s), plan Step 2
     steer_cmd_max: 240  # Maximum steering command in ControlDesk units
     
     # Steering mapping (to be calibrated)
@@ -29,6 +32,7 @@
     
     # Steering acceleration penalty (smoother steering, reduces jerk and beginner-style overcorrect)
     w_ddu: 0.00003  # Steering acceleration weight (increased for smoother steering changes)
+    w_ff_track: 1.0  # (delta - delta_ff)^2 weight — ~0.1x w_ey; shrinks delta_fb vs delta_ff for less aggressive feedback, smoother mid-curve
     
     # Phase 3 MPCC: contouring + lag + progress (set both to 0 for pure trajectory-tracking / A-B test)
     Q_lag: 0.02     # Lag error: penalize (s_ref - s)^2 at each step; reduces "falling behind" and centerline obsession

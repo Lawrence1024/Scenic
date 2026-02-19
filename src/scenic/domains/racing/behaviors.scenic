@@ -1237,6 +1237,29 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 print(f"[FollowRacingLineMPC] *** CTE MISMATCH (fatal guard): legacy_cte={_legacy:.2f}m, match_dist_m={_md:.3f}m, e_y_mpc={_ey:.3f}m -> forcing cte_behavior := cte_to_waypoints for this tick")
                 cte = float(_ey)
         cte_mag = abs(cte)
+        # One ff_log line per MPC tick (feedforward + command side: u_norm, delta_cmd_rad post-clamp, current_delta_max)
+        _lc_ff = _lat_controller
+        _seg_id = getattr(_lc_ff, '_log_segment_id', None)
+        _v_ff = getattr(_lc_ff, '_log_v', None)
+        _kap_ff = getattr(_lc_ff, '_log_kappa_ref_at_proj', None)
+        _dff = getattr(_lc_ff, '_log_delta_ff', None)
+        _dfb = getattr(_lc_ff, '_log_delta_fb', None)
+        _dtot = getattr(_lc_ff, '_log_delta_total', None)
+        _dcmd = getattr(_lc_ff, '_log_delta_cmd_rad', None)
+        _dmax = getattr(_lc_ff, '_log_current_delta_max', None)
+        _sraw = getattr(_lc_ff, '_log_steer_mpc_raw', None)
+        _slpf = getattr(_lc_ff, '_log_steer_after_lpf', None)
+        _seg_s = str(_seg_id) if _seg_id is not None else "?"
+        _v_s = f"{_v_ff:.3f}" if _v_ff is not None else "?"
+        _kap_s = f"{_kap_ff:.4f}" if _kap_ff is not None else "?"
+        _dff_s = f"{_dff:.4f}" if _dff is not None else "?"
+        _dfb_s = f"{_dfb:.4f}" if _dfb is not None else "?"
+        _dtot_s = f"{_dtot:.4f}" if _dtot is not None else "?"
+        _dcmd_s = f"{_dcmd:.4f}" if _dcmd is not None else "?"
+        _dmax_s = f"{_dmax:.4f}" if _dmax is not None else "?"
+        _sraw_s = f"{_sraw:.3f}" if _sraw is not None else "?"
+        _slpf_s = f"{_slpf:.3f}" if _slpf is not None else "?"
+        print(f"[FollowRacingLineMPC] ff_log segment_id={_seg_s} v={_v_s} kappa_ref_at_proj={_kap_s} delta_ff={_dff_s} delta_fb={_dfb_s} delta_total={_dtot_s} delta_cmd_rad={_dcmd_s} current_delta_max={_dmax_s} u_norm_mpc={_sraw_s} u_norm_lpf={_slpf_s}")
         # Heading diff for steering conditioning (segment direction vs vehicle heading, wrapped to [-pi, pi])
         heading_diff = 0.0
         if car_heading is not None and use_waypoints and wp_list and len(wp_list) >= 2 and wp_last_idx < len(wp_list) - 1:
@@ -1247,12 +1270,13 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         local_throttle_limit = throttle_limit
         final_brake = 0.0
 
+        # Plan: steering = road wheel angle (rad). Single source of truth delta_max (rad).
+        DELTA_MAX_RAD = 0.2816
         # Progressive throttle reduction based on CTE magnitude
         if cte_mag >= cte_stop_threshold:
             local_throttle_limit = 0.0
             final_brake = 1.0
-            # Keep your recovery steer intent, but DON'T bypass conditioning/caps/slew below.
-            steer_mpc = -0.5 if cte > 0 else 0.5
+            steer_mpc = (-0.5 * DELTA_MAX_RAD) if cte > 0 else (0.5 * DELTA_MAX_RAD)
         elif cte_mag >= cte_slowdown_threshold:
             local_throttle_limit = min(local_throttle_limit, 0.3)
             final_brake = min(1.0, (cte_mag - cte_slowdown_threshold) / (cte_stop_threshold - cte_slowdown_threshold))
@@ -1284,113 +1308,43 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             local_throttle_limit = local_throttle_limit * (1.0 - moderate_cte_penalty)
 
         
-        # --- Steering conditioning + normalization & slew limiting ---
-        # Goal: avoid "small CTE but too much/too-late steer" -> overshoot & miss waypoint.
-
-        STEER_GAIN   = 1.0      # Full MPC authority (removed cap)
-        CTE_DEADBAND = 0.10     # meters: ignore tiny CTE noise
-        CTE_SOFT     = 1.00     # meters: full CTE authority by here
-
-        PSI_SOFT     = 0.25     # rad (~14 deg): full heading authority by here
-        MIN_SCALE    = 0.25     # IMPORTANT: never zero steering (prevents late-turn overshoot)
-
-        v = float(current_speed) if current_speed is not None else 0.0
-
-        # Use the same CTE you computed for safety envelope (keep naming consistent!)
-        cte_val = float(getattr(_lat_controller, "last_e_y", cte if cte is not None else 0.0))
-        cte_mag_local = abs(cte_val)
-
-        # CTE scale 0..1
-        if cte_mag_local <= CTE_DEADBAND:
-            cte_scale = 0.0
-        elif cte_mag_local >= CTE_SOFT:
-            cte_scale = 1.0
-        else:
-            cte_scale = (cte_mag_local - CTE_DEADBAND) / max(1e-6, (CTE_SOFT - CTE_DEADBAND))
-
-        # Heading/turn anticipation scale 0..1 (lets you steer even when CTE is small)
-        # We already computed heading_diff earlier in your CTE block (seg_heading - car_heading, wrapped to [-pi, pi]).
-        # If you DON'T have heading_diff in scope here, recompute it (same wrap logic).
-        try:
-            psi_mag = abs(float(heading_diff))
-        except Exception:
-            psi_mag = 0.0
-
-        psi_scale = min(1.0, psi_mag / max(1e-6, PSI_SOFT))
-
-        # "recovery" factor 0..1: how much extra authority/slew we allow
-        rec = max(cte_scale, psi_scale)
-
-        # Final scale (NEVER go below MIN_SCALE)
-        scale = max(MIN_SCALE, cte_scale, psi_scale)
-
-        steer_mpc_raw = float(steer_mpc)
-        steer_cmd = steer_mpc_raw * STEER_GAIN * scale
-
-        # No steering cap - allow full authority [-1, 1]
-        # Clamp before slew (only to valid range, no artificial cap)
-        steer_pre_slew = max(-1.0, min(1.0, steer_cmd))
-
-        # Curvature-aware steering slew limit (from suggestion.md)
-        # In corners (|κ| above threshold): allow 2× faster steering rate
-        curvature_slew_multiplier = 1.0  # Default: normal slew limit
-        curvature_slew_threshold = 0.05  # 1/m (curvature threshold for increased slew rate)
-        
-        # Get current curvature from reference builder if available
-        # Try to get curvature from MPC's reference builder
-        current_curvature = 0.0
-        if use_waypoints and wp_list and len(wp_list) >= 3 and wp_last_idx < len(wp_list) - 2:
-            try:
-                # Compute curvature at current waypoint
-                if wp_last_idx > 0 and wp_last_idx < len(wp_list) - 1:
-                    p0 = (float(wp_list[wp_last_idx-1][0]), float(wp_list[wp_last_idx-1][1]))
-                    p1 = (float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1]))
-                    p2 = (float(wp_list[wp_last_idx+1][0]), float(wp_list[wp_last_idx+1][1]))
-                    v1x = p1[0] - p0[0]; v1y = p1[1] - p0[1]
-                    v2x = p2[0] - p1[0]; v2y = p2[1] - p1[1]
-                    cross = v1x * v2y - v1y * v2x
-                    len1 = (v1x*v1x + v1y*v1y) ** 0.5
-                    len2 = (v2x*v2x + v2y*v2y) ** 0.5
-                    if len1 > 1e-6 and len2 > 1e-6:
-                        avg_len = (len1 + len2) / 2.0
-                        if avg_len > 1e-6:
-                            current_curvature = abs(2.0 * cross / (len1 * len2 * avg_len))
-            except:
-                pass
-        
-        # Scale slew rate based on curvature
-        if current_curvature >= curvature_slew_threshold:
-            # In corners: allow 2× faster steering rate
-            curvature_slew_multiplier = 2.0
-        else:
-            # On straights: normal slew limit
-            curvature_slew_multiplier = 1.0
-        
-        # Slew limiter (increase slew allowance during recovery / big heading error / corners)
-        max_delta_eff = float(max_steer_delta) * (1.0 + 1.5 * rec) * curvature_slew_multiplier
-
-        if not hasattr(self, '_last_final_steer'):
-            self._last_final_steer = float(steer_pre_slew)
-
-        prev_steer = float(self._last_final_steer)
-        steer_delta = float(steer_pre_slew) - prev_steer
-        limited = False
-
-        if steer_delta > max_delta_eff:
-            final_steer = prev_steer + max_delta_eff
-            limited = True
-        elif steer_delta < -max_delta_eff:
-            final_steer = prev_steer - max_delta_eff
-            limited = True
-        else:
-            final_steer = float(steer_pre_slew)
-
-        final_steer = max(-1.0, min(1.0, final_steer))
-        self._last_final_steer = final_steer
-
-        # ---- dSPACE interface sign ----
-        # If your vehicle turns the wrong way, flip HERE (and also flip steer_actual readback below).
-        final_steer_ds = final_steer   # negative = right, positive = left (your dSPACE convention)
+        # --- Steering: plan — MPC returns road wheel angle (rad); clamp + rate limit in controller; pass through ---
+        final_steer = max(-DELTA_MAX_RAD, min(DELTA_MAX_RAD, float(steer_mpc)))
+        final_steer_ds = final_steer   # rad; IO adapter converts to dSPACE steering_wheel_deg in simulator
+        # fix.md Option 1: heading-based yaw rate (avoids yaw-rate channel stuck at 0)
+        _psi_rad = float(car_heading) if car_heading is not None else None
+        _dt = float(simulation().timestep) if hasattr(simulation(), 'timestep') else 0.05
+        _psi_prev = getattr(self, '_psi_prev_steer_cal', None)
+        _yaw_rps_est = None
+        if _psi_rad is not None and _psi_prev is not None and _dt > 1e-6:
+            _dpsi = _psi_rad - _psi_prev
+            _dpsi = math.atan2(math.sin(_dpsi), math.cos(_dpsi))  # wrapToPi
+            _yaw_rps_est = _dpsi / _dt
+        self._psi_prev_steer_cal = _psi_rad
+        # Unit-inference analysis: prefer yaw_rps_est when channel yaw_rate is zero/missing (fix.md)
+        _L_wb = getattr(_lat_controller.config, 'wheel_base', 2.97)
+        _delta_cmd_rad = float(final_steer)
+        _kappa_pred = math.tan(_delta_cmd_rad) / _L_wb if _L_wb > 1e-6 else 0.0
+        _speed_mps = float(current_speed) if current_speed is not None else 0.0
+        _yaw_rate_ch = vehicle_state.get('yaw_rate', None) if vehicle_state else None
+        _speed_floor = 0.5
+        _yaw_rps_use = _yaw_rps_est if (_yaw_rate_ch is None or abs(float(_yaw_rate_ch)) < 1e-6) else _yaw_rate_ch
+        if _yaw_rps_use is not None:
+            _yaw_rps_use = float(_yaw_rps_use)
+        _kappa_meas = (_yaw_rps_use / max(_speed_mps, _speed_floor)) if _yaw_rps_use is not None else None
+        _curv_err = (_kappa_meas - _kappa_pred) if _kappa_meas is not None else None
+        _kappa_ratio = (_kappa_meas / _kappa_pred) if (_kappa_meas is not None and abs(_kappa_pred) > 1e-3) else None
+        _psi_s = f"{_psi_rad:.4f}" if _psi_rad is not None else "?"
+        _yaw_est_s = f"{_yaw_rps_est:.4f}" if _yaw_rps_est is not None else "?"
+        _kmeas_s = f"{_kappa_meas:.5f}" if _kappa_meas is not None else "?"
+        _cerr_s = f"{_curv_err:.5f}" if _curv_err is not None else "?"
+        _krat_s = f"{_kappa_ratio:.4f}" if _kappa_ratio is not None else "?"
+        _steer_cal_tick = getattr(self, '_steer_cal_log_count', 0)
+        if _steer_cal_tick % 5 == 0:
+            print(f"[STEER_CAL] v={_speed_mps:.3f} psi={_psi_s} yaw_rps_est={_yaw_est_s} delta_cmd_rad={_delta_cmd_rad:.4f} L={_L_wb:.3f} kappa_meas={_kmeas_s} kappa_pred={_kappa_pred:.5f} curv_err={_cerr_s} kappa_ratio={_krat_s}")
+        self._steer_cal_log_count = _steer_cal_tick + 1
+        # [PLANT] kept for compatibility (same quantities)
+        print(f"[PLANT] speed_mps={_speed_mps:.3f} kappa_pred={_kappa_pred:.4f} kappa_meas={_kmeas_s} curvature_error={_cerr_s}")
 
         # Ensure local_throttle_limit doesn't exceed base throttle_limit
         local_throttle_limit = min(local_throttle_limit, throttle_limit)
@@ -1597,6 +1551,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             else:
                 _sm_s = "segment_map: (none)"
             print(f"[FollowRacingLineMPC] polyline_check {_pw} | {_pm} | {_sm_s}")
+            # ff_log is printed every MPC tick (see above) with segment_id, v, kappa_ref_at_proj, delta_ff, delta_fb, delta_total, steer_mpc_raw, steer_after_lpf
 
         # Supplement log (Todo2): deadzone decision, association, curvature, steering — every 10 ticks or when deadzone state changes
         _lc2 = _lat_controller

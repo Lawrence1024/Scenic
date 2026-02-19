@@ -32,8 +32,11 @@ class MPCConfig:
         self.wheel_base = config_dict.get('wheel_base', 2.9718)
         self.max_steer_angle = config_dict.get('max_steer_angle', 0.2816)
         self.steer_tau = config_dict.get('steer_tau', 0.3)
-        self.steer_rate_lim = config_dict.get('steer_rate_lim', 6.98)  # Increased from 1.0 to ~400 deg/s (6.98 rad/s) for racing
+        self.steer_rate_lim = config_dict.get('steer_rate_lim', 6.98)  # QP internal rate limit (rad/s)
+        self.steer_rate_limit_output_radps = config_dict.get('steer_rate_limit_output_radps', 1.0)  # output rate limit (rad/s), plan: 1.0
         self.steer_cmd_max = config_dict.get('steer_cmd_max', 70)  # ControlDesk units
+        # To-Do 4.2: optional higher steer cap in high curvature only (if vehicle/VEOS accepts more angle; else reduce speed or horizon)
+        self.max_steer_angle_high_curv = config_dict.get('max_steer_angle_high_curv', None)  # rad; if set, use when |kappa| >= high_curvature_threshold
         
         # Steering mapping (calibrated)
         self.steer_scale = config_dict.get('steer_scale', None)  # Will be calibrated
@@ -52,6 +55,8 @@ class MPCConfig:
         
         # Steering acceleration penalty (smoother steering)
         self.w_ddu = config_dict.get('w_ddu', 0.00003)  # Steering acceleration weight (smoother steering)
+        # Feedforward tracking: penalize (delta - delta_ff)^2 = delta_fb^2 to shrink feedback relative to ff (smoother curves, less CTE oscillation)
+        self.w_ff_track = config_dict.get('w_ff_track', 0.2)  # ~0.1x w_ey scale; start small, increase if delta_fb still large
         
         # Phase 2/3 MPCC: lag error and progress incentive (set both to 0 for trajectory-tracking only)
         self.Q_lag = config_dict.get('Q_lag', 0.02)   # Lag error: Q_lag * (s_ref - s)^2 per step (default active for Phase 3)

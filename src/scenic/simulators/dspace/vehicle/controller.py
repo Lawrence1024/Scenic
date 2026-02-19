@@ -75,17 +75,19 @@ class VehicleController:
                 self.cd.set_var(KEY_BRAKE_FRONT, brake_val)
                 self.cd.set_var(KEY_BRAKE_REAR, brake_val)
             
-            # Apply steering (-1 to 1 → -240 to +240 command range)
-            # NOTE: Positive steering = LEFT turn in ControlDesk (verified via joystick integration docs)
-            # The negative sign was causing steering to be inverted (steering LEFT when should steer RIGHT)
+            # Steering: road wheel angle (rad) → dSPACE steering_wheel_deg via single IO adapter (plan)
             if control and 'steering' in control and control['steering'] is not None:
-                steer_val = float(max(-1.0, min(1.0, control['steering']))) * 240.0
+                from ..steer_io import road_rad_to_dspace_value
+                delta_rad = float(control['steering'])
+                steer_val = road_rad_to_dspace_value(delta_rad)
                 self.cd.set_var(KEY_STEERING, steer_val)
             
-            # Debug every 50 steps; t = step * 0.05s for comparison across runs
+            # Debug every 50 steps; t = step * 0.05s for comparison across runs (steer in rad -> deg via adapter)
             if obj._ego_control_count % 50 == 0:
                 t_log = obj._ego_control_count * 0.05
-                print(f"[EgoControl] t={t_log:.2f}s #{obj._ego_control_count} Writing: throttle={throttle_scenic:.3f}->{throttle_scenic*100:.1f}, brake={brake_scenic:.3f}->{brake_scenic*100:.1f}, steer={steer_scenic:.3f}->{-steer_scenic*240:.1f}")
+                from ..steer_io import road_rad_to_dspace_value
+                steer_deg = road_rad_to_dspace_value(float(steer_scenic)) if steer_scenic is not None else 0.0
+                print(f"[EgoControl] t={t_log:.2f}s #{obj._ego_control_count} Writing: throttle={throttle_scenic:.3f}->{throttle_scenic*100:.1f}, brake={brake_scenic:.3f}->{brake_scenic*100:.1f}, steer_rad={steer_scenic:.4f}->{steer_deg:.1f}deg")
                 
         except Exception as e:
             print(f"[VehicleController:EgoControl] Error: {e}")
