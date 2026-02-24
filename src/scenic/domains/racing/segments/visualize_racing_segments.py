@@ -22,6 +22,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
+import matplotlib.patheffects as path_effects
 
 from scenic.domains.racing.tracks import createRacingTrack
 from scenic.domains.racing.segments.segment_map import (
@@ -79,6 +80,12 @@ def main():
         default=CURVATURE_THRESHOLD,
         help=f"Curvature threshold 1/m (default: {CURVATURE_THRESHOLD})",
     )
+    parser.add_argument(
+        "--output",
+        "-o",
+        default=None,
+        help="Save figure to path (e.g. segment_visualization.png) instead of only showing",
+    )
     args = parser.parse_args()
 
     repo_root = _find_repo_root()
@@ -119,6 +126,11 @@ def main():
     total = len(all_segments)
     print(f"Total segments: {total} (threshold={args.threshold})")
     print("Segments are deterministic for the same OpenDRIVE map and threshold.")
+    # Segment lengths (arc length along centerline, meters)
+    print("Segment lengths (m): id  type      length")
+    for seg_id, road_idx, s_start, s_end, seg_type, _ in all_segments:
+        length = s_end - s_start
+        print(f"  {seg_id:2d}   {seg_type:8s}  {length:7.1f}")
 
     # Alternating colors for consecutive segments (2 colors)
     COLOR_A = "tab:blue"
@@ -133,6 +145,14 @@ def main():
         ys = [p[1] for p in pts]
         color = COLOR_A if i % 2 == 0 else COLOR_B
         ax.plot(xs, ys, color=color, linewidth=2.5, solid_capstyle="round")
+        # Number segment at its midpoint
+        mid_idx = len(pts) // 2
+        x_mid, y_mid = pts[mid_idx][0], pts[mid_idx][1]
+        ax.text(
+            x_mid, y_mid, str(seg_id),
+            fontsize=8, ha="center", va="center", color="white", fontweight="bold",
+            path_effects=[path_effects.withStroke(linewidth=2, foreground="black")],
+        )
 
     ax.set_aspect("equal")
     ax.set_xlabel("x (m)")
@@ -147,6 +167,13 @@ def main():
         loc="upper left",
     )
     plt.tight_layout()
+    if args.output:
+        out_path = Path(args.output)
+        if not out_path.is_absolute():
+            out_path = repo_root / out_path
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(out_path, dpi=150)
+        print(f"Saved: {out_path}")
     plt.show()
 
 

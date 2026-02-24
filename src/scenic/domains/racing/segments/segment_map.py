@@ -22,8 +22,18 @@ from typing import List, Optional, Tuple, Any
 from scenic.core.geometry import makeShapelyPoint
 from scenic.core.vectors import Vector
 
-# Curvature threshold (1/m): above this = curve, below = straight. ~0.015 ≈ 67 m radius.
-CURVATURE_THRESHOLD = 0.015
+# Curvature threshold (1/m): above this = curve, below = straight.
+# Lower value = gentler bends count as curve (curve segments extend further into approaches).
+# 0.012 ≈ 83 m radius; 0.015 ≈ 67 m radius.
+CURVATURE_THRESHOLD = 0.012
+
+# Minimum segment length (m). Shorter segments are merged into an adjacent segment
+# to avoid tiny curve/straight chunks from geometry noise or dense sampling.
+MIN_SEGMENT_LENGTH = 15.0
+
+# Short straights (below this length) adjacent to a curve are merged into the curve
+# so that the curve segment covers the full bend (entry/exit transitions).
+MAX_STRAIGHT_ABSORB_INTO_CURVE = 25.0
 
 # -----------------------------------------------------------------------------
 # Laguna Seca conventional segments (fallback: named sections by s-fraction).
@@ -83,6 +93,104 @@ def _curvature_at_vertex(
     return abs(turn) / ds
 
 
+def _merge_short_segments(
+    segments: List[Tuple[float, float, str]],
+    min_length: float,
+) -> List[Tuple[float, float, str]]:
+    """Merge segments shorter than min_length (m) into an adjacent segment."""
+    if min_length <= 0 or not segments:
+        return segments
+    out: List[Tuple[float, float, str]] = []
+    for s_start, s_end, seg_type in segments:
+        length = s_end - s_start
+        if length < min_length and out:
+            # Merge into previous segment
+            prev_start, prev_end, prev_type = out[-1]
+            out[-1] = (prev_start, s_end, prev_type)
+        elif length < min_length and segments:
+            # First segment is short; will be merged when we see next (leave for now)
+            out.append((s_start, s_end, seg_type))
+        else:
+            out.append((s_start, s_end, seg_type))
+    # Merge any short leading segments (e.g. first was short, rest weren't)
+    i = 0
+    while i < len(out) - 1:
+        s_start, s_end, seg_type = out[i]
+        if (s_end - s_start) < min_length:
+            next_start, next_end, next_type = out[i + 1]
+            out[i + 1] = (s_start, next_end, next_type)
+            out.pop(i)
+        else:
+            i += 1
+    if len(out) > 1 and (out[0][1] - out[0][0]) < min_length:
+        next_start, next_end, next_type = out[1]
+        out[1] = (out[0][0], next_end, next_type)
+        out.pop(0)
+    return out
+
+
+def _extend_curves_over_short_straights(
+    segments: List[Tuple[float, float, str]],
+    max_straight_length: float,
+) -> List[Tuple[float, float, str]]:
+    """Merge short straight segments into adjacent curve segments so that each
+    curve segment covers the full bend (including entry/exit transitions that
+    fall below the curvature threshold).
+    """
+    if max_straight_length <= 0 or len(segments) <= 1:
+        return segments
+    # Pass 1: merge short straight into previous when previous is curve
+    out: List[Tuple[float, float, str]] = []
+    for s_start, s_end, seg_type in segments:
+        length = s_end - s_start
+        if (
+            seg_type == "straight"
+            and length <= max_straight_length
+            and out
+            and out[-1][2] == "curve"
+        ):
+            prev_start, prev_end, prev_type = out[-1]
+            out[-1] = (prev_start, s_end, prev_type)
+        else:
+            out.append((s_start, s_end, seg_type))
+    # Pass 2: merge short straight into next when next is curve
+    i = 0
+    while i < len(out):
+        s_start, s_end, seg_type = out[i]
+        length = s_end - s_start
+        if (
+            seg_type == "straight"
+            and length <= max_straight_length
+            and i + 1 < len(out)
+            and out[i + 1][2] == "curve"
+        ):
+            next_start, next_end, next_type = out[i + 1]
+            out[i + 1] = (s_start, next_end, next_type)
+            out.pop(i)
+        else:
+            i += 1
+    return out
+
+
+def _merge_consecutive_same_type(
+    segments: List[Tuple[float, float, str]],
+) -> List[Tuple[float, float, str]]:
+    """Merge consecutive segments that have the same type (curve/straight).
+    Produces a list where segment types strictly alternate, so one continuous
+    curve or straight is a single segment instead of alternating short chunks.
+    """
+    if not segments:
+        return segments
+    out: List[Tuple[float, float, str]] = [segments[0]]
+    for s_start, s_end, seg_type in segments[1:]:
+        prev_start, prev_end, prev_type = out[-1]
+        if seg_type == prev_type:
+            out[-1] = (prev_start, s_end, prev_type)
+        else:
+            out.append((s_start, s_end, seg_type))
+    return out
+
+
 def _build_curve_straight_segments(
     centerline: Any,
     curvature_threshold: float = CURVATURE_THRESHOLD,
@@ -133,6 +241,15 @@ def _build_curve_straight_segments(
             seg_start_s = s_cum[i]
             seg_type = labels[i]
     segments.append((seg_start_s, s_cum[n - 1], seg_type))
+
+    # Merge segments shorter than MIN_SEGMENT_LENGTH into an adjacent segment
+    segments = _merge_short_segments(segments, MIN_SEGMENT_LENGTH)
+    # Extend curves over short adjacent straights so each curve covers the full bend
+    segments = _extend_curves_over_short_straights(
+        segments, MAX_STRAIGHT_ABSORB_INTO_CURVE
+    )
+    # Merge consecutive same-type segments so curve/straight strictly alternate
+    segments = _merge_consecutive_same_type(segments)
     return segments
 
 
