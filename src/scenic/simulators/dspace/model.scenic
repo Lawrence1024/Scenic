@@ -32,6 +32,11 @@ param timestep = (globalParameters.time_step if 'time_step' in globalParameters 
 # Higher values reduce overhead but lower control frequency
 # Default: 1 (no batching). For 0.05s timestep, use 2 for 10Hz minimum
 param batch_steps = 1
+# Period between control/readback updates in seconds. Must be a multiple of timestep.
+# None or omit = every step. Example: timestep=0.01, control_period=0.05 → 20 Hz control and readback
+param control_period = (globalParameters.control_period if 'control_period' in globalParameters else None)
+# Light-step mode: disable COM read/write to test step_time only (no vehicle motion). Default False.
+param light_step = (globalParameters.light_step if 'light_step' in globalParameters else False)
 
 # Configure the dSPACE simulator
 simulator dspace.DSpaceSimulator(
@@ -39,6 +44,8 @@ simulator dspace.DSpaceSimulator(
     scenario_name=globalParameters.scenario_name,
     timestep=globalParameters.timestep,
     batch_steps=globalParameters.batch_steps,
+    control_period=globalParameters.control_period,
+    light_step=globalParameters.light_step,
 )
 
 # dSPACE-specific racing car implementation

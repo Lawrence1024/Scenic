@@ -56,7 +56,9 @@ class RacingSimulation(Simulation):
             If use_mpc=True: (MPCLongitudinalController, MPCLateralController)
             If use_mpc=False: (PIDLongitudinalController, PIDLateralController) - from driving domain
         """
-        dt = self.timestep
+        # If backend decimates control, match controller dt to control cadence
+        control_interval = max(1, getattr(self, "_control_interval", 1))
+        dt = self.timestep * control_interval
         
         if use_mpc:
             # Use MPC controllers (racing library)

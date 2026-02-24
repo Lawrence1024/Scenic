@@ -8,8 +8,11 @@ Used by FollowRacingLineMPCBehavior so the behavior stays a thin orchestration l
   waypoints + state -> speed_profile.compute_speed_reference() -> v_ref_profile -> MPC.run_step().
 """
 
+import time
 from typing import List, Tuple, Optional, Dict, Any
 import numpy as np
+
+from . import timing as _mpc_timing
 
 # --- Constants (can be overridden via config) ---
 MAX_SPEED_LIMIT_MS = 62.58
@@ -94,6 +97,7 @@ def compute_speed_reference(
         grade_profile: Road grade (rad) per step, or None if 2D waypoints.
         debug: Dict for logging (curvature_speed_limit, curvature_ahead_max, effective_target_speed, ...).
     """
+    t0 = time.perf_counter()
     horizon = getattr(config, 'mpc_prediction_horizon', 35)
     dt_slew = getattr(config, 'mpc_prediction_dt', 0.05)
     max_lateral_accel = getattr(config, 'max_lateral_acceleration', 8.0)
@@ -319,4 +323,5 @@ def compute_speed_reference(
         'gap_above_target': gap_above_target,
         'lookahead_dist': lookahead_dist,
     }
+    _mpc_timing.record_speed_profile_ms((time.perf_counter() - t0) * 1000)
     return v_ref_profile, grade_profile, debug

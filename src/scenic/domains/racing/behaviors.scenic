@@ -567,401 +567,305 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 car_heading = float(self.heading)
             except:
                 pass
-        
-        # Update waypoint index for MPC
-        # PROGRESS-BASED ADVANCEMENT (from suggestion.md): Advance based on arc-length progress
-        # Instead of radius-based advancement, track cumulative distance along waypoints
-        # and advance when we've progressed past a waypoint segment
-        old_wp_idx = wp_last_idx
-        if use_waypoints and wp_list and len(wp_list) >= 2:
-            # Build OpenDRIVE-based segment map once (conventional Laguna Seca = main racing roads only; pit excluded)
-            if not hasattr(self, '_waypoint_segment_map') or self._waypoint_segment_map is None:
-                try:
-                    scene = simulation().scene
-                    track = (getattr(scene, 'params', None) or {}).get('track') or getattr(scene, 'track', None)
-                    if track is not None:
-                        self._waypoint_segment_map = build_waypoint_segment_map(wp_list, track)
-                        num_seg = len(set(seg_id for seg_id, _ in self._waypoint_segment_map)) if self._waypoint_segment_map else 0
-                        print(f"[FollowRacingLineMPCBehavior] Segment map built from OpenDRIVE ({num_seg} segments); log will show segment N [name] for performance analysis")
-                    else:
+        _bt = getattr(simulation(), 'behavior_timing', None)
+        if _bt is not None:
+            _bt.start_step()
+            _bt.start_section('waypoint_speed_grade')
+        _run_full_control = (simulation().is_control_step if hasattr(simulation(), 'is_control_step') else True) or not hasattr(self, '_last_final_steer')
+        if not _run_full_control:
+            if _bt is not None:
+                _bt.end_section('waypoint_speed_grade')
+            final_steer = getattr(self, '_last_final_steer', 0.0)
+            final_throttle = getattr(self, '_last_final_throttle', 0.0)
+            final_brake = getattr(self, '_last_final_brake', 0.0)
+            curvature_ahead_max = getattr(self, '_last_curvature_ahead_max', 0.0)
+            cte = getattr(self, '_current_cte', 0.0)
+            speed_limit_applied_this_step = False
+            brake_mpc = 0.0
+            if _bt is not None:
+                _bt.start_section('after_mpc')
+        if _run_full_control:
+            # Update waypoint index for MPC
+            # PROGRESS-BASED ADVANCEMENT (from suggestion.md): Advance based on arc-length progress
+            # Instead of radius-based advancement, track cumulative distance along waypoints
+            # and advance when we've progressed past a waypoint segment
+            old_wp_idx = wp_last_idx
+            if use_waypoints and wp_list and len(wp_list) >= 2:
+                # Build OpenDRIVE-based segment map once (conventional Laguna Seca = main racing roads only; pit excluded)
+                if not hasattr(self, '_waypoint_segment_map') or self._waypoint_segment_map is None:
+                    try:
+                        scene = simulation().scene
+                        track = (getattr(scene, 'params', None) or {}).get('track') or getattr(scene, 'track', None)
+                        if track is not None:
+                            self._waypoint_segment_map = build_waypoint_segment_map(wp_list, track)
+                            num_seg = len(set(seg_id for seg_id, _ in self._waypoint_segment_map)) if self._waypoint_segment_map else 0
+                            print(f"[FollowRacingLineMPCBehavior] Segment map built from OpenDRIVE ({num_seg} segments); log will show segment N [name] for performance analysis")
+                        else:
+                            self._waypoint_segment_map = None
+                            print(f"[FollowRacingLineMPCBehavior] Segment map not built (no track in scene); log will show segment ?")
+                    except Exception as e:
                         self._waypoint_segment_map = None
-                        print(f"[FollowRacingLineMPCBehavior] Segment map not built (no track in scene); log will show segment ?")
-                except Exception as e:
-                    self._waypoint_segment_map = None
-                    print(f"[FollowRacingLineMPCBehavior] Segment map not built: {e}; log will show segment ?")
-            try:
-                # Initialize progress tracking if needed
-                if not hasattr(self, '_waypoint_progress'):
-                    self._waypoint_progress = 0.0  # Cumulative distance along waypoints
-                    self._waypoint_progress_idx = 0  # Waypoint index at last progress update
-                
-                # Compute cumulative distance from start to current waypoint index
-                # This serves as a proxy for arc-length progress s_0
-                cumulative_dist_to_wp = 0.0
-                for i in range(min(wp_last_idx, len(wp_list) - 1)):
-                    wp0 = wp_list[i]
-                    wp1 = wp_list[i + 1]
-                    dx = float(wp1[0]) - float(wp0[0])
-                    dy = float(wp1[1]) - float(wp0[1])
-                    seg_len = (dx*dx + dy*dy) ** 0.5
-                    cumulative_dist_to_wp += seg_len
-                
-                # Project vehicle position onto current waypoint segment to get progress along segment
-                s_0 = cumulative_dist_to_wp  # Default: progress to segment start
-                if wp_last_idx < len(wp_list) - 1:
-                    wp0 = wp_list[wp_last_idx]
-                    wp1 = wp_list[wp_last_idx + 1]
-                    x0, y0 = float(wp0[0]), float(wp0[1])
-                    x1, y1 = float(wp1[0]), float(wp1[1])
-                    seg_dx = x1 - x0
-                    seg_dy = y1 - y0
-                    seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
-                    
-                    if seg_len > 1e-6:
-                        # Project vehicle position onto segment
-                        wx = px - x0
-                        wy = py - y0
-                        u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
-                        u_proj = max(0.0, min(1.0, u_proj))
-                        
-                        # Current progress s_0 = cumulative distance to segment start + progress along segment
-                        s_0 = cumulative_dist_to_wp + u_proj * seg_len
-                        
-                        # Advance waypoint index based on progress
-                        # Only advance if we've progressed past the end of the current segment
-                        # This prevents premature skipping when far off-track
-                        while wp_last_idx < len(wp_list) - 1:
-                            # Check if we've progressed past the end of current segment
-                            segment_end_dist = cumulative_dist_to_wp + seg_len
-                            
-                            if s_0 >= segment_end_dist - 0.5:  # Small threshold (0.5m) to handle numerical issues
-                                # Advance to next segment
-                                wp_last_idx += 1
-                                
-                                # Update cumulative distance
-                                cumulative_dist_to_wp = segment_end_dist
-                                
-                                # Compute next segment length
-                                if wp_last_idx < len(wp_list) - 1:
-                                    wp0 = wp_list[wp_last_idx]
-                                    wp1 = wp_list[wp_last_idx + 1]
-                                    x0, y0 = float(wp0[0]), float(wp0[1])
-                                    x1, y1 = float(wp1[0]), float(wp1[1])
-                                    seg_dx = x1 - x0
-                                    seg_dy = y1 - y0
-                                    seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
-                                    
-                                    # Recompute projection on new segment
-                                    if seg_len > 1e-6:
-                                        wx = px - x0
-                                        wy = py - y0
-                                        u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
-                                        u_proj = max(0.0, min(1.0, u_proj))
-                                        s_0 = cumulative_dist_to_wp + u_proj * seg_len
-                                    else:
-                                        seg_len = 1e-6  # Avoid division by zero
-                                else:
-                                    break
-                            else:
-                                # Haven't progressed past current segment - stop advancing
-                                break
+                        print(f"[FollowRacingLineMPCBehavior] Segment map not built: {e}; log will show segment ?")
+                try:
+                    # Initialize progress tracking if needed
+                    if not hasattr(self, '_waypoint_progress'):
+                        self._waypoint_progress = 0.0  # Cumulative distance along waypoints
+                        self._waypoint_progress_idx = 0  # Waypoint index at last progress update
+                    if not hasattr(self, '_cached_cumulative_dist_wp_idx'):
+                        self._cached_cumulative_dist_wp_idx = 0
+                        self._cached_cumulative_dist_to_wp = 0.0
+                    # Cumulative distance to current waypoint index (O(1) update when wp_last_idx advances)
+                    cached_idx = getattr(self, '_cached_cumulative_dist_wp_idx', 0)
+                    cached_dist = getattr(self, '_cached_cumulative_dist_to_wp', 0.0)
+                    if wp_last_idx <= cached_idx:
+                        if wp_last_idx < cached_idx:
+                            cumulative_dist_to_wp = 0.0
+                            for i in range(min(wp_last_idx, len(wp_list) - 1)):
+                                wp0 = wp_list[i]
+                                wp1 = wp_list[i + 1]
+                                dx = float(wp1[0]) - float(wp0[0])
+                                dy = float(wp1[1]) - float(wp0[1])
+                                seg_len = (dx*dx + dy*dy) ** 0.5
+                                cumulative_dist_to_wp += seg_len
+                            self._cached_cumulative_dist_to_wp = cumulative_dist_to_wp
+                            self._cached_cumulative_dist_wp_idx = wp_last_idx
+                        else:
+                            cumulative_dist_to_wp = cached_dist
                     else:
-                        # Degenerate segment - advance to next
-                        if wp_last_idx < len(wp_list) - 1:
-                            wp_last_idx += 1
-                
-                # Update progress tracking
-                self._waypoint_progress = s_0
-                self._waypoint_progress_idx = wp_last_idx
-                
-                # Calculate distance to current waypoint for logging
-                current_wp_dist = None
-                if wp_last_idx < len(wp_list):
-                    wp_x, wp_y = float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1])
-                    dx = px - wp_x; dy = py - wp_y
-                    current_wp_dist = (dx*dx + dy*dy) ** 0.5
-                
-                # Log current waypoint
-                if wp_last_idx < len(wp_list):
-                    current_wp = wp_list[wp_last_idx]
-                    current_wp_x, current_wp_y = float(current_wp[0]), float(current_wp[1])
-                    if wp_last_idx != old_wp_idx:
-                        # Initialize waypoint progress tracking
-                        if not hasattr(self, '_waypoints_passed'):
-                            self._waypoints_passed = 0
-                        self._waypoints_passed += 1
-                        progress_pct = (self._waypoints_passed / len(wp_list)) * 100.0 if len(wp_list) > 0 else 0.0
-                        step_wp = getattr(self, '_behavior_step_count', 0)
-                        t_wp = step_wp * 0.05
-                        seg_wp = get_segment_at_waypoint(wp_last_idx, getattr(self, '_waypoint_segment_map', None))
-                        seg_str = f" {get_segment_label(*seg_wp)}" if seg_wp is not None else " segment ?"
-                        print(f"[FollowRacingLineMPCBehavior] t={t_wp:.2f}s WAYPOINT HIT: index {old_wp_idx} -> {wp_last_idx} at ({current_wp_x:.2f}, {current_wp_y:.2f}), distance={current_wp_dist:.2f}m{seg_str}")
-                        print(f"[FollowRacingLineMPCBehavior] t={t_wp:.2f}s Progress: {self._waypoints_passed} waypoints passed ({progress_pct:.1f}% of {len(wp_list)} total waypoints)")
-                
-            except Exception as e:
-                print(f"[FollowRacingLineMPCBehavior] Warning: Waypoint finder error: {e}")
-        
-        # --- Longitudinal Control (MPC) ---
-        # To-Do D: Use projection-based CTE (same geometry as MPCC) everywhere. CTE magnitude for speed
-        # comes from previous step's waypoint-based e_y (MPCC uses same polyline and projection).
-        cte_mag_for_speed = getattr(self, '_last_waypoint_cte_for_speed', 0.0)
-        # Legacy CTE (lookahead-based) only for To-Do E mismatch guard — compute for mismatch check
-        self._legacy_cte_this_tick = None
-        if use_waypoints and wp_list and len(wp_list) >= 2:
-            try:
-                nearest_idx = wp_last_idx
-                best_d2 = 1e18
-                search_window = 50
-                for i in range(max(0, wp_last_idx - search_window), min(len(wp_list), wp_last_idx + search_window)):
-                    wx, wy = float(wp_list[i][0]), float(wp_list[i][1])
-                    d2 = (px - wx)**2 + (py - wy)**2
-                    if d2 < best_d2:
-                        best_d2 = d2
-                        nearest_idx = i
-                if abs(nearest_idx - wp_last_idx) > search_window * 0.8:
-                    for i in range(max(0, wp_last_idx - 2*search_window), min(len(wp_list), wp_last_idx + 2*search_window)):
+                        cumulative_dist_to_wp = cached_dist
+                        for i in range(cached_idx, min(wp_last_idx, len(wp_list) - 1)):
+                            wp0 = wp_list[i]
+                            wp1 = wp_list[i + 1]
+                            dx = float(wp1[0]) - float(wp0[0])
+                            dy = float(wp1[1]) - float(wp0[1])
+                            seg_len = (dx*dx + dy*dy) ** 0.5
+                            cumulative_dist_to_wp += seg_len
+                        self._cached_cumulative_dist_to_wp = cumulative_dist_to_wp
+                        self._cached_cumulative_dist_wp_idx = wp_last_idx
+
+                    # Project vehicle position onto current waypoint segment to get progress along segment
+                    s_0 = cumulative_dist_to_wp  # Default: progress to segment start
+                    if wp_last_idx < len(wp_list) - 1:
+                            wp0 = wp_list[wp_last_idx]
+                            wp1 = wp_list[wp_last_idx + 1]
+                            x0, y0 = float(wp0[0]), float(wp0[1])
+                            x1, y1 = float(wp1[0]), float(wp1[1])
+                            seg_dx = x1 - x0
+                            seg_dy = y1 - y0
+                            seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                            
+                            if seg_len > 1e-6:
+                                # Project vehicle position onto segment
+                                wx = px - x0
+                                wy = py - y0
+                                u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
+                                u_proj = max(0.0, min(1.0, u_proj))
+                                
+                                # Current progress s_0 = cumulative distance to segment start + progress along segment
+                                s_0 = cumulative_dist_to_wp + u_proj * seg_len
+                                
+                                # Advance waypoint index based on progress
+                                # Only advance if we've progressed past the end of the current segment
+                                # This prevents premature skipping when far off-track
+                                while wp_last_idx < len(wp_list) - 1:
+                                    # Check if we've progressed past the end of current segment
+                                    segment_end_dist = cumulative_dist_to_wp + seg_len
+                                    
+                                    if s_0 >= segment_end_dist - 0.5:  # Small threshold (0.5m) to handle numerical issues
+                                        # Advance to next segment
+                                        wp_last_idx += 1
+                                        
+                                        # Update cumulative distance
+                                        cumulative_dist_to_wp = segment_end_dist
+                                        
+                                        # Compute next segment length
+                                        if wp_last_idx < len(wp_list) - 1:
+                                            wp0 = wp_list[wp_last_idx]
+                                            wp1 = wp_list[wp_last_idx + 1]
+                                            x0, y0 = float(wp0[0]), float(wp0[1])
+                                            x1, y1 = float(wp1[0]), float(wp1[1])
+                                            seg_dx = x1 - x0
+                                            seg_dy = y1 - y0
+                                            seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                                            
+                                            # Recompute projection on new segment
+                                            if seg_len > 1e-6:
+                                                wx = px - x0
+                                                wy = py - y0
+                                                u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
+                                                u_proj = max(0.0, min(1.0, u_proj))
+                                                s_0 = cumulative_dist_to_wp + u_proj * seg_len
+                                            else:
+                                                seg_len = 1e-6  # Avoid division by zero
+                                        else:
+                                            break
+                                    else:
+                                        # Haven't progressed past current segment - stop advancing
+                                        break
+                            else:
+                                # Degenerate segment - advance to next
+                                if wp_last_idx < len(wp_list) - 1:
+                                    wp_last_idx += 1
+                            # Keep cache in sync when wp_last_idx was advanced in the while loop above
+                            self._cached_cumulative_dist_to_wp = cumulative_dist_to_wp
+                            self._cached_cumulative_dist_wp_idx = wp_last_idx
+
+                            # Update progress tracking
+                            self._waypoint_progress = s_0
+                            self._waypoint_progress_idx = wp_last_idx
+
+                            # Calculate distance to current waypoint for logging
+                            current_wp_dist = None
+                            if wp_last_idx < len(wp_list):
+                                wp_x, wp_y = float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1])
+                                dx = px - wp_x; dy = py - wp_y
+                                current_wp_dist = (dx*dx + dy*dy) ** 0.5
+
+                            # Log current waypoint
+                            if wp_last_idx < len(wp_list):
+                                current_wp = wp_list[wp_last_idx]
+                                current_wp_x, current_wp_y = float(current_wp[0]), float(current_wp[1])
+                                if wp_last_idx != old_wp_idx:
+                                    # Initialize waypoint progress tracking
+                                    if not hasattr(self, '_waypoints_passed'):
+                                        self._waypoints_passed = 0
+                                    self._waypoints_passed += 1
+                                    progress_pct = (self._waypoints_passed / len(wp_list)) * 100.0 if len(wp_list) > 0 else 0.0
+                                    step_wp = getattr(self, '_behavior_step_count', 0)
+                                    t_wp = step_wp * 0.05
+                                    seg_wp = get_segment_at_waypoint(wp_last_idx, getattr(self, '_waypoint_segment_map', None))
+                                    seg_str = f" {get_segment_label(*seg_wp)}" if seg_wp is not None else " segment ?"
+                                    print(f"[FollowRacingLineMPCBehavior] t={t_wp:.2f}s WAYPOINT HIT: index {old_wp_idx} -> {wp_last_idx} at ({current_wp_x:.2f}, {current_wp_y:.2f}), distance={current_wp_dist:.2f}m{seg_str}")
+                                    print(f"[FollowRacingLineMPCBehavior] t={t_wp:.2f}s Progress: {self._waypoints_passed} waypoints passed ({progress_pct:.1f}% of {len(wp_list)} total waypoints)")
+
+                except Exception as e:
+                    print(f"[FollowRacingLineMPCBehavior] Warning: Waypoint finder error: {e}")
+            
+            # --- Longitudinal Control (MPC) ---
+            # To-Do D: Use projection-based CTE (same geometry as MPCC) everywhere. CTE magnitude for speed
+            # comes from previous step's waypoint-based e_y (MPCC uses same polyline and projection).
+            cte_mag_for_speed = getattr(self, '_last_waypoint_cte_for_speed', 0.0)
+            # Legacy CTE (lookahead-based) only for To-Do E mismatch guard — compute for mismatch check
+            self._legacy_cte_this_tick = None
+            if use_waypoints and wp_list and len(wp_list) >= 2:
+                try:
+                    nearest_idx = wp_last_idx
+                    best_d2 = 1e18
+                    search_window = 50
+                    for i in range(max(0, wp_last_idx - search_window), min(len(wp_list), wp_last_idx + search_window)):
                         wx, wy = float(wp_list[i][0]), float(wp_list[i][1])
                         d2 = (px - wx)**2 + (py - wy)**2
                         if d2 < best_d2:
                             best_d2 = d2
                             nearest_idx = i
-                if nearest_idx < len(wp_list) - 1:
-                    x0, y0 = float(wp_list[nearest_idx][0]), float(wp_list[nearest_idx][1])
-                    x1, y1 = float(wp_list[nearest_idx+1][0]), float(wp_list[nearest_idx+1][1])
-                    seg_dx = x1 - x0
-                    seg_dy = y1 - y0
-                    seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
-                    if seg_len > 1e-6:
-                        u_proj = max(0.0, min(1.0, ((px - x0)*seg_dx + (py - y0)*seg_dy) / (seg_len*seg_len)))
-                        proj_x = x0 + u_proj * seg_dx
-                        proj_y = y0 + u_proj * seg_dy
-                        nx = -seg_dy / seg_len
-                        ny = seg_dx / seg_len
-                        if car_heading is not None:
-                            seg_heading = math.atan2(seg_dy, seg_dx)
-                            hd = math.atan2(math.sin(seg_heading - car_heading), math.cos(seg_heading - car_heading))
-                            if abs(hd) > math.pi / 2:
-                                nx, ny = -nx, -ny
-                        self._legacy_cte_this_tick = (px - proj_x)*nx + (py - proj_y)*ny
-            except Exception:
-                pass
-        if self._legacy_cte_this_tick is None and hasattr(self, 'ttl') and self.ttl is not None and hasattr(self.ttl, 'signedDistanceTo'):
-            try:
-                self._legacy_cte_this_tick = self.ttl.signedDistanceTo(self.position)
-            except Exception:
+                    if abs(nearest_idx - wp_last_idx) > search_window * 0.8:
+                        for i in range(max(0, wp_last_idx - 2*search_window), min(len(wp_list), wp_last_idx + 2*search_window)):
+                            wx, wy = float(wp_list[i][0]), float(wp_list[i][1])
+                            d2 = (px - wx)**2 + (py - wy)**2
+                            if d2 < best_d2:
+                                best_d2 = d2
+                                nearest_idx = i
+                    if nearest_idx < len(wp_list) - 1:
+                        x0, y0 = float(wp_list[nearest_idx][0]), float(wp_list[nearest_idx][1])
+                        x1, y1 = float(wp_list[nearest_idx+1][0]), float(wp_list[nearest_idx+1][1])
+                        seg_dx = x1 - x0
+                        seg_dy = y1 - y0
+                        seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                        if seg_len > 1e-6:
+                            u_proj = max(0.0, min(1.0, ((px - x0)*seg_dx + (py - y0)*seg_dy) / (seg_len*seg_len)))
+                            proj_x = x0 + u_proj * seg_dx
+                            proj_y = y0 + u_proj * seg_dy
+                            nx = -seg_dy / seg_len
+                            ny = seg_dx / seg_len
+                            if car_heading is not None:
+                                seg_heading = math.atan2(seg_dy, seg_dx)
+                                hd = math.atan2(math.sin(seg_heading - car_heading), math.cos(seg_heading - car_heading))
+                                if abs(hd) > math.pi / 2:
+                                    nx, ny = -nx, -ny
+                            self._legacy_cte_this_tick = (px - proj_x)*nx + (py - proj_y)*ny
+                except Exception:
+                    pass
+            if self._legacy_cte_this_tick is None and hasattr(self, 'ttl') and self.ttl is not None and hasattr(self.ttl, 'signedDistanceTo'):
+                try:
+                    self._legacy_cte_this_tick = self.ttl.signedDistanceTo(self.position)
+                except Exception:
+                    self._legacy_cte_this_tick = 0.0
+            if self._legacy_cte_this_tick is None:
                 self._legacy_cte_this_tick = 0.0
-        if self._legacy_cte_this_tick is None:
-            self._legacy_cte_this_tick = 0.0
-        # To-Do B fallback (kept for compatibility): when mismatch was detected, trust waypoint CTE for speed
-        if getattr(self, '_cte_mismatch_trust_waypoint', False) and getattr(self, '_cte_mismatch_steps_remaining', 0) > 0:
-            cte_mag_for_speed = getattr(self, '_last_waypoint_cte_for_speed', 0.0)
-            self._cte_mismatch_steps_remaining = getattr(self, '_cte_mismatch_steps_remaining', 0) - 1
-            if self._cte_mismatch_steps_remaining <= 0:
-                self._cte_mismatch_trust_waypoint = False
-        # Universal max speed limit: Reduced for better robustness without elevation data
-        MAX_SPEED_LIMIT_MS = 62.58  # 140 mph in m/s (~225 km/h) for IAC vehicle capability
-        
-        # --- Curvature-based speed gate (from suggestion.md) ---
-        # Formula: v_max(s) = sqrt(a_y_max / (|κ(s)| + ε))
-        # v_ref = min(v_desired, min_{s∈[s_0, s_0+L]} v_max(s))
-        # This ensures vehicle enters turns at appropriate speed (Laguna Seca: see turns early to avoid run-off)
-        curvature_speed_limit = target_speed  # Default: no reduction
-        curvature_ahead_max = 0.0  # Max curvature magnitude over lookahead (for speed limits)
-        curvature_ahead_max_signed = 0.0  # Task 3: signed kappa at apex (left > 0, right < 0) for downstream
-        max_lateral_accel = 8.0  # m/s² (conservative for indoor sim, can be configured)
-        curvature_epsilon = 0.001  # Small epsilon to avoid division by zero
-        curvature_speed_margin = 0.92  # Use 92% of theoretical v_max (generic: less over-braking, less throttle compensation; works for any TTL)
-        
-        if use_waypoints and wp_list and len(wp_list) >= 3:
-            try:
-                # Compute curvature-based speed limit over MPC horizon (waypoint indices wrap at end of lap)
-                # Look ahead: ensure we see turns early enough to brake (Laguna Seca Corkscrew/hairpins)
-                horizon = _lon_controller.config.mpc_prediction_horizon if hasattr(_lon_controller, 'config') else 35
-                dt_mpc = _lon_controller.config.mpc_prediction_dt if hasattr(_lon_controller, 'config') else 0.05
-                lookahead_dist = current_speed * horizon * dt_mpc  # Distance over MPC horizon
-                if lookahead_dist < 10.0:
-                    lookahead_dist = 25.0  # Minimum at very low speed
-                # At high speed, need enough distance to brake before turn (avoid run-off).
-                # Braking from v to v_turn at slew_down m/s takes (v - v_turn)/slew_down seconds; distance ~ v * T.
-                # At 46 m/s, 7 m/s/s slew: need ~5.5 s -> ~250 m to see turn and slow to ~8 m/s for sharp bend.
-                min_lookahead_for_braking = 85.0   # m when 15 < speed <= 25
-                if current_speed > 40.0:
-                    min_lookahead_for_braking = 250.0  # m at very high speed: see sharp turn in time (e.g. k=0.1) without capping max speed
-                elif current_speed > 25.0:
-                    min_lookahead_for_braking = 120.0  # m at high speed
-                if lookahead_dist < min_lookahead_for_braking and current_speed > 15.0:
-                    lookahead_dist = min_lookahead_for_braking
-                # When speed is high, use at least 120 m lookahead so sharp bends (e.g. segment 43) are fully seen and we slow in time.
-                if current_speed > 20.0 and lookahead_dist < 120.0:
-                    lookahead_dist = max(lookahead_dist, 120.0)
-
-                lookahead_idx = wp_last_idx
-                accumulated_dist = 0.0
-                min_v_max = target_speed  # Track minimum v_max over horizon
-                n_wp = len(wp_list)
-                
-                # Sample curvature along horizon; wrap waypoints so near end-of-lap we see the straight after the loop
-                sample_points = []
-                while accumulated_dist < lookahead_dist:
-                    next_idx = (lookahead_idx + 1) % n_wp
-                    x0, y0 = float(wp_list[lookahead_idx][0]), float(wp_list[lookahead_idx][1])
-                    x1, y1 = float(wp_list[next_idx][0]), float(wp_list[next_idx][1])
-                    seg_dx = x1 - x0; seg_dy = y1 - y0
-                    seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
-                    if seg_len < 1e-6:
-                        lookahead_idx = next_idx
-                        continue
-                    sample_points.append((lookahead_idx, accumulated_dist))
-                    accumulated_dist += seg_len
-                    lookahead_idx = next_idx
-                    if lookahead_idx == wp_last_idx and len(sample_points) > 1:
-                        break  # wrapped full lap
-                
-                # Compute curvature at each sample point (use modulo so indices 0 and n_wp-1 are valid)
-                for sample_idx, sample_dist in sample_points:
-                    i0 = (sample_idx - 1) % n_wp
-                    i1 = sample_idx % n_wp
-                    i2 = (sample_idx + 1) % n_wp
-                    p0 = (float(wp_list[i0][0]), float(wp_list[i0][1]))
-                    p1 = (float(wp_list[i1][0]), float(wp_list[i1][1]))
-                    p2 = (float(wp_list[i2][0]), float(wp_list[i2][1]))
-                    # Compute curvature (3-point method)
-                    v1x = p1[0] - p0[0]; v1y = p1[1] - p0[1]
-                    v2x = p2[0] - p1[0]; v2y = p2[1] - p1[1]
-                    cross = v1x * v2y - v1y * v2x
-                    len1 = (v1x*v1x + v1y*v1y) ** 0.5
-                    len2 = (v2x*v2x + v2y*v2y) ** 0.5
-                    if len1 > 1e-6 and len2 > 1e-6:
-                        avg_len = (len1 + len2) / 2.0
-                        if avg_len > 1e-6:
-                            # Task 3: keep signed curvature (cross2D: left turn > 0, right turn < 0); magnitude for speed formulas
-                            kappa_signed = 2.0 * cross / (len1 * len2 * avg_len)
-                            abs_kappa = abs(kappa_signed)
-                            if abs_kappa > curvature_ahead_max:
-                                curvature_ahead_max = abs_kappa
-                                curvature_ahead_max_signed = kappa_signed  # apex signed kappa
-                            # Apply speed gate formula: v_max = sqrt(a_y_max / (|κ| + ε)); apply safety margin
-                            v_max_at_kappa = curvature_speed_margin * (max_lateral_accel / (abs_kappa + curvature_epsilon)) ** 0.5
-                            if v_max_at_kappa < min_v_max:
-                                min_v_max = v_max_at_kappa
-                
-                # Expose signed curvature at apex for downstream (commit/approach logic)
-                self._curvature_ahead_max_signed = curvature_ahead_max_signed
-                # Apply minimum v_max over horizon
-                curvature_speed_limit = min_v_max
-                # Slow-in for sharp turns: when any significant curvature is ahead, cap speed more aggressively
-                # so we are already slow when the turn tightens (avoids "too fast, didn't turn in time").
-                # Very sharp turns (κ > 0.08): use 74% margin to reduce high CTE (e.g. segment 43 run).
-                if curvature_ahead_max > 0.015:
-                    if curvature_ahead_max > 0.08:
-                        slow_in_margin = 0.74   # Very sharp: stricter so we enter segment 43-type curves slower
-                    elif curvature_ahead_max > 0.05:
-                        slow_in_margin = 0.82
-                    else:
-                        slow_in_margin = 0.88
-                    v_max_slow_in = slow_in_margin * (max_lateral_accel / (curvature_ahead_max + curvature_epsilon)) ** 0.5
-                    if v_max_slow_in < curvature_speed_limit:
-                        curvature_speed_limit = v_max_slow_in
-                curvature_speed_cap = curvature_speed_limit  # Task 4: single curvature-based speed cap
-            except Exception as e:
-                curvature_speed_cap = target_speed
-                pass
-        else:
-            curvature_speed_cap = target_speed
-        
-        # --- CTE-based speed reduction (for MPC speed reference) ---
-        # Generic: no TTL or segment IDs; only |CTE| so we slow when off-line on any track.
-        # When CTE is large, cap target speed so the car can recover instead of running off.
-        if cte_mag_for_speed >= 10.0:
-            # 10m+ CTE: strong decel and hard cap so we don't maintain high speed off-track
-            cte_target_speed = min(3.0, max(0.0, current_speed - 4.0))
-        elif cte_mag_for_speed >= 5.0:
-            # 5-10m CTE: cap speed (was current_speed -> run-off). Cap at 5 m/s so MPC brakes.
-            cte_target_speed = min(5.0, current_speed)
-        elif cte_mag_for_speed >= 3.0:
-            # 3-5m CTE: limit to 5 m/s (earlier recovery, any track)
-            cte_target_speed = 5.0
-        elif cte_mag_for_speed >= 2.0:
-            # 2-3m CTE: limit to 6 m/s
-            cte_target_speed = 6.0
-        elif cte_mag_for_speed >= 1.5:
-            # 1.5-2m CTE: limit to 6 m/s (early intervention)
-            cte_target_speed = 6.0
-        elif cte_mag_for_speed >= 1.0:
-            # 1.0-1.5m CTE: limit to 7 m/s
-            cte_target_speed = 7.0
-        elif cte_mag_for_speed >= 0.5:
-            # 0.5-1.0m CTE: limit to 8 m/s
-            cte_target_speed = 8.0
-        elif cte_mag_for_speed >= cte_stop_threshold:
-            # At 50m+ CTE: aim for very low speed (encourages heavy braking)
-            cte_target_speed = target_speed * 0.1
-        elif cte_mag_for_speed >= cte_slowdown_threshold:
-            # Between 15-50m: aim for 30% of target speed (encourages braking)
-            factor = 0.3
-            cte_target_speed = target_speed * factor
-        elif cte_mag_for_speed >= cte_throttle_reduction_max:
-            # Between 10-15m: linear from 50% to 30% of target speed
-            factor = 0.5 - ((cte_mag_for_speed - cte_throttle_reduction_max) / (cte_slowdown_threshold - cte_throttle_reduction_max)) * 0.2
-            cte_target_speed = target_speed * factor
-        else:
-            # CTE < 0.5m: use full target speed (but still respect max speed limit)
-            cte_target_speed = target_speed
-        
-        # --- Combine CTE and curvature speed limits (take minimum) ---
-        # Task 4: curvature-based speed cap applied here; use single cap from lookahead curvature
-        effective_target_speed = min(cte_target_speed, curvature_speed_cap)
-        
-        # Apply universal max speed limit
-        effective_target_speed = min(effective_target_speed, MAX_SPEED_LIMIT_MS)
-        
-        # --- Slew-rate limit on speed reference (smooth ramps into/out of turns) ---
-        # When CTE is large, allow faster slew-down so the CTE speed cap takes effect quickly (generic run-off fix).
-        dt_slew = _lon_controller.config.mpc_prediction_dt if hasattr(_lon_controller, 'config') else 0.05
-        slew_down_ms = 12.0 if cte_mag_for_speed >= 3.0 else 7.0   # faster ramp-down when off-line
-        slew_up_ms = 5.0     # max speed increase per second
-        if not hasattr(self, '_last_effective_target_speed'):
-            self._last_effective_target_speed = float(effective_target_speed)
-        last_eff = float(self._last_effective_target_speed)
-        effective_target_speed = max(last_eff - slew_down_ms * dt_slew, min(last_eff + slew_up_ms * dt_slew, float(effective_target_speed)))
-        self._last_effective_target_speed = float(effective_target_speed)
-        
-        # --- Build speed reference profile for MPC ---
-        # MPC needs a speed profile over the prediction horizon
-        # Build profile that accounts for curvature and CTE
-        horizon = _lon_controller.config.mpc_prediction_horizon
-        # Build speed reference array (use list, MPC will convert to numpy)
-        v_ref_profile = [float(effective_target_speed)] * horizon
-        
-        # If we have waypoints, build a speed profile that reduces speed for upcoming turns
-        if use_waypoints and wp_list and len(wp_list) >= 2:
-            try:
-                # Build speed profile based on curvature ahead
-                dt = _lon_controller.config.mpc_prediction_dt
-                for k in range(horizon):
-                    # Distance ahead at step k
-                    dist_ahead = current_speed * (k + 1) * dt
-                    
-                    # Find waypoint at this distance
-                    wp_idx = wp_last_idx
+            # To-Do B fallback (kept for compatibility): when mismatch was detected, trust waypoint CTE for speed
+            if getattr(self, '_cte_mismatch_trust_waypoint', False) and getattr(self, '_cte_mismatch_steps_remaining', 0) > 0:
+                cte_mag_for_speed = getattr(self, '_last_waypoint_cte_for_speed', 0.0)
+                self._cte_mismatch_steps_remaining = getattr(self, '_cte_mismatch_steps_remaining', 0) - 1
+                if self._cte_mismatch_steps_remaining <= 0:
+                    self._cte_mismatch_trust_waypoint = False
+            # Universal max speed limit: Reduced for better robustness without elevation data
+            MAX_SPEED_LIMIT_MS = 62.58  # 140 mph in m/s (~225 km/h) for IAC vehicle capability
+            
+            # --- Curvature-based speed gate (from suggestion.md) ---
+            # Formula: v_max(s) = sqrt(a_y_max / (|κ(s)| + ε))
+            # v_ref = min(v_desired, min_{s∈[s_0, s_0+L]} v_max(s))
+            # This ensures vehicle enters turns at appropriate speed (Laguna Seca: see turns early to avoid run-off)
+            curvature_speed_limit = target_speed  # Default: no reduction
+            curvature_ahead_max = 0.0  # Max curvature magnitude over lookahead (for speed limits)
+            curvature_ahead_max_signed = 0.0  # Task 3: signed kappa at apex (left > 0, right < 0) for downstream
+            max_lateral_accel = 8.0  # m/s² (conservative for indoor sim, can be configured)
+            curvature_epsilon = 0.001  # Small epsilon to avoid division by zero
+            curvature_speed_margin = 0.92  # Use 92% of theoretical v_max (generic: less over-braking, less throttle compensation; works for any TTL)
+            
+            if use_waypoints and wp_list and len(wp_list) >= 3:
+                try:
+                    # Compute curvature-based speed limit over MPC horizon (waypoint indices wrap at end of lap)
+                    # Look ahead: ensure we see turns early enough to brake (Laguna Seca Corkscrew/hairpins)
+                    horizon = _lon_controller.config.mpc_prediction_horizon if hasattr(_lon_controller, 'config') else 35
+                    dt_mpc = _lon_controller.config.mpc_prediction_dt if hasattr(_lon_controller, 'config') else 0.05
+                    lookahead_dist = current_speed * horizon * dt_mpc  # Distance over MPC horizon
+                    if lookahead_dist < 10.0:
+                        lookahead_dist = 25.0  # Minimum at very low speed
+                    # At high speed, need enough distance to brake before turn (avoid run-off).
+                    # Braking from v to v_turn at slew_down m/s takes (v - v_turn)/slew_down seconds; distance ~ v * T.
+                    # At 46 m/s, 7 m/s/s slew: need ~5.5 s -> ~250 m to see turn and slow to ~8 m/s for sharp bend.
+                    min_lookahead_for_braking = 85.0   # m when 15 < speed <= 25
+                    if current_speed > 40.0:
+                        min_lookahead_for_braking = 250.0  # m at very high speed: see sharp turn in time (e.g. k=0.1) without capping max speed
+                    elif current_speed > 25.0:
+                        min_lookahead_for_braking = 120.0  # m at high speed
+                    if lookahead_dist < min_lookahead_for_braking and current_speed > 15.0:
+                        lookahead_dist = min_lookahead_for_braking
+                    # When speed is high, use at least 120 m lookahead so sharp bends (e.g. segment 43) are fully seen and we slow in time.
+                    if current_speed > 20.0 and lookahead_dist < 120.0:
+                        lookahead_dist = max(lookahead_dist, 120.0)
+    
+                    lookahead_idx = wp_last_idx
                     accumulated_dist = 0.0
-                    while wp_idx < len(wp_list) - 1 and accumulated_dist < dist_ahead:
-                        x0, y0 = float(wp_list[wp_idx][0]), float(wp_list[wp_idx][1])
-                        x1, y1 = float(wp_list[wp_idx+1][0]), float(wp_list[wp_idx+1][1])
+                    min_v_max = target_speed  # Track minimum v_max over horizon
+                    n_wp = len(wp_list)
+                    
+                    # Sample curvature along horizon; wrap waypoints so near end-of-lap we see the straight after the loop
+                    sample_points = []
+                    while accumulated_dist < lookahead_dist:
+                        next_idx = (lookahead_idx + 1) % n_wp
+                        x0, y0 = float(wp_list[lookahead_idx][0]), float(wp_list[lookahead_idx][1])
+                        x1, y1 = float(wp_list[next_idx][0]), float(wp_list[next_idx][1])
                         seg_dx = x1 - x0; seg_dy = y1 - y0
                         seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
                         if seg_len < 1e-6:
-                            wp_idx += 1
+                            lookahead_idx = next_idx
                             continue
+                        sample_points.append((lookahead_idx, accumulated_dist))
                         accumulated_dist += seg_len
-                        if accumulated_dist < dist_ahead:
-                            wp_idx += 1
+                        lookahead_idx = next_idx
+                        if lookahead_idx == wp_last_idx and len(sample_points) > 1:
+                            break  # wrapped full lap
                     
-                    # Compute curvature at this waypoint and apply speed gate formula
-                    if wp_idx > 0 and wp_idx < len(wp_list) - 1:
-                        p0 = (float(wp_list[wp_idx-1][0]), float(wp_list[wp_idx-1][1]))
-                        p1 = (float(wp_list[wp_idx][0]), float(wp_list[wp_idx][1]))
-                        p2 = (float(wp_list[wp_idx+1][0]), float(wp_list[wp_idx+1][1]))
+                    # Compute curvature at each sample point (use modulo so indices 0 and n_wp-1 are valid)
+                    for sample_idx, sample_dist in sample_points:
+                        i0 = (sample_idx - 1) % n_wp
+                        i1 = sample_idx % n_wp
+                        i2 = (sample_idx + 1) % n_wp
+                        p0 = (float(wp_list[i0][0]), float(wp_list[i0][1]))
+                        p1 = (float(wp_list[i1][0]), float(wp_list[i1][1]))
+                        p2 = (float(wp_list[i2][0]), float(wp_list[i2][1]))
+                        # Compute curvature (3-point method)
                         v1x = p1[0] - p0[0]; v1y = p1[1] - p0[1]
                         v2x = p2[0] - p1[0]; v2y = p2[1] - p1[1]
                         cross = v1x * v2y - v1y * v2x
@@ -970,454 +874,600 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         if len1 > 1e-6 and len2 > 1e-6:
                             avg_len = (len1 + len2) / 2.0
                             if avg_len > 1e-6:
-                                abs_kappa = abs(2.0 * cross / (len1 * len2 * avg_len))
-                                # Apply speed gate formula with same safety margin as curvature_speed_limit
+                                # Task 3: keep signed curvature (cross2D: left turn > 0, right turn < 0); magnitude for speed formulas
+                                kappa_signed = 2.0 * cross / (len1 * len2 * avg_len)
+                                abs_kappa = abs(kappa_signed)
+                                if abs_kappa > curvature_ahead_max:
+                                    curvature_ahead_max = abs_kappa
+                                    curvature_ahead_max_signed = kappa_signed  # apex signed kappa
+                                # Apply speed gate formula: v_max = sqrt(a_y_max / (|κ| + ε)); apply safety margin
                                 v_max_at_kappa = curvature_speed_margin * (max_lateral_accel / (abs_kappa + curvature_epsilon)) ** 0.5
-                                # Use minimum of target speed and curvature-limited speed
-                                v_ref_profile[k] = min(v_ref_profile[k], v_max_at_kappa)
-            except Exception as e:
-                # If profile building fails, use constant speed
-                pass
-        
-        # Task 4: enforce curvature-based speed cap on entire profile
-        v_ref_profile = [min(v, curvature_speed_cap) for v in v_ref_profile]
-        # Apply universal max speed limit to profile
-        v_ref_profile = [min(v, MAX_SPEED_LIMIT_MS) for v in v_ref_profile]
-        
-        # --- Build grade profile for longitudinal MPC (if 3D waypoints available) ---
-        grade_profile = None
-        if use_waypoints and wp_list and len(wp_list) >= 2:
-            # Check if waypoints are 3D
-            is_3d_waypoints = len(wp_list[0]) >= 3
-            if is_3d_waypoints:
-                # Build grade profile for longitudinal MPC
-                horizon = _lon_controller.config.mpc_prediction_horizon
-                dt_mpc = _lon_controller.config.mpc_prediction_dt
-                grade_profile = []
-                for k in range(horizon):
-                    # Distance ahead at step k
-                    dist_ahead = current_speed * (k + 1) * dt_mpc
-                    # Find waypoint segment at this distance
-                    wp_idx = wp_last_idx
-                    accumulated_dist = 0.0
-                    while wp_idx < len(wp_list) - 1 and accumulated_dist < dist_ahead:
-                        wp0 = wp_list[wp_idx]
-                        wp1 = wp_list[wp_idx + 1]
-                        dx = float(wp1[0]) - float(wp0[0])
-                        dy = float(wp1[1]) - float(wp0[1])
-                        dz = float(wp1[2]) - float(wp0[2]) if len(wp1) >= 3 and len(wp0) >= 3 else 0.0
-                        seg_len = (dx*dx + dy*dy + dz*dz) ** 0.5
-                        if seg_len < 1e-6:
-                            wp_idx += 1
-                            continue
-                        accumulated_dist += seg_len
-                        if accumulated_dist < dist_ahead:
-                            wp_idx += 1
-                    # Compute grade from segment
-                    if wp_idx < len(wp_list) - 1:
-                        wp0 = wp_list[wp_idx]
-                        wp1 = wp_list[wp_idx + 1]
-                        dx = float(wp1[0]) - float(wp0[0])
-                        dy = float(wp1[1]) - float(wp0[1])
-                        dz = float(wp1[2]) - float(wp0[2]) if len(wp1) >= 3 and len(wp0) >= 3 else 0.0
-                        seg_len_xy = (dx*dx + dy*dy) ** 0.5
-                        if seg_len_xy > 1e-6:
-                            grade = math.atan2(dz, seg_len_xy)
+                                if v_max_at_kappa < min_v_max:
+                                    min_v_max = v_max_at_kappa
+                    
+                    # Expose signed curvature at apex for downstream (commit/approach logic)
+                    self._curvature_ahead_max_signed = curvature_ahead_max_signed
+                    # Apply minimum v_max over horizon
+                    curvature_speed_limit = min_v_max
+                    # Slow-in for sharp turns: when any significant curvature is ahead, cap speed more aggressively
+                    # so we are already slow when the turn tightens (avoids "too fast, didn't turn in time").
+                    # Very sharp turns (κ > 0.08): use 74% margin to reduce high CTE (e.g. segment 43 run).
+                    if curvature_ahead_max > 0.015:
+                        if curvature_ahead_max > 0.08:
+                            slow_in_margin = 0.74   # Very sharp: stricter so we enter segment 43-type curves slower
+                        elif curvature_ahead_max > 0.05:
+                            slow_in_margin = 0.82
+                        else:
+                            slow_in_margin = 0.88
+                        v_max_slow_in = slow_in_margin * (max_lateral_accel / (curvature_ahead_max + curvature_epsilon)) ** 0.5
+                        if v_max_slow_in < curvature_speed_limit:
+                            curvature_speed_limit = v_max_slow_in
+                    curvature_speed_cap = curvature_speed_limit  # Task 4: single curvature-based speed cap
+                except Exception as e:
+                    curvature_speed_cap = target_speed
+                    pass
+            else:
+                curvature_speed_cap = target_speed
+            
+            # --- CTE-based speed reduction (for MPC speed reference) ---
+            # Generic: no TTL or segment IDs; only |CTE| so we slow when off-line on any track.
+            # When CTE is large, cap target speed so the car can recover instead of running off.
+            if cte_mag_for_speed >= 10.0:
+                # 10m+ CTE: strong decel and hard cap so we don't maintain high speed off-track
+                cte_target_speed = min(3.0, max(0.0, current_speed - 4.0))
+            elif cte_mag_for_speed >= 5.0:
+                # 5-10m CTE: cap speed (was current_speed -> run-off). Cap at 5 m/s so MPC brakes.
+                cte_target_speed = min(5.0, current_speed)
+            elif cte_mag_for_speed >= 3.0:
+                # 3-5m CTE: limit to 5 m/s (earlier recovery, any track)
+                cte_target_speed = 5.0
+            elif cte_mag_for_speed >= 2.0:
+                # 2-3m CTE: limit to 6 m/s
+                cte_target_speed = 6.0
+            elif cte_mag_for_speed >= 1.5:
+                # 1.5-2m CTE: limit to 6 m/s (early intervention)
+                cte_target_speed = 6.0
+            elif cte_mag_for_speed >= 1.0:
+                # 1.0-1.5m CTE: limit to 7 m/s
+                cte_target_speed = 7.0
+            elif cte_mag_for_speed >= 0.5:
+                # 0.5-1.0m CTE: limit to 8 m/s
+                cte_target_speed = 8.0
+            elif cte_mag_for_speed >= cte_stop_threshold:
+                # At 50m+ CTE: aim for very low speed (encourages heavy braking)
+                cte_target_speed = target_speed * 0.1
+            elif cte_mag_for_speed >= cte_slowdown_threshold:
+                # Between 15-50m: aim for 30% of target speed (encourages braking)
+                factor = 0.3
+                cte_target_speed = target_speed * factor
+            elif cte_mag_for_speed >= cte_throttle_reduction_max:
+                # Between 10-15m: linear from 50% to 30% of target speed
+                factor = 0.5 - ((cte_mag_for_speed - cte_throttle_reduction_max) / (cte_slowdown_threshold - cte_throttle_reduction_max)) * 0.2
+                cte_target_speed = target_speed * factor
+            else:
+                # CTE < 0.5m: use full target speed (but still respect max speed limit)
+                cte_target_speed = target_speed
+            
+            # --- Combine CTE and curvature speed limits (take minimum) ---
+            # Task 4: curvature-based speed cap applied here; use single cap from lookahead curvature
+            effective_target_speed = min(cte_target_speed, curvature_speed_cap)
+            
+            # Apply universal max speed limit
+            effective_target_speed = min(effective_target_speed, MAX_SPEED_LIMIT_MS)
+            
+            # --- Slew-rate limit on speed reference (smooth ramps into/out of turns) ---
+            # When CTE is large, allow faster slew-down so the CTE speed cap takes effect quickly (generic run-off fix).
+            dt_slew = _lon_controller.config.mpc_prediction_dt if hasattr(_lon_controller, 'config') else 0.05
+            slew_down_ms = 12.0 if cte_mag_for_speed >= 3.0 else 7.0   # faster ramp-down when off-line
+            slew_up_ms = 5.0     # max speed increase per second
+            if not hasattr(self, '_last_effective_target_speed'):
+                self._last_effective_target_speed = float(effective_target_speed)
+            last_eff = float(self._last_effective_target_speed)
+            effective_target_speed = max(last_eff - slew_down_ms * dt_slew, min(last_eff + slew_up_ms * dt_slew, float(effective_target_speed)))
+            self._last_effective_target_speed = float(effective_target_speed)
+            
+            # --- Build speed reference profile for MPC ---
+            # MPC needs a speed profile over the prediction horizon
+            # Build profile that accounts for curvature and CTE
+            horizon = _lon_controller.config.mpc_prediction_horizon
+            # Build speed reference array (use list, MPC will convert to numpy)
+            v_ref_profile = [float(effective_target_speed)] * horizon
+            
+            # If we have waypoints, build a speed profile that reduces speed for upcoming turns
+            if use_waypoints and wp_list and len(wp_list) >= 2:
+                try:
+                    # Build speed profile based on curvature ahead
+                    dt = _lon_controller.config.mpc_prediction_dt
+                    for k in range(horizon):
+                        # Distance ahead at step k
+                        dist_ahead = current_speed * (k + 1) * dt
+                        
+                        # Find waypoint at this distance
+                        wp_idx = wp_last_idx
+                        accumulated_dist = 0.0
+                        while wp_idx < len(wp_list) - 1 and accumulated_dist < dist_ahead:
+                            x0, y0 = float(wp_list[wp_idx][0]), float(wp_list[wp_idx][1])
+                            x1, y1 = float(wp_list[wp_idx+1][0]), float(wp_list[wp_idx+1][1])
+                            seg_dx = x1 - x0; seg_dy = y1 - y0
+                            seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                            if seg_len < 1e-6:
+                                wp_idx += 1
+                                continue
+                            accumulated_dist += seg_len
+                            if accumulated_dist < dist_ahead:
+                                wp_idx += 1
+                        
+                        # Compute curvature at this waypoint and apply speed gate formula
+                        if wp_idx > 0 and wp_idx < len(wp_list) - 1:
+                            p0 = (float(wp_list[wp_idx-1][0]), float(wp_list[wp_idx-1][1]))
+                            p1 = (float(wp_list[wp_idx][0]), float(wp_list[wp_idx][1]))
+                            p2 = (float(wp_list[wp_idx+1][0]), float(wp_list[wp_idx+1][1]))
+                            v1x = p1[0] - p0[0]; v1y = p1[1] - p0[1]
+                            v2x = p2[0] - p1[0]; v2y = p2[1] - p1[1]
+                            cross = v1x * v2y - v1y * v2x
+                            len1 = (v1x*v1x + v1y*v1y) ** 0.5
+                            len2 = (v2x*v2x + v2y*v2y) ** 0.5
+                            if len1 > 1e-6 and len2 > 1e-6:
+                                avg_len = (len1 + len2) / 2.0
+                                if avg_len > 1e-6:
+                                    abs_kappa = abs(2.0 * cross / (len1 * len2 * avg_len))
+                                    # Apply speed gate formula with same safety margin as curvature_speed_limit
+                                    v_max_at_kappa = curvature_speed_margin * (max_lateral_accel / (abs_kappa + curvature_epsilon)) ** 0.5
+                                    # Use minimum of target speed and curvature-limited speed
+                                    v_ref_profile[k] = min(v_ref_profile[k], v_max_at_kappa)
+                except Exception as e:
+                    # If profile building fails, use constant speed
+                    pass
+            
+            # Task 4: enforce curvature-based speed cap on entire profile
+            v_ref_profile = [min(v, curvature_speed_cap) for v in v_ref_profile]
+            # Apply universal max speed limit to profile
+            v_ref_profile = [min(v, MAX_SPEED_LIMIT_MS) for v in v_ref_profile]
+            
+            # --- Build grade profile for longitudinal MPC (if 3D waypoints available) ---
+            grade_profile = None
+            if use_waypoints and wp_list and len(wp_list) >= 2:
+                # Check if waypoints are 3D
+                is_3d_waypoints = len(wp_list[0]) >= 3
+                if is_3d_waypoints:
+                    # Build grade profile for longitudinal MPC
+                    horizon = _lon_controller.config.mpc_prediction_horizon
+                    dt_mpc = _lon_controller.config.mpc_prediction_dt
+                    grade_profile = []
+                    for k in range(horizon):
+                        # Distance ahead at step k
+                        dist_ahead = current_speed * (k + 1) * dt_mpc
+                        # Find waypoint segment at this distance
+                        wp_idx = wp_last_idx
+                        accumulated_dist = 0.0
+                        while wp_idx < len(wp_list) - 1 and accumulated_dist < dist_ahead:
+                            wp0 = wp_list[wp_idx]
+                            wp1 = wp_list[wp_idx + 1]
+                            dx = float(wp1[0]) - float(wp0[0])
+                            dy = float(wp1[1]) - float(wp0[1])
+                            dz = float(wp1[2]) - float(wp0[2]) if len(wp1) >= 3 and len(wp0) >= 3 else 0.0
+                            seg_len = (dx*dx + dy*dy + dz*dz) ** 0.5
+                            if seg_len < 1e-6:
+                                wp_idx += 1
+                                continue
+                            accumulated_dist += seg_len
+                            if accumulated_dist < dist_ahead:
+                                wp_idx += 1
+                        # Compute grade from segment
+                        if wp_idx < len(wp_list) - 1:
+                            wp0 = wp_list[wp_idx]
+                            wp1 = wp_list[wp_idx + 1]
+                            dx = float(wp1[0]) - float(wp0[0])
+                            dy = float(wp1[1]) - float(wp0[1])
+                            dz = float(wp1[2]) - float(wp0[2]) if len(wp1) >= 3 and len(wp0) >= 3 else 0.0
+                            seg_len_xy = (dx*dx + dy*dy) ** 0.5
+                            if seg_len_xy > 1e-6:
+                                grade = math.atan2(dz, seg_len_xy)
+                            else:
+                                grade = 0.0
                         else:
                             grade = 0.0
-                    else:
-                        grade = 0.0
-                    grade_profile.append(grade)
-                grade_profile = np.array(grade_profile, dtype=np.float64)
-        
-        # --- Use MPC for throttle/brake control ---
-        # Get current acceleration (estimate from speed if not available)
-        dt = simulation().timestep
-        current_accel = 0.0
-        if hasattr(self, '_prev_speed_mpc'):
-            current_accel = (current_speed - self._prev_speed_mpc) / dt
-            current_accel = max(-15.0, min(20.0, current_accel))  # Clamp to reasonable range
-        self._prev_speed_mpc = current_speed
-        
-        # Build vehicle state for MPC
-        vehicle_state_mpc = {
-            'speed': current_speed,
-            'acceleration': current_accel,
-            'gear': getattr(self, 'gear', 0) if manage_gears and hasattr(self, 'setGear') else None
-        }
-        
-        # Compute throttle/brake using MPC (with grade compensation if available)
-        try:
-            throttle_mpc, brake_mpc = _lon_controller.run_step(
-                vehicle_state_mpc,
-                v_ref_profile,
-                None,  # curvature_profile not used in simplified model
-                grade_profile  # Road grade profile for gravity compensation
-            )
-            throttle_mpc = float(throttle_mpc)
-            brake_mpc = float(brake_mpc)
-        except Exception as ex:
-            print(f"[FollowRacingLineMPCBehavior] MPC longitudinal error: {ex}, using fallback")
-            # Fallback: simple proportional control
-            speed_error = effective_target_speed - current_speed
-            if speed_error > 0:
-                throttle_mpc = min(1.0, speed_error * 0.1)
-                brake_mpc = 0.0
+                        grade_profile.append(grade)
+                    grade_profile = np.array(grade_profile, dtype=np.float64)
+            if _bt is not None:
+                _bt.end_section('waypoint_speed_grade')
+            
+            # --- Use MPC for throttle/brake control ---
+            # Get current acceleration (estimate from speed if not available)
+            dt = simulation().timestep
+            current_accel = 0.0
+            if hasattr(self, '_prev_speed_mpc'):
+                current_accel = (current_speed - self._prev_speed_mpc) / dt
+                current_accel = max(-15.0, min(20.0, current_accel))  # Clamp to reasonable range
+            self._prev_speed_mpc = current_speed
+            
+            # Build vehicle state for MPC
+            vehicle_state_mpc = {
+                'speed': current_speed,
+                'acceleration': current_accel,
+                'gear': getattr(self, 'gear', 0) if manage_gears and hasattr(self, 'setGear') else None
+            }
+            
+            # Compute throttle/brake using MPC (with grade compensation if available)
+            try:
+                throttle_mpc, brake_mpc = _lon_controller.run_step(
+                    vehicle_state_mpc,
+                    v_ref_profile,
+                    None,  # curvature_profile not used in simplified model
+                    grade_profile  # Road grade profile for gravity compensation
+                )
+                throttle_mpc = float(throttle_mpc)
+                brake_mpc = float(brake_mpc)
+            except Exception as ex:
+                print(f"[FollowRacingLineMPCBehavior] MPC longitudinal error: {ex}, using fallback")
+                # Fallback: simple proportional control
+                speed_error = effective_target_speed - current_speed
+                if speed_error > 0:
+                    throttle_mpc = min(1.0, speed_error * 0.1)
+                    brake_mpc = 0.0
+                else:
+                    throttle_mpc = 0.0
+                    brake_mpc = min(1.0, abs(speed_error) * 0.1)
+            
+            # Use MPC outputs (will be processed by CTE-aware safety envelope below)
+            throttle_pid = throttle_mpc  # Keep variable name for compatibility with existing code
+            
+            # -------------------------------
+            # CTE-aware longitudinal safety
+            # -------------------------------
+    
+            # Hysteresis state tracking
+            if not hasattr(self, '_was_cte_large'):
+                self._was_cte_large = False
+    
+            # Enter large-CTE mode at 4.5m, exit at 3.5m (earlier intervention, generic)
+            if cte_mag_for_speed >= 4.5:
+                self._was_cte_large = True
+            elif cte_mag_for_speed < 3.5:
+                self._was_cte_large = False
+    
+            SPEED_THRESHOLD_FOR_BRAKE = 2.0
+            MIN_THROTTLE_WHEN_STOPPED = 0.10
+    
+            # Output knobs (generic: no TTL/segment; avoid run-off by braking sooner when |CTE| is large)
+            MAX_BRAKE_NORMAL = 0.25        # MPC brake cap when CTE is small
+            MAX_BRAKE_LARGE_CTE = 0.65     # 4.5-10m CTE: allow stronger brake to recover
+            MAX_BRAKE_VERY_LARGE = 0.90    # 10m+ CTE: strong brake, still not instant 1.0
+            BRAKE_SLEW = 0.15              # per step
+    
+            cte_brake = 0.0
+            throttle_override = None
+    
+            very_large = (cte_mag_for_speed >= 10.0)
+            large = (self._was_cte_large or cte_mag_for_speed >= 4.5)
+    
+            if very_large:
+                # Far off-track: strong brake so we don't maintain speed (generic fix for run-off)
+                if current_speed > 4.0:
+                    throttle_override = 0.0
+                    cte_brake = 0.50
+                elif current_speed > SPEED_THRESHOLD_FOR_BRAKE:
+                    throttle_override = 0.0
+                    cte_brake = 0.30
+                else:
+                    throttle_override = MIN_THROTTLE_WHEN_STOPPED
+                    cte_brake = 0.0
+            elif large:
+                # 4.5-10m CTE: meaningful brake at higher speed so speed comes down (was too light)
+                if current_speed > 8.0:
+                    throttle_override = 0.0
+                    cte_brake = 0.25
+                elif current_speed > 5.0:
+                    throttle_override = 0.0
+                    cte_brake = 0.15
+                elif current_speed > 3.0:
+                    throttle_override = 0.0
+                    cte_brake = 0.05
+                else:
+                    throttle_override = None
+                    cte_brake = 0.0
+    
+            # Apply throttle override if set
+            if throttle_override is not None:
+                throttle_mpc = throttle_override
+    
+            # -------------------------------
+            # Brake cap + merge + SLEW-LIMIT (drop-in replacement)
+            # -------------------------------
+    
+            # Compute a brake cap depending on CTE regime
+            if very_large:
+                brake_cap = MAX_BRAKE_VERY_LARGE
+            elif large:
+                brake_cap = MAX_BRAKE_LARGE_CTE
             else:
-                throttle_mpc = 0.0
-                brake_mpc = min(1.0, abs(speed_error) * 0.1)
-        
-        # Use MPC outputs (will be processed by CTE-aware safety envelope below)
-        throttle_pid = throttle_mpc  # Keep variable name for compatibility with existing code
-        
-        # -------------------------------
-        # CTE-aware longitudinal safety
-        # -------------------------------
-
-        # Hysteresis state tracking
-        if not hasattr(self, '_was_cte_large'):
-            self._was_cte_large = False
-
-        # Enter large-CTE mode at 4.5m, exit at 3.5m (earlier intervention, generic)
-        if cte_mag_for_speed >= 4.5:
-            self._was_cte_large = True
-        elif cte_mag_for_speed < 3.5:
-            self._was_cte_large = False
-
-        SPEED_THRESHOLD_FOR_BRAKE = 2.0
-        MIN_THROTTLE_WHEN_STOPPED = 0.10
-
-        # Output knobs (generic: no TTL/segment; avoid run-off by braking sooner when |CTE| is large)
-        MAX_BRAKE_NORMAL = 0.25        # MPC brake cap when CTE is small
-        MAX_BRAKE_LARGE_CTE = 0.65     # 4.5-10m CTE: allow stronger brake to recover
-        MAX_BRAKE_VERY_LARGE = 0.90    # 10m+ CTE: strong brake, still not instant 1.0
-        BRAKE_SLEW = 0.15              # per step
-
-        cte_brake = 0.0
-        throttle_override = None
-
-        very_large = (cte_mag_for_speed >= 10.0)
-        large = (self._was_cte_large or cte_mag_for_speed >= 4.5)
-
-        if very_large:
-            # Far off-track: strong brake so we don't maintain speed (generic fix for run-off)
-            if current_speed > 4.0:
-                throttle_override = 0.0
-                cte_brake = 0.50
-            elif current_speed > SPEED_THRESHOLD_FOR_BRAKE:
-                throttle_override = 0.0
-                cte_brake = 0.30
-            else:
-                throttle_override = MIN_THROTTLE_WHEN_STOPPED
-                cte_brake = 0.0
-        elif large:
-            # 4.5-10m CTE: meaningful brake at higher speed so speed comes down (was too light)
-            if current_speed > 8.0:
-                throttle_override = 0.0
-                cte_brake = 0.25
-            elif current_speed > 5.0:
-                throttle_override = 0.0
-                cte_brake = 0.15
-            elif current_speed > 3.0:
-                throttle_override = 0.0
-                cte_brake = 0.05
-            else:
-                throttle_override = None
-                cte_brake = 0.0
-
-        # Apply throttle override if set
-        if throttle_override is not None:
-            throttle_mpc = throttle_override
-
-        # -------------------------------
-        # Brake cap + merge + SLEW-LIMIT (drop-in replacement)
-        # -------------------------------
-
-        # Compute a brake cap depending on CTE regime
-        if very_large:
-            brake_cap = MAX_BRAKE_VERY_LARGE
-        elif large:
-            brake_cap = MAX_BRAKE_LARGE_CTE
-        else:
-            brake_cap = MAX_BRAKE_NORMAL
-
-        # Merge CTE brake + MPC brake (both capped)
-        raw_brake = max(float(cte_brake), float(brake_mpc))
-        raw_brake = min(float(raw_brake), float(brake_cap))
-
-        # ---- Guard: do not "slam brake" at (near) standstill ----
-        STOP_SPEED = 0.6  # m/s (tune: 0.3~1.0)
-        if current_speed <= STOP_SPEED:
-            raw_brake = 0.0
-
-        # ---- Slew-limit brake to avoid spikes (apply slower, release faster) ----
-        BRAKE_SLEW_UP = 0.12     # max increase per step (0..1 scale)
-        BRAKE_SLEW_DOWN = 0.20   # max decrease per step
-
-        if not hasattr(self, "_last_raw_brake"):
+                brake_cap = MAX_BRAKE_NORMAL
+    
+            # Merge CTE brake + MPC brake (both capped)
+            raw_brake = max(float(cte_brake), float(brake_mpc))
+            raw_brake = min(float(raw_brake), float(brake_cap))
+    
+            # ---- Guard: do not "slam brake" at (near) standstill ----
+            STOP_SPEED = 0.6  # m/s (tune: 0.3~1.0)
+            if current_speed <= STOP_SPEED:
+                raw_brake = 0.0
+    
+            # ---- Slew-limit brake to avoid spikes (apply slower, release faster) ----
+            BRAKE_SLEW_UP = 0.12     # max increase per step (0..1 scale)
+            BRAKE_SLEW_DOWN = 0.20   # max decrease per step
+    
+            if not hasattr(self, "_last_raw_brake"):
+                self._last_raw_brake = float(raw_brake)
+    
+            prev_brake = float(self._last_raw_brake)
+            db = float(raw_brake) - prev_brake
+            limited = False
+    
+            if db > BRAKE_SLEW_UP:
+                raw_brake = prev_brake + BRAKE_SLEW_UP
+                limited = True
+            elif db < -BRAKE_SLEW_DOWN:
+                raw_brake = prev_brake - BRAKE_SLEW_DOWN
+                limited = True
+    
+            raw_brake = max(0.0, min(float(brake_cap), float(raw_brake)))
             self._last_raw_brake = float(raw_brake)
-
-        prev_brake = float(self._last_raw_brake)
-        db = float(raw_brake) - prev_brake
-        limited = False
-
-        if db > BRAKE_SLEW_UP:
-            raw_brake = prev_brake + BRAKE_SLEW_UP
-            limited = True
-        elif db < -BRAKE_SLEW_DOWN:
-            raw_brake = prev_brake - BRAKE_SLEW_DOWN
-            limited = True
-
-        raw_brake = max(0.0, min(float(brake_cap), float(raw_brake)))
-        self._last_raw_brake = float(raw_brake)
-        final_brake = max(0.0, min(1.0, raw_brake))
-
-        # --- Lateral Control (MPC) ---
-        # Build vehicle state for MPC
-        vehicle_state = {
-            'x': px,
-            'y': py,
-            'yaw': car_heading if car_heading is not None else 0.0,
-            'speed': current_speed,
-        }
-
-        # Add gear information for MPC (check before gear change logic)
-        if manage_gears and hasattr(self, 'setGear'):
-            current_gear = getattr(self, 'gear', 0)
-            vehicle_state['gear'] = current_gear
-
-        # Add optional yaw_rate if available
-        if hasattr(self, 'angularVelocity') and self.angularVelocity is not None:
+            final_brake = max(0.0, min(1.0, raw_brake))
+    
+            # --- Lateral Control (MPC) ---
+            # Build vehicle state for MPC
+            vehicle_state = {
+                'x': px,
+                'y': py,
+                'yaw': car_heading if car_heading is not None else 0.0,
+                'speed': current_speed,
+            }
+    
+            # Add gear information for MPC (check before gear change logic)
+            if manage_gears and hasattr(self, 'setGear'):
+                current_gear = getattr(self, 'gear', 0)
+                vehicle_state['gear'] = current_gear
+    
+            # Add optional yaw_rate if available
+            if hasattr(self, 'angularVelocity') and self.angularVelocity is not None:
+                try:
+                    vehicle_state['yaw_rate'] = float(self.angularVelocity.z) if hasattr(self.angularVelocity, 'z') else 0.0
+                except Exception:
+                    pass
+    
+            # Try to read steering feedback from ControlDesk
+            # This provides actual steering angle (delta) for MPC state
+            sim = simulation()
+            if hasattr(sim, 'mpc_config') and sim.mpc_config:
+                from scenic.domains.racing.mpc.io_adapter import read_state_from_controldesk
+                try:
+                    cd_state = read_state_from_controldesk(sim, self)
+                    if 'steer_actual' in cd_state:
+                        vehicle_state['steer_actual'] = cd_state['steer_actual']   # match the same sign convention as command
+    
+                except Exception:
+                    # If reading fails, MPC will use previous state estimate
+                    pass
+    
+            # Convert waypoints to list of tuples for MPC (preserve 3D if available)
+            waypoints_for_mpc = None
+            if wp_list and len(wp_list) >= 2:
+                # Check if waypoints are 3D
+                is_3d_waypoints = len(wp_list[0]) >= 3
+                if is_3d_waypoints:
+                    waypoints_for_mpc = [(float(wp[0]), float(wp[1]), float(wp[2])) for wp in wp_list]
+                else:
+                    waypoints_for_mpc = [(float(wp[0]), float(wp[1])) for wp in wp_list]
+    
+            # Compute steering using MPC
+            # Pass CTE magnitude for adaptive waypoint search
             try:
-                vehicle_state['yaw_rate'] = float(self.angularVelocity.z) if hasattr(self.angularVelocity, 'z') else 0.0
-            except Exception:
-                pass
-
-        # Try to read steering feedback from ControlDesk
-        # This provides actual steering angle (delta) for MPC state
-        sim = simulation()
-        if hasattr(sim, 'mpc_config') and sim.mpc_config:
-            from scenic.domains.racing.mpc.io_adapter import read_state_from_controldesk
-            try:
-                cd_state = read_state_from_controldesk(sim, self)
-                if 'steer_actual' in cd_state:
-                    vehicle_state['steer_actual'] = cd_state['steer_actual']   # match the same sign convention as command
-
-            except Exception:
-                # If reading fails, MPC will use previous state estimate
-                pass
-
-        # Convert waypoints to list of tuples for MPC (preserve 3D if available)
-        waypoints_for_mpc = None
-        if wp_list and len(wp_list) >= 2:
-            # Check if waypoints are 3D
-            is_3d_waypoints = len(wp_list[0]) >= 3
-            if is_3d_waypoints:
-                waypoints_for_mpc = [(float(wp[0]), float(wp[1]), float(wp[2])) for wp in wp_list]
-            else:
-                waypoints_for_mpc = [(float(wp[0]), float(wp[1])) for wp in wp_list]
-
-        # Compute steering using MPC
-        # Pass CTE magnitude for adaptive waypoint search
-        try:
-            steer_mpc = _lat_controller.run_step(
-                vehicle_state,
-                waypoints_for_mpc,
-                None,  # MPC selects segments dynamically
-                cte_magnitude=cte_mag_for_speed,
-                v_ref_profile=v_ref_profile,  # Same trajectory as longitudinal: smooth turns, avoid over-steer then correct
-                curvature_ahead_max=curvature_ahead_max  # For deadzone eligibility: never deadzone in moderate curvature (curv_ahead_max < curv_deadzone_max)
-            )
-            steer_mpc = float(steer_mpc)
-
-        except Exception as e:
-            print(f"[FollowRacingLineMPCBehavior] MPC error: {e}, using fallback")
-            steer_mpc = 0.0
-        # Keep waypoint-based CTE (e_y_mpc) for mismatch fallback (used when behavior CTE disagrees)
-        if getattr(_lat_controller, '_log_mpc_e_y', None) is not None:
-            self._last_waypoint_cte_for_speed = abs(getattr(_lat_controller, '_log_mpc_e_y'))
-
-        # --- CTE-aware safety envelope (for throttle/brake) ---
-        # To-Do D: Use projection-based CTE (same geometry as MPCC). cte_to_waypoints = MPCC e_y from chosen segment.
-        cte = float(getattr(_lat_controller, 'last_e_y', getattr(_lat_controller, '_log_mpc_e_y', 0.0)))
-        # To-Do E: If mismatch triggers, force cte := cte_to_waypoints for this tick and print loud warning (fatal guard).
-        _md = getattr(_lat_controller, '_log_match_dist_m', None)
-        _ey = getattr(_lat_controller, '_log_mpc_e_y', None)
-        _legacy = getattr(self, '_legacy_cte_this_tick', None)
-        if _legacy is not None and _md is not None and _ey is not None:
-            if abs(_legacy) > 2.0 and _md < 1.0 and abs(_ey) < 0.5:
-                print(f"[FollowRacingLineMPC] *** CTE MISMATCH (fatal guard): legacy_cte={_legacy:.2f}m, match_dist_m={_md:.3f}m, e_y_mpc={_ey:.3f}m -> forcing cte_behavior := cte_to_waypoints for this tick")
-                cte = float(_ey)
-        cte_mag = abs(cte)
-        # One ff_log line per MPC tick (feedforward + command side: u_norm, delta_cmd_rad post-clamp, current_delta_max)
-        _lc_ff = _lat_controller
-        _seg_id = getattr(_lc_ff, '_log_segment_id', None)
-        _v_ff = getattr(_lc_ff, '_log_v', None)
-        _kap_ff = getattr(_lc_ff, '_log_kappa_ref_at_proj', None)
-        _dff = getattr(_lc_ff, '_log_delta_ff', None)
-        _dfb = getattr(_lc_ff, '_log_delta_fb', None)
-        _dtot = getattr(_lc_ff, '_log_delta_total', None)
-        _dcmd = getattr(_lc_ff, '_log_delta_cmd_rad', None)
-        _dmax = getattr(_lc_ff, '_log_current_delta_max', None)
-        _sraw = getattr(_lc_ff, '_log_steer_mpc_raw', None)
-        _slpf = getattr(_lc_ff, '_log_steer_after_lpf', None)
-        _seg_s = str(_seg_id) if _seg_id is not None else "?"
-        _v_s = f"{_v_ff:.3f}" if _v_ff is not None else "?"
-        _kap_s = f"{_kap_ff:.4f}" if _kap_ff is not None else "?"
-        _dff_s = f"{_dff:.4f}" if _dff is not None else "?"
-        _dfb_s = f"{_dfb:.4f}" if _dfb is not None else "?"
-        _dtot_s = f"{_dtot:.4f}" if _dtot is not None else "?"
-        _dcmd_s = f"{_dcmd:.4f}" if _dcmd is not None else "?"
-        _dmax_s = f"{_dmax:.4f}" if _dmax is not None else "?"
-        _sraw_s = f"{_sraw:.3f}" if _sraw is not None else "?"
-        _slpf_s = f"{_slpf:.3f}" if _slpf is not None else "?"
-        print(f"[FollowRacingLineMPC] ff_log segment_id={_seg_s} v={_v_s} kappa_ref_at_proj={_kap_s} delta_ff={_dff_s} delta_fb={_dfb_s} delta_total={_dtot_s} delta_cmd_rad={_dcmd_s} current_delta_max={_dmax_s} u_norm_mpc={_sraw_s} u_norm_lpf={_slpf_s}")
-        # Task 1: signed curvature sanity log every tick (if you never see negative curvature on a known right-hand portion, bug confirmed)
-        _kappa_ahead = getattr(_lc_ff, '_log_kappa_ref_ahead_signed', None)
-        _s_ref = getattr(_lc_ff, '_log_s_ref', None)
-        _kappa_ahead_s = f"{_kappa_ahead:.4f}" if _kappa_ahead is not None else "?"
-        _s_ref_s = f"{_s_ref:.3f}" if _s_ref is not None else "?"
-        print(f"[FollowRacingLineMPC] CURV_SANITY kappa_ref_at_proj={_kap_s} kappa_ref_ahead_signed={_kappa_ahead_s} segment_id={_seg_s} s_ref={_s_ref_s}")
-        # Heading diff for steering conditioning (segment direction vs vehicle heading, wrapped to [-pi, pi])
-        heading_diff = 0.0
-        if car_heading is not None and use_waypoints and wp_list and len(wp_list) >= 2 and wp_last_idx < len(wp_list) - 1:
-            x0, y0 = float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1])
-            x1, y1 = float(wp_list[wp_last_idx+1][0]), float(wp_list[wp_last_idx+1][1])
-            seg_heading = math.atan2(y1 - y0, x1 - x0)
-            heading_diff = math.atan2(math.sin(seg_heading - car_heading), math.cos(seg_heading - car_heading))
-        local_throttle_limit = throttle_limit
-        final_brake = 0.0
-
-        # Plan: steering = road wheel angle (rad). Single source of truth delta_max (racing.constants).
-        # Progressive throttle reduction based on CTE magnitude
-        if cte_mag >= cte_stop_threshold:
-            local_throttle_limit = 0.0
-            final_brake = 1.0
-            steer_mpc = (-0.5 * DELTA_MAX_RAD) if cte > 0 else (0.5 * DELTA_MAX_RAD)
-        elif cte_mag >= cte_slowdown_threshold:
-            local_throttle_limit = min(local_throttle_limit, 0.3)
-            final_brake = min(1.0, (cte_mag - cte_slowdown_threshold) / (cte_stop_threshold - cte_slowdown_threshold))
-        elif cte_mag >= cte_throttle_reduction_max:
-            throttle_factor = 1.0 - ((cte_mag - cte_throttle_reduction_max) / (cte_slowdown_threshold - cte_throttle_reduction_max)) * 0.7
-            local_throttle_limit = min(local_throttle_limit, throttle_limit * throttle_factor)
-            local_throttle_limit = max(local_throttle_limit, 0.3)
-        elif cte_mag >= cte_throttle_reduction_start:
-            throttle_factor = 1.0 - ((cte_mag - cte_throttle_reduction_start) / (cte_throttle_reduction_max - cte_throttle_reduction_start)) * (1.0 - min_throttle_at_large_cte / throttle_limit)
-            local_throttle_limit = min(local_throttle_limit, throttle_limit * throttle_factor)
-            local_throttle_limit = max(local_throttle_limit, min_throttle_at_large_cte)
-
-        # Speed-based throttle reduction when CTE is large
-        if cte_mag >= cte_throttle_reduction_start and current_speed > 3.0:
-            if current_speed <= 8.0:
-                speed_penalty = (current_speed - 3.0) / 10.0
-            else:
-                speed_penalty = 0.5 + ((current_speed - 8.0) / 10.0) * 0.3
-            speed_penalty = min(0.8, speed_penalty)
-            local_throttle_limit = local_throttle_limit * (1.0 - speed_penalty)
-
-        # Additional throttle reduction for moderate CTE (2-4m) when speed is high
-        if cte_mag >= 2.0 and cte_mag < 5.0 and current_speed > 4.0:
-            if current_speed <= 6.0:
-                moderate_cte_penalty = (current_speed - 4.0) / 4.0
-            else:
-                moderate_cte_penalty = 0.5 + ((current_speed - 6.0) / 4.0) * 0.3
-            moderate_cte_penalty = min(0.8, moderate_cte_penalty)
-            local_throttle_limit = local_throttle_limit * (1.0 - moderate_cte_penalty)
-
-        
-        # --- Steering: MPC is single owner of clamp/rate limit (mpc_lateral.py). Safety backup below. ---
-        final_steer = max(-DELTA_MAX_RAD, min(DELTA_MAX_RAD, float(steer_mpc)))
-        final_steer_ds = final_steer   # rad; IO adapter converts to dSPACE steering_wheel_deg in simulator
-        # fix.md Option 1: heading-based yaw rate (avoids yaw-rate channel stuck at 0)
-        _psi_rad = float(car_heading) if car_heading is not None else None
-        _dt = float(simulation().timestep) if hasattr(simulation(), 'timestep') else 0.05
-        _psi_prev = getattr(self, '_psi_prev_steer_cal', None)
-        _yaw_rps_est = None
-        if _psi_rad is not None and _psi_prev is not None and _dt > 1e-6:
-            _dpsi = _psi_rad - _psi_prev
-            _dpsi = math.atan2(math.sin(_dpsi), math.cos(_dpsi))  # wrapToPi
-            _yaw_rps_est = _dpsi / _dt
-        self._psi_prev_steer_cal = _psi_rad
-        # Unit-inference analysis: prefer yaw_rps_est when channel yaw_rate is zero/missing (fix.md)
-        _L_wb = getattr(_lat_controller.config, 'wheel_base', 2.97)
-        _delta_cmd_rad = float(final_steer)
-        _kappa_pred = math.tan(_delta_cmd_rad) / _L_wb if _L_wb > 1e-6 else 0.0
-        _speed_mps = float(current_speed) if current_speed is not None else 0.0
-        _yaw_rate_ch = vehicle_state.get('yaw_rate', None) if vehicle_state else None
-        _speed_floor = 0.5
-        _yaw_rps_use = _yaw_rps_est if (_yaw_rate_ch is None or abs(float(_yaw_rate_ch)) < 1e-6) else _yaw_rate_ch
-        if _yaw_rps_use is not None:
-            _yaw_rps_use = float(_yaw_rps_use)
-        _kappa_meas = (_yaw_rps_use / max(_speed_mps, _speed_floor)) if _yaw_rps_use is not None else None
-        _curv_err = (_kappa_meas - _kappa_pred) if _kappa_meas is not None else None
-        _kappa_ratio = (_kappa_meas / _kappa_pred) if (_kappa_meas is not None and abs(_kappa_pred) > 1e-3) else None
-        _psi_s = f"{_psi_rad:.4f}" if _psi_rad is not None else "?"
-        _yaw_est_s = f"{_yaw_rps_est:.4f}" if _yaw_rps_est is not None else "?"
-        _kmeas_s = f"{_kappa_meas:.5f}" if _kappa_meas is not None else "?"
-        _cerr_s = f"{_curv_err:.5f}" if _curv_err is not None else "?"
-        _krat_s = f"{_kappa_ratio:.4f}" if _kappa_ratio is not None else "?"
-        _steer_cal_tick = getattr(self, '_steer_cal_log_count', 0)
-        if _steer_cal_tick % 5 == 0:
-            print(f"[STEER_CAL] v={_speed_mps:.3f} psi={_psi_s} yaw_rps_est={_yaw_est_s} delta_cmd_rad={_delta_cmd_rad:.4f} L={_L_wb:.3f} kappa_meas={_kmeas_s} kappa_pred={_kappa_pred:.5f} curv_err={_cerr_s} kappa_ratio={_krat_s}")
-        self._steer_cal_log_count = _steer_cal_tick + 1
-        # [PLANT] kept for compatibility (same quantities)
-        print(f"[PLANT] speed_mps={_speed_mps:.3f} kappa_pred={_kappa_pred:.4f} kappa_meas={_kmeas_s} curvature_error={_cerr_s}")
-
-        # Ensure local_throttle_limit doesn't exceed base throttle_limit
-        local_throttle_limit = min(local_throttle_limit, throttle_limit)
-        
-        # Use MPC throttle/brake outputs (already processed by CTE-aware safety above)
-        final_throttle = max(0.0, min(local_throttle_limit, throttle_mpc))
-        final_brake = raw_brake  # Already merged and capped above
-        
-        # Apply universal max speed limit with deadband + hysteresis (smooth brake/throttle, no flip-flop)
-        SPEED_LIMIT_DEADBAND = 0.5  # m/s: trigger brake when speed > limit+deadband; release when speed < limit-deadband
-        speed_limit_applied_this_step = False
-        was_limit_active = getattr(self, '_speed_limit_active', False)
-        if current_speed > MAX_SPEED_LIMIT_MS + SPEED_LIMIT_DEADBAND:
-            self._speed_limit_active = True
-        if current_speed < MAX_SPEED_LIMIT_MS - SPEED_LIMIT_DEADBAND:
-            self._speed_limit_active = False
-        if self._speed_limit_active and current_speed > MAX_SPEED_LIMIT_MS - SPEED_LIMIT_DEADBAND:
-            # In hysteresis band or above: apply limit to avoid sharp brake then sharp throttle
-            speed_limit_applied_this_step = True
-            speed_excess = current_speed - MAX_SPEED_LIMIT_MS
-            if speed_excess > 2.0:
-                final_throttle = 0.0
-                final_brake = max(final_brake, 0.5)
-            elif speed_excess > 1.0:
-                final_throttle = 0.0
-                final_brake = max(final_brake, 0.3)
-            else:
-                final_throttle = max(0.0, final_throttle * 0.5)
-                final_brake = max(final_brake, 0.1)
-            step_for_log = getattr(self, '_behavior_step_count', 0) + 1
-            print(f"[Speed Limit] step={step_for_log} Speed {current_speed:.2f}m/s exceeds limit {MAX_SPEED_LIMIT_MS:.1f}m/s, applying brake={final_brake:.3f}")
-
-        # Global mutual exclusion: never command throttle and brake at the same time.
-        # When slowing (e.g. for a turn), lift throttle and brake only—no simultaneous throttle+brake.
-        BRAKE_THROTTLE_EXCLUSION_THRESHOLD = 0.05  # treat as "active" above this
-        if final_brake > BRAKE_THROTTLE_EXCLUSION_THRESHOLD:
-            final_throttle = 0.0
-        elif final_throttle > BRAKE_THROTTLE_EXCLUSION_THRESHOLD:
+                steer_mpc = _lat_controller.run_step(
+                    vehicle_state,
+                    waypoints_for_mpc,
+                    None,  # MPC selects segments dynamically
+                    cte_magnitude=cte_mag_for_speed,
+                    v_ref_profile=v_ref_profile,  # Same trajectory as longitudinal: smooth turns, avoid over-steer then correct
+                    curvature_ahead_max=curvature_ahead_max  # For deadzone eligibility: never deadzone in moderate curvature (curv_ahead_max < curv_deadzone_max)
+                )
+                steer_mpc = float(steer_mpc)
+    
+            except Exception as e:
+                print(f"[FollowRacingLineMPCBehavior] MPC error: {e}, using fallback")
+                steer_mpc = 0.0
+            if _bt is not None:
+                _bt.start_section('after_mpc')
+            # Keep waypoint-based CTE (e_y_mpc) for mismatch fallback (used when behavior CTE disagrees)
+            if getattr(_lat_controller, '_log_mpc_e_y', None) is not None:
+                self._last_waypoint_cte_for_speed = abs(getattr(_lat_controller, '_log_mpc_e_y'))
+    
+            # --- CTE-aware safety envelope (for throttle/brake) ---
+            # To-Do D: Use projection-based CTE (same geometry as MPCC). cte_to_waypoints = MPCC e_y from chosen segment.
+            cte = float(getattr(_lat_controller, 'last_e_y', getattr(_lat_controller, '_log_mpc_e_y', 0.0)))
+            # To-Do E: If mismatch triggers, force cte := cte_to_waypoints for this tick and print loud warning (fatal guard).
+            _md = getattr(_lat_controller, '_log_match_dist_m', None)
+            _ey = getattr(_lat_controller, '_log_mpc_e_y', None)
+            _legacy = getattr(self, '_legacy_cte_this_tick', None)
+            if _legacy is not None and _md is not None and _ey is not None:
+                if abs(_legacy) > 2.0 and _md < 1.0 and abs(_ey) < 0.5:
+                    print(f"[FollowRacingLineMPC] *** CTE MISMATCH (fatal guard): legacy_cte={_legacy:.2f}m, match_dist_m={_md:.3f}m, e_y_mpc={_ey:.3f}m -> forcing cte_behavior := cte_to_waypoints for this tick")
+                    cte = float(_ey)
+            cte_mag = abs(cte)
+            # One ff_log line per MPC tick (feedforward + command side: u_norm, delta_cmd_rad post-clamp, current_delta_max)
+            _lc_ff = _lat_controller
+            _seg_id = getattr(_lc_ff, '_log_segment_id', None)
+            _v_ff = getattr(_lc_ff, '_log_v', None)
+            _kap_ff = getattr(_lc_ff, '_log_kappa_ref_at_proj', None)
+            _dff = getattr(_lc_ff, '_log_delta_ff', None)
+            _dfb = getattr(_lc_ff, '_log_delta_fb', None)
+            _dtot = getattr(_lc_ff, '_log_delta_total', None)
+            _dcmd = getattr(_lc_ff, '_log_delta_cmd_rad', None)
+            _dmax = getattr(_lc_ff, '_log_current_delta_max', None)
+            _sraw = getattr(_lc_ff, '_log_steer_mpc_raw', None)
+            _slpf = getattr(_lc_ff, '_log_steer_after_lpf', None)
+            _seg_s = str(_seg_id) if _seg_id is not None else "?"
+            _v_s = f"{_v_ff:.3f}" if _v_ff is not None else "?"
+            _kap_s = f"{_kap_ff:.4f}" if _kap_ff is not None else "?"
+            _dff_s = f"{_dff:.4f}" if _dff is not None else "?"
+            _dfb_s = f"{_dfb:.4f}" if _dfb is not None else "?"
+            _dtot_s = f"{_dtot:.4f}" if _dtot is not None else "?"
+            _dcmd_s = f"{_dcmd:.4f}" if _dcmd is not None else "?"
+            _dmax_s = f"{_dmax:.4f}" if _dmax is not None else "?"
+            _sraw_s = f"{_sraw:.3f}" if _sraw is not None else "?"
+            _slpf_s = f"{_slpf:.3f}" if _slpf is not None else "?"
+            _log_step = getattr(self, '_behavior_step_count', 0) + 1
+            if _log_step % 50 == 0:
+                print(f"[FollowRacingLineMPC] ff_log segment_id={_seg_s} v={_v_s} kappa_ref_at_proj={_kap_s} delta_ff={_dff_s} delta_fb={_dfb_s} delta_total={_dtot_s} delta_cmd_rad={_dcmd_s} current_delta_max={_dmax_s} u_norm_mpc={_sraw_s} u_norm_lpf={_slpf_s}")
+                # Task 1: signed curvature sanity log (every 50 steps)
+                _kappa_ahead = getattr(_lc_ff, '_log_kappa_ref_ahead_signed', None)
+                _s_ref = getattr(_lc_ff, '_log_s_ref', None)
+                _kappa_ahead_s = f"{_kappa_ahead:.4f}" if _kappa_ahead is not None else "?"
+                _s_ref_s = f"{_s_ref:.3f}" if _s_ref is not None else "?"
+                print(f"[FollowRacingLineMPC] CURV_SANITY kappa_ref_at_proj={_kap_s} kappa_ref_ahead_signed={_kappa_ahead_s} segment_id={_seg_s} s_ref={_s_ref_s}")
+            # Heading diff for steering conditioning (segment direction vs vehicle heading, wrapped to [-pi, pi])
+            heading_diff = 0.0
+            if car_heading is not None and use_waypoints and wp_list and len(wp_list) >= 2 and wp_last_idx < len(wp_list) - 1:
+                x0, y0 = float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1])
+                x1, y1 = float(wp_list[wp_last_idx+1][0]), float(wp_list[wp_last_idx+1][1])
+                seg_heading = math.atan2(y1 - y0, x1 - x0)
+                heading_diff = math.atan2(math.sin(seg_heading - car_heading), math.cos(seg_heading - car_heading))
+            local_throttle_limit = throttle_limit
             final_brake = 0.0
-
-        # Throttle ramp after brake release: avoid jumping from full brake to full throttle (generic, any TTL)
-        THROTTLE_RAMP_STEPS = 12   # ~0.6 s at 0.05 s/step
-        THROTTLE_RAMP_START = 0.2  # throttle cap at first step after brake
-        was_braking = getattr(self, '_last_brake_heavy', False)
-        self._last_brake_heavy = (final_brake > 0.2)
-        ramp_remaining = getattr(self, '_throttle_ramp_steps_remaining', 0)
-        if was_braking and final_brake < BRAKE_THROTTLE_EXCLUSION_THRESHOLD:
-            ramp_remaining = THROTTLE_RAMP_STEPS
-        if ramp_remaining > 0:
-            # Linear ramp: cap throttle so it increases smoothly over THROTTLE_RAMP_STEPS
-            step_in_ramp = THROTTLE_RAMP_STEPS - ramp_remaining
-            throttle_cap = THROTTLE_RAMP_START + (1.0 - THROTTLE_RAMP_START) * (step_in_ramp / THROTTLE_RAMP_STEPS)
-            final_throttle = min(final_throttle, throttle_cap)
-            self._throttle_ramp_steps_remaining = ramp_remaining - 1
-        else:
-            self._throttle_ramp_steps_remaining = 0
+    
+            # Plan: steering = road wheel angle (rad). Single source of truth delta_max (racing.constants).
+            # Progressive throttle reduction based on CTE magnitude
+            if cte_mag >= cte_stop_threshold:
+                local_throttle_limit = 0.0
+                final_brake = 1.0
+                steer_mpc = (-0.5 * DELTA_MAX_RAD) if cte > 0 else (0.5 * DELTA_MAX_RAD)
+            elif cte_mag >= cte_slowdown_threshold:
+                local_throttle_limit = min(local_throttle_limit, 0.3)
+                final_brake = min(1.0, (cte_mag - cte_slowdown_threshold) / (cte_stop_threshold - cte_slowdown_threshold))
+            elif cte_mag >= cte_throttle_reduction_max:
+                throttle_factor = 1.0 - ((cte_mag - cte_throttle_reduction_max) / (cte_slowdown_threshold - cte_throttle_reduction_max)) * 0.7
+                local_throttle_limit = min(local_throttle_limit, throttle_limit * throttle_factor)
+                local_throttle_limit = max(local_throttle_limit, 0.3)
+            elif cte_mag >= cte_throttle_reduction_start:
+                throttle_factor = 1.0 - ((cte_mag - cte_throttle_reduction_start) / (cte_throttle_reduction_max - cte_throttle_reduction_start)) * (1.0 - min_throttle_at_large_cte / throttle_limit)
+                local_throttle_limit = min(local_throttle_limit, throttle_limit * throttle_factor)
+                local_throttle_limit = max(local_throttle_limit, min_throttle_at_large_cte)
+    
+            # Speed-based throttle reduction when CTE is large
+            if cte_mag >= cte_throttle_reduction_start and current_speed > 3.0:
+                if current_speed <= 8.0:
+                    speed_penalty = (current_speed - 3.0) / 10.0
+                else:
+                    speed_penalty = 0.5 + ((current_speed - 8.0) / 10.0) * 0.3
+                speed_penalty = min(0.8, speed_penalty)
+                local_throttle_limit = local_throttle_limit * (1.0 - speed_penalty)
+    
+            # Additional throttle reduction for moderate CTE (2-4m) when speed is high
+            if cte_mag >= 2.0 and cte_mag < 5.0 and current_speed > 4.0:
+                if current_speed <= 6.0:
+                    moderate_cte_penalty = (current_speed - 4.0) / 4.0
+                else:
+                    moderate_cte_penalty = 0.5 + ((current_speed - 6.0) / 4.0) * 0.3
+                moderate_cte_penalty = min(0.8, moderate_cte_penalty)
+                local_throttle_limit = local_throttle_limit * (1.0 - moderate_cte_penalty)
+    
+            
+            # --- Steering: MPC is single owner of clamp/rate limit (mpc_lateral.py). Safety backup below. ---
+            final_steer = max(-DELTA_MAX_RAD, min(DELTA_MAX_RAD, float(steer_mpc)))
+            final_steer_ds = final_steer   # rad; IO adapter converts to dSPACE steering_wheel_deg in simulator
+            # fix.md Option 1: heading-based yaw rate (avoids yaw-rate channel stuck at 0)
+            _psi_rad = float(car_heading) if car_heading is not None else None
+            _dt = float(simulation().timestep) if hasattr(simulation(), 'timestep') else 0.05
+            _psi_prev = getattr(self, '_psi_prev_steer_cal', None)
+            _yaw_rps_est = None
+            if _psi_rad is not None and _psi_prev is not None and _dt > 1e-6:
+                _dpsi = _psi_rad - _psi_prev
+                _dpsi = math.atan2(math.sin(_dpsi), math.cos(_dpsi))  # wrapToPi
+                _yaw_rps_est = _dpsi / _dt
+            self._psi_prev_steer_cal = _psi_rad
+            # Unit-inference analysis: prefer yaw_rps_est when channel yaw_rate is zero/missing (fix.md)
+            _L_wb = getattr(_lat_controller.config, 'wheel_base', 2.97)
+            _delta_cmd_rad = float(final_steer)
+            _kappa_pred = math.tan(_delta_cmd_rad) / _L_wb if _L_wb > 1e-6 else 0.0
+            _speed_mps = float(current_speed) if current_speed is not None else 0.0
+            _yaw_rate_ch = vehicle_state.get('yaw_rate', None) if vehicle_state else None
+            _speed_floor = 0.5
+            _yaw_rps_use = _yaw_rps_est if (_yaw_rate_ch is None or abs(float(_yaw_rate_ch)) < 1e-6) else _yaw_rate_ch
+            if _yaw_rps_use is not None:
+                _yaw_rps_use = float(_yaw_rps_use)
+            _kappa_meas = (_yaw_rps_use / max(_speed_mps, _speed_floor)) if _yaw_rps_use is not None else None
+            _curv_err = (_kappa_meas - _kappa_pred) if _kappa_meas is not None else None
+            _kappa_ratio = (_kappa_meas / _kappa_pred) if (_kappa_meas is not None and abs(_kappa_pred) > 1e-3) else None
+            _psi_s = f"{_psi_rad:.4f}" if _psi_rad is not None else "?"
+            _yaw_est_s = f"{_yaw_rps_est:.4f}" if _yaw_rps_est is not None else "?"
+            _kmeas_s = f"{_kappa_meas:.5f}" if _kappa_meas is not None else "?"
+            _cerr_s = f"{_curv_err:.5f}" if _curv_err is not None else "?"
+            _krat_s = f"{_kappa_ratio:.4f}" if _kappa_ratio is not None else "?"
+            _steer_cal_tick = getattr(self, '_steer_cal_log_count', 0)
+            _log_step_plant = getattr(self, '_behavior_step_count', 0) + 1
+            if _log_step_plant % 50 == 0:
+                print(f"[STEER_CAL] v={_speed_mps:.3f} psi={_psi_s} yaw_rps_est={_yaw_est_s} delta_cmd_rad={_delta_cmd_rad:.4f} L={_L_wb:.3f} kappa_meas={_kmeas_s} kappa_pred={_kappa_pred:.5f} curv_err={_cerr_s} kappa_ratio={_krat_s}")
+                print(f"[PLANT] speed_mps={_speed_mps:.3f} kappa_pred={_kappa_pred:.4f} kappa_meas={_kmeas_s} curvature_error={_cerr_s}")
+            self._steer_cal_log_count = _steer_cal_tick + 1
+    
+            # Ensure local_throttle_limit doesn't exceed base throttle_limit
+            local_throttle_limit = min(local_throttle_limit, throttle_limit)
+            
+            # Use MPC throttle/brake outputs (already processed by CTE-aware safety above)
+            final_throttle = max(0.0, min(local_throttle_limit, throttle_mpc))
+            final_brake = raw_brake  # Already merged and capped above
+            
+            # Apply universal max speed limit with deadband + hysteresis (smooth brake/throttle, no flip-flop)
+            SPEED_LIMIT_DEADBAND = 0.5  # m/s: trigger brake when speed > limit+deadband; release when speed < limit-deadband
+            speed_limit_applied_this_step = False
+            was_limit_active = getattr(self, '_speed_limit_active', False)
+            if current_speed > MAX_SPEED_LIMIT_MS + SPEED_LIMIT_DEADBAND:
+                self._speed_limit_active = True
+            if current_speed < MAX_SPEED_LIMIT_MS - SPEED_LIMIT_DEADBAND:
+                self._speed_limit_active = False
+            if self._speed_limit_active and current_speed > MAX_SPEED_LIMIT_MS - SPEED_LIMIT_DEADBAND:
+                # In hysteresis band or above: apply limit to avoid sharp brake then sharp throttle
+                speed_limit_applied_this_step = True
+                speed_excess = current_speed - MAX_SPEED_LIMIT_MS
+                if speed_excess > 2.0:
+                    final_throttle = 0.0
+                    final_brake = max(final_brake, 0.5)
+                elif speed_excess > 1.0:
+                    final_throttle = 0.0
+                    final_brake = max(final_brake, 0.3)
+                else:
+                    final_throttle = max(0.0, final_throttle * 0.5)
+                    final_brake = max(final_brake, 0.1)
+                step_for_log = getattr(self, '_behavior_step_count', 0) + 1
+                print(f"[Speed Limit] step={step_for_log} Speed {current_speed:.2f}m/s exceeds limit {MAX_SPEED_LIMIT_MS:.1f}m/s, applying brake={final_brake:.3f}")
+    
+            # Global mutual exclusion: never command throttle and brake at the same time.
+            # When slowing (e.g. for a turn), lift throttle and brake only—no simultaneous throttle+brake.
+            BRAKE_THROTTLE_EXCLUSION_THRESHOLD = 0.05  # treat as "active" above this
+            if final_brake > BRAKE_THROTTLE_EXCLUSION_THRESHOLD:
+                final_throttle = 0.0
+            elif final_throttle > BRAKE_THROTTLE_EXCLUSION_THRESHOLD:
+                final_brake = 0.0
+    
+            # Throttle ramp after brake release: avoid jumping from full brake to full throttle (generic, any TTL)
+            THROTTLE_RAMP_STEPS = 12   # ~0.6 s at 0.05 s/step
+            THROTTLE_RAMP_START = 0.2  # throttle cap at first step after brake
+            was_braking = getattr(self, '_last_brake_heavy', False)
+            self._last_brake_heavy = (final_brake > 0.2)
+            ramp_remaining = getattr(self, '_throttle_ramp_steps_remaining', 0)
+            if was_braking and final_brake < BRAKE_THROTTLE_EXCLUSION_THRESHOLD:
+                ramp_remaining = THROTTLE_RAMP_STEPS
+            if ramp_remaining > 0:
+                # Linear ramp: cap throttle so it increases smoothly over THROTTLE_RAMP_STEPS
+                step_in_ramp = THROTTLE_RAMP_STEPS - ramp_remaining
+                throttle_cap = THROTTLE_RAMP_START + (1.0 - THROTTLE_RAMP_START) * (step_in_ramp / THROTTLE_RAMP_STEPS)
+                final_throttle = min(final_throttle, throttle_cap)
+                self._throttle_ramp_steps_remaining = ramp_remaining - 1
+            else:
+                self._throttle_ramp_steps_remaining = 0
+            self._last_final_steer = final_steer
+            self._last_final_throttle = final_throttle
+            self._last_final_brake = final_brake
+            self._last_curvature_ahead_max = curvature_ahead_max
 
         # Store CTE for debugging
         self._current_cte = cte
@@ -1621,6 +1671,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _s_rate_s = f"{_s_rate:.3f}" if _s_rate is not None else "?"
             print(f"[FollowRacingLineMPC] deadzone_log deadzone_applied={_dz_app} dz_cte_m={_dz_m_s} cte_used_for_control={_cte_used_s} cte_raw={_cte_raw_s} deadzone_reason={_reason} match_dist_m={_match_s} gate_accept={_gate_ok} segment_id={_seg_id} curv_ahead_max={_curv_ahd_s} curv_regime={_creg} kappa_ref_at_proj={_kappa_s} steer_mpc_raw={_s_raw_s} steer_after_caps={_s_caps_s} steer_after_lpf={_s_lpf_s} steer_rate={_s_rate_s}")
 
+        if _bt is not None:
+            _bt.end_section('after_mpc')
         # Execute all actions together
         take actions_to_take
 

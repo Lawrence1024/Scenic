@@ -26,6 +26,26 @@ def read_state_from_controldesk(sim: DSpaceSimulation, obj) -> Dict[str, float]:
     if not sim._cd:
         return {}
     
+    # Fast path: reuse per-step cache populated by DSpaceSimulation.getProperties
+    cache_key = (sim.currentTime, id(obj))
+    if hasattr(sim, "_state_cache") and cache_key in sim._state_cache:
+        state = dict(sim._state_cache[cache_key])  # copy
+        actor = getattr(obj, "dspaceActor", None)
+
+        # Try to read actual steering only (optional) without re-reading full ego state
+        if hasattr(sim, 'mpc_config') and sim.mpc_config:
+            steer_path = sim.mpc_config.controldesk_paths.get('steer_actual')
+            if steer_path:
+                try:
+                    steer_val = sim._cd.get_var(steer_path)
+                    import math
+                    steer_rad = math.radians(steer_val)
+                    STEER_ACTUAL_SIGN = -1.0
+                    state['steer_actual'] = STEER_ACTUAL_SIGN * steer_rad
+                except Exception:
+                    pass
+        return state
+
     # Use existing readback infrastructure
     from scenic.simulators.dspace.controldesk.readback import read_ego_state, read_fellow_state
     from scenic.simulators.dspace.utils import legacy as dutils

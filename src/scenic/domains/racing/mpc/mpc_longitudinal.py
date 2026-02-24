@@ -4,6 +4,8 @@ Implements Model Predictive Control for longitudinal (throttle/brake) control,
 replacing PID controllers with predictive control for better speed management.
 """
 
+import math
+import time
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 import osqp
@@ -11,7 +13,7 @@ from scipy.sparse import csc_matrix
 
 from .config import MPCConfig
 from .utils import LowPassFilter
-import math
+from . import timing as _mpc_timing
 
 
 class MPCLongitudinalController:
@@ -247,6 +249,7 @@ class MPCLongitudinalController:
         Returns:
             Tuple of (throttle, brake) in normalized range [0.0, 1.0]
         """
+        t0 = time.perf_counter()
         # Extract state
         v = vehicle_state.get('speed', 0.0)
         a = vehicle_state.get('acceleration', 0.0)
@@ -262,9 +265,13 @@ class MPCLongitudinalController:
         gear = vehicle_state.get('gear', None)
         if gear is not None and gear < 1:
             # In neutral - return zero throttle/brake
+            _mpc_timing.record_longitudinal_mpc_ms((time.perf_counter() - t0) * 1000)
+            _mpc_timing.finish_step()
             return 0.0, 0.0
         elif abs(v) < 0.1 and gear is None:
             # Very slow or stopped AND gear unknown - return zero
+            _mpc_timing.record_longitudinal_mpc_ms((time.perf_counter() - t0) * 1000)
+            _mpc_timing.finish_step()
             return 0.0, 0.0
         
         # Build reference speed array if single value provided
@@ -290,6 +297,8 @@ class MPCLongitudinalController:
             )
         except Exception as e:
             print(f"[MPC Longitudinal] Error building QP matrices: {e}")
+            _mpc_timing.record_longitudinal_mpc_ms((time.perf_counter() - t0) * 1000)
+            _mpc_timing.finish_step()
             return self._fallback_control(v, v_ref[0] if len(v_ref) > 0 else v)
         
         # Initialize solver on first solve
@@ -304,6 +313,8 @@ class MPCLongitudinalController:
             
             if result.info.status != 'solved':
                 print(f"[MPC Longitudinal] Solver failed: {result.info.status}")
+                _mpc_timing.record_longitudinal_mpc_ms((time.perf_counter() - t0) * 1000)
+                _mpc_timing.finish_step()
                 return self._fallback_control(v, v_ref[0] if len(v_ref) > 0 else v)
             
             # Extract first control input (acceleration command)
@@ -347,11 +358,15 @@ class MPCLongitudinalController:
             # Update state estimate
             self.state = np.array([v, a])
             
+            _mpc_timing.record_longitudinal_mpc_ms((time.perf_counter() - t0) * 1000)
+            _mpc_timing.finish_step()
             return float(throttle_filtered), float(brake_filtered)
             
         except Exception as e:
             print(f"[MPC Longitudinal] Solver error: {e}")
             self.invalid_count += 1
+            _mpc_timing.record_longitudinal_mpc_ms((time.perf_counter() - t0) * 1000)
+            _mpc_timing.finish_step()
             max_invalid = getattr(self.config, 'max_invalid_count', 10)
             if self.invalid_count > max_invalid:
                 # Too many failures, return zero

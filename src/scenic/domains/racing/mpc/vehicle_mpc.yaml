@@ -2,7 +2,7 @@
   ros__parameters:
     # Timing
     ctrl_period: 0.05  # Control update period (seconds) - will adapt to Scenic timestep
-    mpc_prediction_horizon: 35  # Prediction horizon steps (reduced from 50 for faster computation, 35*0.05=1.75s preview)
+    mpc_prediction_horizon: 35  # Prediction horizon steps (35*0.05=1.75s preview). For 100Hz sim/20Hz control, try 25 or dt=0.1 to reduce lateral MPC cost.
     mpc_prediction_dt: 0.05  # Time step for prediction (seconds)
     
     # Vehicle geometry

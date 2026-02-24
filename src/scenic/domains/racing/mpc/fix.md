@@ -1,155 +1,283 @@
-# Fix log — MPC/MPCC and steering changes
+# Priority 3 (high impact): Ensure **all heavy MPC work** only runs on control steps (not just command application)
 
-This document records the changes made in response to the recommendations and questions in the original fix/debugging discussion. It is intended as a single reference for what was changed, where, and why.
+You already have a gate in `racing/behaviors.scenic`:
 
----
+```scenic
+_run_full_control = (simulation().is_control_step if hasattr(simulation(), 'is_control_step') else True) ...
+```
 
-## 1. Recommendation #1 (do this first): Remove `heading_flipped` logic — do not flip `e_y`
+But the key is: **everything expensive must be inside that gate**, including:
 
-**Rationale:** The >90° reference flip was the single most dangerous part of the stack and matched the observed failure: spin → heading crosses 90° → reference frame flips → controller whipsaws → 180°. The flip condition used `heading`, which becomes unreliable exactly when a spin starts; it introduced a hard discontinuity (`e_y → -e_y`, `psi_ref → psi_ref + π`) in one timestep and produced "steer the opposite direction NOW" impulses that could cause or lock in a spin.
+* waypoint/speed grading
+* speed profile generation
+* lateral MPC solve
+* longitudinal MPC solve
 
-### Code removed
-
-- **File:** `mpc_lateral.py`, `_compute_errors`
-- **Removed block:**  
-  - Computation of `heading_diff = psi_ref - heading` (wrapped to [-π, π]).  
-  - If `abs(heading_diff) > π/2`: set `psi_ref = wrap(psi_ref + π)` and `heading_flipped = True`.  
-  - After computing `e_y_raw`, the block that did `if heading_flipped: e_y = -e_y`.
-- **Removed from segment-boundary blend:** The same >90° check and 180° flip for `psi_ref_next` when blending toward the next segment (so the next-segment heading is no longer flipped).
-
-### Code kept
-
-- **Reference heading:** `psi_ref = atan2(seg_dy, seg_dx)` only (no conditional flip).
-- **Segment blend:** `psi_ref_next = atan2(seg_dy_next, seg_dx_next)` with no flip; blending between current and next segment heading unchanged.
-- **Lateral error:** `nx = -seg_dy/seg_len`, `ny = seg_dx/seg_len`, and **`e_y = (px - proj_x)*nx + (py - proj_y)*ny`** with **no** sign flip.
-- **Heading error:** `e_psi = wrap(heading - psi_ref)` as before.
-
-### Documentation
-
-- **mpc/README.md:** Key Conventions, Wiring (C) reference/CTE row, and (D) note updated to state that the >90° flip and e_y flip were removed (Recommendation #1) and to remove the "trap" wording that referred to that logic.
+If any of those still runs outside the gate, you lose most of the 100/20 benefit.
 
 ---
 
-## 2. Recommendation A (must-do): Fix steering sign at WRITE (actuation boundary)
+## Patch target
 
-**Problem:** End-of-log physics showed delta_cmd_rad negative while actual yaw-rate indicated positive curvature — i.e. the actuator expects the opposite sign.
+### File
 
-**Change:** Add a single constant in the write path so that the sign of the command sent to the actuator can be reversed.
+`racing/behaviors.scenic`
 
-### Code changed
+### Region
 
-- **File:** `src/scenic/simulators/dspace/steer_io.py`
-- **Added:** `STEER_CMD_SIGN = -1.0` (comment: try -1 first; if car turns right for +delta_rad keep -1, if left use +1).
-- **Conversion:** `theta_sw_deg = STEER_CMD_SIGN * delta_road_rad * R * 180.0 / math.pi` (previously no sign factor).
-- **Startup log:** `log_startup_once()` now prints `STEER_CMD_SIGN` so the active sign is visible in logs.
+Around the block where `_run_full_control` is computed (you showed it around line ~574 in your version).
 
-### Verification
+### What to do
 
-- **Deterministic test:** Hold `delta_road_rad = +0.02 rad` for 1 s at low speed.  
-  - If the car turns **right**, the sign is wrong → keep `STEER_CMD_SIGN = -1.0`.  
-  - If it turns **left**, use `STEER_CMD_SIGN = 1.0`.
+Make sure the control loop looks like this pattern:
 
-### Post-run fix (run.log)
+```scenic
+if _run_full_control:
+    # 1) read state (MPC adapter)
+    # 2) waypoint/speed grade
+    # 3) speed profile
+    # 4) lateral MPC
+    # 5) longitudinal MPC
+    # 6) save final commands to self._last_...
+else:
+    # Reuse previous commands, do NOT recompute MPC / grading / speed profile
+    final_steer = self._last_final_steer
+    final_throttle = self._last_final_throttle
+    final_brake = self._last_final_brake
+```
 
-- **run.log** showed: MPC commanded **positive** `delta_cmd_rad` (left), but the car turned **right** (negative `kappa_meas`). With `STEER_CMD_SIGN = -1` we were sending negative deg for positive rad, and the actuator produced a right turn.  
-- **Fix applied:** Set `STEER_CMD_SIGN = 1.0` in `steer_io.py` so that positive delta_rad is sent as positive steering-wheel deg and the car turns **left** when MPC commands left.
+### Specifically verify these calls are inside the gate
 
----
+Search for these names and make sure they are only in the `if _run_full_control:` path:
 
-## 3. Recommendation B (must-do): When gate rejects, do not keep controlling off the stale segment (recover mode)
+* `read_state_from_controldesk(`
+* `compute_speed_profile` / speed profile function
+* `lateral_controller.run_step(`
+* `longitudinal_controller.run_step(`
+* waypoint grading / route speed grading function
 
-**Problem:** When `gate_accept=False` and `match_dist_m` was large (e.g. 16.7 m), the controller still kept `segment_id` equal to the previous segment. That is acceptable for tiny glitches but dangerous when actually off track: it leads to stale reference + saturated steering.
-
-**Change:** Replace "reject → always hold last_seg" with a recover mode: if the gate rejects the candidate **and** the best match distance is above a hard-fail threshold, **force re-association** to the nearest segment instead of keeping the previous one.
-
-### Code changed
-
-- **File:** `mpc_lateral.py`, `_compute_errors`
-- **Logic:** After the existing gate logic (reject_candidate True when too_far / backward / s_jump):
-  - **New constant:** `hard_fail_dist_m` (from config `gate_hard_fail_dist_m`, default 6.0 m).
-  - **New behavior:** If `reject_candidate` and **`best_match_dist > hard_fail_dist_m`**, do **not** set `best_segment_idx = last_seg`; keep `best_segment_idx` as the candidate (force re-association).
-  - If `reject_candidate` and `best_match_dist <= hard_fail_dist_m`, behavior unchanged: `best_segment_idx = last_seg`.
-- **Config:** `mpc_lateral.py` __init__: `self._gate_hard_fail_dist_m = getattr(config, 'gate_hard_fail_dist_m', 6.0)`.
-- **config.py:** `self.gate_hard_fail_dist_m = config_dict.get('gate_hard_fail_dist_m', 6.0)`.
-- **vehicle_mpc.yaml:** `gate_hard_fail_dist_m: 6.0` with comment "(m) when gate rejects and match_dist > this, force re-association (Rec B: recover mode)".
-
-So when the vehicle is far off (e.g. >6 m from the best match), the controller re-associates to the nearest segment instead of continuing to control from the stale one.
+If you want, I can help you do a line-by-line audit of this block next.
 
 ---
 
-## 4. Recommendation C (important): Apply stickiness only when association is good
+# Priority 4 (medium impact): Cut per-step logging overhead (especially at 100Hz)
 
-**Problem:** The rule "stick to last segment when `abs(prev_e_y) >= stick_m`" was harmful when the car was already diverging: it locked onto a bad segment and prevented reacquisition. When far away, the system should prefer reacquisition over sticking.
-
-**Change:** Allow stickiness only when **both** the gate accepted the current best segment **and** the match distance is below a threshold (association is good).
-
-### Code changed
-
-- **File:** `mpc_lateral.py`, `_compute_errors`
-- **New constants:** `stick_dist_ok_m` from config `stick_association_ok_m` (default 2.0 m); `gate_accept = (gate_reason is None)`.
-- **Stick condition (updated):**  
-  Previously: stick if `prev_e_y` not None and `abs(prev_e_y) >= stick_m` and `last_seg` valid.  
-  Now: same **and** `gate_accept` **and** `best_match_dist < stick_dist_ok_m`.
-- **Config:** `_stick_association_ok_m` in `mpc_lateral.py` (default 2.0); `stick_association_ok_m` in `config.py` and `vehicle_mpc.yaml` with comment "(m) only stick to segment when match_dist < this (Rec C)".
-
-So we only stick when the gate accepted and the vehicle is within 2 m of the best segment; otherwise we allow a segment switch (reacquisition).
+At 100Hz, even “every 50 steps” logs become frequent, and string formatting / console I/O matters more than it looks.
 
 ---
 
-## 5. Recommendation D: Make STEER_SIGN_SANITY use yaw-rate curvature
+## A) Add a single verbose flag in `DSpaceSimulation.__init__`
 
-**Problem:** The existing STEER_SIGN_SANITY check used path curvature (`kappa_at_proj`) as "measured" curvature, which could be misleading at the exact moment of failure (e.g. wrong segment or wrong side of track).
+### File
 
-**Change:** Use curvature from motion, **kappa_meas = yaw_rate / v**, for the sanity check (same as STEER_CAL kappa). Compare **sign(delta_cmd_rad)** vs **sign(yaw_rate / v)** so the log directly reflects whether the actuation sign is inverted in real time.
+`dspace/simulator.py`
 
-### Code changed
+### Function
 
-- **File:** `mpc_lateral.py`, `run_step`
-- **State extraction:** Added `yaw_rate = vehicle_state.get('yaw_rate', None)` (rad/s) where other state is extracted.
-- **STEER_SIGN_SANITY block:**  
-  - If `speed > 0.15` and `yaw_rate` is not None: **`kappa_meas = yaw_rate / speed`**.  
-  - Else: `kappa_meas = kappa_at_proj` (fallback to path curvature).  
-  - Sign comparison and mismatch detection unchanged except they now use this `kappa_meas`.  
-  - Log message updated to indicate "(yaw_rate/v)" and "actuation sign inversion" when a mismatch is detected.
+`DSpaceSimulation.__init__(...)`
 
-The behavior already passes `yaw_rate` in `vehicle_state` when available (e.g. from `angularVelocity.z`), so no behavior change was required for that.
+Add:
+
+```python
+self._perf_verbose = os.environ.get("SCENIC_DSPACE_PERF_VERBOSE", "0").strip().lower() in ("1", "true", "yes")
+```
 
 ---
 
-## 6. README and wiring documentation (from original fix questions)
+## B) Guard noisy prints in `executeActions` and `step`
 
-The original fix discussion asked for a clear "wiring diagram" (signals, signs, frames, units, saturation). The following was added or updated in **mpc/README.md** so those questions are answered in one place:
+### File
 
-- **A) Control pipeline:** Table describing MPC output (rad, not normalized), mapping to front wheel angle, rad → ControlDesk (steering wheel deg ±240, STEER_CMD_SIGN), negations (none on write; readback can use STEER_ACTUAL_SIGN), scales/rate/LPF/saturation, and logged names (delta_cmd, steer_write, steer_readback). Description of the I/O write path (SetSteerAction(rad) → simulator → road_rad_to_dspace_value).
-- **B) State estimation:** Heading source (ControlDesk, wrap to [-π, π]), yaw rate (actor.angvel.z / vehicle_state['yaw_rate']), speed source, e_psi computation (heading - psi_ref then wrap), frame (world, typically ENU).
-- **C) Reference and segment selection:** Best-segment selection, gate (too_far / backward / s_jump) and stick logic; note that reference heading and CTE use no flip (Recommendation #1). kappa_ref sign (spline and linear). CTE (e_y) from waypoint projection, no flip.
-- **D) Wheelbase and kinematics:** wheel_base 2.9718 m, delta_ff = atan(L * kappa_ref), max_steer_angle = front wheel (rad). Note that the previous >90° flip and e_y flip were removed (Recommendation #1).
+`dspace/simulator.py`
 
-Related Docs in the README now point to **fix.md** as the source of those questions and to this document for a record of what was changed.
+### Functions
+
+* `executeActions(...)`
+* `step(...)`
+
+Examples of prints to guard:
+
+* `[executeActions] t=...`
+* `[step] t=... Advancing simulation...`
+* `[step] [OK] Step completed`
+* light-step repeated per-step logs (if not needed)
+
+Change patterns like:
+
+```python
+if self._execute_count % 50 == 1:
+    print(...)
+```
+
+to:
+
+```python
+if self._perf_verbose and self._execute_count % 50 == 1:
+    print(...)
+```
+
+Same in `step(...)`.
+
+Keep the summary timing prints (`[Timing] steps=... mean(...)`) **enabled** — those are useful.
 
 ---
 
-## Summary table
+## C) (Optional) Increase timing print interval
 
-| Item | File(s) | What changed |
-|------|--------|---------------|
-| Rec #1: no heading flip | `mpc_lateral.py` | Removed >90° psi_ref flip and e_y sign flip; kept psi_ref = atan2(seg_dy, seg_dx), e_y = projection, no flip in blend. |
-| Rec #1: docs | `mpc/README.md` | Conventions and wiring (C)(D) updated; trap note removed. |
-| Rec A: steer sign at write | `steer_io.py` | STEER_CMD_SIGN = -1.0; theta_sw_deg = STEER_CMD_SIGN * delta_road_rad * R * 180/π; startup log. |
-| Rec B: recover mode | `mpc_lateral.py`, `config.py`, `vehicle_mpc.yaml` | When gate rejects and best_match_dist > gate_hard_fail_dist_m (6 m), keep best_segment_idx (force re-assoc). New config gate_hard_fail_dist_m. |
-| Rec C: stick when association good | `mpc_lateral.py`, `config.py`, `vehicle_mpc.yaml` | Stick only if gate_accept and best_match_dist < stick_association_ok_m (2 m). New config stick_association_ok_m. |
-| Rec D: STEER_SIGN_SANITY | `mpc_lateral.py` | kappa_meas = yaw_rate/v when v>0.15 and yaw_rate present; else kappa_at_proj. Log text updated. |
-| Wiring answers | `mpc/README.md` | Section "Wiring and debugging" added (A–D tables and note). |
-| Single-segment consistency | `mpc_lateral.py`, `reference_builder.py`, `MPCC_IMPROVEMENT_PLAN.md` | run_step: _compute_errors first; build_reference(..., reference_segment_idx=mpc_segment_idx). reference_builder: optional reference_segment_idx; when set, nearest_idx = it. Doc: MPCC_IMPROVEMENT_PLAN.md §E. |
+In `DSpaceSimulation.__init__`, if you’re running long 100Hz tests:
 
----
+```python
+self._timing_interval = 200
+```
 
-## Single-segment consistency (steering wobble at curve exits)
+instead of `50`.
 
-**Problem:** Feedforward (kappa_ref, delta_ff) and feedback (e_y, e_psi, delta_fb) used different segment indices: ref_builder used nearest waypoint by **node distance**, while _compute_errors used best segment by **perpendicular distance** (with gate/hysteresis/stick). At curve exits they could disagree, so delta_ff said "turn left" and delta_fb said "turn right" → steering sign flips (left→right→left) and FF TRIPWIRE logs.
-
-**Fix:** Use one segment per step. In `run_step`, call `_compute_errors` first to get `(e_y, e_psi, mpc_segment_idx)`, then call `ref_builder.build_reference(..., reference_segment_idx=mpc_segment_idx)` so the reference is built from the same segment. In `reference_builder.build_reference`, new optional arg `reference_segment_idx`: when provided, use it as `nearest_idx` instead of `find_nearest_waypoint`. Documented in **MPCC_IMPROVEMENT_PLAN.md** section E.
+This reduces console overhead and log size.
 
 ---
 
-All of the above changes are in the codebase and config as of this document; adjust STEER_CMD_SIGN (Rec A) and the two new MPC config parameters (Rec B, C) as needed for your vehicle and track.
+# Priority 5 (diagnostic + optimization targeting): Split timing into **control-step** vs **non-control-step**
+
+Right now your averages are over **all sim steps**, which hides where the time goes.
+
+At 100Hz/20Hz:
+
+* control steps happen every 5th step
+* non-control steps are 4/5 of the run
+
+You want to know separately:
+
+* “control-step cost”
+* “non-control-step cost”
+
+This makes optimization obvious and prevents misleading comparisons.
+
+---
+
+## Patch `executeActions(...)` timing accumulation
+
+### File
+
+`dspace/simulator.py`
+
+### Function
+
+`DSpaceSimulation.__init__(...)`
+
+Add two timing accumulators:
+
+```python
+self._timing_sums_ctrl = {k: 0.0 for k in self._timing_sums}
+self._timing_sums_nonctrl = {k: 0.0 for k in self._timing_sums}
+self._timing_n_ctrl = 0
+self._timing_n_nonctrl = 0
+```
+
+---
+
+### File
+
+`dspace/simulator.py`
+
+### Function
+
+`DSpaceSimulation.executeActions(...)`
+
+Inside the block where you flush `_timing_last` into sums (the one with `_timing_keys`), replace:
+
+```python
+for k in self._timing_sums:
+    self._timing_sums[k] += _last.get(k, 0.0)
+self._timing_n += 1
+```
+
+with:
+
+```python
+for k in self._timing_sums:
+    self._timing_sums[k] += _last.get(k, 0.0)
+self._timing_n += 1
+
+# Split by control vs non-control for the *previous* step
+prev_step_index = self.currentTime - 1
+is_prev_ctrl = (prev_step_index % self._control_interval) == 0 if self._control_interval > 0 else True
+target_sums = self._timing_sums_ctrl if is_prev_ctrl else self._timing_sums_nonctrl
+
+for k in target_sums:
+    target_sums[k] += _last.get(k, 0.0)
+
+if is_prev_ctrl:
+    self._timing_n_ctrl += 1
+else:
+    self._timing_n_nonctrl += 1
+```
+
+---
+
+## Also print split summary in `destroy()`
+
+### File
+
+`dspace/simulator.py`
+
+### Function
+
+`destroy(...)`
+
+Add after the existing final timing summary:
+
+```python
+def _print_split(label, sums, n):
+    if n <= 0:
+        return
+    print(f"[Timing] FINAL {label} (steps={n}): "
+          f"apply_actions={sums['apply_actions']/n:.4f} "
+          f"com_writes={sums['com_writes']/n:.4f} "
+          f"step_time={sums['step_time']/n:.4f} "
+          f"com_reads={sums['com_reads']/n:.4f} "
+          f"loop_other={sums['loop_other']/n:.4f} "
+          f"get_properties={sums['get_properties']/n:.4f}")
+
+_print_split("CONTROL", self._timing_sums_ctrl, self._timing_n_ctrl)
+_print_split("NONCONTROL", self._timing_sums_nonctrl, self._timing_n_nonctrl)
+```
+
+This will immediately tell you:
+
+* whether control decimation is working,
+* what the irreducible 100Hz sim-step cost is (`step_time` on non-control steps).
+
+---
+
+## Expected impact (roughly)
+
+From your current 100Hz/20Hz log behavior:
+
+* **Priority 1** (MPC dt fix): mainly **stability/correctness**, likely helps control quality a lot.
+* **Priority 2** (remove duplicate readback): likely noticeable reduction in control-step COM read cost.
+* **Priority 3** (strict control-step gating): potentially big if any heavy functions still run every sim step.
+* **Priority 4** (logging): modest but easy, especially for long runs.
+* **Priority 5** (split timing): not a speedup itself, but makes the next optimization decisions obvious.
+
+---
+
+## Important reality check (so expectations are correct)
+
+Even after all 5 patches, **100Hz sim / 20Hz control may still be much slower than 20/20** if:
+
+* `cd.advance_simulation_step()` itself takes ~20–30 ms per call.
+
+Because at 100Hz you are making **5× more step calls** than 20Hz.
+
+That’s why your current visualization shows a huge gap.
+
+So the optimization path is:
+
+1. **Fix control decimation correctness (P1/P3)**
+2. **Remove redundant COM readback (P2)**
+3. **Measure split timings (P5)**
+4. Then decide whether you need a **bigger architectural change** (e.g., asynchronous/free-running simulator, or a lower-overhead stepping API in dSPACE if available)
+
+---
+
+If you want, next I can give you a **very small concrete patch snippet** for **Priority 2 (state cache)** as a ready-to-paste diff (just those two files).

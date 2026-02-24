@@ -6,16 +6,17 @@
 # --- Map and timing (must come before the model line) ---
 param map = localPath('../../assets/maps/dSPACE/LagunaSeca.xodr')
 param use2DMap = True
-param time_step = 0.05 
+# 100 Hz simulation step, 20 Hz control and readback (0.05 s period)
+param time_step = 0.01
+param control_period = 0.05
 param batch_steps = 1
+# Light-step mode: disable COM read/write to test step_time only (vehicle will not move). Set True to test; False for full analytics (COM on).
+param light_step = False
 # Optional: describe this run for analysis (logged as [RacingRun] edit_note=... and stored in result_data)
-# param edit_note = 'baseline'  # e.g. 'higher lookahead', 'curvature cap 0.08', 'TTL v2'   
+# param edit_note = 'baseline'  # e.g. 'higher lookahead', 'curvature cap 0.08', 'TTL v2'
 
-# --- Driving world model (brings in Car/road/behaviors) ---
-model scenic.domains.driving.model
-
-# --- Racing domain model (brings in RacingCar/racing behaviors) ---
-model scenic.domains.racing.model
+# --- dSPACE racing model (RacingCar, behaviors, 100 Hz step / 20 Hz control & readback) ---
+model scenic.simulators.dspace.racing_model
 
 # --- Ego car with MPC behavior ---
 # Using main racing road centerline TTL (excluding pitlane)

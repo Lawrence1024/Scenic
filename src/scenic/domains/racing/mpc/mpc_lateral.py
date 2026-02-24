@@ -7,6 +7,8 @@ reward -Q_progress*(s_N - s_0). Progress dynamics: s_{k+1} = s_k + v_ref_k*dt
 for pure trajectory-tracking mode.
 """
 
+import math
+import time
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Union
 import osqp
@@ -15,7 +17,7 @@ from scipy.sparse import csc_matrix
 from .config import MPCConfig
 from .reference_builder import ReferenceBuilder
 from .utils import LowPassFilter
-import math
+from . import timing as _mpc_timing
 
 
 class MPCLateralController:
@@ -417,6 +419,7 @@ class MPCLateralController:
         Returns:
             Steering command in normalized range [-1.0, 1.0]
         """
+        t0 = time.perf_counter()
         # Extract state
         x = vehicle_state.get('x', 0.0)
         y = vehicle_state.get('y', 0.0)
@@ -430,9 +433,11 @@ class MPCLateralController:
         if gear is not None:
             if gear < 1:
                 # In neutral - return zero steering
+                _mpc_timing.record_lateral_mpc_ms((time.perf_counter() - t0) * 1000)
                 return 0.0
         elif abs(speed) < 0.1:
             # Very slow or stopped AND gear unknown - return zero steering
+            _mpc_timing.record_lateral_mpc_ms((time.perf_counter() - t0) * 1000)
             return 0.0
         
         # Compute lateral errors and segment first so reference uses same segment (single-segment
@@ -498,8 +503,10 @@ class MPCLateralController:
                     heading=yaw,
                     waypoints=waypoints
                 )
+                _mpc_timing.record_lateral_mpc_ms((time.perf_counter() - t0) * 1000)
                 return self._fallback_steering(e_y=e_y, e_psi=e_psi)
             except:
+                _mpc_timing.record_lateral_mpc_ms((time.perf_counter() - t0) * 1000)
                 return self._fallback_steering(e_y=None, e_psi=None)
         
         # e_y, e_psi, mpc_segment_idx already computed above (single-segment consistency)
@@ -561,6 +568,7 @@ class MPCLateralController:
         # Use proportional fallback to prevent catch-22 (large error → no steering → larger error)
         if abs(e_y) > self.config.admissible_position_error:
             print(f"[MPC] Position error too large: {e_y:.2f}m > {self.config.admissible_position_error}m")
+            _mpc_timing.record_lateral_mpc_ms((time.perf_counter() - t0) * 1000)
             return self._fallback_steering(e_y=e_y, e_psi=e_psi)
         
         if abs(e_psi) > self.config.admissible_yaw_error_rad:
@@ -574,6 +582,7 @@ class MPCLateralController:
             else:
                 print(f"[MPC] Yaw error too large: {e_psi:.2f}rad ({yaw_error_deg:.1f}deg) > {self.config.admissible_yaw_error_rad:.2f}rad")
                 print(f"[MPC] Orientation details: vehicle_heading={vehicle_heading_deg:.1f}deg, reference_heading=N/A, error={yaw_error_deg:.1f}deg")
+            _mpc_timing.record_lateral_mpc_ms((time.perf_counter() - t0) * 1000)
             return self._fallback_steering(e_y=e_y, e_psi=e_psi)
         
         # Get current steering angle (delta)
@@ -613,6 +622,7 @@ class MPCLateralController:
             # Accept "solved" and "solved inaccurate" (solution meets relaxed tolerances, usable for control)
             if result.info.status not in ('solved', 'solved inaccurate'):
                 print(f"[MPC] Solver failed: {result.info.status}")
+                _mpc_timing.record_lateral_mpc_ms((time.perf_counter() - t0) * 1000)
                 return self._fallback_steering()
             if result.info.status == 'solved inaccurate':
                 # Log occasionally (first time, then every 500 occurrences)
@@ -751,10 +761,12 @@ class MPCLateralController:
             self.last_valid_steering = delta_cmd_rad  # now in rad
             
             # Plan Step 1: controller returns steer_road_rad (rad), not normalized
+            _mpc_timing.record_lateral_mpc_ms((time.perf_counter() - t0) * 1000)
             return float(delta_cmd_rad)
             
         except Exception as e:
             print(f"[MPC] Error solving QP: {e}")
+            _mpc_timing.record_lateral_mpc_ms((time.perf_counter() - t0) * 1000)
             return self._fallback_steering()
     
     def _is_3d_waypoint(self, waypoint) -> bool:
