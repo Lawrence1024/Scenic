@@ -250,13 +250,13 @@ class VehicleController:
 
             # Debug every 50 ego control ticks (control-time + sim-time alignment)
             if obj._ego_control_count % 50 == 0:
-                # Control-time (based on configured control period if available)
+                # Control-time (prefer actual control period; support controlPeriod or control_period)
                 ctrl_period = getattr(self.simulation, "control_period", None)
-                if ctrl_period is None or self._safe_float(ctrl_period, 0.0) <= 0.0:
-                    ctrl_period = float(getattr(self.simulation, "timestep", 0.0))
-                else:
-                    ctrl_period = float(ctrl_period)
-                t_ctrl = obj._ego_control_count * ctrl_period
+                if ctrl_period is None:
+                    ctrl_period = getattr(self.simulation, "controlPeriod", None)
+                if ctrl_period is None or float(ctrl_period) <= 0:
+                    ctrl_period = 0.05  # fallback for your current experiment
+                t_ctrl = obj._ego_control_count * float(ctrl_period)
 
                 # Sim-time from simulation step index
                 sim_step_idx = int(getattr(self.simulation, "currentTime", 0))
@@ -304,9 +304,9 @@ class VehicleController:
                 try:
                     if action_type == "gear":
                         gear_int = max(0, min(6, int(value)))
-                        self.cd.set_var(self.KEY_GEAR, gear_int)
-                        if obj._ego_control_count <= 5 or obj._ego_control_count % 50 == 0:
-                            print(f"[EgoControl] Setting gear to {gear_int}")
+                        if self._maybe_write_cd(self.KEY_GEAR, gear_int, 0.0):
+                            if obj._ego_control_count <= 5 or obj._ego_control_count % 50 == 0:
+                                print(f"[EgoControl] Setting gear to {gear_int}")
                     elif action_type == "clutch":
                         clutch_pct = float(value * 100.0)
                         self.cd.set_var(self.KEY_CLUTCH, clutch_pct)
@@ -315,6 +315,7 @@ class VehicleController:
                     print(f"[VehicleController:EgoControl] {action_type} error: {e}")
                     import traceback
                     traceback.print_exc()
+            obj._oneshot_actions.clear()
 
     # -------------------------------------------------------------------------
     # Fellow control

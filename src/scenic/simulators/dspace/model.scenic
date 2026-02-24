@@ -117,19 +117,21 @@ class DSPACERacingCar(RacingCar, _DSpaceVehicle, Steers, HasManualTransmission, 
     
     # HasManualTransmission protocol implementation (for racing domain actions)
     def setGear(self, gear):
-        """Set gear using racing domain protocol."""
-        print(f"[DSPACERacingCar.setGear] Called with gear={gear}")
-        # Store as one-shot action for immediate application
+        if getattr(self, '_debug_transmission', False):
+            print(f"[DSPACERacingCar.setGear] Called with gear={gear}")
         if not hasattr(self, '_oneshot_actions'):
             self._oneshot_actions = []
+        # remove previous pending gear action, keep only latest
+        self._oneshot_actions = [a for a in self._oneshot_actions if a[0] != 'gear']
         self._oneshot_actions.append(('gear', int(gear)))
-    
+
     def setClutch(self, clutch):
-        """Set clutch using racing domain protocol."""
-        print(f"[DSPACERacingCar.setClutch] Called with clutch={clutch}")
-        # Store as one-shot action for immediate application
+        if getattr(self, '_debug_transmission', False):
+            print(f"[DSPACERacingCar.setClutch] Called with clutch={clutch}")
         if not hasattr(self, '_oneshot_actions'):
             self._oneshot_actions = []
+        # remove previous pending clutch action, keep only latest
+        self._oneshot_actions = [a for a in self._oneshot_actions if a[0] != 'clutch']
         self._oneshot_actions.append(('clutch', float(clutch)))
     
     # RacingSteers protocol implementation (for decision tree actions)

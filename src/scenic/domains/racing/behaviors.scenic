@@ -557,10 +557,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             final_steer = getattr(self, '_last_final_steer', 0.0)
             final_throttle = getattr(self, '_last_final_throttle', 0.0)
             final_brake = getattr(self, '_last_final_brake', 0.0)
-            final_gear = getattr(self, '_last_final_gear', getattr(self, 'gear', 1))
             _fast_actions = [SetSteerAction(final_steer), SetThrottleAction(final_throttle), SetBrakeAction(final_brake)]
-            if manage_gears and hasattr(self, 'setGear'):
-                _fast_actions.append(SetGearAction(final_gear))
             take _fast_actions
             wait
             continue
@@ -743,8 +740,14 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                                         self._waypoints_passed = 0
                                     self._waypoints_passed += 1
                                     progress_pct = (self._waypoints_passed / len(wp_list)) * 100.0 if len(wp_list) > 0 else 0.0
+                                    sim = simulation()
+                                    ctrl_dt = getattr(sim, 'control_dt', None)
+                                    if ctrl_dt is None or ctrl_dt <= 0:
+                                        ctrl_dt = getattr(sim, 'control_period', None)
+                                    if ctrl_dt is None or ctrl_dt <= 0:
+                                        ctrl_dt = float(getattr(sim, 'timestep', 0.05))
                                     step_wp = getattr(self, '_behavior_step_count', 0)
-                                    t_wp = step_wp * 0.05
+                                    t_wp = step_wp * ctrl_dt
                                     seg_wp = get_segment_at_waypoint(wp_last_idx, getattr(self, '_waypoint_segment_map', None))
                                     seg_str = f" {get_segment_label(*seg_wp)}" if seg_wp is not None else " segment ?"
                                     print(f"[FollowRacingLineMPCBehavior] t={t_wp:.2f}s WAYPOINT HIT: index {old_wp_idx} -> {wp_last_idx} at ({current_wp_x:.2f}, {current_wp_y:.2f}), distance={current_wp_dist:.2f}m{seg_str}")
@@ -1299,15 +1302,32 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     # If reading fails, MPC will use previous state estimate
                     pass
     
-            # Convert waypoints to list of tuples for MPC (preserve 3D if available)
-            waypoints_for_mpc = None
-            if wp_list and len(wp_list) >= 2:
-                # Check if waypoints are 3D
-                is_3d_waypoints = len(wp_list[0]) >= 3
-                if is_3d_waypoints:
-                    waypoints_for_mpc = [(float(wp[0]), float(wp[1]), float(wp[2])) for wp in wp_list]
+            # Convert waypoints to list of tuples for MPC (preserve 3D if available); cache to avoid rebuild every tick
+            _wp_src = wp_list
+            _wp_src_id = id(_wp_src)
+            _wp_len = len(_wp_src) if _wp_src else 0
+
+            cache_ok = (
+                hasattr(self, '_waypoints_for_mpc_cache_id') and
+                self._waypoints_for_mpc_cache_id == _wp_src_id and
+                getattr(self, '_waypoints_for_mpc_cache_len', -1) == _wp_len
+            )
+
+            if cache_ok:
+                waypoints_for_mpc = self._waypoints_for_mpc_cache
+            else:
+                if _wp_src and len(_wp_src) >= 2:
+                    is_3d_waypoints = len(_wp_src[0]) >= 3
+                    if is_3d_waypoints:
+                        waypoints_for_mpc = tuple((float(wp[0]), float(wp[1]), float(wp[2])) for wp in _wp_src)
+                    else:
+                        waypoints_for_mpc = tuple((float(wp[0]), float(wp[1])) for wp in _wp_src)
                 else:
-                    waypoints_for_mpc = [(float(wp[0]), float(wp[1])) for wp in wp_list]
+                    waypoints_for_mpc = None
+
+                self._waypoints_for_mpc_cache = waypoints_for_mpc
+                self._waypoints_for_mpc_cache_id = _wp_src_id
+                self._waypoints_for_mpc_cache_len = _wp_len
 
             # Compute steering using MPC (mpc_total in [LoopOther] from record_lateral_mpc_ms + record_longitudinal_mpc_ms)
             # Pass CTE magnitude for adaptive waypoint search
@@ -1524,9 +1544,15 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
 
         # ---- Detailed drive logging (heavy brake / near stop / speed drop) ----
         # Use step_for_log (not _step) to avoid shadowing the behavior's _step() method
-        # Timestamp t = step * 0.05s for systematic comparison across runs (scenario time_step)
+        # Timestamp t = step * control_dt for systematic comparison across runs
+        sim = simulation()
+        ctrl_dt = getattr(sim, 'control_dt', None)
+        if ctrl_dt is None or ctrl_dt <= 0:
+            ctrl_dt = getattr(sim, 'control_period', None)
+        if ctrl_dt is None or ctrl_dt <= 0:
+            ctrl_dt = float(getattr(sim, 'timestep', 0.05))
         step_for_log = getattr(self, '_behavior_step_count', 0) + 1
-        t_log = step_for_log * 0.05
+        t_log = step_for_log * ctrl_dt
         _last_speed = getattr(self, '_last_speed', None)
         if final_brake > 0.25:
             cte_show = float(cte) if cte is not None else 0.0
@@ -1595,7 +1621,13 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         self._last_final_gear = gear_val if gear_val >= 1 else 1
         # Log step summary every 50 steps; include t= and OpenDRIVE-based segment for segment performance analysis
         if self._behavior_step_count % 50 == 0:
-            t_log = self._behavior_step_count * 0.05
+            sim = simulation()
+            ctrl_dt = getattr(sim, 'control_dt', None)
+            if ctrl_dt is None or ctrl_dt <= 0:
+                ctrl_dt = getattr(sim, 'control_period', None)
+            if ctrl_dt is None or ctrl_dt <= 0:
+                ctrl_dt = float(getattr(sim, 'timestep', 0.05))
+            t_log = self._behavior_step_count * ctrl_dt
             seg = get_segment_at_waypoint(wp_last_idx, getattr(self, '_waypoint_segment_map', None))
             segment_str = f" {get_segment_label(*seg)}" if seg is not None else " segment ?"
             print(f"[FollowRacingLineMPC] t={t_log:.2f}s Step {self._behavior_step_count}: pos=({px:.2f},{py:.2f}) speed={current_speed:.2f}m/s CTE={cte:.3f}m steer={final_steer:.3f} throttle={final_throttle:.3f} brake={final_brake:.3f} gear={gear_val} curv_ahead={curvature_ahead_max:.3f}{segment_str}")

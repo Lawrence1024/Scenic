@@ -114,6 +114,7 @@ class DSpaceSimulation(RacingSimulation):
                     f"Got {steps_float} steps (must be an integer)."
                 )
             self._control_interval = max(1, int(round(steps_float)))
+        self.control_dt = float(ts) * max(1, self._control_interval)
         # Light-step mode: disable COM read/write to test step_time in isolation (param light_step or env SCENIC_DSPACE_LIGHT_STEP)
         _light = os.environ.get("SCENIC_DSPACE_LIGHT_STEP", "").strip().lower()
         self._light_step = getattr(sim, "light_step", False) or _light in ("1", "true", "yes")
@@ -1247,22 +1248,39 @@ class DSpaceSimulation(RacingSimulation):
             'yaw_rate': float(ang.z) if hasattr(ang, 'z') else 0.0,
         }
         # --- Tiny clock debug: capture latest ego snapshot for alignment checks ---
+        # Only set after valid ego properties are read; never store None (avoids nan in ClockDebug print)
         try:
             _name = str(getattr(obj, "name", "")).lower()
             _is_ego = bool(getattr(obj, "isEgo", False)) or ("ego" in _name)
         except Exception:
             _is_ego = False
 
-        if _is_ego:
+        if _is_ego and pos is not None and vel is not None:
             try:
+                # Safe numeric extraction: do not store None (consumer uses .get(key, nan) for missing keys)
+                _x = float(pos.x) if hasattr(pos, "x") and pos.x is not None else 0.0
+                _y = float(pos.y) if hasattr(pos, "y") and pos.y is not None else 0.0
+                _z = float(getattr(pos, "z", 0.0)) if pos is not None else 0.0
+                _speed = float(vel.norm()) if hasattr(vel, "norm") else 0.0
+                _yaw = float(yaw) if yaw is not None else 0.0
+                if not math.isfinite(_x):
+                    _x = 0.0
+                if not math.isfinite(_y):
+                    _y = 0.0
+                if not math.isfinite(_z):
+                    _z = 0.0
+                if not math.isfinite(_speed):
+                    _speed = 0.0
+                if not math.isfinite(_yaw):
+                    _yaw = 0.0
                 self._clock_debug_ego = {
                     "step": int(self.currentTime),
                     "sim_time": float(self.currentTime * self.timestep),
-                    "x": float(pos.x),
-                    "y": float(pos.y),
-                    "z": float(pos.z) if hasattr(pos, "z") else 0.0,
-                    "speed": float(vel.norm()),
-                    "yaw": float(yaw),
+                    "x": _x,
+                    "y": _y,
+                    "z": _z,
+                    "speed": _speed,
+                    "yaw": _yaw,
                 }
             except Exception:
                 pass

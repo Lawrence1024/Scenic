@@ -1,45 +1,44 @@
-## 3) `controller.py` — patch debug print so it shows both control-time and sim-time
+### 3) Cache `waypoints_for_mpc` conversion in `racing/behaviors.scenic`
 
-You still have a hardcoded:
+You currently rebuild the tuple list every control tick:
 
 ```python
-t_log = obj._ego_control_count * 0.05
+waypoints_for_mpc = [(float(wp[0]), float(wp[1]), ... ) for wp in wp_list]
 ```
 
-That’s not ideal for debugging.
+That’s pure Python allocation overhead on a hot path.
 
-Find this block (around line ~111):
+### Low-risk optimization
 
-```python
-if obj._ego_control_count % 50 == 0:
-    t_log = obj._ego_control_count * 0.05
-```
+Cache the converted waypoint list and only rebuild if the source list changes.
 
-### Replace with:
+#### Suggested pattern
 
 ```python
-if obj._ego_control_count % 50 == 0:
-    # Control-time (based on actual configured control period)
-    ctrl_period = getattr(self.simulation, "control_period", None)
-    if ctrl_period is None or float(ctrl_period) <= 0:
-        ctrl_period = float(getattr(self.simulation, "timestep", 0.0))
+# Before converting
+_wp_src = wp_list
+_wp_src_id = id(_wp_src)
+_wp_len = len(_wp_src) if _wp_src else 0
+
+cache_ok = (
+    hasattr(self, '_waypoints_for_mpc_cache_id') and
+    self._waypoints_for_mpc_cache_id == _wp_src_id and
+    getattr(self, '_waypoints_for_mpc_cache_len', -1) == _wp_len
+)
+
+if cache_ok:
+    waypoints_for_mpc = self._waypoints_for_mpc_cache
+else:
+    if _wp_src and len(_wp_src) >= 2:
+        is_3d_waypoints = len(_wp_src[0]) >= 3
+        if is_3d_waypoints:
+            waypoints_for_mpc = tuple((float(wp[0]), float(wp[1]), float(wp[2])) for wp in _wp_src)
+        else:
+            waypoints_for_mpc = tuple((float(wp[0]), float(wp[1])) for wp in _wp_src)
     else:
-        ctrl_period = float(ctrl_period)
-    t_ctrl = obj._ego_control_count * ctrl_period
+        waypoints_for_mpc = None
 
-    # Sim-time from simulation step index (for visualization alignment)
-    sim_step_idx = int(getattr(self.simulation, "currentTime", 0))
-    t_sim = sim_step_idx * float(getattr(self.simulation, "timestep", 0.0))
-```
-
-Then update the print line from:
-
-```python
-print(f"[EgoControl] t={t_log:.2f}s #{obj._ego_control_count} Writing: ...")
-```
-
-to:
-
-```python
-print(f"[EgoControl] t_ctrl={t_ctrl:.2f}s sim_t={t_sim:.2f}s step={sim_step_idx} #{obj._ego_control_count} Writing: throttle={throttle_scenic:.3f}->{throttle_scenic*100:.1f}, brake={brake_scenic:.3f}->{brake_scenic*100:.1f}, steer_rad={_delta_rad:.4f}->{steer_deg:.1f}deg")
+    self._waypoints_for_mpc_cache = waypoints_for_mpc
+    self._waypoints_for_mpc_cache_id = _wp_src_id
+    self._waypoints_for_mpc_cache_len = _wp_len
 ```
