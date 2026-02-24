@@ -10,7 +10,8 @@ The Scenic Racing Domain (`@racing/`) extends the Driving Domain (`@driving/`) w
 - **Pit lanes** separate from racing lanes with automatic detection
 - **Sectors** for timing and performance analysis (auto-divided into 3 sectors)
 - **Starting grids** for race starts
-- **Racing-specific controllers** optimized for track performance
+- **Racing controllers:** PID (driving domain) or **MPC** (MPCC lateral + longitudinal) via `getRacingControllers(agent, use_mpc=True)`
+- **Waypoint-based racing line** with segment maps and TTL loading (`segments/`, `mpc/`)
 - **Minimal but extensible API** that simulators can implement
 
 ## Table of Contents
@@ -248,6 +249,16 @@ behavior FollowRacingLineBehavior(target_speed=30):
 ```
 
 **Usage**: `do FollowRacingLineBehavior(target_speed=35)`
+
+### `FollowRacingLineMPCBehavior`
+
+**Purpose**: Follow the car's TTL using **MPC** for lateral control (MPCC) and longitudinal control, with waypoint-based reference and curvature/CTE speed profile.
+
+**Implementation**: Uses `getRacingControllers(self, use_mpc=True, mpc_config_path=...)` to obtain `MPCLateralController` and `MPCLongitudinalController`. CTE and reference are computed from waypoints (same geometry as MPCC). Supports gear management, configurable lookahead, and optional custom MPC config path.
+
+**Usage**: `do FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, lookahead=20.0, mpc_config_path=None)`
+
+**Details**: See `mpc/README.md` for formulation, configuration, and integration.
 
 ### `PitStopBehavior`
 
@@ -569,14 +580,15 @@ chaser.behavior = OvertakingBehavior(leader, aggressive=True)
 - Track direction enforcement
 - Starting grid generation
 - Racing car objects with proper properties
-- 4 racing behaviors (basic functionality)
+- 5 racing behaviors: `FollowRacingLineBehavior`, **`FollowRacingLineMPCBehavior`** (MPC), `PitStopBehavior`, `OvertakingBehavior`, `DefensiveBehavior`
 - 5 racing actions (max speed, TTL, gear/clutch)
 - dSPACE integration (via `racing_model.scenic`)
 - Sector-based organization (auto-generated 3 sectors)
 - Pit lane identification (via road ID or name pattern)
 - Racing simulator interface (`RacingSimulator`, `RacingSimulation`)
 - Manual transmission protocol (`HasManualTransmission`)
-- Racing controllers (optimized PID for different scenarios)
+- Racing controllers: **MPC** (lateral MPCC + longitudinal) when `getRacingControllers(agent, use_mpc=True)`; otherwise optimized PID from driving domain
+- MPC module: MPCC lateral controller, longitudinal MPC, reference builder, speed profile, result_data analysis (see `mpc/README.md`)
 
 ### ⚠️ Partially Implemented
 
@@ -672,6 +684,7 @@ ReleaseClutchAction()
 
 ```scenic
 FollowRacingLineBehavior(target_speed=30)
+FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, lookahead=20.0, mpc_config_path=None)
 PitStopBehavior()  # May require simulator-specific PitLimiterAction
 OvertakingBehavior(target_car, aggressive=False)  # May require simulator-specific actions
 DefensiveBehavior()  # May require simulator-specific actions
@@ -680,7 +693,11 @@ DefensiveBehavior()  # May require simulator-specific actions
 ### Racing Controllers (from `RacingSimulation`)
 
 ```python
-getRacingControllers(agent) -> Tuple[PIDLongitudinalController, PIDLateralController]
+getRacingControllers(agent, use_mpc=False, mpc_config_path=None)
+#   -> Tuple[LongitudinalController, LateralController]
+#   If use_mpc=True: (MPCLongitudinalController, MPCLateralController)
+#   If use_mpc=False: (PIDLongitudinalController, PIDLateralController) from driving domain
+
 getRacingLineControllers(agent) -> Tuple[PIDLongitudinalController, PIDLateralController]
 getPitLaneControllers(agent) -> Tuple[PIDLongitudinalController, PIDLateralController]
 getOvertakingControllers(agent) -> Tuple[PIDLongitudinalController, PIDLateralController]
@@ -743,8 +760,9 @@ class MyRacingCar(RacingCar, HasManualTransmission):
 Implement or override controller methods:
 
 ```python
-def getRacingControllers(self, agent):
-    # Return optimized PID controllers for racing
+def getRacingControllers(self, agent, use_mpc=False, mpc_config_path=None):
+    # If use_mpc=True: return (MPCLongitudinalController, MPCLateralController)
+    # Else: return optimized PID controllers for racing from driving domain
     return lon_controller, lat_controller
 ```
 
@@ -795,11 +813,20 @@ src/scenic/domains/racing/
 ├── __init__.py              # Domain documentation & initialization
 ├── tracks.py                # RacingTrack, PitLane, Sector, RacingLine classes
 ├── model.scenic             # Racing objects, regions, utilities
-├── behaviors.scenic          # Racing behaviors
+├── behaviors.scenic         # Racing behaviors (incl. FollowRacingLineMPCBehavior)
 ├── actions.py               # Racing actions
-├── simulators.py            # Racing simulator interfaces
-├── README.md                 # This file (complete reference)
-└── __pycache__/             # Python cache files
+├── simulators.py            # Racing simulator interfaces (getRacingControllers with use_mpc)
+├── README.md                # This file (complete reference)
+├── supplement_log_instructions.md  # Optional logging for MPC/deadzone/ref continuity
+├── mpc/                     # MPC/MPCC lateral + longitudinal controllers
+│   ├── config.py, reference_builder.py, mpc_lateral.py, mpc_longitudinal.py
+│   ├── speed_profile.py, io_adapter.py, utils.py, calibration.py
+│   ├── vehicle_mpc.yaml, README.md
+│   ├── result_data/         # Log analysis (analyze_racing_log, compare_racing_results)
+│   └── testing/             # Unit and integration tests
+└── segments/                # Segment map and racing-line utilities
+    ├── segment_map.py, visualize_racing_segments.py
+    └── README.md
 
 src/scenic/simulators/dspace/
 └── racing_model.scenic      # dSPACE+Racing integration
@@ -828,10 +855,11 @@ The Racing Domain provides a **minimal but functional** foundation for racing sc
 
 - **1 Object Type**: `RacingCar` with racing systems
 - **5 Actions**: Max speed, TTL, gear, clutch (press/release)
-- **4 Behaviors**: Racing line following, pit stops, overtaking, defense
+- **5 Behaviors**: Racing line following (PID), **racing line following with MPC**, pit stops, overtaking, defense
 - **3 Regions**: Main racing road, pit lane road, racing line
 - **Multiple Track Features**: Sectors, pit lanes, racing lines, starting grids
+- **MPC submodule**: MPCC lateral + longitudinal MPC, waypoint reference, speed profile, log analysis (`mpc/`, `segments/`)
 
-The implementation is intentionally lean, focusing on core racing functionality that simulators can build upon. The domain is **production-ready** for basic racing scenarios but may require simulator-specific extensions for advanced features.
+The implementation is intentionally lean, focusing on core racing functionality that simulators can build upon. The domain supports both PID and MPC-based racing line following; see `mpc/README.md` for MPC details.
 
 For questions or contributions, see the main Scenic documentation or contact the development team.

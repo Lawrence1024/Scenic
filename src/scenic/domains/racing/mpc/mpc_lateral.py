@@ -73,6 +73,10 @@ class MPCLateralController:
         # Reference continuity gate: don't swap to a segment when association is weak (curve-approach stability)
         self._max_wp_match_dist_m = getattr(config, 'max_wp_match_dist_m', 3.0)
         self._max_s_jump_m = getattr(config, 'max_s_jump_m', 4.0)
+        # Recommendation B: when gate rejects and match_dist > this, force re-association (m)
+        self._gate_hard_fail_dist_m = getattr(config, 'gate_hard_fail_dist_m', 6.0)
+        # Recommendation C: only stick to segment when match_dist < this (m)
+        self._stick_association_ok_m = getattr(config, 'stick_association_ok_m', 2.0)
         
         # OSQP solver (will be initialized on first solve)
         self.solver = None
@@ -309,6 +313,14 @@ class MPCLateralController:
                 P[u_km1_idx, u_km2_idx] -= 4.0 * w_ddu_k
                 P[u_km2_idx, u_km1_idx] -= 4.0 * w_ddu_k
             
+            # Task 3: Yaw-rate damping — penalize (e_psi_{k+1} - e_psi_k)^2 to prevent snap oscillations
+            w_epsi_rate = getattr(self.config, 'w_epsi_rate', 0.1)
+            if w_epsi_rate > 0:
+                P[x_k_idx + 1, x_k_idx + 1] += w_epsi_rate
+                P[x_kp1_idx + 1, x_kp1_idx + 1] += w_epsi_rate
+                P[x_k_idx + 1, x_kp1_idx + 1] -= 2.0 * w_epsi_rate
+                P[x_kp1_idx + 1, x_k_idx + 1] -= 2.0 * w_epsi_rate
+            
             # Dynamics: x_{k+1} = A_k * x_k + B_k * u_k + g_k
             # e_y_{k+1} = e_y_k + v_k * e_psi_k * dt
             A[constraint_idx, x_k_idx] = 1.0  # e_y_k
@@ -410,6 +422,7 @@ class MPCLateralController:
         y = vehicle_state.get('y', 0.0)
         yaw = vehicle_state.get('yaw', 0.0)
         speed = vehicle_state.get('speed', 0.0)
+        yaw_rate = vehicle_state.get('yaw_rate', None)  # rad/s, for Recommendation D (STEER_SIGN_SANITY)
         gear = vehicle_state.get('gear', None)  # Get gear if available
         
         # Safety check: disable MPC if in neutral (gear 0) or if speed is very low AND gear unknown
@@ -422,7 +435,20 @@ class MPCLateralController:
             # Very slow or stopped AND gear unknown - return zero steering
             return 0.0
         
+        # Compute lateral errors and segment first so reference uses same segment (single-segment
+        # consistency: avoids ff/fb mismatch and steering wobble at curve exits)
+        prev_e_y = float(self.state[0]) if hasattr(self, 'state') and self.state is not None and len(self.state) > 0 else None
+        e_y, e_psi, mpc_segment_idx = self._compute_errors(
+            position=(x, y),
+            heading=yaw,
+            waypoints=waypoints,
+            current_waypoint_idx=current_waypoint_idx,
+            prev_e_y=prev_e_y
+        )
+        self._log_mpc_e_y = float(e_y)
+        
         # Build reference trajectory (Phase 1: returns s_0 and s_horizon for MPCC)
+        # Pass reference_segment_idx so kappa_ref/s_0 and e_y/e_psi refer to the same path segment
         try:
             (psi_ref, kappa_ref, v_ref, grade_ref, new_waypoint_idx,
              s_0, s_horizon) = self.ref_builder.build_reference(
@@ -434,11 +460,23 @@ class MPCLateralController:
                 speed=speed,
                 last_waypoint_idx=current_waypoint_idx,
                 cte_magnitude=cte_magnitude,
-                v_ref_profile=v_ref_profile
+                v_ref_profile=v_ref_profile,
+                reference_segment_idx=mpc_segment_idx
             )
             # Phase 1: store progress s_0 and s along horizon for logging / Phase 2 (no cost change yet)
             self._last_s_0 = s_0
             self._last_s_horizon = s_horizon
+            # Task 1: signed curvature sanity — kappa at +10 m along arc for log
+            s_ahead_m = 10.0
+            kappa_ref_ahead_signed = None
+            if s_horizon is not None and kappa_ref is not None and len(s_horizon) == len(kappa_ref):
+                for k in range(len(s_horizon)):
+                    if s_horizon[k] >= s_0 + s_ahead_m:
+                        kappa_ref_ahead_signed = float(kappa_ref[k])
+                        break
+                if kappa_ref_ahead_signed is None and len(kappa_ref) > 0:
+                    kappa_ref_ahead_signed = float(kappa_ref[-1])
+            self._log_kappa_ref_ahead_signed = kappa_ref_ahead_signed
             # grade_ref is computed but not used by lateral MPC (used by longitudinal MPC)
             # Debug: verify arrays right after build_reference returns
             if len(psi_ref) != self.config.mpc_prediction_horizon:
@@ -464,36 +502,19 @@ class MPCLateralController:
             except:
                 return self._fallback_steering(e_y=None, e_psi=None)
         
-        # Compute current state [e_y, e_psi, delta]
-        # MPC now dynamically selects the best segment each step; pass prev CTE so we stick to segment when far off line
-        prev_e_y = float(self.state[0]) if hasattr(self, 'state') and self.state is not None and len(self.state) > 0 else None
-        e_y, e_psi, mpc_segment_idx = self._compute_errors(
-            position=(x, y),
-            heading=yaw,
-            waypoints=waypoints,
-            current_waypoint_idx=current_waypoint_idx,
-            prev_e_y=prev_e_y
-        )
-        # Log MPCC internal e_y (before deadzone) for comparison with behavior CTE on same tick
-        self._log_mpc_e_y = float(e_y)
-
-        # Compute reference heading for logging (extract from _compute_errors logic)
-        # NOTE: Use different variable name to avoid shadowing the psi_ref array from build_reference
+        # e_y, e_psi, mpc_segment_idx already computed above (single-segment consistency)
+        # Compute reference heading for logging (use segment index from reference = mpc_segment_idx)
         psi_ref_logging = None
-        if waypoints and len(waypoints) > new_waypoint_idx and new_waypoint_idx >= 0:
-            if new_waypoint_idx < len(waypoints) - 1:
-                wp0 = waypoints[new_waypoint_idx]
-                wp1 = waypoints[new_waypoint_idx + 1]
+        if waypoints and len(waypoints) > mpc_segment_idx and mpc_segment_idx >= 0:
+            if mpc_segment_idx < len(waypoints) - 1:
+                wp0 = waypoints[mpc_segment_idx]
+                wp1 = waypoints[mpc_segment_idx + 1]
                 seg_dx = wp1[0] - wp0[0]
                 seg_dy = wp1[1] - wp0[1]
                 seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)
                 if seg_len > 1e-6:
                     psi_ref_logging = np.arctan2(seg_dy, seg_dx)
-                    # Apply same 180° flip logic as in _compute_errors
-                    heading_diff = psi_ref_logging - yaw
-                    heading_diff = np.arctan2(np.sin(heading_diff), np.cos(heading_diff))
-                    if abs(heading_diff) > np.pi / 2:  # > 90 degrees
-                        psi_ref_logging = np.arctan2(np.sin(psi_ref_logging + np.pi), np.cos(psi_ref_logging + np.pi))
+                    # No 180° flip (Recommendation #1: removed from _compute_errors)
         
         # To-Do 2: Conditional CTE deadzone — only apply when |CTE| small AND association good AND curv_ahead_max < curv_deadzone_max
         dz = getattr(self.config, 'cte_deadzone', 0.2)
@@ -604,12 +625,35 @@ class MPCLateralController:
             n_x = 4  # State dimension [e_y, e_psi, delta, s] (Phase 2)
             u_0_idx = n_x  # First control is after initial state
             delta_fb_rad = float(result.x[u_0_idx])
-            # Explicit curvature feedforward: delta_ff = arctan(L * kappa_ref) so MPC only tracks residual
+            # Task 2: Feedforward uses preview curvature (signed) for chicanes — switch to higher preview blend when chicane detected
             L = self.config.wheel_base
-            delta_ff_rad = math.atan(L * float(kappa_ref[0]))
+            kappa_at_proj_ff = float(kappa_ref[0]) if kappa_ref is not None and len(kappa_ref) > 0 else 0.0
+            kappa_ahead = getattr(self, '_log_kappa_ref_ahead_signed', None)
+            ff_preview_blend = getattr(self.config, 'ff_preview_blend', 0.4)
+            ff_chicane_blend = getattr(self.config, 'ff_chicane_preview_blend', 0.85)  # Task 2: use preview in chicanes
+            chicane_thresh = getattr(self.config, 'ff_chicane_curvature_threshold', 0.02)  # 1/m
+            is_chicane = False
+            if kappa_ahead is not None:
+                ka = float(kappa_ahead)
+                if abs(kappa_at_proj_ff) > chicane_thresh and abs(ka) > chicane_thresh and (kappa_at_proj_ff * ka < 0):
+                    is_chicane = True  # sign flip = chicane (S-bend)
+                blend = ff_chicane_blend if is_chicane else ff_preview_blend
+                kappa_ff = (1.0 - blend) * kappa_at_proj_ff + blend * ka
+            else:
+                kappa_ff = kappa_at_proj_ff
+            delta_ff_rad = math.atan(L * kappa_ff)
             delta_cmd_rad_raw = delta_ff_rad + delta_fb_rad
             # To-Do 4.2: use higher steer cap in high curvature if max_steer_angle_high_curv set
             kappa_at_proj_0 = float(kappa_ref[0]) if kappa_ref is not None and len(kappa_ref) > 0 else 0.0
+            # Same-sign clamp in curvature: never steer opposite to path (avoids spin from ff/fb opposition)
+            _curv_sign_clamp_min = getattr(self.config, 'curvature_same_sign_clamp_min', 0.02)  # 1/m
+            if abs(kappa_at_proj_0) >= _curv_sign_clamp_min:
+                _same_sign = (delta_cmd_rad_raw > 0) == (delta_ff_rad > 0)
+                if not _same_sign:
+                    if delta_ff_rad > 0:
+                        delta_cmd_rad_raw = max(0.0, delta_cmd_rad_raw)
+                    elif delta_ff_rad < 0:
+                        delta_cmd_rad_raw = min(0.0, delta_cmd_rad_raw)
             high_t = getattr(self.config, 'high_curvature_threshold', 0.1)
             current_delta_max = self.config.max_steer_angle
             if getattr(self.config, 'max_steer_angle_high_curv', None) is not None and abs(kappa_at_proj_0) >= high_t:
@@ -652,6 +696,22 @@ class MPCLateralController:
                 print(f"[MPC] *** FF TRIPWIRE 1: abs(delta_ff)={abs(delta_ff_rad):.4f} > abs(delta_total)+eps={abs(delta_cmd_rad_raw) + _eps:.4f} — suspicious (ff dominating unexpectedly)")
             if abs(kappa_at_proj) > _k_min and ((delta_ff_rad > 0) != (kappa_at_proj > 0)):
                 print(f"[MPC] *** FF TRIPWIRE 2: sign(delta_ff) != sign(kappa_ref_at_proj) with |kappa_ref|={abs(kappa_at_proj):.4f} > {_k_min} — likely sign/axis mismatch")
+            
+            # Recommendation D: STEER_SIGN_SANITY — compare sign(delta_cmd) vs sign(yaw_rate/v) (curvature from motion)
+            kappa_pred = kappa_at_proj_0
+            _v = float(speed) if speed is not None else 0.0
+            if _v > 0.15 and yaw_rate is not None:
+                kappa_meas = float(yaw_rate) / _v  # curvature from motion (same as STEER_CAL kappa)
+            else:
+                kappa_meas = kappa_at_proj  # fallback to path curvature when yaw_rate/v unavailable
+            sign_delta = 1 if delta_cmd_rad > 0 else (-1 if delta_cmd_rad < 0 else 0)
+            sign_kappa = 1 if kappa_meas > 0 else (-1 if kappa_meas < 0 else 0)
+            print(f"[MPC] STEER_SIGN_SANITY delta_cmd_rad={delta_cmd_rad:.4f} kappa_pred={kappa_pred:.4f} kappa_meas={kappa_meas:.4f} (yaw_rate/v) sign_delta_cmd={sign_delta} sign_kappa_meas={sign_kappa}")
+            _steer_sanity_count = getattr(self, '_steer_sanity_mismatch_count', 0)
+            if abs(delta_cmd_rad) > 0.05 and abs(kappa_meas) > 0.02 and delta_cmd_rad * kappa_meas < 0:
+                _steer_sanity_count += 1
+                self._steer_sanity_mismatch_count = _steer_sanity_count
+                print(f"[MPC] STEER_SIGN_SANITY MISMATCH #{_steer_sanity_count} (delta_cmd and yaw_rate/v opposite signs — actuation sign inversion)")
             
             # Plan: output is road wheel angle (rad). Normalized only for debug logs.
             steer_norm_debug = float(np.clip(delta_cmd_rad / current_delta_max, -1.0, 1.0))
@@ -744,6 +804,9 @@ class MPCLateralController:
             self._log_stick_blocked = False
             self._log_ref_point = None
             self._log_ego = None
+            self._log_s_ref_continuous = True
+            self._log_proj_hop = False
+            self._log_projection_continuity_ok = True
             return (0.0, 0.0, 0)
 
         # Handle both 2D and 3D positions (always use XY for CTE computation)
@@ -823,9 +886,11 @@ class MPCLateralController:
                 best_match_dist = distance
 
         # Reference continuity gate: reject candidate if too far or non-monotonic progress (data association)
+        # Recommendation B: when gate rejects AND match_dist > hard_fail, force re-association (do not keep stale segment)
         gate_reason = None  # for logging: None = accept; 'too_far' | 'backward' | 's_jump' = reject reason
         max_wp_dist = getattr(self, '_max_wp_match_dist_m', 3.0)
         max_s_jump = getattr(self, '_max_s_jump_m', 4.0)
+        hard_fail_dist_m = getattr(self, '_gate_hard_fail_dist_m', 6.0)  # Recommendation B: force re-assoc when off track
         if last_seg is not None and 0 <= last_seg < search_end and best_segment_idx != last_seg:
             reject_candidate = False
             if best_match_dist > max_wp_dist:
@@ -847,8 +912,10 @@ class MPCLateralController:
                     gate_reason = 's_jump'
                     reject_candidate = True  # progress jumped forward too much
             if reject_candidate:
-                best_segment_idx = last_seg
-                # best_match_dist for retained segment not needed for downstream (we keep last_seg)
+                # Recommendation B: if far off track (best_match_dist > hard_fail), accept nearest segment anyway
+                if best_match_dist <= hard_fail_dist_m:
+                    best_segment_idx = last_seg
+                # else: keep best_segment_idx (force re-association to avoid stale reference + saturated steering)
 
         # Smooth segment selection: hysteresis only (no advance cap — cap caused lag at high speed)
         # In bends (high curvature), use stronger hysteresis so we don't switch segment and cause steer flip (generic: curvature in 1/m)
@@ -871,10 +938,14 @@ class MPCLateralController:
             if prev_seg_score is not None and best_segment_idx != last_seg:
                 if best_score >= prev_seg_score - effective_hysteresis_m:
                     waypoint_idx = last_seg
-        # When far off line (|CTE| > threshold), stick to current segment to avoid reference flip and steer oscillation (generic for any TTL)
+        # Recommendation C: stick only when association is good (gate_accept and match_dist < threshold)
+        # When far off, prefer reacquisition over locking to a bad segment
         stick_m = getattr(self, '_segment_stick_cte_m', 1.5)
+        stick_dist_ok_m = getattr(self, '_stick_association_ok_m', 2.0)  # only stick when match_dist < this
+        gate_accept = (gate_reason is None)
         waypoint_idx_before_stick = waypoint_idx
-        if prev_e_y is not None and abs(prev_e_y) >= stick_m and last_seg is not None and 0 <= last_seg < search_end:
+        if (prev_e_y is not None and abs(prev_e_y) >= stick_m and last_seg is not None and 0 <= last_seg < search_end
+                and gate_accept and best_match_dist < stick_dist_ok_m):
             waypoint_idx = last_seg
         stick_blocked = (waypoint_idx_before_stick != waypoint_idx)
         wp0 = waypoints[waypoint_idx]
@@ -898,6 +969,9 @@ class MPCLateralController:
             self._log_stick_blocked = stick_blocked
             self._log_ref_point = None
             self._log_ego = (float(px), float(py))
+            self._log_s_ref_continuous = True
+            self._log_proj_hop = False
+            self._log_projection_continuity_ok = True
             return (0.0, 0.0, waypoint_idx)
         
         # Project vehicle position onto segment (in XY plane)
@@ -909,20 +983,8 @@ class MPCLateralController:
         proj_x = x0 + u_proj * seg_dx
         proj_y = y0 + u_proj * seg_dy
         
-        # Compute heading error (e_psi)
-        # Reference heading is the segment direction
-        psi_ref_original = np.arctan2(seg_dy, seg_dx)
-        psi_ref = psi_ref_original
-        
-        # Check if reference heading is opposite to vehicle heading (>90° difference)
-        # If so, flip it by 180° to align with vehicle's forward direction
-        heading_diff = psi_ref - heading
-        heading_diff = np.arctan2(np.sin(heading_diff), np.cos(heading_diff))  # Normalize to [-pi, pi]
-        heading_flipped = False
-        if abs(heading_diff) > np.pi / 2:  # > 90 degrees
-            # Flip reference heading by 180°
-            psi_ref = np.arctan2(np.sin(psi_ref + np.pi), np.cos(psi_ref + np.pi))
-            heading_flipped = True
+        # Reference heading: segment direction (no flip — avoids spin-induced discontinuity)
+        psi_ref = np.arctan2(seg_dy, seg_dx)
         
         # Option A: blend reference heading toward next segment near boundary to avoid discontinuity
         u_start = self._segment_blend_u_start
@@ -935,12 +997,7 @@ class MPCLateralController:
             seg_dy_next = y1n - y0n
             seg_len_next = np.sqrt(seg_dx_next*seg_dx_next + seg_dy_next*seg_dy_next)
             if seg_len_next >= 1e-6:
-                psi_ref_next_orig = np.arctan2(seg_dy_next, seg_dx_next)
-                psi_ref_next = psi_ref_next_orig
-                heading_diff_next = psi_ref_next - heading
-                heading_diff_next = np.arctan2(np.sin(heading_diff_next), np.cos(heading_diff_next))
-                if abs(heading_diff_next) > np.pi / 2:
-                    psi_ref_next = np.arctan2(np.sin(psi_ref_next + np.pi), np.cos(psi_ref_next + np.pi))
+                psi_ref_next = np.arctan2(seg_dy_next, seg_dx_next)
                 # Ramp alpha from 0 at u_start to 1 at u_proj=1
                 alpha = min(1.0, (u_proj - u_start) / (1.0 - u_start))
                 # Blend angles via unit vector to avoid wrap
@@ -955,20 +1012,8 @@ class MPCLateralController:
         nx = -seg_dy / seg_len
         ny = seg_dx / seg_len
         
-        # NOTE: We do NOT flip the normal vector when heading is flipped
-        # The normal vector is based on geometric position, not travel direction
-        
-        e_y_raw = (px - proj_x)*nx + (py - proj_y)*ny
-        e_y = e_y_raw
-        
-        # CRITICAL FIX: When heading is flipped by 180°, CTE sign must also be flipped!
-        # Why: The normal vector (-dy, dx) is defined relative to the original segment direction.
-        # When we flip the reference heading by 180°, we're saying "travel in the opposite direction".
-        # The CTE "left/right" is relative to travel direction, so it must also flip.
-        # Example: If vehicle is physically right of the geometric line (e_y < 0), but we're
-        # traveling opposite to the line direction, then vehicle is LEFT of the travel path (e_y > 0).
-        if heading_flipped:
-            e_y = -e_y
+        # Normal vector (-dy, dx) points LEFT of segment direction; e_y positive = left of path
+        e_y = (px - proj_x)*nx + (py - proj_y)*ny
         
         # Heading error: difference between reference and actual
         # Normalize to [-pi, pi]
@@ -1000,6 +1045,12 @@ class MPCLateralController:
         self._log_stick_blocked = stick_blocked
         self._log_ref_point = (float(proj_x), float(proj_y))  # CTE cross-check: projection used for match_dist
         self._log_ego = (float(px), float(py))
+        # Task 1: projection continuity — s doesn't jump, projection doesn't hop across track
+        s_jump_ok = (gate_reason != 's_jump')
+        proj_hop = (last_seg is not None and waypoint_idx != last_seg and match_dist_m > 2.0)
+        self._log_s_ref_continuous = s_jump_ok
+        self._log_proj_hop = proj_hop
+        self._log_projection_continuity_ok = s_jump_ok and (not proj_hop)
         # Expose last errors for outer behavior logic (conditioning/safety/debug)
         self.last_e_y = float(e_y)
         self.last_e_psi = float(e_psi)

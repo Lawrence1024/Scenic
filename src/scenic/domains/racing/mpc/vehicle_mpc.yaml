@@ -32,7 +32,11 @@
     
     # Steering acceleration penalty (smoother steering, reduces jerk and beginner-style overcorrect)
     w_ddu: 0.00003  # Steering acceleration weight (increased for smoother steering changes)
+    w_epsi_rate: 0.1  # Task 3: yaw-rate damping — cost on (e_psi_{k+1} - e_psi_k)^2 to prevent snap oscillations
     w_ff_track: 1.0  # (delta - delta_ff)^2 weight — ~0.1x w_ey; shrinks delta_fb vs delta_ff for less aggressive feedback, smoother mid-curve
+    ff_preview_blend: 0.4  # Blend for delta_ff — 0 = at-proj kappa only, 0.4 = 40% kappa_ref_ahead_signed (+10 m)
+    ff_chicane_preview_blend: 0.85  # Task 2: in chicanes (curvature sign flip) use 85% preview curvature for FF
+    ff_chicane_curvature_threshold: 0.02  # 1/m; min |kappa| at proj and ahead to detect chicane
     
     # Phase 3 MPCC: contouring + lag + progress (set both to 0 for pure trajectory-tracking / A-B test)
     Q_lag: 0.02     # Lag error: penalize (s_ref - s)^2 at each step; reduces "falling behind" and centerline obsession
@@ -70,6 +74,7 @@
     admissible_position_error: 30.0  # Stop MPC if position error > this (meters) - increased to 30.0m for sparse waypoints (~25m apart)
     admissible_yaw_error_rad: 2.36  # Stop MPC if yaw error > this (radians, ~135 deg) - increased from 1.57rad to allow MPC when off-track
     max_invalid_count: 10  # Max consecutive solver failures before zeroing steering
+    curvature_same_sign_clamp_min: 0.02  # (1/m) in curvature >= this, clamp total steer to same sign as feedforward (avoids spin from ff/fb opposition)
     
     # Filtering (smoother = lower cutoff; reduces steering jerk and overcorrect)
     steering_lpf_cutoff_hz: 1.5  # Low-pass filter cutoff (reduced from 2.0 for smoother steering, less oscillation)
@@ -80,6 +85,8 @@
     # Reference continuity gate (To-Do 1): reject segment switch when association weak or progress non-monotonic
     max_wp_match_dist_m: 3.0  # (m) max perpendicular distance to accept segment switch; reject if candidate match point farther
     max_s_jump_m: 4.0  # (m) max along-path progress jump per tick; reject switch if new segment implies larger jump
+    gate_hard_fail_dist_m: 6.0  # (m) when gate rejects and match_dist > this, force re-association (Rec B: recover mode)
+    stick_association_ok_m: 2.0  # (m) only stick to segment when match_dist < this (Rec C: stick only when association good)
     curvature_smoothing_num: 15  # Number of points for curvature calculation (smoothing window)
     use_splines: true  # Use spline fitting with arc-length parameterization for smooth reference trajectories
     

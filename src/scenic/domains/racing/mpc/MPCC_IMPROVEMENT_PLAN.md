@@ -188,4 +188,25 @@ This order gives you quick wins *without* re-tuning 30 weights.
 
 ---
 
+## E. Implemented: Single-segment consistency (steering wobble fix)
+
+**Problem:** At curve exits, feedforward (delta_ff, kappa_ref) and feedback (e_y, e_psi → delta_fb) were built from **different segment indices**. The reference builder used “nearest waypoint by node distance”; lateral errors used “best segment by perpendicular distance” (with gate, hysteresis, stick). When they disagreed, kappa_ref said “turn left” (curve segment) while e_y said “you’re left of path” (exit segment) so delta_fb commanded “turn right,” causing **steering sign flips** (left → right → left) and FF TRIPWIRE logs.
+
+**Fix:** Use one segment index for both reference and errors in each step.
+
+1. **`mpc_lateral.run_step`**  
+   *Compute errors first.* Call `_compute_errors(...)` at the start of the step to get `(e_y, e_psi, mpc_segment_idx)`. Then call `ref_builder.build_reference(..., reference_segment_idx=mpc_segment_idx)` so the reference (kappa_ref, s_0, horizon) is built from the **same** segment as e_y/e_psi.
+
+2. **`reference_builder.build_reference`**  
+   New optional argument **`reference_segment_idx: Optional[int] = None`**. When provided and valid, use it as `nearest_idx` (and update `_last_nearest_idx`) instead of calling `find_nearest_waypoint`. Spline and polyline branches already use `nearest_idx` for the reference window and s_0, so kappa_ref and s_0 now align with the lateral MPC segment.
+
+**Files:**  
+* `src/scenic/domains/racing/mpc/mpc_lateral.py`: run_step reordered; single call to _compute_errors; build_reference(..., reference_segment_idx=mpc_segment_idx).  
+* `src/scenic/domains/racing/mpc/reference_builder.py`: build_reference(..., reference_segment_idx=...); when set, nearest_idx = reference_segment_idx.
+
+**Expected behavior:**  
+Feedforward and feedback refer to the same path segment every step, so no structural ff/fb opposition at curve exits. Steering sign flips (left→right→left) and “FF TRIPWIRE 1” from delta_fb opposing delta_ff should drop or disappear when the cause was segment mismatch.
+
+---
+
 If you tell me (a) where waypoint selection happens (file/function) and (b) whether your MPCC uses a projected `s` state internally or only segment indices, I can write you **exact pseudocode** for the gating logic in To-Do 1/2/5 in the style of your current stack.

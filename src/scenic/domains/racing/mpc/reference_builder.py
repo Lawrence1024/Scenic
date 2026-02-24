@@ -557,7 +557,8 @@ class ReferenceBuilder:
                        speed: float,
                        last_waypoint_idx: Optional[int] = None,
                        cte_magnitude: Optional[float] = None,
-                       v_ref_profile: Optional[Union[List[float], np.ndarray]] = None
+                       v_ref_profile: Optional[Union[List[float], np.ndarray]] = None,
+                       reference_segment_idx: Optional[int] = None
                        ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, float, np.ndarray]:
         """Build reference trajectory for MPC horizon (Phase 1: s-based parameterization).
         
@@ -568,6 +569,10 @@ class ReferenceBuilder:
         When v_ref_profile is provided, lateral and longitudinal MPC share the same speed
         plan so the controller "sees the whole trajectory" and avoids over-brake then throttle
         or over-steer then correct.
+        
+        When reference_segment_idx is provided, the reference is built from that segment
+        (same as used for e_y/e_psi in lateral MPC) to avoid feedforward/feedback segment
+        mismatch and steering wobble at curve exits.
         
         Supports both 2D (x, y) and 3D (x, y, z) waypoints.
         
@@ -582,6 +587,9 @@ class ReferenceBuilder:
             cte_magnitude: Optional CTE magnitude for adaptive search
             v_ref_profile: Optional speed profile over horizon (m/s). If length matches
                 horizon_steps, used for v_ref and for s_horizon (s_k = s_0 + sum(v_ref[0:k+1]*dt)).
+            reference_segment_idx: Optional segment index to use for reference (e.g. from
+                _compute_errors). When set, overrides find_nearest_waypoint so kappa_ref/s_0
+                and e_y/e_psi refer to the same path segment.
             
         Returns:
             Tuple of (psi_ref, kappa_ref, v_ref, grade_ref, new_waypoint_idx, s_0, s_horizon)
@@ -611,23 +619,26 @@ class ReferenceBuilder:
         # Check if waypoints are 3D
         is_3d = self._is_3d_waypoints(waypoints)
         
-        # Find nearest waypoint
-        # Use provided CTE magnitude if available, otherwise estimate from distance to last waypoint
-        cte_estimate = cte_magnitude
-        if cte_estimate is None and last_waypoint_idx is not None and last_waypoint_idx < len(waypoints):
-            last_wp = waypoints[last_waypoint_idx]
-            dx = current_position[0] - last_wp[0]
-            dy = current_position[1] - last_wp[1]
-            if is_3d and len(current_position) >= 3 and len(last_wp) >= 3:
-                dz = current_position[2] - last_wp[2]
-                cte_estimate = (dx*dx + dy*dy + dz*dz) ** 0.5
-            else:
-                cte_estimate = (dx*dx + dy*dy) ** 0.5
-        
-        nearest_idx = self.find_nearest_waypoint(
-            current_position, waypoints, last_waypoint_idx,
-            adaptive_search=True, cte_magnitude=cte_estimate
-        )
+        # Find segment index for reference: use provided reference_segment_idx (single-segment
+        # consistency with lateral MPC e_y/e_psi) or fall back to nearest waypoint by node distance
+        if reference_segment_idx is not None and 0 <= reference_segment_idx < len(waypoints) - 1:
+            nearest_idx = int(reference_segment_idx)
+            self._last_nearest_idx = nearest_idx
+        else:
+            cte_estimate = cte_magnitude
+            if cte_estimate is None and last_waypoint_idx is not None and last_waypoint_idx < len(waypoints):
+                last_wp = waypoints[last_waypoint_idx]
+                dx = current_position[0] - last_wp[0]
+                dy = current_position[1] - last_wp[1]
+                if is_3d and len(current_position) >= 3 and len(last_wp) >= 3:
+                    dz = current_position[2] - last_wp[2]
+                    cte_estimate = (dx*dx + dy*dy + dz*dz) ** 0.5
+                else:
+                    cte_estimate = (dx*dx + dy*dy) ** 0.5
+            nearest_idx = self.find_nearest_waypoint(
+                current_position, waypoints, last_waypoint_idx,
+                adaptive_search=True, cte_magnitude=cte_estimate
+            )
         
         if horizon_steps <= 0:
             raise ValueError(f"horizon_steps must be > 0, got {horizon_steps}")
@@ -717,15 +728,14 @@ class ReferenceBuilder:
                                 seg_heading = math.atan2(dy_dt, dx_dt)
                                 psi_ref[k] = adjust_heading_if_opposite(seg_heading, current_heading)
                                 
-                                # Compute curvature from spline derivatives
-                                # For 3D, compute 2D curvature in XY plane (project to XY plane)
-                                # kappa = |x'*y'' - y'*x''| / (x'^2 + y'^2)^(3/2)
+                                # Compute signed curvature from spline derivatives (Task 2: keep sign; left turn > 0, right turn < 0)
+                                # kappa = (x'*y'' - y'*x'') / (x'^2 + y'^2)^(3/2) — cross2D(tangent, accel) gives sign
                                 d2x_dt2 = deriv2_k[0]
                                 d2y_dt2 = deriv2_k[1]
-                                numerator = abs(dx_dt * d2y_dt2 - dy_dt * d2x_dt2)
+                                numerator_signed = dx_dt * d2y_dt2 - dy_dt * d2x_dt2
                                 denominator = speed_tangent ** 3
                                 if denominator > 1e-9:
-                                    kappa_ref[k] = numerator / denominator
+                                    kappa_ref[k] = numerator_signed / denominator
                                 else:
                                     kappa_ref[k] = 0.0
                                 

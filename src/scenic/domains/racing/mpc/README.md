@@ -1,13 +1,13 @@
-# MPC Controller Module - Living Document
+# MPC Controller Module
 
-**Last Updated:** 2024-12-19  
-**Status:** Initial Implementation
+**Last Updated:** 2025-02  
+**Status:** MPCC lateral + longitudinal MPC integrated with racing behaviors
 
 ---
 
 ## Overview
 
-This module implements a Model Predictive Control (MPC) controller for lateral (steering) control of racing vehicles in the Scenic racing domain. The MPC replaces PID controllers with predictive control for better performance on racing tracks, especially in high-speed cornering scenarios.
+This module implements **Model Predictive Contouring Control (MPCC)** for lateral (steering) control and **MPC for longitudinal** (throttle/brake) control of racing vehicles in the Scenic racing domain. The lateral controller uses a 4-state formulation with contouring cost, lag error, progress reward, and curvature feedforward. It replaces PID for improved performance on racing tracks, especially in high-speed cornering.
 
 ---
 
@@ -15,887 +15,198 @@ This module implements a Model Predictive Control (MPC) controller for lateral (
 
 ```
 mpc/
-├── __init__.py              # Module exports
-├── config.py                # Configuration management (YAML → Python)
-├── reference_builder.py     # Waypoint → reference trajectory builder
-├── mpc_lateral.py           # Main MPC controller implementation
-├── io_adapter.py            # ControlDesk I/O integration
-├── utils.py                 # Utility functions (filters, etc.)
-├── calibration.py           # Steering scale calibration
-├── README.md                # This file
-└── testing/                 # Testing infrastructure
-    ├── __init__.py
-    ├── test_config.py       # Configuration tests
-    ├── test_utils.py        # Utility function tests
-    ├── test_reference_builder.py  # Reference builder tests
-    ├── test_mpc_lateral.py  # MPC controller tests
-    ├── run_tests.py         # Test runner script
-    └── TEST_CASES.md        # Living document of test cases (guard)
+├── __init__.py              # Module exports (MPCLateralController, MPCLongitudinalController, load_mpc_config)
+├── config.py                 # Configuration (YAML → MPCConfig)
+├── reference_builder.py      # Waypoints → psi_ref, kappa_ref, v_ref, s_horizon
+├── mpc_lateral.py            # MPCC lateral controller (state [e_y, e_psi, delta, s])
+├── mpc_longitudinal.py       # Longitudinal MPC (throttle/brake)
+├── speed_profile.py          # Curvature/CTE-based speed profile for v_ref
+├── io_adapter.py             # ControlDesk I/O (readback, steering write)
+├── utils.py                  # Low-pass filter, etc.
+├── calibration.py            # Steering scale calibration (skeleton)
+├── vehicle_mpc.yaml          # Default MPC parameters
+├── README.md                 # This file
+├── result_data/              # Log parsing and run analysis
+│   ├── analyze_racing_log.py
+│   ├── compare_racing_results.py
+│   ├── parse_commit_metrics.py
+│   └── README.md
+├── testing/
+│   ├── test_config.py, test_utils.py, test_reference_builder.py, test_mpc_lateral.py
+│   ├── test_behavior_integration.py, test_simulation_integration.py, test_scenario_compilation.py
+│   ├── run_tests.py, TEST_CASES.md
+│   └── ...
+└── *.md                      # MPCC_MIGRATION_PLAN, MPCC_IMPROVEMENT_PLAN, 3D_RESPONSIBILITIES, etc.
 ```
 
 ---
 
-## Current Status
+## Lateral MPC (MPCC) Formulation
 
-### ✅ Completed
-- [x] Module structure created
-- [x] Configuration loader (`config.py`)
-- [x] Reference trajectory builder (`reference_builder.py`)
-- [x] MPC controller skeleton (`mpc_lateral.py`)
-- [x] State computation (e_y, e_psi from waypoints) - **COMPLETED**
-- [x] Safety checks (position/yaw error thresholds)
-- [x] Utility functions (`utils.py` - low-pass filter)
-- [x] I/O adapter skeleton (`io_adapter.py`)
-- [x] Calibration utilities skeleton (`calibration.py`)
-- [x] **Behavior integration** - `FollowRacingLineMPCBehavior` created ✅
-- [x] **Testing infrastructure** - Comprehensive test suite (27 tests) ✅
-- [x] **Integration tests** - Behavior, simulation, and scenario compilation tests ✅
-- [x] **Simulation integration** - `getRacingControllers()` supports MPC ✅
+**State:** `x = [e_y, e_psi, delta, s]`
+- `e_y`: Lateral error (m), positive = left of path
+- `e_psi`: Heading error (rad)
+- `delta`: Front-wheel angle (rad)
+- `s`: Progress along path (m), for lag/progress cost
 
-### 🚧 In Progress
-- [ ] ControlDesk integration testing (with real simulator)
-- [x] Steering feedback reading (delta from ControlDesk) - **INFRASTRUCTURE COMPLETE** ✅
-- [ ] Steering scale calibration implementation (skeleton exists)
-
-### 📋 TODO
-- [x] Unit tests for reference builder ✅
-- [x] Unit tests for MPC formulation ✅
-- [x] Unit tests for configuration ✅
-- [x] Unit tests for utilities ✅
-- [x] Test infrastructure and living document ✅
-- [x] Integration with behaviors - `FollowRacingLineMPCBehavior` created ✅
-- [x] Simulation integration - `getRacingControllers()` updated ✅
-- [ ] Real-world testing with ControlDesk
-- [ ] Performance tuning and weight optimization
-- [ ] Integration tests with ControlDesk
-- [ ] Documentation and examples
-
----
-
-## Key Learnings & Decisions
-
-### Configuration Management
-- **Decision:** Use YAML config files (compatible with ROS-style parameter format)
-- **Location:** `src/scenic/domains/racing/mpc/vehicle_mpc.yaml`
-- **Adaptation:** Config adapts to Scenic `timestep` automatically
-- **After changing config:** An iteration (simulation run) **must be run** so the new tuning is exercised; then run `analyze_racing_log --log run.log` and optionally `compare_racing_results` to verify. Update `run_edit_note` in `vehicle_mpc.yaml` when you change tuning (e.g. threshold or weights) so result_data and comparison tables are tagged with what produced each run.
-
-### ControlDesk Integration
-- **Read Paths:** Use existing `read_ego_state()` / `read_fellow_state()` functions
-- **Write Path:** Use existing `VehicleController` infrastructure via `_control_state`
-- **Steering Range:** ControlDesk expects -70 to +70 (degrees-like units)
-- **Normalization:** MPC outputs [-1, 1], converted to ControlDesk range
-
-### Coordinate Frames & Heading (Critical)
-This project uses multiple coordinate/angle conventions at once. The most important debugging lesson was:
-
-- **Waypoints in `assets/ttls/.../transformed/*.csv` are in XODR/Scenic coordinates** (already transformed).
-- **ControlDesk provides yaw in degrees** via `Angle_Yaw_Vehicle_CoorSys_E[deg]` (see `src/scenic/domains/racing/mpc/vehicle_mpc.yaml` path).
-- **Do not blindly apply ±90° or ±180° offsets** to yaw in code. We tested both and they can silently break tracking.
-
-#### Final decision (what worked)
-- **Heading used by MPC must come from ControlDesk readback** (`self.dspaceActor.heading`) so the MPC state is consistent with the simulator.
-  - In `src/scenic/domains/racing/behaviors.scenic`, the MPC behavior now prefers `dspaceActor.heading` (ControlDesk) over `self.heading`.
-- **Yaw conversion in readback is: degrees -> radians -> normalize to [-pi, pi]**
-  - In `src/scenic/simulators/dspace/controldesk/readback.py`, we keep yaw as:
-    - `yaw_rad_raw = yaw_deg * pi/180`
-    - `yaw_rad = atan2(sin(yaw_rad_raw), cos(yaw_rad_raw))`
-  - This was validated by logs where `raw_yaw_deg≈236°` normalized to `heading_deg≈-123°`, matching the local track/waypoint direction.
-
-#### Why earlier "flip by 180°" experiments happened
-At one point the controller appeared to need a 180° heading flip. That turned out to be a **heading source mismatch**:
-- the behavior used `self.heading` (not necessarily the ControlDesk yaw), while the debug prints were inspecting ControlDesk yaw.
-- mixing these sources made the MPC fight a fake heading error and "swerve" off track.
-
-### Waypoint Direction & 180° Reference Heading Flip
-Even if yaw is correct, waypoints can be "geometrically reversed" relative to travel direction.
-
-We implemented a robust rule in `src/scenic/domains/racing/mpc/mpc_lateral.py::_compute_errors`:
-- Compute segment heading from waypoint geometry: `psi_ref_original = atan2(seg_dy, seg_dx)`
-- If the segment heading differs from vehicle heading by > 90°, **flip the reference heading by 180°**:
-  - `psi_ref = wrap(psi_ref_original + pi)`
-- **If we flip reference heading, we must also flip CTE sign** (see next section).
-
-This avoids "drive backwards along the segment" behavior without requiring CSV reversal.
-
-### CTE Sign Conventions (Critical)
-Within `_compute_errors` in `mpc_lateral.py`:
-- Normal vector is defined as `n = (-dy, dx) / len` (LEFT of the segment direction).
-- Raw CTE is `e_y_raw = (p - proj) · n`
-- If we flip the reference heading by 180° (meaning "travel opposite direction"), then the notion of LEFT/RIGHT relative to travel direction also flips.
-
-**Final rule:**
-- Keep the normal vector based on the geometric segment (do NOT negate `n`).
-- If `heading_flipped == True`, then apply:
-  - `e_y = -e_y_raw`
-
-This fixes the common bug where the vehicle consistently steers away from the line because CTE left/right is inverted.
-
-### Steering Sign Conventions (Critical)
-The MPC solves for a steering command `u0` (front wheel angle command in radians). In practice we observed a sign mismatch between:
-- the sign of the QP solution (`u0_raw_rad`), and
-- the direction the vehicle actually turns in the dSPACE visualization.
-
-**Final decision (empirical):** Steering sign is **environment-dependent**; validate it with logs.
-
-In the current (consistent-yaw) setup, the solver output is used **without negation**:
-- Implemented in `src/scenic/domains/racing/mpc/mpc_lateral.py` (solve path):
-  - `delta_cmd_rad = delta_cmd_rad_raw`
-
-Why we document this explicitly:
-- It is easy to accidentally "fix" this away when also changing yaw transforms.
-- Always validate with logs + visualization: when CTE is RIGHT (negative), steering must turn LEFT (positive), and vice versa.
-
-Practical validation:
-- Use `[MPC Error Computation] CTE_raw=...` and `[MPC Actuation DBG] u0_raw_rad/u0_used_rad`.
-- If `CTE_used > 0` (LEFT), `u0_used_rad` should steer RIGHT (negative) to reduce CTE (depending on your simulator steering convention).
-
-### Waypoint Index Initialization & Progress
-Two independent issues can cause "random swerves":
-- tracking a waypoint that is behind the vehicle
-- getting stuck on an old waypoint index
-
-We added/used:
-- **Initialize waypoint index using a forward dot-product check** (pick the first waypoint ahead of the vehicle).
-- **Prefer ControlDesk heading** for that dot-product (see heading section above).
-- **Increment waypoint index** using a hit-threshold (default 3m) to prevent oscillating index selection.
-
-These changes live in `src/scenic/domains/racing/behaviors.scenic`.
-
-### Debugging Playbook (What to Log)
-When tracking is wrong, print the pipeline values so you can isolate sign/frame issues quickly.
-
-Recommended log tags (added during debugging):
-- `[Yaw Readback]`: shows yaw_deg -> yaw_rad -> normalized heading
-- `[MPC Errors DBG]`: shows segment geometry, projection, normal vector
-- `CTE_raw` vs `CTE_used`: shows whether heading flip changed CTE sign
-- `[MPC Actuation DBG]`: shows `u0_raw_rad`, `u0_neg_rad`, normalized, filtered
-- `[Steer Slew DBG]`: shows MPC output vs slew-limited command applied by behavior
-
-### Waypoint Format
-- **Format:** CSV files with `x,y` pairs (no speed profile initially)
-- **Location:** `assets/ttls/LS_ENU_TTL_CSV/transformed/`
-- **Coordinate System:** XODR coordinates (matches vehicle positions)
-
-### Vehicle Parameters
-From `dspace_iac_car.param.yaml`:
-- Wheelbase: `2.9718 m`
-- Max steering angle: `0.2816 rad` (≈16.1°)
-- Steering time constant: `0.3 s` (from `aw_lat_mpc.param.yaml`)
-- Steering rate limit: `1.0 rad/s` (conservative estimate)
-
----
-
-## Implementation Details
-
-### MPC Formulation
-
-**State:** `x = [e_y, e_psi, delta]`
-- `e_y`: Lateral error (meters)
-- `e_psi`: Heading error (radians)
-- `delta`: Front-wheel angle (radians)
-
-**Control:** `u = delta_cmd` (desired front-wheel angle, radians)
+**Control:** `u = delta_fb` (feedback steering). Total steering: `delta = delta_ff + delta_fb`, with `delta_ff = atan(L * kappa_ref)` (curvature feedforward).
 
 **Dynamics:**
-- Steering actuator: `delta_{k+1} = delta_k + (dt/tau) * (u_k - delta_k)`
-- Lateral error: `e_y_{k+1} = e_y_k + v_k * e_psi_k * dt`
-- Heading error: `e_psi_{k+1} = e_psi_k + (v_k/L) * delta_k * dt - v_k * kappa_ref_k * dt`
+- `e_y_{k+1} = e_y_k + v_k * e_psi_k * dt`
+- `e_psi_{k+1} = e_psi_k + (v_k/L)*(delta_ff_k + u_k)*dt - v_k*kappa_k*dt`
+- `delta_{k+1} = delta_k + (dt/tau)*((delta_ff_k + u_k) - delta_k)`
+- `s_{k+1} = s_k + v_ref_k*dt` (linearized progress)
 
-**Constraints:**
-- Steering limits: `|delta_k| <= DELTA_MAX_RAD`
-- Control limits: `|u_k| <= DELTA_MAX_RAD`
-- Rate limits: `|delta_{k+1} - delta_k| <= DELTA_DOT_MAX * dt`
+**Cost:** Contouring (`w_ey*e_y^2`, `w_epsi*e_psi^2`), lag `Q_lag*(s_ref - s)^2`, progress reward `-Q_progress*(s_N - s_0)`, feedforward tracking `w_ff_track*(delta - delta_ff)^2`, input/rate/ddu penalties. Weights are adaptive by curvature (low / mid / high).
 
-**Cost Function:**
-- Tracking: `w_ey * e_y^2 + w_epsi * e_psi^2`
-- Smoothness: `w_u * u^2 + w_du * (u_k - u_{k-1})^2`
-- Terminal: `wT_ey * e_y_N^2 + wT_epsi * e_psi_N^2`
+**Reference continuity (segment selection):**
+- Best segment by perpendicular distance, with forward bias.
+- **Gate:** Reject switch if `match_dist > max_wp_match_dist_m`, or progress backward, or along-path `s_jump > max_s_jump_m`; then keep previous segment.
+- **Stick:** When `|prev_e_y| >= segment_stick_cte_m`, keep current segment to avoid reference flip.
 
-### Reference Builder
-
-**Nearest Waypoint Search:**
-- Forward-only search starting from last known index
-- Prevents backtracking along path
-- Search window: ±50 waypoints from last index
-
-**Curvature Computation:**
-- 3-point method: uses waypoints at `[i-1, i, i+1]`
-- Formula: `kappa = 2 * cross(v1, v2) / (|v1| * |v2| * avg_length)`
-
-**Reference Generation:**
-- Interpolates along waypoint segments for horizon steps
-- Computes heading from segment tangent
-- Computes curvature using 3-point method
+**Conditional deadzone:** Apply CTE deadzone only when `|e_y| < cte_deadzone`, `match_dist < deadzone_dist_ok_m`, and `curvature_ahead_max < curv_deadzone_max`; otherwise do not zero e_y (avoids “recenter while far off”).
 
 ---
 
-## Configuration Parameters
+## Configuration
 
-### Timing
-- `ctrl_period`: Control update period (seconds) - adapts to Scenic timestep
-- `mpc_prediction_horizon`: Number of prediction steps (default: 30)
-- `mpc_prediction_dt`: Time step for prediction (seconds)
+**File:** `vehicle_mpc.yaml` (ROS-style parameters under `/**/ros__parameters`).
 
-### Vehicle
-- `wheel_base`: Wheelbase (meters)
-- `max_steer_angle`: Maximum front-wheel angle (radians)
-- `steer_tau`: Steering actuator time constant (seconds)
-- `steer_rate_lim`: Steering rate limit (rad/s)
-- `steer_cmd_max`: Maximum steering command in ControlDesk units
+**Key groups:**
+- **Timing:** `ctrl_period`, `mpc_prediction_horizon` (e.g. 35), `mpc_prediction_dt`
+- **Vehicle:** `wheel_base`, `max_steer_angle`, `steer_tau`, `steer_rate_lim`, `steer_cmd_max`
+- **Lateral weights:** `w_ey`, `w_epsi`, `w_u`, `w_du`, `w_ddu`, `w_ff_track`; terminal `wT_ey`, `wT_epsi`
+- **Adaptive curvature:** `use_adaptive_weights`, `low_curvature_threshold`, `high_curvature_threshold`; `w_ey_low_curv`, `w_ey_high_curv`, etc.
+- **Feedforward:** `ff_preview_blend`, `ff_chicane_preview_blend`, `ff_chicane_curvature_threshold`
+- **MPCC:** `Q_lag`, `Q_progress`
+- **Oscillation / deadzone:** `cte_deadzone`, `deadzone_dist_ok_m`, `curv_deadzone_max`, `cte_multiplier_max`
+- **Reference gate:** `segment_stick_cte_m`, `max_wp_match_dist_m`, `max_s_jump_m`, `segment_hysteresis_m`
+- **Safety:** `admissible_position_error`, `admissible_yaw_error_rad`, `max_invalid_count`
+- **Filtering:** `steering_lpf_cutoff_hz`
+- **Longitudinal:** `w_v`, `w_a`, `w_u_lon`, `w_du_lon`, throttle/brake LPF, deadbands, curvature-based speed limits
 
-### MPC Weights
-- `w_ey`: Lateral error weight
-- `w_epsi`: Heading error weight
-- `w_u`: Control input weight
-- `w_du`: Control rate weight
-- `wT_ey`: Terminal lateral error weight
-- `wT_epsi`: Terminal heading error weight
-
-### Safety
-- `admissible_position_error`: Maximum position error before disabling MPC (meters)
-- `admissible_yaw_error_rad`: Maximum yaw error before disabling MPC (radians)
-- `max_invalid_count`: Maximum consecutive solver failures before zeroing steering
-
-### Filtering
-- `steering_lpf_cutoff_hz`: Low-pass filter cutoff frequency for steering output (Hz)
-
-### Waypoint
-- `traj_resample_dist`: Distance between resampled waypoints (meters)
+After changing config, run a simulation and use `analyze_racing_log` (and optionally `compare_racing_results`). Set `run_edit_note` in the YAML to tag runs.
 
 ---
 
-## Integration Points
+## Key Conventions
 
-### With Scenic Behaviors
-- **New Behavior:** `FollowRacingLineMPCBehavior` ✅ **CREATED**
-  - Located in `src/scenic/domains/racing/behaviors.scenic`
-  - Uses MPC for lateral control, PID for longitudinal control
-  - Same interface as `FollowRacingLineBehavior` with additional `mpc_config_path` parameter
-  - Example usage: `ego.behavior = FollowRacingLineMPCBehavior(target_speed=30)`
-
-### With dSPACE Simulator
-- **Read State:** Via `read_state_from_controldesk()` → uses existing `read_ego_state()`
-- **Write Commands:** Via `write_steering_to_controldesk()` → uses `VehicleController`
-
-### With Racing Domain
-- **Controller Interface:** `MPCLateralController.run_step()` returns normalized steering [-1, 1]
-- **Compatibility:** Drop-in replacement for `PIDLateralController` interface
+- **Heading:** Use ControlDesk readback (`dspaceActor.heading`) for MPC state; yaw is converted deg→rad and normalized to [-π, π].
+- **Waypoints:** XODR/Scenic coordinates (e.g. `assets/ttls/.../transformed/*.csv`). Reference heading is `psi_ref = atan2(seg_dy, seg_dx)` with no >90° flip; e_y is projection-based with no sign flip (avoids spin-induced discontinuity).
+- **Steering sign:** Environment-dependent; validate with logs (e.g. CTE positive ⇒ steer right). Current setup uses solver output without negation. See [Wiring and debugging](#wiring-and-debugging-control-pipeline-state-reference-kinematics) for the full chain.
+- **Logging:** Use ASCII only in prints (no Unicode) for Windows console compatibility.
 
 ---
 
-## Testing Infrastructure
+## Integration
 
-### Test Suite Location
-All tests are located in `mpc/testing/` directory.
+### With Scenic behaviors
+- **`FollowRacingLineMPCBehavior`** (in `behaviors.scenic`): Uses lateral MPC and longitudinal MPC (or shared speed profile), waypoint-based CTE, optional `mpc_config_path`.
+- Example: `ego.behavior = FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, lookahead=20.0, mpc_config_path=None)`
 
-### Running Tests
+### With simulator
+- **`getRacingControllers(agent, use_mpc=True, mpc_config_path=None)`** (in `simulators.py`): Returns `(MPCLongitudinalController, MPCLateralController)` when `use_mpc=True`; otherwise PID controllers from the driving domain.
 
-#### Quick Test Run
-```bash
-cd Scenic/src/scenic/domains/racing/mpc/testing
-python run_tests.py
-```
-
-#### Using pytest (Recommended)
-```bash
-cd Scenic/src/scenic/domains/racing/mpc/testing
-python -m pytest test_*.py -v
-```
-
-#### Run Specific Test File
-```bash
-python test_reference_builder.py
-```
-
-#### Run Specific Test Case
-```bash
-python -m pytest test_reference_builder.py::TestReferenceBuilder::test_find_nearest_waypoint_simple -v
-```
-
-### Test Categories
-
-#### 1. Unit Tests (Implemented ✅)
-- **`test_config.py`**: Configuration loading and parameter validation
-- **`test_utils.py`**: Low-pass filter and utility functions
-- **`test_reference_builder.py`**: Waypoint search, curvature computation, reference generation
-- **`test_mpc_lateral.py`**: State computation, error handling, fallback behavior
-
-#### 2. Test Cases Document
-- **`TEST_CASES.md`**: Living document serving as a guard/regression test suite
-  - Documents all test cases with expected behavior
-  - Explains why each test is important
-  - Tracks test status (PASS/FAIL/SKIP)
-  - Must be updated when adding/modifying tests
-
-### Test Status
-- **Total Tests:** 18
-- **Passing:** 18 ✅
-- **Skipped:** 0
-- **Failing:** 0
-
-**All tests passing!** The test suite validates:
-- Configuration loading and parameter validation
-- Reference trajectory building (waypoint search, curvature computation)
-- State computation (lateral and heading errors)
-- MPC controller functionality (with OSQP solver)
-- Utility functions (low-pass filter)
-
-### Test Maintenance Guidelines
-
-#### Before Committing Changes
-1. ✅ Run all tests: `python run_tests.py`
-2. ✅ Ensure all tests pass (or are appropriately skipped)
-3. ✅ Update `TEST_CASES.md` if adding new tests
-4. ✅ Update this README if test infrastructure changes
-
-#### When Tests Fail
-1. **Identify root cause:** Which test failed and why?
-2. **Fix the issue:** Don't just disable the test
-3. **Verify fix:** Re-run all tests
-4. **Update status:** Mark test as PASS in `TEST_CASES.md`
-
-#### Adding New Tests
-1. Add test case to appropriate test file
-2. Document test case in `TEST_CASES.md` with:
-   - Purpose
-   - Expected behavior
-   - Why it's important
-   - Status (PASS/FAIL/SKIP)
-3. Update test status summary in `TEST_CASES.md`
-4. Run all tests to ensure nothing breaks
-
-### Future Test Additions
-
-#### Integration Tests (To Be Added)
-- [ ] Test with real ControlDesk connection
-- [ ] Test with real waypoint files
-- [ ] Test end-to-end behavior integration
-- [ ] Test calibration procedure
-
-#### Performance Tests (To Be Added)
-- [ ] QP solve time benchmark (< 10ms target)
-- [ ] Memory usage profiling
-- [ ] Warm-start effectiveness
-
-#### Regression Tests (To Be Added)
-- [ ] Test known good scenarios
-- [ ] Test edge cases (very slow, very fast, sharp turns)
-- [ ] Test error handling (invalid waypoints, solver failures)
-
-### Test Dependencies
-- **Required:** `unittest` (standard library)
-- **Optional:** `pytest` (for better output formatting)
-- **Optional:** `osqp` (for full MPC controller tests)
-
-### Coding Guidelines for Logging
-**IMPORTANT:** When printing logs or test output, use **text-only** (ASCII) characters. Do NOT use Unicode symbols (✓, ✗, →, etc.) as they cause encoding errors on Windows consoles.
-
-**Good:**
-```python
-print("[OK] Test passed")
-print("[FAIL] Test failed")
-print("[SUCCESS] All tests passing!")
-```
-
-**Bad:**
-```python
-print("✓ Test passed")  # Unicode - will fail on Windows
-print("✗ Test failed")  # Unicode - will fail on Windows
-```
-
-This guideline applies to all print statements, test output, and logging throughout the MPC module.
-
-### Testing with Scenic Commands
-**IMPORTANT:** Do NOT run `scenic` commands directly. Instead, provide the user with the exact command to run. Running scenic commands requires specific setup (ModelDesk/ControlDesk connections, simulation state, etc.) that the user must handle manually.
-
-**Good:**
-```markdown
-To test the MPC scenario, run:
-```powershell
-scenic examples/racing/ego_mpc_behavior.scenic --simulate --time 10 --count 1 --model scenic.simulators.dspace.racing_model
-```
-Note: `--count 1` ensures only one scene is generated and simulated (prevents infinite loop).
-```
-
-**Bad:**
-- Running `scenic` commands via `run_terminal_cmd` tool
-- Assuming simulation environment is ready for automated testing
-- Forgetting to add `--count 1` which causes infinite scene generation loop
-
-**Important Notes:**
-- Without `--count`, Scenic will generate scenes indefinitely in a loop
-- The `--time` parameter specifies simulation duration in seconds (not number of steps)
-- For step-by-step mode, the simulation will run until `--time` duration is reached or manually stopped
-
-This guideline applies to all testing and validation that requires running Scenic scenarios with dSPACE simulator.
+### Controller interface
+- **Lateral:** `MPCLateralController.run_step(vehicle_state, waypoints, ...)` returns **front wheel angle in radians** (`delta_cmd_rad`), not normalized. Behavior clamps to ±`max_steer_angle` and passes to `SetSteerAction(rad)`; the dSPACE simulator converts rad → steering wheel deg and writes to ControlDesk.
+- **Longitudinal:** `MPCLongitudinalController.run_step(speed, v_ref, ...)` returns throttle/brake commands.
 
 ---
 
-## Known Issues & Limitations
+## Wiring and debugging (control pipeline, state, reference, kinematics)
 
-### Current Limitations
-1. **Steering Feedback:** `delta` (actual steering angle) reading implemented using `Angle_SteeringGear[deg]` - **NOTE: This may need verification/adjustment in the future** if `Angle_SteeringGear` is not exactly the front wheel angle. Falls back to previous control estimate if path not available.
-2. **Calibration:** Steering scale calibration procedure skeleton exists but not yet fully implemented
-3. **Speed Profile:** Reference speed is constant - no speed profile from waypoints yet
-4. **QP Solver Testing:** QP formulation needs testing with real data to verify correctness
+This section answers the questions in `fix.md` so that sign/frame/saturation issues (e.g. intermittent 180° spin from reference flip or I/O sign) can be isolated quickly.
 
-### Future Enhancements
-1. **Longitudinal MPC:** Add throttle/brake control (Phase 2)
-2. **Adaptive Weights:** Adjust weights based on curvature/speed
-3. **Multi-rate Control:** Different control rates for lateral vs longitudinal
-4. **Advanced Safety:** Collision avoidance constraints
+### A) Control pipeline (steering chain)
+
+| Stage | What | Where |
+|-------|------|--------|
+| **MPC output** | `run_step(...)` returns **front wheel angle in rad** (`delta_cmd_rad`), not normalized [-1,1]. | `mpc_lateral.py`: after clamp to ±`current_delta_max`, rate limit (`steer_rate_limit_output_radps`), then `return float(delta_cmd_rad)`. |
+| **Normalized steer → delta (rad)** | MPC already outputs rad. Behavior clamps to ±`DELTA_MAX_RAD` (0.2816) and passes that rad value. | `behaviors.scenic`: `final_steer = max(-DELTA_MAX_RAD, min(DELTA_MAX_RAD, float(steer_mpc)))`, then `SetSteerAction(final_steer)`. |
+| **Rad → ControlDesk / dSPACE** | **Steering wheel angle** in degrees, ±240. Conversion: `theta_sw_deg = delta_road_rad * R * 180/pi`, with `R = THETA_SW_MAX_DEG / (DELTA_MAX_RAD * 180/pi)` ≈ 14.9. | `simulators/dspace/steer_io.py`: `road_rad_to_dspace_value(delta_road_rad)`; used in `vehicle/controller.py` and simulator write path. |
+| **Negations** | None on write. Readback in `io_adapter.py`: `STEER_ACTUAL_SIGN = -1.0` applied to read steering (deg→rad) if ControlDesk sign is opposite to MPC convention. | `io_adapter.py` (read only). |
+| **Scales / deadzone / rate / LPF / saturation** | **Saturation:** clip to ±`max_steer_angle` (rad) and ±`steer_rate_limit_output_radps` in `mpc_lateral.py`. No output LPF in lateral controller. **Scale:** rad→deg only in `steer_io` (R as above). | `mpc_lateral.py` (clamp, rate limit); `steer_io.py` (scale). |
+| **Logged names** | **delta_cmd:** `_log_delta_cmd_rad` (MPC, post-clamp/rate). **steer_write:** `theta_sw_deg_sent` (simulator) = value written to ControlDesk. **steer_readback:** `state['steer_actual']` (rad) from `io_adapter.read_state_from_controldesk` (ControlDesk path `steer_actual` → deg→rad, then `STEER_ACTUAL_SIGN`). | MPC: `_log_delta_cmd_rad`, `_log_ctrl_*`. Simulator: `[STEER_IO]`, `[ControlDesk]`. |
+
+**I/O write path:** The behavior does not call `write_steering_to_controldesk` with the MPC output directly. It uses `SetSteerAction(final_steer)` with `final_steer` in rad; the simulator reads `_control_state['steering']` (rad) and calls `road_rad_to_dspace_value(delta_rad)` in `vehicle/controller.py` (or the simulator’s write path), then writes the result to the ControlDesk steering variable.
+
+### B) State estimation used by MPC
+
+| Item | Source / convention |
+|------|----------------------|
+| **Heading** | ControlDesk readback: `dspaceActor.heading` (rad). Yaw from `Angle_Yaw_Vehicle_CoorSys_E[deg]` → rad → normalized to [-π, π] with `atan2(sin(yaw_rad_raw), cos(yaw_rad_raw))`. Used for MPC state and waypoint-ahead search. |
+| **Yaw rate** | If available: `actor.angvel.z` (rad/s) in `io_adapter.read_state_from_controldesk`; behavior can pass `vehicle_state['yaw_rate']` into MPC. |
+| **Speed** | `actor.linvel.norm()` in readback (m/s), or behavior `self.speed` / current_speed (m/s). |
+| **e_psi** | `e_psi = heading - psi_ref`, then wrapped to [-π, π] with `atan2(sin(e_psi), cos(e_psi))`. | `mpc_lateral._compute_errors`. |
+| **Frame** | Vehicle yaw is in **world frame** (Vehicle_CoorSys_E = vehicle pose in world). Typically ENU with yaw positive CCW (right-hand rule); readback does not apply 90° or 180° offset unless empirically required. |
+
+### C) Reference builder and segment selection
+
+| Item | Where / how |
+|------|-------------|
+| **Best-segment selection** | Perpendicular distance to each segment (XY); score = distance + penalty for being behind (u_proj < 0.5). Prefer segment with smallest score. Then **gate:** reject switch if `best_match_dist > max_wp_match_dist_m`, or `best_segment_idx < last_seg` (backward), or along-path jump > `max_s_jump_m`. **Stick:** if `|prev_e_y| >= segment_stick_cte_m`, keep `last_seg`. Hysteresis in curvature: stronger hysteresis in high curvature. | `mpc_lateral._compute_errors` (search, gate, stick). |
+| **Reference heading and CTE (no flip)** | `psi_ref = atan2(seg_dy, seg_dx)` only (no >90° flip). `e_y = (px - proj_x)*nx + (py - proj_y)*ny` with no sign flip. Avoids spin-induced discontinuity (heading flip logic removed per Recommendation #1). | `mpc_lateral._compute_errors`. |
+| **kappa_ref sign** | **Spline:** `kappa = (x'*y'' - y'*x'') / (x'^2 + y'^2)^(3/2)` — left turn > 0, right turn < 0. **Linear fallback:** 3-point formula; sign from cross product. | `reference_builder.py` (spline and linear). |
+| **CTE (e_y)** | **Waypoint projection:** project vehicle (px, py) onto chosen segment; normal `n = (-seg_dy, seg_dx)/seg_len` (left of segment direction). `e_y = (px - proj_x)*nx + (py - proj_y)*ny` (no flip). Positive e_y = left of path. | `mpc_lateral._compute_errors`. |
+
+### D) Wheelbase and kinematics
+
+| Item | Value / convention |
+|------|--------------------|
+| **wheel_base** | **2.9718 m** (`vehicle_mpc.yaml`). |
+| **delta_ff** | **Exactly** `delta_ff = atan(L * kappa_ref)` with L = wheel_base; used per step with optional preview blend (at-proj vs ahead). | `mpc_lateral.py`: `delta_ff_rad = math.atan(L * kappa_ff)`. |
+| **max_steer_angle** | **Front wheel angle** in rad (default 0.2816). Used as clamp and in QP constraints. `steer_cmd_max` (e.g. 240) is **ControlDesk steering wheel deg** (dSPACE), not used inside MPC cost/constraints. | `vehicle_mpc.yaml`: `max_steer_angle`, `steer_cmd_max`. |
+
+**Note:** The previous >90° reference flip and e_y sign flip were removed (Recommendation #1) to avoid spin-induced discontinuity. If sign issues remain, use the logged `delta_cmd_rad`, `steer_write`, `steer_readback`, gate/segment, and kappa sign to isolate I/O or kappa convention.
+
+---
+
+## Testing
+
+**Location:** `mpc/testing/`
+
+**Run:** From `mpc/testing/`: `python run_tests.py` or `python -m pytest test_*.py -v`
+
+**Coverage:** Config loading, reference builder (waypoint search, curvature, reference generation), lateral MPC (state computation, gate/stick, OSQP solve), behavior/simulation/scenario integration. See `TEST_CASES.md` for the test guard.
+
+**Note:** Do not run `scenic` commands from automated scripts; use `--count 1` when running scenarios manually to avoid infinite scene generation.
 
 ---
 
 ## Dependencies
 
-### Required Packages
-- `numpy`: Numerical computations
-- `scipy`: Sparse matrices for QP
-- `osqp`: QP solver (OSQP)
-- `pyyaml`: Configuration file parsing
-
-### Optional Packages
-- `matplotlib`: For visualization/debugging (future)
+- `numpy`, `scipy`, `osqp`, `pyyaml` (required)
+- Optional: `matplotlib` for visualization
 
 ---
 
 ## Usage Example
 
-### Using MPC Behavior in Scenic Scenario
-
 ```scenic
 # Example: ego_mpc_behavior.scenic
-param map = "maps/LagunaSeca.xodr"
-param ttl_folder = localPath("../../assets/ttls/LS_ENU_TTL_CSV/transformed")
-param ttl_index = 17
-
-ego = new RacingCar on mainRacingRoad, \
-    with raceNumber 1, \
-    with waypoints (loadWaypoints(ttl_folder, ttl_index))
-
-# Use MPC behavior for improved racing performance
 ego.behavior = FollowRacingLineMPCBehavior(
-    target_speed=30,      # 30 m/s (~108 km/h)
-    manage_gears=True,    # Auto gear shifting
-    use_waypoints=True,   # Use waypoint-based control
-    lookahead=20.0,       # 20m lookahead distance
-    mpc_config_path=None  # Use default MPC config
+    target_speed=30,
+    manage_gears=True,
+    use_waypoints=True,
+    lookahead=20.0,
+    mpc_config_path=None
 )
 ```
-
-### Using MPC Controller Directly (Python)
 
 ```python
 from scenic.domains.racing.mpc import MPCLateralController, load_mpc_config
 
-# Load configuration
 config = load_mpc_config('src/scenic/domains/racing/mpc/vehicle_mpc.yaml')
-
-# Create controller
 mpc = MPCLateralController(config, timestep=0.05)
-
-# In behavior loop:
-vehicle_state = {
-    'x': obj.position.x,
-    'y': obj.position.y,
-    'yaw': obj.heading,
-    'speed': obj.speed,
-}
-waypoints = obj.waypoints  # List of (x, y) tuples
-
-steering = mpc.run_step(vehicle_state, waypoints)
-# steering is in range [-1.0, 1.0]
-```
-
-### Using MPC via Simulation Method
-
-```python
-# In simulator implementation:
-lon_controller, lat_controller = sim.getRacingControllers(
-    agent, 
-    use_mpc=True,  # Enable MPC
-    mpc_config_path='src/scenic/domains/racing/mpc/vehicle_mpc.yaml'  # Optional custom config
-)
+# In loop: steering = mpc.run_step(vehicle_state, waypoints, ...)
 ```
 
 ---
 
-## References
+## Related Docs
 
-- **Spec Document:** `debug_mpc/starting_guide.md`
-- **Vehicle Params:** `debug_mpc/dspace_iac_car.param.yaml`
-- **MPC Params:** `debug_mpc/aw_lat_mpc.param.yaml`
-- **ControlDesk Paths:** `src/scenic/simulators/dspace/controldesk/readback.py`
-
----
-
-## Changelog
-
-### 2024-12-21 - Waypoint Search Fix (Critical Bug - Waypoint Index Stuck)
-- ✅ **Fixed waypoint index getting stuck at 0 when vehicle is off-track**
-  - **Problem:** Waypoint index never updated from 0, distance to waypoint 0 kept increasing (6.76m → 66m), vehicle drove away from path
-  - **Root Cause:** Ahead-only search change removed lookback completely. When vehicle started off-track (6.76m from waypoint 0), it couldn't find waypoints behind it, so always returned index 0 as "nearest"
-  - **Impact:** Vehicle always tried to reach waypoint 0, which kept getting further away. MPC was running but with wrong reference, so steering was ineffective
-  - **Solution:** 
-    - When CTE > 5.0m (far off-track), use aggressive lookback (50% of forward window) to find actual nearest waypoint
-    - When CTE < 5.0m (on-track), use small lookback (base_lookback) for safety
-    - This allows waypoint index to update correctly when vehicle is off-track
-  - **Implementation:**
-    - `lookback_window = int(base_forward * scale * 0.5)` when `cte_magnitude >= 5.0`
-    - `lookback_window = int(base_lookback * scale)` when `cte_magnitude < 5.0`
-  - **Expected behavior:**
-    - Waypoint index should update correctly even when vehicle starts off-track
-    - Vehicle should be able to "catch up" to waypoints when far from path
-    - MPC should get correct reference waypoints for steering computation
-
-### 2024-12-21 - MPC Threshold Adjustments (Allow MPC to Run More Often)
-- ✅ **Increased safety thresholds to allow MPC to run more often**
-  - **Problem:** MPC was constantly disabled, vehicle using weak fallback steering, poor tracking performance
-  - **Root Cause:** 
-    - Position error threshold (5.0m) was too strict - MPC disabled when CTE was just slightly over (5.1m, 5.3m)
-    - Yaw error threshold (1.57rad = 90 deg) was too strict - MPC disabled when vehicle was off-track (common yaw errors of 2.5-3.0 rad)
-    - Config file had old values, code changes didn't take effect
-  - **Solution:** 
-    - **Increased position error threshold:** 5.0m → 8.0m (allows MPC to run when CTE is moderate)
-    - **Increased yaw error threshold:** 1.57rad (90 deg) → 2.36rad (135 deg) (allows MPC when off-track)
-    - **Updated config file:** Changed values in `vehicle_mpc.yaml` (code defaults were overridden by YAML)
-  - **Implementation:**
-    - Config file: `admissible_position_error: 8.0`, `admissible_yaw_error_rad: 2.36`
-    - Code defaults: Updated in `config.py` to match (for cases where YAML doesn't specify)
-  - **Expected behavior:**
-    - MPC should run more often, providing better control than fallback steering
-    - Vehicle should track better when CTE is moderate (5-8m)
-    - MPC can handle large yaw errors better than fallback steering
-
-### 2024-12-21 - Fallback Steering Improvements (Prevent Overshooting When Close to Track)
-- ✅ **Improved fallback steering for small CTE errors to prevent overshooting**
-  - **Problem:** When CTE was small (1-2m), fallback steering was too weak, vehicle overshot from left to right
-  - **Root Cause:** 
-    - Small error branch had low proportional gain (0.3) and large max_error_for_full_steer (5.0m)
-    - Heading error correction was counteracting lateral error correction
-    - Steering commands were too small (e.g., -0.002) when close to track
-  - **Solution:** 
-    - **Increased steering authority for small errors:**
-      - Proportional gain: 0.3 → 0.4 (stronger correction)
-      - Max error for full steer: 5.0m → 2.0m (more responsive)
-    - **Improved heading error correction:**
-      - Reduce heading gain when lateral error is large (0.05 for >5m, 0.08 for 2-5m, 0.1 for <2m)
-      - Prevent heading correction from counteracting lateral correction (reduce by 50% if opposing)
-  - **Implementation:**
-    - Small error branch: `proportional_gain = 0.4`, `max_error_for_full_steer = 2.0`
-    - Heading error: Adaptive gain based on lateral error magnitude, conflict detection
-  - **Expected behavior:**
-    - Stronger steering correction when CTE is small (1-2m)
-    - Less overshooting when approaching track
-    - Heading error correction doesn't counteract lateral correction
-
-### 2024-12-21 - Overshooting Prevention Fixes
-- ✅ **Fixed vehicle overshooting track when CTE is moderate (2-4m)**
-  - **Problem:** Vehicle overshooting from left to right side of track, MPC disabled due to large yaw error, weak fallback steering, speed too high when approaching track
-  - **Root Cause:** 
-    - Speed limits too high for moderate CTE (10 m/s at 2-3m CTE, 5 m/s at 3-5m CTE)
-    - Yaw error threshold too strict (1.57 rad = 90 deg), disabling MPC when vehicle is off-track
-    - Fallback steering too weak for moderate CTE (0.3 gain for <5m errors)
-    - Vehicle accelerating too much when CTE reduces to 2-4m
-  - **Solution:** 
-    - **Reduced speed limits for moderate CTE:**
-      - 2-3m CTE: 5 m/s (reduced from 10 m/s)
-      - 3-5m CTE: 4 m/s (reduced from 5 m/s)
-      - Prevents vehicle from overshooting when approaching track
-    - **Increased fallback steering authority for moderate CTE:**
-      - 2-5m CTE: 0.5 gain (increased from 0.3), full steering at 5m (reduced from 10m)
-      - More responsive correction when CTE is moderate
-    - **Relaxed yaw error threshold:**
-      - Changed from 1.57 rad (90 deg) to 2.36 rad (135 deg)
-      - Allows MPC to run more often when vehicle is off-track
-      - MPC handles large yaw errors better than fallback steering
-    - **Additional throttle reduction for moderate CTE at high speed:**
-      - When CTE is 2-5m and speed > 4 m/s, apply additional throttle reduction
-      - At 4 m/s: 0% reduction, at 6 m/s: 50% reduction, at 8+ m/s: 80% reduction
-      - Prevents acceleration when approaching track at high speed
-  - **Implementation:**
-    - Speed limits: `effective_target_speed = 5.0` for 2-3m CTE, `4.0` for 3-5m CTE
-    - Fallback steering: `proportional_gain = 0.5` for 2-5m CTE, `max_error_for_full_steer = 5.0`
-    - Yaw error threshold: `admissible_yaw_error_rad = 2.36` (135 degrees)
-    - Moderate CTE throttle reduction: Additional 0-80% reduction based on speed
-  - **Expected behavior:**
-    - Vehicle should not overshoot when CTE is moderate (2-4m)
-    - MPC should run more often, providing better control than fallback
-    - Stronger steering correction when CTE is moderate
-    - Lower speeds when approaching track prevent overshooting
-
-### 2024-12-21 - Smooth Driving Improvements (Prefer Throttle Reduction Over Braking)
-- ✅ **Improved driving smoothness by preferring throttle reduction over braking**
-  - **Problem:** Drive-brake-drive-brake cycles causing jerky motion, simultaneous throttle and brake application
-  - **Root Cause:** 
-    - When CTE 5-7m and speed 2-3 m/s, both throttle (0.05) and brake (0.025-0.05) were applied simultaneously
-    - Binary throttle on/off (0.0 or 0.05) created abrupt transitions
-    - Brake was applied even when throttle reduction would be sufficient
-  - **Solution:** 
-    - **Speed-based brake application:**
-      - Only apply brake when speed > 5 m/s (high speed requires active braking)
-      - For speed 3-5 m/s: reduce throttle to 0.0, no brake (smooth deceleration)
-      - For speed 2-3 m/s: gradual throttle reduction, no brake
-      - Prefer throttle reduction as primary speed control mechanism
-    - **Avoid simultaneous throttle and brake:**
-      - When both throttle and brake are present at moderate CTE (5-7m):
-        - Low speed (<4 m/s): remove brake, reduce throttle instead
-        - High speed (≥4 m/s): remove throttle, keep brake (brake necessary)
-    - **Gradual throttle reduction:**
-      - Use PID output with reduction factor instead of binary on/off
-      - Smooth transitions between throttle levels
-  - **Implementation:**
-    - Speed thresholds: Brake only when speed > 5 m/s for CTE 5-7m, > 4 m/s for CTE 7-10m
-    - Throttle reduction: Zero throttle for 3-5 m/s, gradual reduction for 2-3 m/s
-    - Conflict resolution: Remove brake or throttle when both present at moderate CTE
-    - Better logging to track smooth driving decisions
-  - **Expected behavior:**
-    - Smoother deceleration when CTE is moderate (5-7m)
-    - No simultaneous throttle and brake application
-    - Gradual speed reduction through throttle reduction instead of abrupt braking
-    - More natural driving feel, less jerky motion
-
-### 2024-12-21 - Aggressive Waypoint Search (Fix Stuck Waypoint Index) - UPDATED
-- ✅ **Fixed waypoint index getting stuck when vehicle moves far from waypoint**
-  - **Problem:** Waypoint index stuck at same value (e.g., 3396), distance to waypoint increasing (5m → 42m), vehicle moving but not making progress
-  - **Root Cause:** 
-    - Waypoint search was using `last_known_index` as starting point, biasing search toward old index
-    - Even with aggressive search, `find_best_racing_waypoint` kept finding the same waypoint (3396) because it started from that index
-    - Vehicle had passed waypoint 3396, but search wasn't finding the next waypoint
-  - **Solution:** 
-    - **Find nearest waypoint first when distance > 10m:**
-      - Before doing aggressive search, scan waypoints to find the actual nearest one
-      - Scan ±500 waypoints around current index first (fast)
-      - If nearest is still >10m, scan entire waypoint list (brute force)
-      - Use nearest waypoint as starting point for aggressive search, not old index
-    - **Fallback if aggressive search returns old index:**
-      - If aggressive search still returns old index with large distance, use nearest waypoint instead
-      - Prevents waypoint index from getting stuck on old waypoint
-    - **Enhanced manual scan fallback:**
-      - When distance > 20m, scan both forward and backward waypoints
-      - Find nearest waypoint regardless of direction
-  - **Implementation:**
-    - When `current_wp_dist > 10.0m`: First find nearest waypoint by brute force scan
-    - Use nearest waypoint as `last_known_index` for aggressive search (not old index)
-    - If aggressive search returns old index with distance > 10m, override with nearest waypoint
-    - Search parameters: `max_search_distance=500.0`, `forward_bias=0.5`, `forward_only=False`
-    - Manual scan: scans backward up to 200 waypoints when distance > 20m
-    - Better debug logging to track waypoint search attempts and nearest waypoint found
-  - **Expected behavior:**
-    - Waypoint index should update to nearest waypoint when vehicle moves far from current waypoint
-    - Vehicle should be able to "catch up" to waypoints even after overshooting
-    - Distance to waypoint should decrease over time, not increase
-    - CTE should reduce as vehicle gets closer to reference path
-
-### 2024-12-21 - Progressive Brake & Throttle Control (Prevent Brake-Accelerate Cycles)
-- ✅ **Fixed brake-accelerate cycle preventing vehicle progress**
-  - **Problem:** Vehicle stuck in cycle: accelerate → brake (0.2) → stop → accelerate → brake → stop
-  - **Root Cause:** 
-    - Brake (0.2) was too strong, stopping vehicle completely
-    - Min throttle (0.05) was too weak to make meaningful progress
-    - Speed threshold (1.0 m/s) was too low, brake reapplied too soon
-    - No throttle allowed when moving, preventing slow progress toward reducing CTE
-  - **Solution:** 
-    - **Progressive brake strength based on CTE:**
-      - 5-7m CTE: 0.05 brake (light)
-      - 7-10m CTE: 0.1 brake (moderate)
-      - 10m+ CTE: 0.2-0.3 brake (strong)
-    - **Increased min throttle when stopped:** 0.1 instead of 0.05
-    - **Allow small throttle when moving slowly:** 0.05 throttle when speed < 3 m/s and CTE 5-7m
-    - **Increased speed threshold for brake:** 2.0 m/s instead of 1.0 m/s
-    - **Reduce brake when speed is low:** 50% reduction when speed < 2.5 m/s (prevents complete stop)
-  - **Implementation:**
-    - Speed threshold: `SPEED_THRESHOLD_FOR_BRAKE = 2.0 m/s` - allows more movement before braking
-    - Minimum throttle when stopped: `MIN_THROTTLE_WHEN_STOPPED = 0.1` - stronger throttle to start moving
-    - Minimum throttle when moving slowly: `MIN_THROTTLE_WHEN_MOVING_SLOW = 0.05` - enables slow progress
-    - Progressive brake: Light (0.05) for 5-7m, Moderate (0.1) for 7-10m, Strong (0.2-0.3) for 10m+
-    - Speed-based brake reduction: 50% reduction when speed < 2.5 m/s
-  - **Expected behavior:**
-    - Vehicle can make slow progress even with moderate CTE (5-7m)
-    - Brake strength scales with CTE magnitude (not binary on/off)
-    - Small throttle allowed when moving slowly enables progress toward reducing CTE
-    - Brake reduced when speed is low prevents complete stop
-    - Vehicle should gradually reduce CTE instead of getting stuck in brake-accelerate cycles
-
-### 2024-12-19 - Fixed Simulation Loop Bug
-- ✅ Removed debug `exit()` call that was terminating simulation after 10 steps
-- ✅ Added note about `--count 1` parameter to prevent infinite scene generation loop
-- ✅ Updated testing guidelines to include proper command-line parameters
-- ⚠️ **Issue Found:** Scenic's main loop generates scenes indefinitely without `--count` parameter
-
-### 2024-12-19 - Steering Sign Fix & TTL Coordinate System Verification
-- ✅ **Fixed steering sign inversion in controller.py**
-  - **Problem:** Negative sign in `controller.py` line 80 was flipping steering direction
-  - **Impact:** Vehicle was steering RIGHT when MPC commanded LEFT (and vice versa)
-  - **Root Cause:** `steer_val = -float(...) * 70.0` inverted the sign
-  - **Fix:** Removed negative sign - now positive steering = LEFT in ControlDesk (matches joystick convention)
-  - **Verification:** ControlDesk joystick docs confirm: positive = LEFT, negative = RIGHT
-- ✅ **TTL Waypoint Coordinate System Verified**
-  - Ran `evaluate_ttl_coordinates.py` to verify waypoint coordinate system
-  - **Result:** TTL files in `transformed` folder are correctly in XODR coordinate space
-  - Waypoints project correctly to road geometry when treated as XODR coordinates
-  - **Conclusion:** Waypoint coordinate system is correct - not the source of tracking errors
-  - Large initial CTE values (8-10m) are likely due to:
-    - Initial vehicle placement offset from waypoint path
-    - Waypoint path may not perfectly align with actual track centerline
-    - Possible t-coordinate sign convention mismatch (see note below)
-- ⚠️ **Note on dSPACE t-coordinate Sign Convention:**
-  - Documentation indicates dSPACE t-coordinate convention is INVERTED:
-    - Positive t = RIGHT of reference line (not LEFT as expected)
-    - Negative t = LEFT of reference line (not RIGHT as expected)
-  - This may affect lateral error computation if waypoint path uses same convention
-  - MPC uses standard convention: Positive e_y = LEFT, Negative e_y = RIGHT
-  - **Recommendation:** Verify if waypoint path computation needs sign adjustment
-
-### 2024-12-19 - CTE-Aware PID Controller & Progressive Throttle Reduction (Updated)
-- ✅ **Made PID controller CTE-aware (CRITICAL FIX)**
-  - **Problem:** PID controller didn't account for vehicle's natural acceleration (momentum, gravity, etc.)
-  - **Impact:** PID saw `speed_error = 30 - 6.29 = 23.71 m/s` and commanded full throttle even when CTE was large
-  - **Root Cause:** Vehicle accelerates naturally even without throttle, but PID only sees speed difference
-  - **Solution:** Modify effective target speed based on CTE magnitude before computing speed error
-    - **CTE < 2m:** Full target speed (30 m/s)
-    - **2-10m CTE:** Linear reduction from 100% to 50% of target speed
-    - **10-15m CTE:** Linear reduction from 50% to 30% of target speed
-    - **15-50m CTE:** 30% of target speed (encourages braking)
-    - **>50m CTE:** 10% of target speed (heavy braking)
-  - **Result:** PID now commands braking or zero throttle when CTE is large, instead of trying to accelerate
-- ✅ **Implemented progressive throttle reduction based on CTE magnitude**
-  - **Problem:** Fixed throttle (0.1) caused vehicle to accelerate too fast when starting with large CTE errors
-  - **Impact:** Vehicle reached 11+ m/s before steering could correct, leading to overshoot and 24m+ CTE errors
-  - **Solution:** Multi-zone progressive throttle reduction:
-    - **2-10m CTE:** Linear reduction from base throttle (0.1) to minimum (0.03) - **LOWERED from 5m to 2m**
-    - **10-15m CTE:** Further reduction to 0.3 throttle limit
-    - **15-50m CTE:** Progressive braking (existing logic)
-    - **>50m CTE:** Full brake (existing logic)
-- ✅ **Added speed-based throttle reduction (Enhanced)**
-  - When CTE > 2m and speed > 3 m/s, additional throttle reduction based on speed
-  - **More aggressive speed penalty:**
-    - At 3 m/s: 0% reduction
-    - At 8 m/s: 50% reduction
-    - At 13+ m/s: 80% reduction (increased from 50%)
-  - Prevents vehicle from overshooting when correcting large errors at high speed
-- ✅ **PID output clamping**
-  - Clamp PID controller output to [-1.0, 1.0] range before applying CTE/speed reductions
-  - Prevents excessive throttle commands from PID controller
-- ✅ **Throttle limit enforcement**
-  - Ensure `local_throttle_limit` never exceeds base `throttle_limit`
-  - Final throttle is clamped to `local_throttle_limit` (includes all reductions)
-- ✅ **Throttle reduction thresholds:**
-  - `cte_throttle_reduction_start = 2.0m`: Start progressive reduction (lowered from 5.0m)
-  - `cte_throttle_reduction_max = 10.0m`: Maximum reduction zone
-  - `min_throttle_at_large_cte = 0.03`: Minimum throttle when CTE > 10m
-- **Expected behavior:** 
-  - PID controller now commands braking/zero throttle when CTE is large (addresses natural acceleration issue)
-  - Vehicle should now accelerate more slowly when off-track (even with small CTE errors)
-  - Throttle reduction continues even when CTE drops below 5m (prevents sudden throttle jumps)
-  - More aggressive speed-based reduction prevents overshooting at high speeds
-
-### 2024-12-19 - Proportional Fallback Steering & Safety Improvements
-- ✅ **Implemented proportional fallback steering** to prevent catch-22 situations
-  - **Problem:** Large errors (>5m) disabled MPC → zero steering → larger errors → MPC stays disabled
-  - **Solution:** Fallback now uses proportional control based on lateral error (e_y)
-  - Proportional gain: 0.3 (full steering at ~10m error)
-  - Blends with last valid steering for smooth transitions
-  - Prevents vehicle from drifting further when MPC is disabled
-- ✅ Updated `_fallback_steering()` to accept error information (e_y, e_psi)
-- ✅ Modified safety check calls to pass error information to fallback
-- ✅ Added heading error correction in fallback (smaller contribution)
-
-### 2024-12-19 - Steering Feedback Reading Infrastructure
-- ✅ Added `steer_actual` path configuration in `vehicle_mpc.yaml`
-- ✅ Implemented steering feedback reading in `io_adapter.py`
-- ✅ Updated MPC controller to use actual steering feedback from ControlDesk
-- ✅ Added fallback to previous state estimate if feedback not available
-- ✅ Integrated steering feedback reading into `FollowRacingLineMPCBehavior`
-- ✅ Stored MPC config in simulation for io_adapter access
-- ✅ **Integrated `Angle_SteeringGear[deg]` as steering feedback path**
-- ⚠️ **Note:** Using `Angle_SteeringGear` - this may need verification/adjustment in the future if it's not exactly the front wheel angle. Alternative paths available: `Angle_SteeringWheel` (has steering ratio) and `Displ_Steering` (displacement, not angle).
-
-### 2024-12-19 - Testing Complete & Path Fix
-- ✅ Created comprehensive integration test suite (27 tests total)
-- ✅ Added behavior integration tests (`test_behavior_integration.py`)
-- ✅ Added simulation integration tests (`test_simulation_integration.py`)
-- ✅ Added scenario compilation tests (`test_scenario_compilation.py`)
-- ✅ **Fixed config path resolution** - now correctly finds `src/scenic/domains/racing/mpc/vehicle_mpc.yaml`
-- ✅ **All 27 tests passing!** (1 skipped - requires dSPACE simulator)
-- ✅ Updated test runner to include all new tests
-- ✅ Updated TEST_CASES.md with integration test documentation
-- ✅ Fixed example scenario (`ego_mpc_behavior.scenic`) to use correct TTL loading
-
-### 2024-12-19 - Behavior Integration Complete
-- ✅ Created `FollowRacingLineMPCBehavior` in `behaviors.scenic`
-- ✅ Updated `DSpaceSimulation.getRacingControllers()` to support `use_mpc=True` parameter
-- ✅ Updated abstract base class `RacingSimulation.getRacingControllers()` signature
-- ✅ Created example scenario: `examples/racing/ego_mpc_behavior.scenic`
-- ✅ MPC controller integrated with waypoint following logic
-- ✅ Maintains compatibility with existing PID-based behaviors
-
-### 2024-12-19 - Testing Infrastructure & Fixes
-- ✅ Created comprehensive test suite in `testing/` directory
-- ✅ Added unit tests for all major components (18 test cases)
-- ✅ Created `TEST_CASES.md` living document as guard/regression test suite
-- ✅ Added test runner script (`run_tests.py`)
-- ✅ Fixed OSQP solver update issue (now uses setup() each step)
-- ✅ Fixed test expectation for lateral error sign convention
-- ✅ Updated README with testing information for future AI agents
-- ✅ **All 18 tests passing!** ✅
-
-### 2024-12-19 - State Computation Implementation
-- ✅ Implemented state computation (`_compute_errors()`)
-  - Lateral error (e_y) computed from waypoint projection
-  - Heading error (e_psi) computed from segment direction
-  - Safety checks for large errors (disable MPC if exceeded)
-- ✅ Added error computation based on existing `FollowRacingLineBehavior` CTE logic
-- ✅ Integrated state computation into `run_step()`
-
-### 2024-12-19 - Initial Implementation
-- Created module structure
-- Implemented configuration loader
-- Implemented reference trajectory builder
-- Created MPC controller skeleton
-- Added utility functions (low-pass filter)
-- Created I/O adapter skeleton
-- Created calibration utilities skeleton
-
----
-
-## Next Steps
-
-### Priority 1: Integration with Behaviors
-1. **Create MPC Behavior:**
-   - Create `FollowRacingLineMPCBehavior` in `behaviors.scenic`
-   - Or add `use_mpc=True` parameter to existing `FollowRacingLineBehavior`
-   - Integrate MPC controller with waypoint following logic
-
-2. **Simulation Integration:**
-   - Update `DSpaceSimulation.getRacingControllers()` to support MPC option
-   - Test with ControlDesk connection
-   - Validate coordinate systems match
-
-### Priority 2: Steering Feedback & Calibration
-3. **Steering Feedback:**
-   - Read actual steering angle (delta) from ControlDesk
-   - Update state computation to use real steering feedback
-
-4. **Calibration:**
-   - Implement steering scale calibration procedure
-   - Test calibration with real vehicle
-   - Update config with calibrated values
-
-### Priority 3: Testing & Tuning
-5. **Integration Testing:**
-   - Test with real waypoint files
-   - Test end-to-end behavior
-   - Validate performance
-
-6. **Tuning:**
-   - Initial weight tuning based on test results
-   - Safety threshold tuning
-   - Performance optimization (if needed)
-
----
-
-*This is a living document - update as implementation progresses and learnings are gathered.*
-
+- **fix.md** – Questions used to build the [Wiring and debugging](#wiring-and-debugging-control-pipeline-state-reference-kinematics) section (control pipeline, state, reference, kinematics).
+- **MPCC_MIGRATION_PLAN.md** – Phases 1–3 (progress state, lag/progress cost, MPCC).
+- **MPCC_IMPROVEMENT_PLAN.md** – Reference continuity gate, conditional deadzone, curve-approach commitment, feedforward, stick-by-match-quality.
+- **result_data/README.md** – Log analysis and comparison.
+- **3D_RESPONSIBILITIES.md** – 3D waypoints and projection.

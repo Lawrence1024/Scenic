@@ -95,6 +95,9 @@ class MPCConfig:
         self.admissible_yaw_error_rad = config_dict.get('admissible_yaw_error_rad', 2.36)
         self.max_invalid_count = config_dict.get('max_invalid_count', 10)
         
+        # Task 3: Yaw-rate damping to prevent snap oscillations (cost on (e_psi_{k+1} - e_psi_k)^2)
+        self.w_epsi_rate = config_dict.get('w_epsi_rate', 0.1)
+        
         # Filter
         self.steering_lpf_cutoff_hz = config_dict.get('steering_lpf_cutoff_hz', 2.0)  # Smoother steering output
         
@@ -109,6 +112,13 @@ class MPCConfig:
         # Reference continuity gate: reject candidate segment if match is weak (avoid reference snap at curve entry)
         self.max_wp_match_dist_m = config_dict.get('max_wp_match_dist_m', 3.0)  # (m) max perpendicular distance to accept segment switch
         self.max_s_jump_m = config_dict.get('max_s_jump_m', 4.0)  # (m) max along-path progress jump per tick; reject if exceeded
+        self.gate_hard_fail_dist_m = config_dict.get('gate_hard_fail_dist_m', 6.0)  # (m) when gate rejects and match_dist > this, force re-association (Rec B)
+        self.stick_association_ok_m = config_dict.get('stick_association_ok_m', 2.0)  # (m) only stick to segment when match_dist < this (Rec C)
+        
+        # Feedforward preview (Task B: chicane) — blend of at-proj and +10 m ahead curvature for delta_ff
+        self.ff_preview_blend = config_dict.get('ff_preview_blend', 0.4)  # 0 = at-proj only, 0.4 = 40% ahead
+        self.ff_chicane_preview_blend = config_dict.get('ff_chicane_preview_blend', 0.85)  # Task 2: use preview in chicanes (sign flip)
+        self.ff_chicane_curvature_threshold = config_dict.get('ff_chicane_curvature_threshold', 0.02)  # 1/m, min |kappa| to detect chicane
         
         # Curvature smoothing
         self.curvature_smoothing_num = config_dict.get('curvature_smoothing_num', 15)  # Points for curvature calculation

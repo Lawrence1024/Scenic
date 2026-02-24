@@ -765,7 +765,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         # v_ref = min(v_desired, min_{s∈[s_0, s_0+L]} v_max(s))
         # This ensures vehicle enters turns at appropriate speed (Laguna Seca: see turns early to avoid run-off)
         curvature_speed_limit = target_speed  # Default: no reduction
-        curvature_ahead_max = 0.0  # Max curvature over lookahead (for proactive downshift)
+        curvature_ahead_max = 0.0  # Max curvature magnitude over lookahead (for speed limits)
+        curvature_ahead_max_signed = 0.0  # Task 3: signed kappa at apex (left > 0, right < 0) for downstream
         max_lateral_accel = 8.0  # m/s² (conservative for indoor sim, can be configured)
         curvature_epsilon = 0.001  # Small epsilon to avoid division by zero
         curvature_speed_margin = 0.92  # Use 92% of theoretical v_max (generic: less over-braking, less throttle compensation; works for any TTL)
@@ -832,14 +833,19 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     if len1 > 1e-6 and len2 > 1e-6:
                         avg_len = (len1 + len2) / 2.0
                         if avg_len > 1e-6:
-                            abs_kappa = abs(2.0 * cross / (len1 * len2 * avg_len))
+                            # Task 3: keep signed curvature (cross2D: left turn > 0, right turn < 0); magnitude for speed formulas
+                            kappa_signed = 2.0 * cross / (len1 * len2 * avg_len)
+                            abs_kappa = abs(kappa_signed)
                             if abs_kappa > curvature_ahead_max:
                                 curvature_ahead_max = abs_kappa
+                                curvature_ahead_max_signed = kappa_signed  # apex signed kappa
                             # Apply speed gate formula: v_max = sqrt(a_y_max / (|κ| + ε)); apply safety margin
                             v_max_at_kappa = curvature_speed_margin * (max_lateral_accel / (abs_kappa + curvature_epsilon)) ** 0.5
                             if v_max_at_kappa < min_v_max:
                                 min_v_max = v_max_at_kappa
                 
+                # Expose signed curvature at apex for downstream (commit/approach logic)
+                self._curvature_ahead_max_signed = curvature_ahead_max_signed
                 # Apply minimum v_max over horizon
                 curvature_speed_limit = min_v_max
                 # Slow-in for sharp turns: when any significant curvature is ahead, cap speed more aggressively
@@ -855,9 +861,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     v_max_slow_in = slow_in_margin * (max_lateral_accel / (curvature_ahead_max + curvature_epsilon)) ** 0.5
                     if v_max_slow_in < curvature_speed_limit:
                         curvature_speed_limit = v_max_slow_in
+                curvature_speed_cap = curvature_speed_limit  # Task 4: single curvature-based speed cap
             except Exception as e:
-                # If curvature computation fails, use full target speed
+                curvature_speed_cap = target_speed
                 pass
+        else:
+            curvature_speed_cap = target_speed
         
         # --- CTE-based speed reduction (for MPC speed reference) ---
         # Generic: no TTL or segment IDs; only |CTE| so we slow when off-line on any track.
@@ -899,8 +908,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             cte_target_speed = target_speed
         
         # --- Combine CTE and curvature speed limits (take minimum) ---
-        # Use the more restrictive limit (lower speed) to ensure safety
-        effective_target_speed = min(cte_target_speed, curvature_speed_limit)
+        # Task 4: curvature-based speed cap applied here; use single cap from lookahead curvature
+        effective_target_speed = min(cte_target_speed, curvature_speed_cap)
         
         # Apply universal max speed limit
         effective_target_speed = min(effective_target_speed, MAX_SPEED_LIMIT_MS)
@@ -969,6 +978,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 # If profile building fails, use constant speed
                 pass
         
+        # Task 4: enforce curvature-based speed cap on entire profile
+        v_ref_profile = [min(v, curvature_speed_cap) for v in v_ref_profile]
         # Apply universal max speed limit to profile
         v_ref_profile = [min(v, MAX_SPEED_LIMIT_MS) for v in v_ref_profile]
         
@@ -1260,6 +1271,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         _sraw_s = f"{_sraw:.3f}" if _sraw is not None else "?"
         _slpf_s = f"{_slpf:.3f}" if _slpf is not None else "?"
         print(f"[FollowRacingLineMPC] ff_log segment_id={_seg_s} v={_v_s} kappa_ref_at_proj={_kap_s} delta_ff={_dff_s} delta_fb={_dfb_s} delta_total={_dtot_s} delta_cmd_rad={_dcmd_s} current_delta_max={_dmax_s} u_norm_mpc={_sraw_s} u_norm_lpf={_slpf_s}")
+        # Task 1: signed curvature sanity log every tick (if you never see negative curvature on a known right-hand portion, bug confirmed)
+        _kappa_ahead = getattr(_lc_ff, '_log_kappa_ref_ahead_signed', None)
+        _s_ref = getattr(_lc_ff, '_log_s_ref', None)
+        _kappa_ahead_s = f"{_kappa_ahead:.4f}" if _kappa_ahead is not None else "?"
+        _s_ref_s = f"{_s_ref:.3f}" if _s_ref is not None else "?"
+        print(f"[FollowRacingLineMPC] CURV_SANITY kappa_ref_at_proj={_kap_s} kappa_ref_ahead_signed={_kappa_ahead_s} segment_id={_seg_s} s_ref={_s_ref_s}")
         # Heading diff for steering conditioning (segment direction vs vehicle heading, wrapped to [-pi, pi])
         heading_diff = 0.0
         if car_heading is not None and use_waypoints and wp_list and len(wp_list) >= 2 and wp_last_idx < len(wp_list) - 1:
@@ -1502,6 +1519,24 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             cte_b = float(cte) if cte is not None else 0.0
             _legacy_s = f"{getattr(self, '_legacy_cte_this_tick', 0):.3f}" if getattr(self, '_legacy_cte_this_tick', None) is not None else "?"
             print(f"[FollowRacingLineMPC] ref_log match_dist_m={_md_s} gate={_gs}{_gr_s} s_ref={_sr_s} dS_ref={_ds_s} s_jump_flag={1 if _sj else 0} seg={_seg_s} stick={1 if _st else 0} e_y_mpc={_ey_s} cte_behavior={cte_b:.3f} legacy_cte={_legacy_s}")
+            # Task 4: Quick projection check — match_dist_m, proj_xy, ego_xy, segment_id progression (stuck = segment_id stops advancing or match_dist spikes at left-right transition)
+            _rp = getattr(_lc, '_log_ref_point', None)
+            _ego = getattr(_lc, '_log_ego', None)
+            _proj_s = f"({_rp[0]:.3f},{_rp[1]:.3f})" if _rp is not None and len(_rp) >= 2 else "?"
+            _ego_xy_s = f"({_ego[0]:.3f},{_ego[1]:.3f})" if _ego is not None and len(_ego) >= 2 else "?"
+            print(f"[FollowRacingLineMPC] projection_check match_dist_m={_md_s} proj_xy={_proj_s} ego_xy={_ego_xy_s} segment_id={_seg_s}")
+            # Task 1: projection continuity — s_ref, segment_id, proj_xy, match_dist; ensure s doesn't jump and projection doesn't hop
+            _s_ok = 1 if getattr(_lc, '_log_s_ref_continuous', True) else 0
+            _hop_ok = 1 if not getattr(_lc, '_log_proj_hop', False) else 0
+            _cont_ok = 1 if getattr(_lc, '_log_projection_continuity_ok', True) else 0
+            print(f"[FollowRacingLineMPC] projection_continuity s_ref={_sr_s} segment_id={_seg_s} proj_xy={_proj_s} match_dist_m={_md_s} s_ok={_s_ok} proj_hop_ok={_hop_ok} continuity_ok={_cont_ok}")
+            _stuck_hint = False
+            if _md is not None and _md > 5.0:
+                _stuck_hint = True  # match_dist spike
+            if _sp is not None and _sn is not None and _sp == _sn and _ds is not None and abs(_ds) < 0.01 and _md is not None and _md > 2.0:
+                _stuck_hint = True  # segment not advancing with significant match_dist
+            if _stuck_hint:
+                print(f"[FollowRacingLineMPC] projection_check STUCK? (segment_id not advancing or match_dist spike)")
             # To-Do A: CTE cross-check (cte_to_waypoints = e_y_mpc; cte_behavior now uses same geometry)
             _rp = getattr(_lc, '_log_ref_point', None)
             _ego = getattr(_lc, '_log_ego', None)
