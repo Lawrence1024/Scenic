@@ -1,18 +1,15 @@
 """dSPACE steering IO adapter: single place for road wheel angle (rad) → steering wheel deg.
 
-Per steer_restructure_plan: only here do we use 240 (theta_sw_max_deg) and the conversion.
+Per steer_restructure_plan: only here do we use the conversion (R, 240).
+Constants DELTA_MAX_RAD, THETA_SW_MAX_DEG, R come from racing.constants.
 """
 
 import math
 import numpy as np
 
-# Single source of truth (plan)
-DELTA_MAX_RAD = 0.2816
-THETA_SW_MAX_DEG = 240.0
-# R = theta_sw_max_deg / (delta_max_rad * 180/pi) ≈ 14.9
-R = THETA_SW_MAX_DEG / (DELTA_MAX_RAD * 180.0 / math.pi)
+from scenic.domains.racing.constants import DELTA_MAX_RAD, THETA_SW_MAX_DEG, R
+
 # Recommendation A: actuator sign at write. +1 = positive delta_rad -> positive deg -> turn left (match kappa).
-# Log showed positive delta_cmd_rad with -1 produced right turn (kappa_meas<0); use +1 so left command = left turn.
 STEER_CMD_SIGN = 1.0
 
 _startup_logged = False

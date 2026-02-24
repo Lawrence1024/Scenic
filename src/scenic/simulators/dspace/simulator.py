@@ -1042,6 +1042,9 @@ class DSpaceSimulation(RacingSimulation):
                 lon_controller = MPCLongitudinalController(config, timestep=dt)
                 lat_controller = MPCLateralController(config, timestep=dt)
                 
+                # Steering contract: MPC path uses road wheel angle in radians (see RACING_CONTROL_CONTRACT.md)
+                agent._racing_steer_units = 'rad'
+                
                 # Store config in simulation for io_adapter access
                 self.mpc_config = config
                 
@@ -1051,6 +1054,7 @@ class DSpaceSimulation(RacingSimulation):
             except Exception as e:
                 print(f"[DSpaceSimulation] WARNING: Failed to create MPC controllers: {e}")
                 print(f"[DSpaceSimulation] Falling back to PID controllers")
+                agent._racing_steer_units = 'normalized'
                 # Fall back to PID
                 from scenic.domains.driving.controllers import (
                     PIDLongitudinalController,
@@ -1060,14 +1064,13 @@ class DSpaceSimulation(RacingSimulation):
                 lat_controller = PIDLateralController(K_P=0.3, K_D=0.15, K_I=0.0, dt=dt)
                 return lon_controller, lat_controller
         else:
-            # Standard PID controllers
+            # Standard PID controllers (steering in normalized [-1, 1])
+            agent._racing_steer_units = 'normalized'
             from scenic.domains.driving.controllers import (
                 PIDLongitudinalController,
                 PIDLateralController
             )
             lon_controller = PIDLongitudinalController(K_P=0.8, K_D=0.15, K_I=0.9, dt=dt)
-            lat_controller = PIDLateralController(K_P=0.3, K_D=0.15, K_I=0.0, dt=dt)
-            return lon_controller, lat_controller
             lat_controller = PIDLateralController(K_P=0.3, K_D=0.15, K_I=0.0, dt=dt)
             return lon_controller, lat_controller
     

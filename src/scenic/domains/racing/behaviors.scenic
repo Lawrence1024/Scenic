@@ -26,6 +26,7 @@ from scenic.domains.racing.segments import (
     get_segment_at_waypoint,
     get_segment_label,
 )
+from scenic.domains.racing.constants import DELTA_MAX_RAD
 
 behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoints=True, lookahead=20.0):
     """Follow the car's TTL using controllers.
@@ -1287,8 +1288,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         local_throttle_limit = throttle_limit
         final_brake = 0.0
 
-        # Plan: steering = road wheel angle (rad). Single source of truth delta_max (rad).
-        DELTA_MAX_RAD = 0.2816
+        # Plan: steering = road wheel angle (rad). Single source of truth delta_max (racing.constants).
         # Progressive throttle reduction based on CTE magnitude
         if cte_mag >= cte_stop_threshold:
             local_throttle_limit = 0.0
@@ -1325,7 +1325,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             local_throttle_limit = local_throttle_limit * (1.0 - moderate_cte_penalty)
 
         
-        # --- Steering: plan — MPC returns road wheel angle (rad); clamp + rate limit in controller; pass through ---
+        # --- Steering: MPC is single owner of clamp/rate limit (mpc_lateral.py). Safety backup below. ---
         final_steer = max(-DELTA_MAX_RAD, min(DELTA_MAX_RAD, float(steer_mpc)))
         final_steer_ds = final_steer   # rad; IO adapter converts to dSPACE steering_wheel_deg in simulator
         # fix.md Option 1: heading-based yaw rate (avoids yaw-rate channel stuck at 0)

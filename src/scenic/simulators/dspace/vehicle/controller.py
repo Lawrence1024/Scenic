@@ -75,10 +75,18 @@ class VehicleController:
                 self.cd.set_var(KEY_BRAKE_FRONT, brake_val)
                 self.cd.set_var(KEY_BRAKE_REAR, brake_val)
             
-            # Steering: road wheel angle (rad) → dSPACE steering_wheel_deg via single IO adapter (plan)
+            # Steering: interpret by control mode (RACING_CONTROL_CONTRACT.md)
+            # MPC path: _racing_steer_units == 'rad' → value is road wheel angle (rad)
+            # PID path: _racing_steer_units == 'normalized' → value is [-1, 1], convert to rad
             if control and 'steering' in control and control['steering'] is not None:
                 from ..steer_io import road_rad_to_dspace_value
-                delta_rad = float(control['steering'])
+                from scenic.domains.racing.constants import DELTA_MAX_RAD
+                steer_raw = float(control['steering'])
+                if getattr(obj, '_racing_steer_units', None) == 'rad':
+                    delta_rad = steer_raw
+                else:
+                    # Normalized [-1, 1] from PID; convert to rad
+                    delta_rad = max(-DELTA_MAX_RAD, min(DELTA_MAX_RAD, steer_raw * DELTA_MAX_RAD))
                 steer_val = road_rad_to_dspace_value(delta_rad)
                 self.cd.set_var(KEY_STEERING, steer_val)
             
@@ -86,8 +94,14 @@ class VehicleController:
             if obj._ego_control_count % 50 == 0:
                 t_log = obj._ego_control_count * 0.05
                 from ..steer_io import road_rad_to_dspace_value
-                steer_deg = road_rad_to_dspace_value(float(steer_scenic)) if steer_scenic is not None else 0.0
-                print(f"[EgoControl] t={t_log:.2f}s #{obj._ego_control_count} Writing: throttle={throttle_scenic:.3f}->{throttle_scenic*100:.1f}, brake={brake_scenic:.3f}->{brake_scenic*100:.1f}, steer_rad={steer_scenic:.4f}->{steer_deg:.1f}deg")
+                from scenic.domains.racing.constants import DELTA_MAX_RAD
+                steer_raw = steer_scenic if steer_scenic is not None else 0.0
+                if getattr(obj, '_racing_steer_units', None) == 'rad':
+                    _delta_rad = float(steer_raw)
+                else:
+                    _delta_rad = max(-DELTA_MAX_RAD, min(DELTA_MAX_RAD, float(steer_raw) * DELTA_MAX_RAD))
+                steer_deg = road_rad_to_dspace_value(_delta_rad)
+                print(f"[EgoControl] t={t_log:.2f}s #{obj._ego_control_count} Writing: throttle={throttle_scenic:.3f}->{throttle_scenic*100:.1f}, brake={brake_scenic:.3f}->{brake_scenic*100:.1f}, steer_rad={_delta_rad:.4f}->{steer_deg:.1f}deg")
                 
         except Exception as e:
             print(f"[VehicleController:EgoControl] Error: {e}")
@@ -152,6 +166,10 @@ class VehicleController:
         throttle = float(control.get('throttle', 0.0))
         brake = float(control.get('braking', 0.0))
         steering = float(control.get('steering', 0.0))
+        # Fellow physics expects steering in [-1, 1]. Convert from rad if MPC path.
+        if getattr(obj, '_racing_steer_units', None) == 'rad':
+            from scenic.domains.racing.constants import DELTA_MAX_RAD
+            steering = max(-1.0, min(1.0, steering / DELTA_MAX_RAD))
         
         # CRITICAL: Get the actual CTE (cross-track error) from the behavior
         cte_from_behavior = getattr(obj, '_current_cte', None)

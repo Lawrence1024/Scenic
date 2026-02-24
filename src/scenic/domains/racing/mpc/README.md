@@ -3,45 +3,47 @@
 **Last Updated:** 2025-02  
 **Status:** MPCC lateral + longitudinal MPC integrated with racing behaviors
 
+This document focuses on the **MPC submodule**: formulation, configuration, and how it fits into the racing control stack. For the overall racing library structure, see the parent [racing README](../README.md) and [RACING_CONTROL_CONTRACT.md](../RACING_CONTROL_CONTRACT.md).
+
 ---
 
 ## Overview
 
-This module implements **Model Predictive Contouring Control (MPCC)** for lateral (steering) control and **MPC for longitudinal** (throttle/brake) control of racing vehicles in the Scenic racing domain. The lateral controller uses a 4-state formulation with contouring cost, lag error, progress reward, and curvature feedforward. It replaces PID for improved performance on racing tracks, especially in high-speed cornering.
+This module implements **Model Predictive Contouring Control (MPCC)** for lateral (steering) control and **MPC for longitudinal** (throttle/brake) control of racing vehicles. The lateral controller uses a 4-state formulation with contouring cost, lag error, progress reward, and curvature feedforward. It is the **single owner** of lateral steering limits (clamp and rate limit); the behavior layer applies only policy overrides (e.g. far-off-path recovery). Steering output is **road wheel angle in radians**; constants (`DELTA_MAX_RAD`, etc.) come from `scenic.domains.racing.constants`.
 
 ---
 
-## Module Structure
+## Role in the racing library
+
+- **Behaviors** (`FollowRacingLineMPCBehavior`) call `getRacingControllers(agent, use_mpc=True)` to obtain lateral and longitudinal MPCs, build waypoints/speed profile, and pass MPC output to `SetSteerAction(rad)` and throttle/brake actions.
+- **MPC** owns lateral clamp (±`max_steer_angle`) and rate limit; returns `delta_cmd_rad`. Config default for `max_steer_angle` uses `DELTA_MAX_RAD` from racing constants.
+- **Simulator (e.g. dSPACE)** interprets `_control_state['steering']` using `agent._racing_steer_units` (set to `'rad'` when MPC is used); conversion rad → steering wheel deg happens only in `steer_io`. See [RACING_CONTROL_CONTRACT.md](../RACING_CONTROL_CONTRACT.md).
+
+---
+
+## Module structure
 
 ```
 mpc/
-├── __init__.py              # Module exports (MPCLateralController, MPCLongitudinalController, load_mpc_config)
-├── config.py                 # Configuration (YAML → MPCConfig)
-├── reference_builder.py      # Waypoints → psi_ref, kappa_ref, v_ref, s_horizon
-├── mpc_lateral.py            # MPCC lateral controller (state [e_y, e_psi, delta, s])
-├── mpc_longitudinal.py       # Longitudinal MPC (throttle/brake)
-├── speed_profile.py          # Curvature/CTE-based speed profile for v_ref
-├── io_adapter.py             # ControlDesk I/O (readback, steering write)
-├── utils.py                  # Low-pass filter, etc.
-├── calibration.py            # Steering scale calibration (skeleton)
-├── vehicle_mpc.yaml          # Default MPC parameters
-├── README.md                 # This file
-├── result_data/              # Log parsing and run analysis
-│   ├── analyze_racing_log.py
-│   ├── compare_racing_results.py
-│   ├── parse_commit_metrics.py
-│   └── README.md
-├── testing/
-│   ├── test_config.py, test_utils.py, test_reference_builder.py, test_mpc_lateral.py
-│   ├── test_behavior_integration.py, test_simulation_integration.py, test_scenario_compilation.py
-│   ├── run_tests.py, TEST_CASES.md
-│   └── ...
-└── *.md                      # MPCC_MIGRATION_PLAN, MPCC_IMPROVEMENT_PLAN, 3D_RESPONSIBILITIES, etc.
+├── __init__.py              # Exports: MPCLateralController, MPCLongitudinalController, load_mpc_config, ReferenceBuilder
+├── config.py                # YAML → MPCConfig (uses racing.constants.DELTA_MAX_RAD as default max_steer_angle)
+├── reference_builder.py     # Waypoints → psi_ref, kappa_ref, v_ref, s_horizon
+├── mpc_lateral.py           # MPCC lateral (state [e_y, e_psi, delta, s]); returns delta_cmd_rad; clamp/rate limit here only
+├── mpc_longitudinal.py      # Longitudinal MPC (throttle/brake)
+├── speed_profile.py        # Curvature/CTE-based speed profile for v_ref
+├── io_adapter.py           # ControlDesk readback (state for MPC); STEER_ACTUAL_SIGN for readback
+├── utils.py                # Low-pass filter, etc.
+├── calibration.py          # Steering scale calibration (skeleton)
+├── vehicle_mpc.yaml        # Default MPC parameters
+├── README.md               # This file
+├── result_data/            # Log parsing and run analysis
+├── testing/                # Unit and integration tests
+└── *.md                    # fix.md, steer_restrcutre_plan.md, MPCC_IMPROVEMENT_PLAN.md, etc.
 ```
 
 ---
 
-## Lateral MPC (MPCC) Formulation
+## Lateral MPC (MPCC) formulation
 
 **State:** `x = [e_y, e_psi, delta, s]`
 - `e_y`: Lateral error (m), positive = left of path
@@ -49,22 +51,15 @@ mpc/
 - `delta`: Front-wheel angle (rad)
 - `s`: Progress along path (m), for lag/progress cost
 
-**Control:** `u = delta_fb` (feedback steering). Total steering: `delta = delta_ff + delta_fb`, with `delta_ff = atan(L * kappa_ref)` (curvature feedforward).
+**Control:** `u = delta_fb`. Total steering: `delta = delta_ff + delta_fb`, with `delta_ff = atan(L * kappa_ref)`.
 
-**Dynamics:**
-- `e_y_{k+1} = e_y_k + v_k * e_psi_k * dt`
-- `e_psi_{k+1} = e_psi_k + (v_k/L)*(delta_ff_k + u_k)*dt - v_k*kappa_k*dt`
-- `delta_{k+1} = delta_k + (dt/tau)*((delta_ff_k + u_k) - delta_k)`
-- `s_{k+1} = s_k + v_ref_k*dt` (linearized progress)
+**Dynamics:** Standard bicycle model; `s_{k+1} = s_k + v_ref_k*dt` for progress.
 
-**Cost:** Contouring (`w_ey*e_y^2`, `w_epsi*e_psi^2`), lag `Q_lag*(s_ref - s)^2`, progress reward `-Q_progress*(s_N - s_0)`, feedforward tracking `w_ff_track*(delta - delta_ff)^2`, input/rate/ddu penalties. Weights are adaptive by curvature (low / mid / high).
+**Cost:** Contouring (`w_ey*e_y^2`, `w_epsi*e_psi^2`), lag, progress reward, feedforward tracking, input/rate/ddu penalties. Weights are adaptive by curvature (low / mid / high).
 
-**Reference continuity (segment selection):**
-- Best segment by perpendicular distance, with forward bias.
-- **Gate:** Reject switch if `match_dist > max_wp_match_dist_m`, or progress backward, or along-path `s_jump > max_s_jump_m`; then keep previous segment.
-- **Stick:** When `|prev_e_y| >= segment_stick_cte_m`, keep current segment to avoid reference flip.
+**Reference continuity (segment selection):** Best segment by perpendicular distance; **gate** (reject switch if too far / backward / s_jump); **stick** when `|prev_e_y| >= segment_stick_cte_m`. Recover mode: when gate rejects and match_dist > `gate_hard_fail_dist_m`, force re-association.
 
-**Conditional deadzone:** Apply CTE deadzone only when `|e_y| < cte_deadzone`, `match_dist < deadzone_dist_ok_m`, and `curvature_ahead_max < curv_deadzone_max`; otherwise do not zero e_y (avoids “recenter while far off”).
+**Conditional deadzone:** Apply CTE deadzone only when association good and curvature low; otherwise do not zero e_y.
 
 ---
 
@@ -72,141 +67,103 @@ mpc/
 
 **File:** `vehicle_mpc.yaml` (ROS-style parameters under `/**/ros__parameters`).
 
-**Key groups:**
-- **Timing:** `ctrl_period`, `mpc_prediction_horizon` (e.g. 35), `mpc_prediction_dt`
-- **Vehicle:** `wheel_base`, `max_steer_angle`, `steer_tau`, `steer_rate_lim`, `steer_cmd_max`
-- **Lateral weights:** `w_ey`, `w_epsi`, `w_u`, `w_du`, `w_ddu`, `w_ff_track`; terminal `wT_ey`, `wT_epsi`
-- **Adaptive curvature:** `use_adaptive_weights`, `low_curvature_threshold`, `high_curvature_threshold`; `w_ey_low_curv`, `w_ey_high_curv`, etc.
-- **Feedforward:** `ff_preview_blend`, `ff_chicane_preview_blend`, `ff_chicane_curvature_threshold`
-- **MPCC:** `Q_lag`, `Q_progress`
-- **Oscillation / deadzone:** `cte_deadzone`, `deadzone_dist_ok_m`, `curv_deadzone_max`, `cte_multiplier_max`
-- **Reference gate:** `segment_stick_cte_m`, `max_wp_match_dist_m`, `max_s_jump_m`, `segment_hysteresis_m`
-- **Safety:** `admissible_position_error`, `admissible_yaw_error_rad`, `max_invalid_count`
-- **Filtering:** `steering_lpf_cutoff_hz`
-- **Longitudinal:** `w_v`, `w_a`, `w_u_lon`, `w_du_lon`, throttle/brake LPF, deadbands, curvature-based speed limits
+**Key groups:** Timing, vehicle (`wheel_base`, `max_steer_angle` from constants when not overridden), lateral weights, adaptive curvature, feedforward, MPCC (Q_lag, Q_progress), oscillation/deadzone, reference gate, safety, longitudinal (weights, deadbands, curvature speed limits).
 
-After changing config, run a simulation and use `analyze_racing_log` (and optionally `compare_racing_results`). Set `run_edit_note` in the YAML to tag runs.
+After changing config, run a simulation and use `result_data/analyze_racing_log` (and optionally `compare_racing_results`). Set `run_edit_note` in the YAML to tag runs.
 
 ---
 
-## Key Conventions
+## Key conventions
 
-- **Heading:** Use ControlDesk readback (`dspaceActor.heading`) for MPC state; yaw is converted deg→rad and normalized to [-π, π].
-- **Waypoints:** XODR/Scenic coordinates (e.g. `assets/ttls/.../transformed/*.csv`). Reference heading is `psi_ref = atan2(seg_dy, seg_dx)` with no >90° flip; e_y is projection-based with no sign flip (avoids spin-induced discontinuity).
-- **Steering sign:** Environment-dependent; validate with logs (e.g. CTE positive ⇒ steer right). Current setup uses solver output without negation. See [Wiring and debugging](#wiring-and-debugging-control-pipeline-state-reference-kinematics) for the full chain.
-- **Logging:** Use ASCII only in prints (no Unicode) for Windows console compatibility.
+- **Heading:** ControlDesk readback for MPC state; yaw normalized to [-π, π]. No >90° flip; e_y is projection-based with no sign flip (avoids spin-induced discontinuity).
+- **Steering output:** **Road wheel angle in radians.** Clamp and rate limit are applied inside `mpc_lateral.py` only. Behavior may apply a safety backup clamp using `DELTA_MAX_RAD` from `scenic.domains.racing.constants`.
+- **Steering sign:** Validate with logs (CTE positive ⇒ steer right). See [Wiring and debugging](#wiring-and-debugging) for the full chain.
+- **Logging:** ASCII only (Windows console compatibility).
 
 ---
 
 ## Integration
 
 ### With Scenic behaviors
-- **`FollowRacingLineMPCBehavior`** (in `behaviors.scenic`): Uses lateral MPC and longitudinal MPC (or shared speed profile), waypoint-based CTE, optional `mpc_config_path`.
+
+- **`FollowRacingLineMPCBehavior`** (in `behaviors.scenic`): Uses lateral + longitudinal MPC, waypoint-based CTE, optional `mpc_config_path`.
 - Example: `ego.behavior = FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, lookahead=20.0, mpc_config_path=None)`
 
 ### With simulator
-- **`getRacingControllers(agent, use_mpc=True, mpc_config_path=None)`** (in `simulators.py`): Returns `(MPCLongitudinalController, MPCLateralController)` when `use_mpc=True`; otherwise PID controllers from the driving domain.
+
+- **`getRacingControllers(agent, use_mpc=True, mpc_config_path=None)`** (in `simulators.py`): Returns `(MPCLongitudinalController, MPCLateralController)` and sets `agent._racing_steer_units = 'rad'` so the simulator interprets steering in radians.
 
 ### Controller interface
-- **Lateral:** `MPCLateralController.run_step(vehicle_state, waypoints, ...)` returns **front wheel angle in radians** (`delta_cmd_rad`), not normalized. Behavior clamps to ±`max_steer_angle` and passes to `SetSteerAction(rad)`; the dSPACE simulator converts rad → steering wheel deg and writes to ControlDesk.
-- **Longitudinal:** `MPCLongitudinalController.run_step(speed, v_ref, ...)` returns throttle/brake commands.
+
+- **Lateral:** `MPCLateralController.run_step(vehicle_state, waypoints, ...)` returns **front wheel angle in radians** (`delta_cmd_rad`). Behavior passes it via `SetSteerAction(rad)`; simulator converts rad → deg only in `steer_io`.
+- **Longitudinal:** `MPCLongitudinalController.run_step(...)` returns (throttle, brake) in [0, 1].
 
 ---
 
 ## Wiring and debugging (control pipeline, state, reference, kinematics)
 
-This section answers the questions in `fix.md` so that sign/frame/saturation issues (e.g. intermittent 180° spin from reference flip or I/O sign) can be isolated quickly.
+Reference: [RACING_CONTROL_CONTRACT.md](../RACING_CONTROL_CONTRACT.md). This section gives MPC-specific locations.
 
 ### A) Control pipeline (steering chain)
 
 | Stage | What | Where |
 |-------|------|--------|
-| **MPC output** | `run_step(...)` returns **front wheel angle in rad** (`delta_cmd_rad`), not normalized [-1,1]. | `mpc_lateral.py`: after clamp to ±`current_delta_max`, rate limit (`steer_rate_limit_output_radps`), then `return float(delta_cmd_rad)`. |
-| **Normalized steer → delta (rad)** | MPC already outputs rad. Behavior clamps to ±`DELTA_MAX_RAD` (0.2816) and passes that rad value. | `behaviors.scenic`: `final_steer = max(-DELTA_MAX_RAD, min(DELTA_MAX_RAD, float(steer_mpc)))`, then `SetSteerAction(final_steer)`. |
-| **Rad → ControlDesk / dSPACE** | **Steering wheel angle** in degrees, ±240. Conversion: `theta_sw_deg = delta_road_rad * R * 180/pi`, with `R = THETA_SW_MAX_DEG / (DELTA_MAX_RAD * 180/pi)` ≈ 14.9. | `simulators/dspace/steer_io.py`: `road_rad_to_dspace_value(delta_road_rad)`; used in `vehicle/controller.py` and simulator write path. |
-| **Negations** | None on write. Readback in `io_adapter.py`: `STEER_ACTUAL_SIGN = -1.0` applied to read steering (deg→rad) if ControlDesk sign is opposite to MPC convention. | `io_adapter.py` (read only). |
-| **Scales / deadzone / rate / LPF / saturation** | **Saturation:** clip to ±`max_steer_angle` (rad) and ±`steer_rate_limit_output_radps` in `mpc_lateral.py`. No output LPF in lateral controller. **Scale:** rad→deg only in `steer_io` (R as above). | `mpc_lateral.py` (clamp, rate limit); `steer_io.py` (scale). |
-| **Logged names** | **delta_cmd:** `_log_delta_cmd_rad` (MPC, post-clamp/rate). **steer_write:** `theta_sw_deg_sent` (simulator) = value written to ControlDesk. **steer_readback:** `state['steer_actual']` (rad) from `io_adapter.read_state_from_controldesk` (ControlDesk path `steer_actual` → deg→rad, then `STEER_ACTUAL_SIGN`). | MPC: `_log_delta_cmd_rad`, `_log_ctrl_*`. Simulator: `[STEER_IO]`, `[ControlDesk]`. |
+| **MPC output** | `run_step(...)` returns **delta_cmd_rad** (clamped to ±`max_steer_angle`, rate-limited). | `mpc_lateral.py`: after clamp, rate limit, `return float(delta_cmd_rad)`. |
+| **Behavior** | Safety backup clamp to ±`DELTA_MAX_RAD` (from `scenic.domains.racing.constants`); passes rad to `SetSteerAction(final_steer)`. | `behaviors.scenic`. |
+| **Rad → dSPACE** | Steering wheel deg ±240. Conversion only in `steer_io.road_rad_to_dspace_value(delta_road_rad)`. Constants from `scenic.domains.racing.constants`. | `simulators/dspace/steer_io.py`; used in `vehicle/controller.py`. |
+| **Simulator interpretation** | Ego: if `agent._racing_steer_units == 'rad'`, use value as rad; else (PID) treat as [-1,1] and convert with `steer * DELTA_MAX_RAD`. | `simulators/dspace/vehicle/controller.py`. |
 
-**I/O write path:** The behavior does not call `write_steering_to_controldesk` with the MPC output directly. It uses `SetSteerAction(final_steer)` with `final_steer` in rad; the simulator reads `_control_state['steering']` (rad) and calls `road_rad_to_dspace_value(delta_rad)` in `vehicle/controller.py` (or the simulator’s write path), then writes the result to the ControlDesk steering variable.
+**Logged names:** `_log_delta_cmd_rad` (MPC); simulator may log `theta_sw_deg_sent`. Readback: `io_adapter.read_state_from_controldesk` → `state['steer_actual']` (rad) with `STEER_ACTUAL_SIGN` if needed.
 
-### B) State estimation used by MPC
+### B) State estimation
 
-| Item | Source / convention |
-|------|----------------------|
-| **Heading** | ControlDesk readback: `dspaceActor.heading` (rad). Yaw from `Angle_Yaw_Vehicle_CoorSys_E[deg]` → rad → normalized to [-π, π] with `atan2(sin(yaw_rad_raw), cos(yaw_rad_raw))`. Used for MPC state and waypoint-ahead search. |
-| **Yaw rate** | If available: `actor.angvel.z` (rad/s) in `io_adapter.read_state_from_controldesk`; behavior can pass `vehicle_state['yaw_rate']` into MPC. |
-| **Speed** | `actor.linvel.norm()` in readback (m/s), or behavior `self.speed` / current_speed (m/s). |
-| **e_psi** | `e_psi = heading - psi_ref`, then wrapped to [-π, π] with `atan2(sin(e_psi), cos(e_psi))`. | `mpc_lateral._compute_errors`. |
-| **Frame** | Vehicle yaw is in **world frame** (Vehicle_CoorSys_E = vehicle pose in world). Typically ENU with yaw positive CCW (right-hand rule); readback does not apply 90° or 180° offset unless empirically required. |
+Heading from ControlDesk; yaw rate from readback or behavior; speed from actor/behavior. e_psi = wrap(heading - psi_ref). Frame: world (ENU); no >90° flip.
 
 ### C) Reference builder and segment selection
 
-| Item | Where / how |
-|------|-------------|
-| **Best-segment selection** | Perpendicular distance to each segment (XY); score = distance + penalty for being behind (u_proj < 0.5). Prefer segment with smallest score. Then **gate:** reject switch if `best_match_dist > max_wp_match_dist_m`, or `best_segment_idx < last_seg` (backward), or along-path jump > `max_s_jump_m`. **Stick:** if `|prev_e_y| >= segment_stick_cte_m`, keep `last_seg`. Hysteresis in curvature: stronger hysteresis in high curvature. | `mpc_lateral._compute_errors` (search, gate, stick). |
-| **Reference heading and CTE (no flip)** | `psi_ref = atan2(seg_dy, seg_dx)` only (no >90° flip). `e_y = (px - proj_x)*nx + (py - proj_y)*ny` with no sign flip. Avoids spin-induced discontinuity (heading flip logic removed per Recommendation #1). | `mpc_lateral._compute_errors`. |
-| **kappa_ref sign** | **Spline:** `kappa = (x'*y'' - y'*x'') / (x'^2 + y'^2)^(3/2)` — left turn > 0, right turn < 0. **Linear fallback:** 3-point formula; sign from cross product. | `reference_builder.py` (spline and linear). |
-| **CTE (e_y)** | **Waypoint projection:** project vehicle (px, py) onto chosen segment; normal `n = (-seg_dy, seg_dx)/seg_len` (left of segment direction). `e_y = (px - proj_x)*nx + (py - proj_y)*ny` (no flip). Positive e_y = left of path. | `mpc_lateral._compute_errors`. |
+Best segment by perpendicular distance; gate (max_wp_match_dist_m, max_s_jump_m, backward); stick (segment_stick_cte_m); recover when gate rejects and match_dist > gate_hard_fail_dist_m. psi_ref = atan2(seg_dy, seg_dx); e_y from projection (no flip). kappa_ref from spline or linear; sign: left turn > 0.
 
 ### D) Wheelbase and kinematics
 
-| Item | Value / convention |
-|------|--------------------|
-| **wheel_base** | **2.9718 m** (`vehicle_mpc.yaml`). |
-| **delta_ff** | **Exactly** `delta_ff = atan(L * kappa_ref)` with L = wheel_base; used per step with optional preview blend (at-proj vs ahead). | `mpc_lateral.py`: `delta_ff_rad = math.atan(L * kappa_ff)`. |
-| **max_steer_angle** | **Front wheel angle** in rad (default 0.2816). Used as clamp and in QP constraints. `steer_cmd_max` (e.g. 240) is **ControlDesk steering wheel deg** (dSPACE), not used inside MPC cost/constraints. | `vehicle_mpc.yaml`: `max_steer_angle`, `steer_cmd_max`. |
-
-**Note:** The previous >90° reference flip and e_y sign flip were removed (Recommendation #1) to avoid spin-induced discontinuity. If sign issues remain, use the logged `delta_cmd_rad`, `steer_write`, `steer_readback`, gate/segment, and kappa sign to isolate I/O or kappa convention.
+wheel_base (e.g. 2.9718 m); delta_ff = atan(L * kappa_ref); max_steer_angle in rad (default from racing.constants). steer_cmd_max (e.g. 240) is dSPACE steering wheel deg, not used inside MPC.
 
 ---
 
 ## Testing
 
-**Location:** `mpc/testing/`
-
-**Run:** From `mpc/testing/`: `python run_tests.py` or `python -m pytest test_*.py -v`
-
-**Coverage:** Config loading, reference builder (waypoint search, curvature, reference generation), lateral MPC (state computation, gate/stick, OSQP solve), behavior/simulation/scenario integration. See `TEST_CASES.md` for the test guard.
-
-**Note:** Do not run `scenic` commands from automated scripts; use `--count 1` when running scenarios manually to avoid infinite scene generation.
+**Location:** `mpc/testing/`. Run: `python run_tests.py` or `python -m pytest test_*.py -v`. Coverage: config, reference builder, lateral MPC (state, gate/stick, OSQP), behavior/simulation integration. See `TEST_CASES.md`. Do not run `scenic` from automated scripts; use `--count 1` when running scenarios manually.
 
 ---
 
 ## Dependencies
 
-- `numpy`, `scipy`, `osqp`, `pyyaml` (required)
-- Optional: `matplotlib` for visualization
+`numpy`, `scipy`, `osqp`, `pyyaml` (required). Optional: `matplotlib`.
 
 ---
 
-## Usage Example
+## Usage example
 
 ```scenic
-# Example: ego_mpc_behavior.scenic
 ego.behavior = FollowRacingLineMPCBehavior(
-    target_speed=30,
-    manage_gears=True,
-    use_waypoints=True,
-    lookahead=20.0,
-    mpc_config_path=None
+    target_speed=30, manage_gears=True, use_waypoints=True,
+    lookahead=20.0, mpc_config_path=None
 )
 ```
 
 ```python
 from scenic.domains.racing.mpc import MPCLateralController, load_mpc_config
-
 config = load_mpc_config('src/scenic/domains/racing/mpc/vehicle_mpc.yaml')
 mpc = MPCLateralController(config, timestep=0.05)
-# In loop: steering = mpc.run_step(vehicle_state, waypoints, ...)
+# In loop: steering_rad = mpc.run_step(vehicle_state, waypoints, ...)
 ```
 
 ---
 
-## Related Docs
+## Related docs
 
-- **fix.md** – Questions used to build the [Wiring and debugging](#wiring-and-debugging-control-pipeline-state-reference-kinematics) section (control pipeline, state, reference, kinematics).
-- **MPCC_MIGRATION_PLAN.md** – Phases 1–3 (progress state, lag/progress cost, MPCC).
-- **MPCC_IMPROVEMENT_PLAN.md** – Reference continuity gate, conditional deadzone, curve-approach commitment, feedforward, stick-by-match-quality.
+- **../RACING_CONTROL_CONTRACT.md** – Steering units, constants, simulator contract.
+- **fix.md** – Log of fixes (no e_y flip, steer sign at write, gate/stick, single-segment).
+- **steer_restrcutre_plan.md** – MPC output in rad; single rad→dSPACE conversion in steer_io.
+- **MPCC_IMPROVEMENT_PLAN.md** – Reference gate, conditional deadzone, feedforward, stick.
 - **result_data/README.md** – Log analysis and comparison.
 - **3D_RESPONSIBILITIES.md** – 3D waypoints and projection.

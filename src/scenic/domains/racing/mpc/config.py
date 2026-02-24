@@ -8,6 +8,8 @@ import os
 from typing import Dict, Any, Optional
 from pathlib import Path
 
+from scenic.domains.racing.constants import DELTA_MAX_RAD
+
 
 class MPCConfig:
     """MPC configuration parameters.
@@ -30,7 +32,7 @@ class MPCConfig:
         
         # Vehicle geometry
         self.wheel_base = config_dict.get('wheel_base', 2.9718)
-        self.max_steer_angle = config_dict.get('max_steer_angle', 0.2816)
+        self.max_steer_angle = config_dict.get('max_steer_angle', DELTA_MAX_RAD)
         self.steer_tau = config_dict.get('steer_tau', 0.3)
         self.steer_rate_lim = config_dict.get('steer_rate_lim', 6.98)  # QP internal rate limit (rad/s)
         self.steer_rate_limit_output_radps = config_dict.get('steer_rate_limit_output_radps', 1.0)  # output rate limit (rad/s), plan: 1.0

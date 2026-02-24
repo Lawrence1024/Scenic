@@ -1,189 +1,129 @@
-# dSPACE Simulator Integration - Logging and Debugging
+# dSPACE Simulator Integration
+
+This folder contains the **dSPACE simulator integration** for Scenic: how the racing domain connects to dSPACE ModelDesk/ControlDesk, including vehicle placement, coordinate transformation, control application (ego and fellow), and steering IO. The integration follows the [racing control contract](../../domains/racing/RACING_CONTROL_CONTRACT.md) so that steering units and constants are consistent with the racing library.
+
+---
 
 ## Overview
 
-This folder contains the dSPACE simulator integration for Scenic, including coordinate transformation, vehicle placement, and simulation control. Recent work has focused on improving logging to help diagnose coordinate transformation and placement issues.
+The dSPACE backend provides:
 
-## What Has Been Done
+- **Racing simulation:** `DSpaceSimulation` extends `RacingSimulation`; overrides `getRacingControllers(agent, use_mpc=..., mpc_config_path=...)` and sets `agent._racing_steer_units` so the write path knows whether steering is in radians (MPC) or normalized [-1, 1] (PID).
+- **Vehicle placement:** XODR → RD coordinate transform, route detection (Pit/Lap), projection to (s,t), placement in ModelDesk, readback comparison.
+- **Control application:** Ego: throttle/brake/steering from `_control_state` → VesiInterface (throttle %, brake, steering wheel deg). Fellow: throttle/brake/steering → physics model → velocity and deviation written to External_Signals.
+- **Steering IO:** Single place for rad → steering wheel deg: `steer_io.road_rad_to_dspace_value()`. Constants from `scenic.domains.racing.constants`.
 
-### 1. Logging Improvements
+---
 
-#### Removed Verbose/Unnecessary Logs
-- Removed "Creating EGO/FELLOW vehicle" messages
-- Removed "Checking objects for dynamic control" messages
-- Removed "No racing behaviors found" messages
-- Removed verbose RouteProjection debug messages
-- Removed DEBUG ego state reading messages
-- Removed verbose ControlDesk connection step-by-step messages
-- Removed verbose VesiInterface initialization messages
-- Removed verbose warm-up attempt messages
+## Racing integration
 
-#### Added Clear Transformation Chain Logs
-During vehicle placement, each vehicle now logs its complete transformation chain:
+### Control contract
+
+- **Steering units:** PID path outputs normalized [-1, 1]; MPC path outputs road wheel angle in **radians**. The simulator interprets `_control_state['steering']` using `agent._racing_steer_units` (`'rad'` or `'normalized'`), set by `getRacingControllers` when controllers are created.
+- **Ego:** If `_racing_steer_units == 'rad'`, treat value as rad and pass to `road_rad_to_dspace_value(delta_rad)`. Otherwise treat as [-1, 1] and convert: `delta_rad = steer * DELTA_MAX_RAD`, then `road_rad_to_dspace_value(delta_rad)`.
+- **Fellow:** Physics model expects steering in [-1, 1]. When `_racing_steer_units == 'rad'`, convert rad → normalized before calling physics.
+- **Constants:** `DELTA_MAX_RAD`, `THETA_SW_MAX_DEG`, `R` are defined in `scenic.domains.racing.constants`; `steer_io` imports them. Do not hardcode 0.2816 or 240 elsewhere.
+
+See [RACING_CONTROL_CONTRACT.md](../../domains/racing/RACING_CONTROL_CONTRACT.md).
+
+### Steering IO (single conversion point)
+
+Ego steering is always in **road wheel angle (radians)** by the time it is written. The **only** place that converts rad → steering wheel deg (e.g. ±240°) is **`steer_io.py`** via `road_rad_to_dspace_value()`. Do not add scaling or 240 elsewhere.
+
+- **PID path:** Behavior outputs [-1, 1]; `vehicle/controller.py` converts to rad with `steer * DELTA_MAX_RAD`, then calls `road_rad_to_dspace_value(delta_rad)`.
+- **MPC path:** Behavior outputs rad; controller passes rad through to `road_rad_to_dspace_value(delta_rad)`.
+
+**Key files:** `steer_io.py`, `vehicle/controller.py` (apply_ego_control, apply_fellow_control).
+
+---
+
+## Coordinate transformation and placement
+
+1. **XODR → RD:** Apply coordinate transform (rotation + translation).
+2. **Route detection:** Determine if vehicle is on pitLane or mainRacing road.
+3. **RD → (s,t):** Project RD coordinates to route-relative (s,t) using route-specific road sequences.
+4. **Placement:** Set (s,t) in ModelDesk with appropriate route.
+5. **Readback:** Read actual position from ControlDesk and compare with expected.
+
+**Key files:**
+- `geometry/coordinate_transform.py` – XODR ↔ RD transformation
+- `geometry/route_projection.py` – RD → route-specific (s,t) projection
+- `geometry/route_mapping.py` – Route detection (pitLane vs mainRacing)
+- `modeldesk/placement.py` – Vehicle placement in ModelDesk
+- `controldesk/readback.py` – Position readback from ControlDesk
+
+---
+
+## Logging and debugging
+
+### Transformation chain logs
+
+During placement, each vehicle logs:
 ```
 [VehicleName] XODR: (x, y) → RD: (x, y) → Route RouteName (s=s_val, t=t_val)
 ```
+**Location:** `modeldesk/placement.py` – `place_ego()`, `place_fellow()`.
 
-This shows:
-- Original XODR coordinates from Scenic
-- Transformed RD coordinates (after coordinate transform)
-- Detected route (Pit/Lap)
-- Calculated route-relative (s,t) coordinates
+### Readback comparison logs
 
-**Location**: `modeldesk/placement.py` - `place_ego()` and `place_fellow()` functions
-
-#### Added Readback Comparison Logs
-On first readback from ControlDesk, each vehicle logs:
+On first readback:
 ```
 [VehicleName Readback] RD: (actual_rd) [expected: (expected_rd), error: X.XXXm]
 [VehicleName Readback] XODR: (actual_xodr) [expected: (expected_xodr), error: X.XXXm]
 ```
+**Location:** `controldesk/readback.py` – `read_ego_state()`, `read_fellow_state()`.
 
-This shows:
-- Actual position read from ControlDesk (in RD coordinates)
-- Expected position (what we placed)
-- Error distance in meters
-- Same comparison in XODR coordinates (after inverse transform)
+### Removed / reduced logs
 
-**Location**: `controldesk/readback.py` - `read_ego_state()` and `read_fellow_state()` functions
+Verbose messages (e.g. “Creating EGO/FELLOW vehicle”, step-by-step ControlDesk connection) have been removed or reduced to keep logs focused.
 
-### 2. Coordinate Transformation Pipeline
+---
 
-The transformation pipeline is:
-1. **XODR → RD**: Apply coordinate transform (rotation + translation)
-2. **Route Detection**: Determine if vehicle is on pitLane or mainRacing road
-3. **RD → (s,t)**: Project RD coordinates to route-relative (s,t) using route-specific road sequences
-4. **Placement**: Set (s,t) in ModelDesk with appropriate route
-5. **Readback**: Read actual position from ControlDesk and compare with expected
+## Known limitations
 
-**Key Files**:
-- `geometry/coordinate_transform.py`: XODR ↔ RD transformation
-- `geometry/route_projection.py`: RD → route-specific (s,t) projection
-- `geometry/route_mapping.py`: Route detection (pitLane vs mainRacing)
-- `modeldesk/placement.py`: Vehicle placement in ModelDesk
-- `controldesk/readback.py`: Position readback from ControlDesk
+- **T-coordinate (lateral deviation):** ModelDesk may ignore lateral deviation settings for ego and fellows (centerline placement). This is a dSPACE ModelDesk configuration issue. See `debug_ego_cord/README.md`, `debug_route_code/README.md`.
+- **Simulation control:** Currently configured for continuous running; pause/step may be disabled in `simulator.py`.
 
-### 3. Known Limitations
+---
 
-#### T-coordinate (Lateral Deviation) Limitation
-dSPACE ModelDesk may ignore lateral deviation (`t-coordinate`) settings for both ego and fellow vehicles. Testing shows:
-- Ego: "Could not activate Deviation mode" warning
-- Fellow: Vehicles placed on centerline regardless of `t` value
+## Running a scenario
 
-This is a **dSPACE ModelDesk configuration issue**, not a bug in our code. See:
-- `debug_ego_cord/README.md`
-- `debug_route_code/README.md`
-
-**Location**: `modeldesk/placement.py` - documented in code comments
-
-### 4. Simulation Control
-
-Currently configured for **continuous running** (pause/step functionality temporarily disabled):
-- `simulator.py`: `setup()` - pause call commented out
-- `simulator.py`: `step()` - manual stepping replaced with `time.sleep()`
-
-## What Needs to Be Done
-
-### Primary Task: Run Simulation and Analyze Logs
-
-1. **Activate virtual environment**:
-   ```powershell
-   c:/Users/bklfh/Documents/Scenic/venv/Scripts/Activate.ps1
-   ```
-
-2. **Run scenic command**:
+1. Activate virtual environment (e.g. `venv/Scripts/Activate.ps1`).
+2. Run Scenic with the dSPACE racing model, e.g.:
    ```powershell
    scenic examples/racing/fellow_fixed_placing.scenic --2d --model scenic.simulators.dspace.racing_model --simulate --time 10
    ```
+3. Check logs for transformation chain, readback errors, and (if applicable) steering/control.
 
-3. **Analyze the logs** to understand:
-   - Are transformation chains correct?
-   - Are routes detected correctly?
-   - Are (s,t) values calculated correctly?
-   - What are the readback errors?
-   - Are there systematic issues or just individual vehicle issues?
+---
 
-### Expected Log Output
-
-You should see logs like:
-
-```
-[Ego] XODR: (163.545000, 48.302000) → RD: (xxx.xxxxxx, yyy.yyyyyy) → Route Pit (s=xxx.xx, t=xxx.xxxxxx)
-[Fellow_1] XODR: (-101.919263, -457.524908) → RD: (xxx.xxxxxx, yyy.yyyyyy) → Route Lap (s=xxx.xx, t=xxx.xxxxxx)
-...
-[Ego Readback] RD: (xxx.xxxxxx, yyy.yyyyyy) [expected: (xxx.xxxxxx, yyy.yyyyyy), error: X.XXXm]
-[Ego Readback] XODR: (xxx.xxxxxx, yyy.yyyyyy) [expected: (xxx.xxxxxx, yyy.yyyyyy), error: X.XXXm]
-[Fellow_1 Readback] RD: (xxx.xxxxxx, yyy.yyyyyy) [expected: (xxx.xxxxxx, yyy.yyyyyy), error: X.XXXm]
-[Fellow_1 Readback] XODR: (xxx.xxxxxx, yyy.yyyyyy) [expected: (xxx.xxxxxx, yyy.yyyyyy), error: X.XXXm]
-...
-```
-
-### Analysis Questions
-
-After running, check:
-
-1. **Transformation Chain**:
-   - Do XODR → RD transformations look correct?
-   - Are routes detected correctly (Pit for ego, Lap for fellows)?
-   - Are (s,t) values reasonable?
-
-2. **Readback Errors**:
-   - What are the RD coordinate errors? (Should be < 1m for most positions, ~10m at transition points)
-   - What are the XODR coordinate errors? (Should be < 1m after round-trip)
-   - Are errors systematic (all vehicles) or individual?
-
-3. **Comparison with ControlDesk**:
-   - Compare the logged RD coordinates with ControlDesk values
-   - Are they matching? If not, where is the discrepancy?
-
-### Potential Issues to Investigate
-
-1. **Route Detection**: Are vehicles assigned to correct routes?
-2. **Route-Specific Projection**: Are (s,t) values calculated correctly for each route?
-3. **Placement Accuracy**: Are vehicles placed where expected in ModelDesk?
-4. **Readback Accuracy**: Do readback positions match expected positions?
-5. **T-coordinate**: Are lateral deviations being applied? (Known limitation - may be ignored)
-
-### Next Steps Based on Logs
-
-After analyzing logs:
-
-1. **If transformation chain is wrong**: Check coordinate transform parameters
-2. **If route detection is wrong**: Check `route_mapping.py` and road ID detection
-3. **If (s,t) values are wrong**: Check `route_projection.py` and route-specific calculations
-4. **If readback errors are high**: Check placement logic and ModelDesk configuration
-5. **If systematic errors**: Check coordinate transform or route projection logic
-6. **If individual errors**: Check specific vehicle coordinates or road assignments
-
-## File Structure
+## File structure
 
 ```
 src/scenic/simulators/dspace/
-├── README.md                          # This file
-├── simulator.py                       # Main simulator class
+├── README.md                    # This file
+├── simulator.py                 # DSpaceSimulation, getRacingControllers override, executeActions
+├── steer_io.py                  # road_rad_to_dspace_value; only place for rad → steering wheel deg
+├── actions.py                   # SetVehicleControl (dSPACE-specific); steer doc per RACING_CONTROL_CONTRACT
+├── vehicle/
+│   ├── controller.py            # apply_ego_control (throttle/brake/steer by _racing_steer_units), apply_fellow_control
+│   └── physics.py               # Fellow kinematic model (steering in [-1, 1])
 ├── geometry/
-│   ├── coordinate_transform.py        # XODR ↔ RD transformation
-│   ├── route_projection.py            # RD → route-specific (s,t)
-│   ├── route_mapping.py               # Route detection
-│   └── ...
+│   ├── coordinate_transform.py  # XODR ↔ RD
+│   ├── route_projection.py      # RD → (s,t)
+│   └── route_mapping.py         # Route detection
 ├── modeldesk/
-│   ├── placement.py                   # Vehicle placement (with new logs)
-│   └── ...
+│   └── placement.py            # place_ego, place_fellow (with transformation logs)
 └── controldesk/
-    ├── readback.py                    # Position readback (with new logs)
-    └── ...
+    └── readback.py             # read_ego_state, read_fellow_state (with readback logs)
 ```
 
-## Related Documentation
+---
 
-- `debug_cord_code/README.md`: Route-specific projection details
-- `debug_ego_cord/README.md`: Ego vehicle coordinate issues
-- `debug_route_code/README.md`: Route detection and fellow vehicle issues
+## Related documentation
 
-## Notes
-
-- Logs are designed to be clear and concise
-- Transformation chain logs show the complete pipeline
-- Readback logs show expected vs actual for debugging
-- Error distances help identify accuracy issues
-- All logs use consistent formatting: `[VehicleName] Message`
+- [RACING_CONTROL_CONTRACT.md](../../domains/racing/RACING_CONTROL_CONTRACT.md) – Steering units, constants, simulator contract.
+- [Racing domain README](../../domains/racing/README.md) – Full racing reference (objects, actions, behaviors, simulator implementation).
+- [MPC README](../../domains/racing/mpc/README.md) – MPC formulation, config, wiring; MPC output in rad.
+- [Segments README](../../domains/racing/segments/README.md) – Racing library structure and segment map.
+- `debug_cord_code/README.md`, `debug_ego_cord/README.md`, `debug_route_code/README.md` – Route and coordinate debugging.

@@ -73,10 +73,13 @@ class RacingSimulation(Simulation):
                 lon_controller = MPCLongitudinalController(config, timestep=dt)
                 lat_controller = MPCLateralController(config, timestep=dt)
                 
+                # Steering contract: MPC path uses road wheel angle in radians (see RACING_CONTROL_CONTRACT.md)
+                agent._racing_steer_units = 'rad'
                 return lon_controller, lat_controller
             except Exception as e:
                 print(f"[RacingSimulation] WARNING: Failed to create MPC controllers: {e}")
                 print(f"[RacingSimulation] Falling back to PID controllers from driving domain")
+                agent._racing_steer_units = 'normalized'
                 # Fall through to PID controllers below
         
         # Fallback: Use PID controllers from driving domain (not racing library)
@@ -97,7 +100,8 @@ class RacingSimulation(Simulation):
             # Standard cars: Use driving domain defaults
             lon_controller = PIDLongitudinalController(K_P=0.5, K_D=0.1, K_I=0.7, dt=dt)
             lat_controller = PIDLateralController(K_P=0.2, K_D=0.1, K_I=0.0, dt=dt)
-            
+        
+        agent._racing_steer_units = 'normalized'
         return lon_controller, lat_controller
 
     def getRacingLineControllers(self, agent):

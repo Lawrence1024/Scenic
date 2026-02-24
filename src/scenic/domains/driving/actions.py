@@ -139,7 +139,9 @@ class SetSteerAction(SteeringAction):
     """Set the steering 'angle'.
 
     Arguments:
-        steer: Steering 'angle' between -1 and 1.
+        steer: Steering in range [-1, 1] (normalized). For racing MPC, the racing
+            behavior may pass road wheel angle in radians; the simulator interprets
+            per backend (agent._racing_steer_units). See RACING_CONTROL_CONTRACT.md.
     """
 
     def __init__(self, steer: float):
