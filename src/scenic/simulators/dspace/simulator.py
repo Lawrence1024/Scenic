@@ -69,6 +69,11 @@ class DSpaceSimulation(RacingSimulation):
         
         ts = kwargs.pop("timestep", None) or sim.timestep
         _batch_steps = getattr(sim, 'batch_steps', 1)
+        # Timing: init before super().__init__() because parent runs the whole simulation inside __init__
+        self._timing_interval = 50
+        self._timing_sums = {"apply_actions": 0.0, "com_writes": 0.0, "step_time": 0.0, "com_reads": 0.0}
+        self._timing_n = 0
+        self._timing_last = {}
         # Pass only parameters that Simulation.__init__ accepts (avoids TypeError from
         # extra kwargs or int/callable confusion). Do NOT set self.batch_steps before
         # super().__init__ so the parent never sees an int attribute that could be
@@ -87,7 +92,7 @@ class DSpaceSimulation(RacingSimulation):
         }
         super().__init__(scene, **parent_kwargs)
         self.batch_steps = _batch_steps
-        print(f"[DSpaceSimulation] timestep: {ts}, batch_steps: {self.batch_steps}")
+        print(f"[DSpaceSimulation] timestep: {ts}, batch_steps: {self.batch_steps}, timing every {self._timing_interval} steps")
 
     # --- TTL (Target Trajectory Line) loading utilities ---
     def _load_ttl_region(self):
@@ -600,7 +605,7 @@ class DSpaceSimulation(RacingSimulation):
 
     def executeActions(self, allActions):
         """Execute actions selected by agents and apply accumulated control state.
-        
+
         This method is called by Scenic's simulation framework after behaviors
         determine what actions to take. We:
         1. Ensure fellow arrays are initialized before executing behaviors; if not, skip this tick
@@ -613,7 +618,19 @@ class DSpaceSimulation(RacingSimulation):
         if not hasattr(self, '_execute_count'):
             self._execute_count = 0
         self._execute_count += 1
-        
+
+        # --- Timing: flush previous step and init this step (only record when all four buckets present) ---
+        _last = self._timing_last
+        if all(k in _last for k in ('apply_actions', 'com_writes', 'step_time', 'com_reads')):
+            for k in self._timing_sums:
+                self._timing_sums[k] += _last[k]
+            self._timing_n += 1
+            n = self._timing_n
+            if n % self._timing_interval == 0:
+                s = self._timing_sums
+                print(f"[Timing] steps={n} mean(s): apply_actions={s['apply_actions']/n:.4f} com_writes={s['com_writes']/n:.4f} step_time={s['step_time']/n:.4f} com_reads={s['com_reads']/n:.4f}")
+        self._timing_last = {'com_reads': 0.0}
+
         if not self._fellow_arrays_initialized:
             ensure_fellow_arrays_initialized(self)
             if not self._fellow_arrays_initialized:
@@ -623,20 +640,23 @@ class DSpaceSimulation(RacingSimulation):
                 if self._execute_count % 50 == 1:
                     print(f"[executeActions #{self._execute_count}] Waiting for fellow arrays...")
                 return
-        
+
         if self._execute_count % 50 == 1:
             t_log = (self._execute_count - 1) * self.timestep
             print(f"[executeActions] t={t_log:.2f}s #{self._execute_count} Executing actions for {len(self.scene.objects)} objects")
-        
+
         # First, let actions apply themselves (this calls setThrottle, setSteering, etc.)
+        _t0 = time.perf_counter()
         super().executeActions(allActions)
-        
+        self._timing_last['apply_actions'] = time.perf_counter() - _t0
+
         # Now apply accumulated control state to ControlDesk using VehicleController
         if self._vehicle_controller:
+            _t0 = time.perf_counter()
             for obj in self.scene.objects:
                 # Determine if this is ego or fellow
                 is_ego = (obj is self.scene.egoObject)
-                
+
                 if is_ego:
                     # Ego: Use VesiInterface physics-based control
                     self._vehicle_controller.apply_ego_control(obj)
@@ -644,12 +664,13 @@ class DSpaceSimulation(RacingSimulation):
                     # Fellow: Only drive if a behavior exists; otherwise leave stationary
                     if getattr(obj, 'behavior', None):
                         self._vehicle_controller.apply_fellow_control(obj)
-                
+
                 # Clear control state after applying
                 if hasattr(obj, '_control_state'):
                     obj._control_state = {}
                 if hasattr(obj, '_oneshot_actions'):
                     obj._oneshot_actions = []
+            self._timing_last['com_writes'] = time.perf_counter() - _t0
         else:
             if self._execute_count == 1:
                 print(f"\n{'='*70}")
@@ -938,10 +959,12 @@ class DSpaceSimulation(RacingSimulation):
             if self._step_count <= 5 or self._step_count % 50 == 1:
                 t_log = self._step_count * effective_step_size
                 print(f"[step] t={t_log:.2f}s #{self._step_count} Batching: advancing by {effective_step_size:.4f}s (control frequency={control_frequency:.1f}Hz)...")
-            
+
             # Execute single step with larger step size (one pause/continue cycle)
+            _t0 = time.perf_counter()
             success = cd_session.step(self._cd, effective_step_size)
-            
+            self._timing_last['step_time'] = time.perf_counter() - _t0
+
             if self._step_count <= 5:
                 t_log = self._step_count * effective_step_size
                 if success:
@@ -953,9 +976,11 @@ class DSpaceSimulation(RacingSimulation):
             if self._step_count <= 5 or self._step_count % 50 == 1:
                 t_log = self._step_count * self.timestep
                 print(f"[step] t={t_log:.2f}s #{self._step_count} Advancing simulation by {self.timestep}s...")
-            
+
+            _t0 = time.perf_counter()
             success = cd_session.step(self._cd, self.timestep)
-            
+            self._timing_last['step_time'] = time.perf_counter() - _t0
+
             if self._step_count <= 5:
                 if success:
                     print(f"[step] t={t_log:.2f}s #{self._step_count} [OK] Step completed")
@@ -980,10 +1005,12 @@ class DSpaceSimulation(RacingSimulation):
         """
         # Initialize dspaceActor if it doesn't exist
         self._initializeDSpaceActor(obj)
-        
+
         # Try to read fresh state from ControlDesk
+        _t0 = time.perf_counter()
         self._readVehicleStateFromControlDesk(obj)
-        
+        self._timing_last['com_reads'] = self._timing_last.get('com_reads', 0.0) + (time.perf_counter() - _t0)
+
         # Get state from dspaceActor
         actor = obj.dspaceActor
         pos = actor.position
@@ -1005,6 +1032,18 @@ class DSpaceSimulation(RacingSimulation):
         }
         
         return {k: vals[k] for k in properties if k in vals}
+
+    def destroy(self):
+        """Print final timing summary and COM per-path timing."""
+        if self._timing_n > 0:
+            n = self._timing_n
+            s = self._timing_sums
+            print(f"[Timing] FINAL (steps={n}): mean(s) apply_actions={s['apply_actions']/n:.4f} com_writes={s['com_writes']/n:.4f} step_time={s['step_time']/n:.4f} com_reads={s['com_reads']/n:.4f}")
+            total = (s['apply_actions'] + s['com_writes'] + s['step_time'] + s['com_reads']) / n
+            print(f"[Timing] mean total per step={total:.4f}s")
+        if self._cd and hasattr(self._cd, 'print_timing_summary'):
+            self._cd.print_timing_summary()
+        super().destroy()
 
     def getRacingControllers(self, agent, use_mpc=False, mpc_config_path=None):
         """Get racing controllers optimized for dSPACE racing scenarios.

@@ -9,6 +9,7 @@ Provides a minimal API for:
 The COM application object is created similarly to ModelDesk automation.
 """
 
+import time
 from typing import Any
 
 
@@ -23,6 +24,12 @@ class ControlDeskApp:
         # Cache COM objects to reduce overhead
         self._platform = None
         self._rta = None
+        # Variable access cache: avoid re-resolving Variables collection every call
+        self._variables_cache = None
+        # Per-path ref cache for writes only (reads use fresh lookup to avoid stale values)
+        self._write_refs_cache = {}
+        # Per-call timing for COM analysis (path, 'get'|'set', duration_sec)
+        self._timing_log = []
 
     def connect(self):
         import pythoncom
@@ -45,8 +52,10 @@ class ControlDeskApp:
     def stop_measurement(self):
         self.app.MeasurementDataManagement.Stop()
 
-    # Variable access
+    # Variable access (cached: Variables object + per-path variable reference)
     def _get_variables(self):
+        if self._variables_cache is not None:
+            return self._variables_cache
         exp = self.app.ActiveExperiment
         plats = exp.Platforms
         try:
@@ -59,15 +68,35 @@ class ControlDeskApp:
         except Exception:
             inner = outer
         vdesc = inner.ActiveVariableDescription
-        return vdesc.Variables
+        self._variables_cache = vdesc.Variables
+        return self._variables_cache
 
     def get_var(self, path: str) -> Any:
+        """Read variable; always fresh lookup (no ref cache) so values are never stale."""
+        t0 = time.perf_counter()
+        try:
+            vars_obj = self._get_variables()
+            return vars_obj[path].ValueConverted
+        finally:
+            self._timing_log.append((path, "get", time.perf_counter() - t0))
+
+    def _get_write_var_ref(self, path: str):
+        """Cached variable reference for writes only. Safe: writes push to target, no stale read."""
+        if path in self._write_refs_cache:
+            return self._write_refs_cache[path]
         vars_obj = self._get_variables()
-        return vars_obj[path].ValueConverted
+        ref = vars_obj[path]
+        self._write_refs_cache[path] = ref
+        return ref
 
     def set_var(self, path: str, value: Any):
-        vars_obj = self._get_variables()
-        vars_obj[path].ValueConverted = value
+        """Write variable; uses cached ref for writes to reduce path lookup cost (correctness unchanged)."""
+        t0 = time.perf_counter()
+        try:
+            ref = self._get_write_var_ref(path)
+            ref.ValueConverted = value
+        finally:
+            self._timing_log.append((path, "set", time.perf_counter() - t0))
 
     # Maneuver control
     def start_maneuver(self):
@@ -116,6 +145,35 @@ class ControlDeskApp:
         """Clear cached COM objects (useful for reconnection scenarios)."""
         self._platform = None
         self._rta = None
+        self._variables_cache = None
+        self._write_refs_cache = {}
+
+    def print_timing_summary(self):
+        """Print per-path COM timing summary for analysis (call at end of run)."""
+        if not self._timing_log:
+            return
+        # Aggregate by (path, op): total_sec, count
+        agg = {}
+        for path, op, duration in self._timing_log:
+            key = (path, op)
+            if key not in agg:
+                agg[key] = [0.0, 0]
+            agg[key][0] += duration
+            agg[key][1] += 1
+        # Sort by total duration descending
+        rows = [(path, op, total, count) for (path, op), (total, count) in agg.items()]
+        rows.sort(key=lambda x: -x[2])
+        print("[COM Timing] Per-path summary (total_sec, count, mean_ms):")
+        for path, op, total, count in rows:
+            mean_ms = (total / count) * 1000.0 if count else 0
+            # Shorten path for readability: keep last two path segments
+            short = path
+            if "/" in path:
+                parts = path.split("/")
+                short = "/".join(parts[-2:]) if len(parts) >= 2 else path
+            print(f"  [{op:3s}] {total:.3f}s  n={count:6d}  mean={mean_ms:6.2f}ms  {short}")
+        total_all = sum(d for _, _, d in self._timing_log)
+        print(f"[COM Timing] TOTAL: {total_all:.3f}s over {len(self._timing_log)} calls")
     
     def set_simulation_step(self, step=0.01):
         """Set the simulation time step."""
