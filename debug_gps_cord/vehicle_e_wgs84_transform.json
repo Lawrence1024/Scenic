@@ -1,0 +1,18 @@
+{
+  "type": "vehicle_e_to_wgs84",
+  "description": "Local tangent-plane (ENU) origin for Vehicle Coordinate System E",
+  "lon0_deg": -121.75582763570301,
+  "lat0_deg": 36.587360169401386,
+  "h0_m": 0.0,
+  "R_earth_m": 6378137.0,
+  "convention": "ENU: x=East, y=North, z=Up (meters)",
+  "calibration_point_vehicle_e": [
+    -20.001929315,
+    -49.881083992,
+    3.63857835596
+  ],
+  "calibration_point_wgs84": [
+    -121.75605141,
+    36.58691208
+  ]
+}

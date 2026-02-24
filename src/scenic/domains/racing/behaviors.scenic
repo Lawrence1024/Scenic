@@ -545,6 +545,27 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
     while True:
         # Calculate Control Signals
         current_speed = (self.speed if self.speed is not None else 0)
+
+        # Non-control-step fast path: exit before any heavy work (no waypoint/profile, NumPy, readbacks, progress, controller assembly)
+        _run_full_control = (simulation().is_control_step if hasattr(simulation(), 'is_control_step') else True) or not hasattr(self, '_last_final_steer')
+        if not _run_full_control:
+            self._fastpath_ticks = getattr(self, '_fastpath_ticks', 0) + 1
+            _fc = getattr(self, '_full_control_ticks', 0)
+            _fp = getattr(self, '_fastpath_ticks', 0)
+            if (_fc + _fp) % 100 == 0 and (_fc + _fp) > 0:
+                print(f"[FollowRacingLineMPC] full_control_ticks={_fc} fastpath_ticks={_fp}")
+            final_steer = getattr(self, '_last_final_steer', 0.0)
+            final_throttle = getattr(self, '_last_final_throttle', 0.0)
+            final_brake = getattr(self, '_last_final_brake', 0.0)
+            final_gear = getattr(self, '_last_final_gear', getattr(self, 'gear', 1))
+            _fast_actions = [SetSteerAction(final_steer), SetThrottleAction(final_throttle), SetBrakeAction(final_brake)]
+            if manage_gears and hasattr(self, 'setGear'):
+                _fast_actions.append(SetGearAction(final_gear))
+            take _fast_actions
+            wait
+            continue
+
+        self._full_control_ticks = getattr(self, '_full_control_ticks', 0) + 1
         
         # --- Waypoint Management for MPC ---
         wp_list = (self.waypoints if hasattr(self, 'waypoints') else None)
@@ -570,27 +591,18 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         _bt = getattr(simulation(), 'behavior_timing', None)
         if _bt is not None:
             _bt.start_step()
-            _bt.start_section('waypoint_speed_grade')
-        _run_full_control = (simulation().is_control_step if hasattr(simulation(), 'is_control_step') else True) or not hasattr(self, '_last_final_steer')
-        if not _run_full_control:
-            if _bt is not None:
-                _bt.end_section('waypoint_speed_grade')
-            final_steer = getattr(self, '_last_final_steer', 0.0)
-            final_throttle = getattr(self, '_last_final_throttle', 0.0)
-            final_brake = getattr(self, '_last_final_brake', 0.0)
-            curvature_ahead_max = getattr(self, '_last_curvature_ahead_max', 0.0)
-            cte = getattr(self, '_current_cte', 0.0)
-            speed_limit_applied_this_step = False
-            brake_mpc = 0.0
-            if _bt is not None:
-                _bt.start_section('after_mpc')
-        if _run_full_control:
+            _bt.start_section('state_unpack')
+        # Full control path (waypoint/profile/MPC); we only reach here when not on fast path
+        if True:
             # Update waypoint index for MPC
             # PROGRESS-BASED ADVANCEMENT (from suggestion.md): Advance based on arc-length progress
             # Instead of radius-based advancement, track cumulative distance along waypoints
             # and advance when we've progressed past a waypoint segment
             old_wp_idx = wp_last_idx
             if use_waypoints and wp_list and len(wp_list) >= 2:
+                if _bt is not None:
+                    _bt.end_section('state_unpack')
+                    _bt.start_section('path_progress')
                 # Build OpenDRIVE-based segment map once (conventional Laguna Seca = main racing roads only; pit excluded)
                 if not hasattr(self, '_waypoint_segment_map') or self._waypoint_segment_map is None:
                     try:
@@ -740,6 +752,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
 
                 except Exception as e:
                     print(f"[FollowRacingLineMPCBehavior] Warning: Waypoint finder error: {e}")
+                if _bt is not None:
+                    _bt.end_section('path_progress')
             
             # --- Longitudinal Control (MPC) ---
             # To-Do D: Use projection-based CTE (same geometry as MPCC) everywhere. CTE magnitude for speed
@@ -798,6 +812,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 self._cte_mismatch_steps_remaining = getattr(self, '_cte_mismatch_steps_remaining', 0) - 1
                 if self._cte_mismatch_steps_remaining <= 0:
                     self._cte_mismatch_trust_waypoint = False
+            if _bt is not None:
+                _bt.start_section('waypoint_speed_grade')
             # Universal max speed limit: Reduced for better robustness without elevation data
             MAX_SPEED_LIMIT_MS = 62.58  # 140 mph in m/s (~225 km/h) for IAC vehicle capability
             
@@ -973,48 +989,63 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             # Build speed reference array (use list, MPC will convert to numpy)
             v_ref_profile = [float(effective_target_speed)] * horizon
             
-            # If we have waypoints, build a speed profile that reduces speed for upcoming turns
+            # If we have waypoints, build a speed profile that reduces speed for upcoming turns (cached + vectorized)
             if use_waypoints and wp_list and len(wp_list) >= 2:
-                try:
-                    # Build speed profile based on curvature ahead
-                    dt = _lon_controller.config.mpc_prediction_dt
-                    for k in range(horizon):
-                        # Distance ahead at step k
-                        dist_ahead = current_speed * (k + 1) * dt
-                        
-                        # Find waypoint at this distance
-                        wp_idx = wp_last_idx
-                        accumulated_dist = 0.0
-                        while wp_idx < len(wp_list) - 1 and accumulated_dist < dist_ahead:
-                            x0, y0 = float(wp_list[wp_idx][0]), float(wp_list[wp_idx][1])
-                            x1, y1 = float(wp_list[wp_idx+1][0]), float(wp_list[wp_idx+1][1])
-                            seg_dx = x1 - x0; seg_dy = y1 - y0
-                            seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
-                            if seg_len < 1e-6:
-                                wp_idx += 1
-                                continue
-                            accumulated_dist += seg_len
-                            if accumulated_dist < dist_ahead:
-                                wp_idx += 1
-                        
-                        # Compute curvature at this waypoint and apply speed gate formula
-                        if wp_idx > 0 and wp_idx < len(wp_list) - 1:
-                            p0 = (float(wp_list[wp_idx-1][0]), float(wp_list[wp_idx-1][1]))
-                            p1 = (float(wp_list[wp_idx][0]), float(wp_list[wp_idx][1]))
-                            p2 = (float(wp_list[wp_idx+1][0]), float(wp_list[wp_idx+1][1]))
-                            v1x = p1[0] - p0[0]; v1y = p1[1] - p0[1]
-                            v2x = p2[0] - p1[0]; v2y = p2[1] - p1[1]
-                            cross = v1x * v2y - v1y * v2x
-                            len1 = (v1x*v1x + v1y*v1y) ** 0.5
-                            len2 = (v2x*v2x + v2y*v2y) ** 0.5
-                            if len1 > 1e-6 and len2 > 1e-6:
-                                avg_len = (len1 + len2) / 2.0
-                                if avg_len > 1e-6:
+                # Stable cache key (shape + first/last waypoint) so cache hits when racing line is unchanged
+                wp_cache_key = (len(wp_list), (float(wp_list[0][0]), float(wp_list[0][1])), (float(wp_list[-1][0]), float(wp_list[-1][1])))
+                self._wp_cache_tick = getattr(self, '_wp_cache_tick', 0) + 1
+                # Build/reuse curvature cache (2D cumdist + per-waypoint curve_vmax)
+                if getattr(self, '_wp_curve_cache_key', None) != wp_cache_key:
+                    nwp = len(wp_list)
+                    if nwp >= 2:
+                        seg_len_xy = []
+                        for i in range(nwp - 1):
+                            x0, y0 = float(wp_list[i][0]), float(wp_list[i][1])
+                            x1, y1 = float(wp_list[i+1][0]), float(wp_list[i+1][1])
+                            Lxy = ((x1-x0)**2 + (y1-y0)**2) ** 0.5
+                            seg_len_xy.append(max(Lxy, 1e-9))
+                        seg_len_xy_arr = np.asarray(seg_len_xy, dtype=np.float64)
+                        cum_xy = np.zeros(nwp, dtype=np.float64)
+                        cum_xy[1:] = np.cumsum(seg_len_xy_arr)
+                        self._wp_cumdist_xy = cum_xy
+                        curve_vmax_list = []
+                        for i in range(nwp):
+                            if i == 0 or i == nwp - 1:
+                                curve_vmax_list.append(1e6)
+                            else:
+                                p0 = (float(wp_list[i-1][0]), float(wp_list[i-1][1]))
+                                p1 = (float(wp_list[i][0]), float(wp_list[i][1]))
+                                p2 = (float(wp_list[i+1][0]), float(wp_list[i+1][1]))
+                                v1x = p1[0] - p0[0]; v1y = p1[1] - p0[1]
+                                v2x = p2[0] - p1[0]; v2y = p2[1] - p1[1]
+                                cross = v1x * v2y - v1y * v2x
+                                len1 = (v1x*v1x + v1y*v1y) ** 0.5
+                                len2 = (v2x*v2x + v2y*v2y) ** 0.5
+                                if len1 > 1e-6 and len2 > 1e-6:
+                                    avg_len = (len1 + len2) / 2.0
                                     abs_kappa = abs(2.0 * cross / (len1 * len2 * avg_len))
-                                    # Apply speed gate formula with same safety margin as curvature_speed_limit
                                     v_max_at_kappa = curvature_speed_margin * (max_lateral_accel / (abs_kappa + curvature_epsilon)) ** 0.5
-                                    # Use minimum of target speed and curvature-limited speed
-                                    v_ref_profile[k] = min(v_ref_profile[k], v_max_at_kappa)
+                                    curve_vmax_list.append(v_max_at_kappa)
+                                else:
+                                    curve_vmax_list.append(1e6)
+                        self._wp_curve_vmax = np.asarray(curve_vmax_list, dtype=np.float64)
+                        self._wp_curve_cache_key = wp_cache_key
+                        self._wp_curve_cache_rebuilds = getattr(self, '_wp_curve_cache_rebuilds', 0) + 1
+                else:
+                    self._wp_curve_cache_hits = getattr(self, '_wp_curve_cache_hits', 0) + 1
+                try:
+                    if getattr(self, '_wp_curve_vmax', None) is not None:
+                        # Vectorized: dist_vec, searchsorted, gather curve_vmax, apply min
+                        dt = _lon_controller.config.mpc_prediction_dt
+                        dist_vec = current_speed * (np.arange(1, horizon + 1, dtype=np.float64)) * dt
+                        base_idx = max(0, min(wp_last_idx, len(wp_list) - 2))
+                        base_cum = self._wp_cumdist_xy[base_idx]
+                        target_abs = base_cum + dist_vec
+                        wp_end_idx = np.searchsorted(self._wp_cumdist_xy, target_abs, side='right') - 1
+                        wp_end_idx = np.clip(wp_end_idx, 0, len(self._wp_curve_vmax) - 1)
+                        cap_profile = self._wp_curve_vmax[wp_end_idx]
+                        v_ref_profile = np.minimum(np.asarray(v_ref_profile, dtype=np.float64), cap_profile)
+                        v_ref_profile = v_ref_profile.tolist()
                 except Exception as e:
                     # If profile building fails, use constant speed
                     pass
@@ -1027,54 +1058,73 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             # --- Build grade profile for longitudinal MPC (if 3D waypoints available) ---
             grade_profile = None
             if use_waypoints and wp_list and len(wp_list) >= 2:
-                # Check if waypoints are 3D
-                is_3d_waypoints = len(wp_list[0]) >= 3
-                if is_3d_waypoints:
-                    # Build grade profile for longitudinal MPC
+                # --- Build/reuse waypoint geometry cache --- (same stable key as curvature block)
+                wp_cache_key = (len(wp_list), (float(wp_list[0][0]), float(wp_list[0][1])), (float(wp_list[-1][0]), float(wp_list[-1][1])))
+                if getattr(self, '_wp_grade_cache_key', None) != wp_cache_key:
+                    nwp = len(wp_list)
+                    if nwp >= 2:
+                        seg_len_3d = []
+                        seg_grade = []
+                        for i in range(nwp - 1):
+                            wp0 = wp_list[i]
+                            wp1 = wp_list[i + 1]
+                            x0, y0 = float(wp0[0]), float(wp0[1])
+                            x1, y1 = float(wp1[0]), float(wp1[1])
+                            z0 = float(wp0[2]) if len(wp0) >= 3 else 0.0
+                            z1 = float(wp1[2]) if len(wp1) >= 3 else 0.0
+
+                            dx, dy, dz = x1 - x0, y1 - y0, z1 - z0
+                            L3 = (dx*dx + dy*dy + dz*dz) ** 0.5
+                            Lxy = (dx*dx + dy*dy) ** 0.5
+
+                            seg_len_3d.append(max(L3, 1e-9))
+                            seg_grade.append(math.atan2(dz, Lxy) if Lxy > 1e-6 else 0.0)
+
+                        self._wp_seg_len_3d = np.asarray(seg_len_3d, dtype=np.float64)
+                        self._wp_seg_grade = np.asarray(seg_grade, dtype=np.float64)
+
+                        # cumulative distance at waypoint i (length from start to wp i)
+                        # length nwp, with cum[0] = 0
+                        cum = np.zeros(nwp, dtype=np.float64)
+                        cum[1:] = np.cumsum(self._wp_seg_len_3d)
+                        self._wp_cumdist_3d = cum
+
+                        self._wp_grade_cache_key = wp_cache_key
+                        self._wp_grade_cache_rebuilds = getattr(self, '_wp_grade_cache_rebuilds', 0) + 1
+                else:
+                    self._wp_grade_cache_hits = getattr(self, '_wp_grade_cache_hits', 0) + 1
+                if getattr(self, '_wp_cache_tick', 0) % 100 == 0:
+                    ch = getattr(self, '_wp_curve_cache_hits', 0); cr = getattr(self, '_wp_curve_cache_rebuilds', 0)
+                    gh = getattr(self, '_wp_grade_cache_hits', 0); gr = getattr(self, '_wp_grade_cache_rebuilds', 0)
+                    print(f"[Waypoint cache] tick={getattr(self, '_wp_cache_tick', 0)}  curve: hits={ch} rebuilds={cr}  grade: hits={gh} rebuilds={gr}")
+                if len(wp_list[0]) >= 3:
                     horizon = _lon_controller.config.mpc_prediction_horizon
                     dt_mpc = _lon_controller.config.mpc_prediction_dt
-                    grade_profile = []
-                    for k in range(horizon):
-                        # Distance ahead at step k
-                        dist_ahead = current_speed * (k + 1) * dt_mpc
-                        # Find waypoint segment at this distance
-                        wp_idx = wp_last_idx
-                        accumulated_dist = 0.0
-                        while wp_idx < len(wp_list) - 1 and accumulated_dist < dist_ahead:
-                            wp0 = wp_list[wp_idx]
-                            wp1 = wp_list[wp_idx + 1]
-                            dx = float(wp1[0]) - float(wp0[0])
-                            dy = float(wp1[1]) - float(wp0[1])
-                            dz = float(wp1[2]) - float(wp0[2]) if len(wp1) >= 3 and len(wp0) >= 3 else 0.0
-                            seg_len = (dx*dx + dy*dy + dz*dz) ** 0.5
-                            if seg_len < 1e-6:
-                                wp_idx += 1
-                                continue
-                            accumulated_dist += seg_len
-                            if accumulated_dist < dist_ahead:
-                                wp_idx += 1
-                        # Compute grade from segment
-                        if wp_idx < len(wp_list) - 1:
-                            wp0 = wp_list[wp_idx]
-                            wp1 = wp_list[wp_idx + 1]
-                            dx = float(wp1[0]) - float(wp0[0])
-                            dy = float(wp1[1]) - float(wp0[1])
-                            dz = float(wp1[2]) - float(wp0[2]) if len(wp1) >= 3 and len(wp0) >= 3 else 0.0
-                            seg_len_xy = (dx*dx + dy*dy) ** 0.5
-                            if seg_len_xy > 1e-6:
-                                grade = math.atan2(dz, seg_len_xy)
-                            else:
-                                grade = 0.0
-                        else:
-                            grade = 0.0
-                        grade_profile.append(grade)
-                    grade_profile = np.array(grade_profile, dtype=np.float64)
+
+                    # distance ahead for each horizon point
+                    dist_vec = current_speed * (np.arange(1, horizon + 1, dtype=np.float64)) * dt_mpc
+
+                    # Distance-to-segment-end from current wp_last_idx onward
+                    # seg index range: [0, len(wp_list)-2]
+                    base_idx = max(0, min(wp_last_idx, len(wp_list) - 2))
+                    base_cum = self._wp_cumdist_3d[base_idx]
+
+                    # Find segment index for each dist ahead using waypoint cumulative distances
+                    # We search in waypoint endpoints (base_idx+1 ... end)
+                    target_abs = base_cum + dist_vec
+                    # returns waypoint index in [base_idx+1, ...], convert to segment index
+                    wp_end_idx = np.searchsorted(self._wp_cumdist_3d, target_abs, side='right') - 1
+                    seg_idx = np.clip(wp_end_idx, base_idx, len(self._wp_seg_grade) - 1)
+
+                    grade_profile = self._wp_seg_grade[seg_idx].astype(np.float64, copy=False)
             if _bt is not None:
                 _bt.end_section('waypoint_speed_grade')
             
             # --- Use MPC for throttle/brake control ---
             # Get current acceleration (estimate from speed if not available)
-            dt = simulation().timestep
+            dt = getattr(simulation(), 'control_dt', None)
+            if dt is None:
+                dt = simulation().timestep * max(1, getattr(simulation(), '_control_interval', 1))
             current_accel = 0.0
             if hasattr(self, '_prev_speed_mpc'):
                 current_accel = (current_speed - self._prev_speed_mpc) / dt
@@ -1215,7 +1265,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             final_brake = max(0.0, min(1.0, raw_brake))
     
             # --- Lateral Control (MPC) ---
-            # Build vehicle state for MPC
+            # Build vehicle state for MPC (assembly + read_state_from_controldesk)
             vehicle_state = {
                 'x': px,
                 'y': py,
@@ -1258,8 +1308,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     waypoints_for_mpc = [(float(wp[0]), float(wp[1]), float(wp[2])) for wp in wp_list]
                 else:
                     waypoints_for_mpc = [(float(wp[0]), float(wp[1])) for wp in wp_list]
-    
-            # Compute steering using MPC
+
+            # Compute steering using MPC (mpc_total in [LoopOther] from record_lateral_mpc_ms + record_longitudinal_mpc_ms)
             # Pass CTE magnitude for adaptive waypoint search
             try:
                 steer_mpc = _lat_controller.run_step(
@@ -1276,7 +1326,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 print(f"[FollowRacingLineMPCBehavior] MPC error: {e}, using fallback")
                 steer_mpc = 0.0
             if _bt is not None:
-                _bt.start_section('after_mpc')
+                _bt.start_section('cmd_post')
             # Keep waypoint-based CTE (e_y_mpc) for mismatch fallback (used when behavior CTE disagrees)
             if getattr(_lat_controller, '_log_mpc_e_y', None) is not None:
                 self._last_waypoint_cte_for_speed = abs(getattr(_lat_controller, '_log_mpc_e_y'))
@@ -1542,6 +1592,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             self._behavior_step_count = 0
         
         gear_val = getattr(self, 'gear', 0)
+        self._last_final_gear = gear_val if gear_val >= 1 else 1
         # Log step summary every 50 steps; include t= and OpenDRIVE-based segment for segment performance analysis
         if self._behavior_step_count % 50 == 0:
             t_log = self._behavior_step_count * 0.05
@@ -1672,7 +1723,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             print(f"[FollowRacingLineMPC] deadzone_log deadzone_applied={_dz_app} dz_cte_m={_dz_m_s} cte_used_for_control={_cte_used_s} cte_raw={_cte_raw_s} deadzone_reason={_reason} match_dist_m={_match_s} gate_accept={_gate_ok} segment_id={_seg_id} curv_ahead_max={_curv_ahd_s} curv_regime={_creg} kappa_ref_at_proj={_kappa_s} steer_mpc_raw={_s_raw_s} steer_after_caps={_s_caps_s} steer_after_lpf={_s_lpf_s} steer_rate={_s_rate_s}")
 
         if _bt is not None:
-            _bt.end_section('after_mpc')
+            _bt.end_section('cmd_post')
         # Execute all actions together
         take actions_to_take
 

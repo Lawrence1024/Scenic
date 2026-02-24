@@ -9,6 +9,7 @@ simulation step (from longitudinal run_step, which runs last).
 
 import time
 from typing import Dict, Optional
+print(f"[PatchID] timing.py loaded from {__file__}")
 
 # Module-level state for this process
 _step = 0
@@ -89,19 +90,28 @@ def finish_step() -> None:
         mean_lat = (_sum_lateral / _count) / 1000.0
         mean_lon = (_sum_longitudinal / _count) / 1000.0
         mean_sp = (_sum_speed_profile / _count) / 1000.0
-        total_mpc = mean_lat + mean_lon + mean_sp
+        mpc_total_s = mean_lat + mean_lon
         line = (
-            f"[LoopOther] steps={_step} mean(s): lateral_mpc={mean_lat:.4f} lon_mpc={mean_lon:.4f} speed_profile={mean_sp:.4f} "
-            f"(total_mpc={total_mpc:.4f}s"
+            f"[LoopOther] steps={_step} mean(s): "
+            f"state_unpack="
         )
         if _behavior_timing is not None:
             section_ms = _behavior_timing.get_section_ms()
+            state_unpack_s = section_ms.get("state_unpack", 0.0) / 1000.0
+            path_progress_s = section_ms.get("path_progress", 0.0) / 1000.0
             waypoint_s = section_ms.get("waypoint_speed_grade", 0.0) / 1000.0
-            after_mpc_s = section_ms.get("after_mpc", 0.0) / 1000.0
-            line += f"; waypoint_speed_grade={waypoint_s:.4f}s after_mpc={after_mpc_s:.4f}s"
+            cmd_post_s = section_ms.get("cmd_post", 0.0) / 1000.0
+            line += (
+                f"{state_unpack_s:.4f} "
+                f"path_progress={path_progress_s:.4f} "
+                f"speed_profile={mean_sp:.4f} "
+                f"mpc_total={mpc_total_s:.4f} "
+                f"waypoint_speed_grade={waypoint_s:.4f} "
+                f"cmd_post={cmd_post_s:.4f}"
+            )
         else:
-            line += "; behavior_sections=N/A"
-        line += ")"
+            line += "N/A path_progress=N/A "
+            line += f"mpc_total={mpc_total_s:.4f} waypoint_speed_grade=N/A cmd_post=N/A"
         print(line)
         _sum_lateral = 0.0
         _sum_longitudinal = 0.0

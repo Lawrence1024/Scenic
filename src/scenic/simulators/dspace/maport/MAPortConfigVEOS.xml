@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PortConfigurations xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+	<MAPortConfig>
+        <!-- Replace #DEMO_ROOT# by the path to the Demos directory in your XIL API installation, e.g. C:\Program Files (x86)\Common Files\dSPACE\XIL API .NET\2.0\Demos -->
+        <!-- <ApplicationPath>#DEMO_ROOT#\RTApplications\Throttle\DS1006\throttlecontroldemo.sdf</ApplicationPath> -->
+        <SystemDescriptionFile>C:\Users\bklfh\Documents\dspace\AURELIONManager\IAC_Project\Instrumentation\CD_Traffic\Experiment_001\Variable Descriptions\ASM_Traffic.sdf\ASM_Traffic.sdf</SystemDescriptionFile>
+        <!-- The processor board on which the application is running, e.g. DS1006, SCALEXIO, or VEOS -->
+		<PlatformName>VEOS</PlatformName>
+	</MAPortConfig>
+</PortConfigurations>
