@@ -1,22 +1,28 @@
-### 4) Stop printing from `setGear()` / `setClutch()` on every call in `dspace/model.scenic`
+#### 0A) Add a startup “time-base sanity” check and fail fast
 
-These methods currently print every invocation:
+For the first N step calls (e.g., 50):
 
-```python
-print(f"[DSPACERacingCar.setGear] Called with gear={gear}")
-```
+* read dSPACE time **before** and **after** each `advance_simulation_step()`
+* compute `delta_dspace`
+* compare against expected `timestep`
 
-This is surprisingly expensive in Python hot loops and pollutes logs.
+If `delta_dspace` is not close to expected (or mostly zeros), print a warning / raise in debug mode.
 
-### Fix
+#### 0B) Log both clocks explicitly (no ambiguous `t=`)
 
-Gate it behind a debug flag, or just remove.
+Rename labels:
 
-#### Suggested minimal change
+* `scenic_sim_t`
+* `ctrl_sched_t`
+* `dspace_maneuver_t`
 
-```python
-if getattr(self, '_debug_transmission', False):
-    print(f"[DSPACERacingCar.setGear] Called with gear={gear}")
-```
+#### 0C) Don’t use Scenic `t += timestep` as “truth” yet
 
-Same for `setClutch()` and other high-frequency setters if they’re called often.
+For debug/validation runs, treat dSPACE time as source-of-truth until step semantics are fixed.
+
+#### 0D) Investigate `set_simulation_step(...)` semantics in the ControlDesk wrapper
+
+Given your frozen tests, the likely issue is:
+
+* step API advances a different internal tick than you assume, or
+* configured timestep isn’t actually applied.

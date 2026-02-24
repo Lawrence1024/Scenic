@@ -55,7 +55,8 @@ class VehicleController:
             simulation: The parent DSpaceSimulation instance
         """
         self.simulation = simulation
-        self.cd = simulation._cd
+        # Variable read/write: MAPort if available, else ControlDesk COM
+        self.cd = getattr(simulation, "_var_access", None) or simulation._cd
 
         # --- Dedup / COM-write optimization state ---
         self._write_tick = 0
@@ -309,8 +310,8 @@ class VehicleController:
                                 print(f"[EgoControl] Setting gear to {gear_int}")
                     elif action_type == "clutch":
                         clutch_pct = float(value * 100.0)
-                        self.cd.set_var(self.KEY_CLUTCH, clutch_pct)
-                        print(f"[EgoControl] Setting clutch to {clutch_pct}%")
+                        if self._maybe_write_cd(self.KEY_CLUTCH, clutch_pct, 1e-6):
+                            print(f"[EgoControl] Setting clutch to {clutch_pct}%")
                 except Exception as e:
                     print(f"[VehicleController:EgoControl] {action_type} error: {e}")
                     import traceback

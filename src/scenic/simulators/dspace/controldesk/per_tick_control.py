@@ -57,24 +57,26 @@ class ExternalControlManager:
                     try:
                         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
                         if result.returncode == 0:
-                            print(f"[ASM_Maneuver] ✅ Enabled external control for F{fellow_number}")
+                            print(f"[ASM_Maneuver] [OK] Enabled external control for F{fellow_number}")
                         else:
-                            print(f"[ASM_Maneuver] ❌ Failed for F{fellow_number}: {result.stderr}")
+                            print(f"[ASM_Maneuver] [FAIL] Failed for F{fellow_number}: {result.stderr}")
                             return False
                     except subprocess.TimeoutExpired:
-                        print(f"[ASM_Maneuver] ⏰ Timeout for F{fellow_number}")
+                        print(f"[ASM_Maneuver] [TIMEOUT] Timeout for F{fellow_number}")
                         return False
                     except FileNotFoundError:
                         print("[ASM_Maneuver] Docker not found - trying direct script execution")
                         return False
                     except Exception as e:
-                        print(f"[ASM_Maneuver] Error for F{fellow_number}: {e}")
+                        err_msg = str(e).encode('ascii', 'replace').decode('ascii')
+                        print(f"[ASM_Maneuver] Error for F{fellow_number}: {err_msg}")
                         return False
             
             return True
             
         except Exception as e:
-            print(f"[ASM_Maneuver] Docker exec error: {e}")
+            err_msg = str(e).encode('ascii', 'replace').decode('ascii')
+            print(f"[ASM_Maneuver] Docker exec error: {err_msg}")
             return False
     
     @staticmethod
@@ -92,11 +94,13 @@ class ExternalControlManager:
                     try:
                         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
                         if result.returncode == 0:
-                            print(f"[ASM_Maneuver] ✅ Enabled external control for F{fellow_number}")
+                            print(f"[ASM_Maneuver] [OK] Enabled external control for F{fellow_number}")
                         else:
-                            print(f"[ASM_Maneuver] ❌ Failed for F{fellow_number}: {result.stderr}")
+                            print(f"[ASM_Maneuver] [FAIL] Failed for F{fellow_number}: {result.stderr}")
                     except Exception as e:
-                        print(f"[ASM_Maneuver] Error for F{fellow_number}: {e}")
+                        err_msg = str(e).encode('ascii', 'replace').decode('ascii')
+                        print(f"[ASM_Maneuver] Error for F{fellow_number}: {err_msg}")
                         
         except Exception as e:
-            print(f"[ASM_Maneuver] Direct script error: {e}")
+            err_msg = str(e).encode('ascii', 'replace').decode('ascii')
+            print(f"[ASM_Maneuver] Direct script error: {err_msg}")

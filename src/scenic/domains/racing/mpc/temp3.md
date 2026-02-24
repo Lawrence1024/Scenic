@@ -1,44 +1,19 @@
-### 3) Cache `waypoints_for_mpc` conversion in `racing/behaviors.scenic`
+### 3) Pre-cache fellow hot paths too (MAPort first-touch latency reduction)
 
-You currently rebuild the tuple list every control tick:
+You already precache ego + control paths in `simulator.py` (nice).
+If your test includes fellows, add fellow array paths as hot refs too.
 
-```python
-waypoints_for_mpc = [(float(wp[0]), float(wp[1]), ... ) for wp in wp_list]
-```
+### Add these to `hot_paths` in `simulator.py` setup
 
-That’s pure Python allocation overhead on a hot path.
+* Fellow readback arrays:
 
-### Low-risk optimization
+  * `.../FellowTrailer/x`
+  * `.../FellowTrailer/y`
+  * `.../FellowTrailer/z`
+  * `.../FellowTrailer/yaw_deg_out`
+  * `.../FellowTrailer/v_Fellows`
+  * `.../FellowTrailer/w_Fellows`
+* Fellow external write arrays:
 
-Cache the converted waypoint list and only rebuild if the source list changes.
-
-#### Suggested pattern
-
-```python
-# Before converting
-_wp_src = wp_list
-_wp_src_id = id(_wp_src)
-_wp_len = len(_wp_src) if _wp_src else 0
-
-cache_ok = (
-    hasattr(self, '_waypoints_for_mpc_cache_id') and
-    self._waypoints_for_mpc_cache_id == _wp_src_id and
-    getattr(self, '_waypoints_for_mpc_cache_len', -1) == _wp_len
-)
-
-if cache_ok:
-    waypoints_for_mpc = self._waypoints_for_mpc_cache
-else:
-    if _wp_src and len(_wp_src) >= 2:
-        is_3d_waypoints = len(_wp_src[0]) >= 3
-        if is_3d_waypoints:
-            waypoints_for_mpc = tuple((float(wp[0]), float(wp[1]), float(wp[2])) for wp in _wp_src)
-        else:
-            waypoints_for_mpc = tuple((float(wp[0]), float(wp[1])) for wp in _wp_src)
-    else:
-        waypoints_for_mpc = None
-
-    self._waypoints_for_mpc_cache = waypoints_for_mpc
-    self._waypoints_for_mpc_cache_id = _wp_src_id
-    self._waypoints_for_mpc_cache_len = _wp_len
-```
+  * `.../External_Signals/Const_v_Fellows_External[km|h]/Value`
+  * `.../External_Signals/Const_d_Fellows_External[m]/Value`

@@ -3,7 +3,8 @@ import time
 
 def ensure_fellow_arrays_initialized(sim):
     """Advance the simulation until fellow arrays are populated (once)."""
-    if sim._fellow_arrays_initialized or sim._initializing_fellow_arrays or not sim._cd:
+    var = getattr(sim, "_var_access", None) or getattr(sim, "_cd", None)
+    if sim._fellow_arrays_initialized or sim._initializing_fellow_arrays or not var:
         return
     base_path = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer"
     array_path = f"{base_path}/x"
@@ -31,15 +32,15 @@ def ensure_fellow_arrays_initialized(sim):
         for attempt in range(max_attempts):
             x_arr = y_arr = yaw_arr = None
             try:
-                x_arr = sim._cd.get_var(array_path)
+                x_arr = var.get_var(array_path)
             except Exception:
                 x_arr = None
             try:
-                y_arr = sim._cd.get_var(f"{base_path}/y")
+                y_arr = var.get_var(f"{base_path}/y")
             except Exception:
                 y_arr = None
             try:
-                yaw_arr = sim._cd.get_var(f"{base_path}/yaw_deg_out")
+                yaw_arr = var.get_var(f"{base_path}/yaw_deg_out")
             except Exception:
                 yaw_arr = None
 
@@ -72,14 +73,15 @@ def ensure_fellow_arrays_initialized(sim):
                 break
 
             if attempt < max_attempts - 1:
-                # TEMPORARILY COMMENTED OUT FOR DEBUGGING - no stepping/pausing
-                # try:
-                #     sim._cd.advance_simulation_step()
-                #     time.sleep(sim.timestep * 0.5)
-                # except Exception:
-                #     time.sleep(sim.timestep)
-                # Just wait without stepping for debugging
-                time.sleep(sim.timestep * 0.5)
+                try:
+                    # Prefer ControlDesk step control for warm-up (session/step still owned by COM)
+                    if getattr(sim, "_cd", None) is not None:
+                        sim._cd.advance_simulation_step()
+                        time.sleep(sim.timestep * 0.5)
+                    else:
+                        time.sleep(sim.timestep)
+                except Exception:
+                    time.sleep(sim.timestep)
         if not sim._fellow_arrays_initialized:
             print(f"[dSPACE] [ERROR] Fellow arrays not initialized after {max_attempts} warm-up steps")
     finally:
@@ -88,7 +90,8 @@ def ensure_fellow_arrays_initialized(sim):
 
 def probe_external_index_base(sim):
     """Probe External_Signals arrays and determine index base (0 or 1)."""
-    if sim._ext_probe_done or not sim._cd:
+    var = getattr(sim, "_var_access", None) or getattr(sim, "_cd", None)
+    if sim._ext_probe_done or not var:
         return sim._ext_probe_done
     base = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/External_Signals"
     v_candidates = (
@@ -98,12 +101,12 @@ def probe_external_index_base(sim):
     d_candidates = (f"{base}/Const_d_Fellows_External[m]/Value",)
     for vpath in v_candidates:
         try:
-            arr = sim._cd.get_var(vpath)
+            arr = var.get_var(vpath)
             if not isinstance(arr, (list, tuple)):
                 continue
             for idx_base in (0, 1):
                 try:
-                    _ = sim._cd.get_var(f"{vpath}[{idx_base}]")
+                    _ = var.get_var(f"{vpath}[{idx_base}]")
                     sim._ext_v_path = vpath
                     sim._ext_d_path = d_candidates[0]
                     sim._ext_index_base = idx_base

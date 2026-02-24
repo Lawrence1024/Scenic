@@ -1,30 +1,38 @@
 from scenic.core.vectors import Vector
 import math
 
-def read_ego_state(sim, obj):
-    """Read ego vehicle state from ControlDesk into obj.dspaceActor."""
-    if not sim._cd:
-        return False
-    
-    base_path = "Platform()://ASM_Traffic/Model Root/VehicleDynamics/Plant/UserInterface/DISP_Plant"
-    
-    # 1. Position (x, y, z)
-    path_x = f"{base_path}/Positions/Pos_x_Vehicle_CoorSys_E[m]/Out1"
-    path_y = f"{base_path}/Positions/Pos_y_Vehicle_CoorSys_E[m]/Out1"
-    path_z = f"{base_path}/Positions/Pos_z_Vehicle_CoorSys_E[m]/Out1"
-    
-    # 2. Orientation (yaw)
-    path_yaw = f"{base_path}/Positions/Angle_Yaw_Vehicle_CoorSys_E[deg]/Out1"
+EGO_BASE_PATH = "Platform()://ASM_Traffic/Model Root/VehicleDynamics/Plant/UserInterface/DISP_Plant"
+EGO_PATH_X   = f"{EGO_BASE_PATH}/Positions/Pos_x_Vehicle_CoorSys_E[m]/Out1"
+EGO_PATH_Y   = f"{EGO_BASE_PATH}/Positions/Pos_y_Vehicle_CoorSys_E[m]/Out1"
+EGO_PATH_Z   = f"{EGO_BASE_PATH}/Positions/Pos_z_Vehicle_CoorSys_E[m]/Out1"
+EGO_PATH_YAW = f"{EGO_BASE_PATH}/Positions/Angle_Yaw_Vehicle_CoorSys_E[deg]/Out1"
+EGO_PATH_VX  = f"{EGO_BASE_PATH}/Velocities/v_x_Vehicle_CoG[km|h]/Out1"
+EGO_PATH_VY  = f"{EGO_BASE_PATH}/Velocities/v_y_Vehicle_CoG[km|h]/Out1"
 
-    # 3. Velocity [vx, vy, vz]
-    path_vx = f"{base_path}/Velocities/v_x_Vehicle_CoG[km|h]/Out1"
-    path_vy = f"{base_path}/Velocities/v_y_Vehicle_CoG[km|h]/Out1"
+EGO_READ_PATHS = (
+    EGO_PATH_X, EGO_PATH_Y, EGO_PATH_Z, EGO_PATH_YAW, EGO_PATH_VX, EGO_PATH_VY
+)
+
+
+def read_ego_state(sim, obj):
+    """Read ego vehicle state from variable access (MAPort or ControlDesk) into obj.dspaceActor."""
+    var = getattr(sim, "_var_access", None) or getattr(sim, "_cd", None)
+    if not var:
+        return False
 
     try:
-        # 1. Read Position
-        x = float(sim._cd.get_var(path_x))
-        y = float(sim._cd.get_var(path_y))
-        z = float(sim._cd.get_var(path_z))
+        if hasattr(var, "get_vars"):
+            if not getattr(sim, "_ego_read_get_vars_logged", False):
+                print("[EgoRead] using get_vars path (MAPort-compatible)")
+                sim._ego_read_get_vars_logged = True
+            x, y, z, yaw_deg, vx_kmh, vy_kmh = var.get_vars(EGO_READ_PATHS)
+        else:
+            x = float(var.get_var(EGO_PATH_X))
+            y = float(var.get_var(EGO_PATH_Y))
+            z = float(var.get_var(EGO_PATH_Z))
+            yaw_deg = float(var.get_var(EGO_PATH_YAW))
+            vx_kmh = float(var.get_var(EGO_PATH_VX))
+            vy_kmh = float(var.get_var(EGO_PATH_VY))
         
         # CRITICAL: Transform position from RD/dSPACE coordinates back to Scenic/XODR coordinates
         # Position read from ControlDesk is in RD coordinate system, but Scenic expects XODR coordinates
@@ -43,9 +51,8 @@ def read_ego_state(sim, obj):
                 print(f"[Ego Readback] RD: ({rd_x:.6f}, {rd_y:.6f}) [expected: ({expected_rd[0]:.6f}, {expected_rd[1]:.6f}), error: {error_rd:.3f}m]")
                 print(f"[Ego Readback] XODR: ({scenic_x:.6f}, {scenic_y:.6f}) [expected: ({expected_xodr[0]:.6f}, {expected_xodr[1]:.6f}), error: {error_xodr:.3f}m]")
                 obj._readback_shown = True
-        
-        # 2. Read Orientation
-        yaw_deg = float(sim._cd.get_var(path_yaw))
+
+        # yaw_deg, vx_kmh, vy_kmh already read above (get_vars or get_var)
         yaw_rad_raw = yaw_deg * (math.pi / 180.0)
 
         # Convert raw yaw to Scenic heading.
@@ -57,11 +64,7 @@ def read_ego_state(sim, obj):
         # Normalize to [-pi, pi]
         yaw_rad = math.atan2(math.sin(yaw_rad_raw), math.cos(yaw_rad_raw))
 
-        # 3. Read Velocity
         # Inputs are km/h, Scenic uses m/s
-        vx_kmh = float(sim._cd.get_var(path_vx))
-        vy_kmh = float(sim._cd.get_var(path_vy))
-        
         vx_ms = vx_kmh / 3.6
         vy_ms = vy_kmh / 3.6
         
@@ -78,8 +81,9 @@ def read_ego_state(sim, obj):
 
 
 def read_fellow_state(sim, obj, dutils):
-    """Read fellow vehicle state from ControlDesk arrays into obj.dspaceActor."""
-    if not sim._cd:
+    """Read fellow vehicle state from variable access (MAPort or ControlDesk) arrays into obj.dspaceActor."""
+    var = getattr(sim, "_var_access", None) or getattr(sim, "_cd", None)
+    if not var:
         return False
     
     # Ensure arrays are initialized (warm-up should have completed during setup)
@@ -97,35 +101,35 @@ def read_fellow_state(sim, obj, dutils):
         eff_index = fellow_index + (sim._fellow_index_base or 0)
         base_path = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer"
         try:
-            x_arr = sim._cd.get_var(f"{base_path}/x")
+            x_arr = var.get_var(f"{base_path}/x")
             x = x_arr[eff_index] if isinstance(x_arr, (list, tuple)) and isinstance(eff_index, int) and eff_index < len(x_arr) else 0.0
         except Exception:
             x = 0.0
         try:
-            y_arr = sim._cd.get_var(f"{base_path}/y")
+            y_arr = var.get_var(f"{base_path}/y")
             y = y_arr[eff_index] if isinstance(y_arr, (list, tuple)) and isinstance(eff_index, int) and eff_index < len(y_arr) else 0.0
         except Exception:
             y = 0.0
         try:
-            z_arr = sim._cd.get_var(f"{base_path}/z")
+            z_arr = var.get_var(f"{base_path}/z")
             z = z_arr[eff_index] if isinstance(z_arr, (list, tuple)) and isinstance(eff_index, int) and eff_index < len(z_arr) else 0.0
         except Exception:
             z = 0.0
         try:
-            yaw_arr = sim._cd.get_var(f"{base_path}/yaw_deg_out")
+            yaw_arr = var.get_var(f"{base_path}/yaw_deg_out")
             yaw_deg = yaw_arr[eff_index] if isinstance(yaw_arr, (list, tuple)) and isinstance(eff_index, int) and eff_index < len(yaw_arr) else 0.0
         except Exception:
             yaw_deg = 0.0
         v = 0.0
         w = 0.0
         try:
-            v_arr = sim._cd.get_var(f"{base_path}/v_Fellows")
+            v_arr = var.get_var(f"{base_path}/v_Fellows")
             if isinstance(v_arr, (list, tuple)) and isinstance(eff_index, int) and eff_index < len(v_arr):
                 v = v_arr[eff_index] if v_arr[eff_index] is not None else 0.0
         except Exception:
             pass
         try:
-            w_arr = sim._cd.get_var(f"{base_path}/w_Fellows")
+            w_arr = var.get_var(f"{base_path}/w_Fellows")
             if isinstance(w_arr, (list, tuple)) and isinstance(eff_index, int) and eff_index < len(w_arr):
                 w = w_arr[eff_index] if w_arr[eff_index] is not None else 0.0
         except Exception:

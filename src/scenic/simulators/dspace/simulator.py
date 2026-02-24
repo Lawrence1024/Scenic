@@ -31,7 +31,8 @@ from .geometry.params import get_map_path
 from .steer_io import road_rad_to_dspace_value, log_startup_once, DELTA_MAX_RAD, THETA_SW_MAX_DEG, R
 print(f"[PatchID] simulator.py loaded from {__file__}")
 
-
+# dSPACE path for simulated maneuver time (read on each control step and logged)
+MANEUVER_TIME_PATH = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/UserInterface/DISP_Plant/ManeuverTime[s]/Out1"
 
 
 class DSpaceSimulator(RacingSimulator):
@@ -63,7 +64,10 @@ class DSpaceSimulation(RacingSimulation):
         # dSPACE two-phase architecture
         self._modeldesk_app = None  # ModelDesk COM application
         self._fellow_vehicles = {}  # Track fellow vehicles for runtime control
-        self._cd = None  # ControlDesk app
+        self._cd = None  # ControlDesk app (session, stepping only)
+        self._maport = None  # MAPort app (variable read/write when used)
+        self._var_access = None  # get_var/set_var: MAPort if available, else ControlDesk
+        self._var_access_backend_logged = False  # one-time runtime log of which backend is used
         self._vehicle_controller = None  # VehicleController (initialized after ControlDesk connection)
         self._fellow_arrays_initialized = False
         self._initializing_fellow_arrays = False
@@ -102,6 +106,10 @@ class DSpaceSimulation(RacingSimulation):
         # Optional: if you know a ControlDesk path for sim time, set it here (or via config)
         # Example: self._clock_debug_cd_time_path = "Your/Model/SimTime/Path"
         self._clock_debug_cd_time_path = None
+        # Time-base sanity check: first N steps read dSPACE time before/after advance_simulation_step()
+        self._time_sanity_steps = int(os.environ.get("SCENIC_DSPACE_TIME_SANITY_STEPS", "50"))
+        self._time_sanity_strict = os.environ.get("SCENIC_DSPACE_TIME_SANITY_STRICT", "").strip().lower() in ("1", "true", "yes")
+        # 0C) For debug/validation: treat dSPACE ManeuverTime as source-of-truth until step semantics are fixed.
         # control_period (seconds) -> steps; must be divisible by timestep
         _control_period = getattr(sim, 'control_period', None)
         if _control_period is None or _control_period <= 0:
@@ -268,9 +276,50 @@ class DSpaceSimulation(RacingSimulation):
         # 9) Connect ControlDesk and initialize VesiInterface BEFORE starting maneuver
         self._cd = cd_session.connect_and_prepare(self)
         if self._cd:
-            # Initialize VehicleController for applying controls
+            self._var_access = self._cd  # default fallback
+            # 9b) Prefer MAPort for variable read/write (faster); fall back to ControlDesk COM
+            try:
+                from .maport import session as maport_session
+                self._maport = maport_session.connect_and_prepare_maport(self, start_if_needed=False)
+                if self._maport:
+                    self._var_access = self._maport
+                    try:
+                        from .controldesk.readback import EGO_READ_PATHS
+                        from .vehicle.controller import VehicleController as _VC
+                        _fellow_trailer_base = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer"
+                        _fellow_ext_base = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/External_Signals"
+                        hot_paths = list(EGO_READ_PATHS) + [
+                            _VC.KEY_THROTTLE,
+                            _VC.KEY_BRAKE_FRONT,
+                            _VC.KEY_BRAKE_REAR,
+                            _VC.KEY_STEERING,
+                            _VC.KEY_GEAR,
+                            _VC.KEY_CLUTCH,
+                        ] + [
+                            f"{_fellow_trailer_base}/x",
+                            f"{_fellow_trailer_base}/y",
+                            f"{_fellow_trailer_base}/z",
+                            f"{_fellow_trailer_base}/yaw_deg_out",
+                            f"{_fellow_trailer_base}/v_Fellows",
+                            f"{_fellow_trailer_base}/w_Fellows",
+                            f"{_fellow_ext_base}/Const_v_Fellows_External[km|h]/Value",
+                            f"{_fellow_ext_base}/Const_d_Fellows_External[m]/Value",
+                            MANEUVER_TIME_PATH,
+                        ]
+                        if hasattr(self._maport, "precache"):
+                            self._maport.precache(hot_paths)
+                            print(f"[MAPort] Precached {len(hot_paths)} hot refs")
+                    except Exception as e:
+                        print(f"[MAPort] [WARN] Ref precache skipped: {e}")
+                    print("[VarAccess] backend=MAPort (session/step = ControlDesk COM)")
+                else:
+                    print("[VarAccess] backend=COM (MAPort unavailable/failed)")
+            except Exception as e:
+                print("[VarAccess] backend=COM (MAPort unavailable/failed): %s" % e)
+            # Initialize VehicleController for applying controls (uses _var_access for get_var/set_var)
             self._vehicle_controller = VehicleController(self)
         else:
+            self._var_access = None
             self._vehicle_controller = None
             print("\n" + "="*70)
             print("[WARNING] CRITICAL: ControlDesk Connection Failed!")
@@ -533,9 +582,9 @@ class DSpaceSimulation(RacingSimulation):
         """Set dynamic control inputs for a vehicle using VesiInterface manual control."""
         print(f"\n[setVehicleControl] Called for {vehicle_name}: throttle={throttle}, brake={brake}, steering={steering}, velocity={velocity}")
 
-        # Write directly via ControlDesk using VesiInterface if available
-        if self._cd:
-            print(f"[setVehicleControl] Writing to ControlDesk (VesiInterface)...")
+        # Write directly via variable access (MAPort or ControlDesk) using VesiInterface if available
+        if self._var_access:
+            print(f"[setVehicleControl] Writing to VesiInterface...")
             # VesiInterface manual control keys (Platform_2)
             KEY_THROTTLE = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_throttle_cmd/Value"
             KEY_BRAKE_FRONT = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_front/Value"
@@ -546,25 +595,25 @@ class DSpaceSimulation(RacingSimulation):
                 # Throttle: Scenic uses 0-1, ControlDesk expects 0-100 command range
                 if throttle is not None:
                     throttle_val = float(max(0.0, min(1.0, throttle)) * 100.0)
-                    print(f"  [ControlDesk] Setting throttle: {throttle} -> {throttle_val}")
-                    self._cd.set_var(KEY_THROTTLE, throttle_val)
-                    print(f"  [ControlDesk] OK - Throttle written successfully")
+                    print(f"  [VesiInterface] Setting throttle: {throttle} -> {throttle_val}")
+                    self._var_access.set_var(KEY_THROTTLE, throttle_val)
+                    print(f"  [VesiInterface] OK - Throttle written successfully")
                 
                 # Brake: Scenic uses 0-1, ControlDesk expects 0-10000 command range
                 # Apply same value to both front and rear
                 if brake is not None:
                     brake_val = float(max(0.0, min(1.0, brake)) * 10000.0)
-                    print(f"  [ControlDesk] Setting brake: {brake} -> front={brake_val}, rear={brake_val}")
-                    self._cd.set_var(KEY_BRAKE_FRONT, brake_val)
-                    self._cd.set_var(KEY_BRAKE_REAR, brake_val)
-                    print(f"  [ControlDesk] OK - Brake (front/rear) written successfully")
+                    print(f"  [VesiInterface] Setting brake: {brake} -> front={brake_val}, rear={brake_val}")
+                    self._var_access.set_var(KEY_BRAKE_FRONT, brake_val)
+                    self._var_access.set_var(KEY_BRAKE_REAR, brake_val)
+                    print(f"  [VesiInterface] OK - Brake (front/rear) written successfully")
                 
                 # Steering: plan — steering is road wheel angle (rad). Single conversion here (only place 240 appears).
                 if steering is not None:
                     log_startup_once()
                     delta_cmd_rad = float(steering)
                     theta_sw_deg_sent = road_rad_to_dspace_value(delta_cmd_rad)
-                    self._cd.set_var(KEY_STEERING, theta_sw_deg_sent)
+                    self._var_access.set_var(KEY_STEERING, theta_sw_deg_sent)
                     u_norm = delta_cmd_rad / DELTA_MAX_RAD
                     steer_norm = u_norm
                     sat_io = abs(theta_sw_deg_sent) >= 0.99 * THETA_SW_MAX_DEG
@@ -572,15 +621,15 @@ class DSpaceSimulation(RacingSimulation):
                     # fix.md checklist: cmd_value_sent, theta_sw_deg_sent, steer_norm, delta_cmd_rad, delta_max, R
                     print(f"[STEER_IO] u_norm={u_norm:.4f} delta_cmd_rad={delta_cmd_rad:.4f} steer_norm={steer_norm:.4f} theta_sw_deg_sent={theta_sw_deg_sent:.2f} cmd_value_sent={cmd_value_sent:.2f} delta_max={DELTA_MAX_RAD:.4f} R={R:.2f}")
                     print(f"[IO] theta_sw_deg_sent={theta_sw_deg_sent:.2f} u_norm={u_norm:.4f} delta_cmd_rad={delta_cmd_rad:.4f} R={R:.2f} sat_io={sat_io}")
-                    print(f"  [ControlDesk] Setting steering: {delta_cmd_rad:.4f} rad -> {theta_sw_deg_sent:.2f} deg")
-                    print(f"  [ControlDesk] OK - Steering written successfully")
+                    print(f"  [VesiInterface] Setting steering: {delta_cmd_rad:.4f} rad -> {theta_sw_deg_sent:.2f} deg")
+                    print(f"  [VesiInterface] OK - Steering written successfully")
                 
                 # Note: Velocity control not available in VesiInterface manual control
                 if velocity is not None:
-                    print(f"  [ControlDesk] WARNING - Velocity control not supported in VesiInterface")
+                    print(f"  [VesiInterface] WARNING - Velocity control not supported in VesiInterface")
                     
             except Exception as e:
-                print(f"[ControlDesk] ERROR - Write failed for {vehicle_name}: {e}")
+                print(f"[VesiInterface] ERROR - Write failed for {vehicle_name}: {e}")
                 import traceback
                 traceback.print_exc()
                 return False
@@ -594,41 +643,40 @@ class DSpaceSimulation(RacingSimulation):
         """
         print(f"\n[setVehicleGear] Called for {vehicle_name}: gear={gear}")
         
-        if self._cd:
+        if self._var_access:
             # Use VesiInterface gear control
             KEY_GEAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_gear_cmd/Value"
             try:
                 gear_int = int(gear)
                 # Clamp gear to valid range: 0 (neutral) to 6
                 gear_int = max(0, min(6, gear_int))
-                print(f"  [ControlDesk] Setting gear: {gear_int}")
-                self._cd.set_var(KEY_GEAR, gear_int)
-                print(f"  [ControlDesk] OK - Gear written successfully")
+                print(f"  [VesiInterface] Setting gear: {gear_int}")
+                self._var_access.set_var(KEY_GEAR, gear_int)
+                print(f"  [VesiInterface] OK - Gear written successfully")
             except Exception as e:
-                print(f"[ControlDesk] ERROR - Gear write failed for {vehicle_name}: {e}")
+                print(f"[VesiInterface] ERROR - Gear write failed for {vehicle_name}: {e}")
                 import traceback
                 traceback.print_exc()
     
     def setVehicleClutch(self, vehicle_name, clutch):
-        """Set clutch pedal position for a vehicle using ControlDesk (one-shot action).
+        """Set clutch pedal position for a vehicle (one-shot action).
         
-        Note: VesiInterface does not support clutch control, so we use ExternalUserData
-        for clutch operations. This is acceptable as clutch is only used for starting
-        from neutral, which is a separate operation from the main control loop.
+        Note: VesiInterface does not support clutch control, so we use ExternalUserData.
+        Clutch is only used for starting from neutral.
         """
         print(f"\n[setVehicleClutch] Called for {vehicle_name}: clutch={clutch}")
         
-        if self._cd:
+        if self._var_access:
             # VesiInterface doesn't have clutch, use ExternalUserData
             KEY_CLUTCH = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Pos_ClutchPedal[%]/Value"
             try:
                 # Convert 0-1 to 0-100%
                 clutch_pct = float(clutch * 100.0)
-                print(f"  [ControlDesk] Setting clutch: {clutch} -> {clutch_pct}% (using ExternalUserData)")
-                self._cd.set_var(KEY_CLUTCH, clutch_pct)
-                print(f"  [ControlDesk] OK - Clutch written successfully")
+                print(f"  [VesiInterface] Setting clutch: {clutch} -> {clutch_pct}% (using ExternalUserData)")
+                self._var_access.set_var(KEY_CLUTCH, clutch_pct)
+                print(f"  [VesiInterface] OK - Clutch written successfully")
             except Exception as e:
-                print(f"[ControlDesk] ERROR - Clutch write failed for {vehicle_name}: {e}")
+                print(f"[VesiInterface] ERROR - Clutch write failed for {vehicle_name}: {e}")
                 import traceback
                 traceback.print_exc()
     
@@ -725,12 +773,13 @@ class DSpaceSimulation(RacingSimulation):
             n = self._timing_n
             if n % self._timing_interval == 0:
                 s = self._timing_sums
+                var_backend = "MAPort" if (self._maport is not None and self._var_access is self._maport) else "COM"
                 print(
                     f"[Timing] steps={n} mean(s): "
                     f"apply_actions={s['apply_actions']/n:.4f} "
-                    f"com_writes={s['com_writes']/n:.4f} "
+                    f"var_writes({var_backend})={s['com_writes']/n:.4f} "
                     f"step_time={s['step_time']/n:.4f} "
-                    f"com_reads={s['com_reads']/n:.4f} "
+                    f"var_reads({var_backend})={s['com_reads']/n:.4f} "
                     f"loop_other={s['loop_other']/n:.4f} "
                     f"get_properties={s['get_properties']/n:.4f}"
                 )
@@ -758,9 +807,20 @@ class DSpaceSimulation(RacingSimulation):
         super().executeActions(allActions)
         self._timing_last['apply_actions'] = time.perf_counter() - _t0
 
-        # Apply control to ControlDesk only every control_interval steps (e.g. 100 Hz step, 50 Hz control)
-        # In light-step mode skip COM writes entirely to test step_time without set_var contention
+        # Apply control only every control_interval steps. In light-step mode skip variable writes.
         if not getattr(self, "_light_step", False) and self._vehicle_controller and (self.currentTime % self._control_interval) == 0:
+            # One-time log: evidence of which backend is used for get_var/set_var at runtime
+            if not getattr(self, "_var_access_backend_logged", False) and self._var_access:
+                backend = "MAPort (XIL API)" if (self._maport is not None and self._var_access is self._maport) else "ControlDesk COM"
+                print("[VarAccess] Runtime: get_var/set_var via %s" % backend)
+                self._var_access_backend_logged = True
+            # Read and log simulated time (ManeuverTime) from dSPACE on each control step
+            if self._var_access:
+                try:
+                    _maneuver_time_s = float(self._var_access.get_var(MANEUVER_TIME_PATH))
+                    print(f"[Control] dspace_maneuver_t={_maneuver_time_s:.9f}s (ManeuverTime from dSPACE)")
+                except Exception as _e:
+                    print("[Control] ManeuverTime[s] read failed: %s" % _e)
             _t0 = time.perf_counter()
             for obj in self.scene.objects:
                 # Determine if this is ego or fellow
@@ -898,7 +958,7 @@ class DSpaceSimulation(RacingSimulation):
         Returns:
             True if state was successfully read, False otherwise
         """
-        if not self._cd:
+        if not self._var_access:
             return False
         
         try:
@@ -939,8 +999,8 @@ class DSpaceSimulation(RacingSimulation):
         Returns:
             True if all vehicles readback successfully, False otherwise
         """
-        if not self._cd:
-            print("[Setup] [WARN] ControlDesk not connected, skipping readback verification")
+        if not self._var_access:
+            print("[Setup] [WARN] No variable access (ControlDesk/MAPort), skipping readback verification")
             return False
         
         all_success = True
@@ -1050,6 +1110,42 @@ class DSpaceSimulation(RacingSimulation):
         if not hasattr(self, '_step_count'):
             self._step_count = 0
         self._step_count += 1
+
+        def _do_step_with_time_sanity_check(expected_dt):
+            # 0A) Read dSPACE time before and after advance_simulation_step(); compare delta to expected_dt
+            try:
+                dspace_before = float(self._var_access.get_var(MANEUVER_TIME_PATH))
+            except Exception:
+                dspace_before = float("nan")
+            try:
+                self._cd.advance_simulation_step()
+            except Exception:
+                time.sleep(expected_dt)
+                return False
+            try:
+                dspace_after = float(self._var_access.get_var(MANEUVER_TIME_PATH))
+            except Exception:
+                dspace_after = float("nan")
+            delta_dspace = dspace_after - dspace_before if (dspace_before == dspace_before and dspace_after == dspace_after) else float("nan")
+            tol_abs = 1e-6
+            tol_rel = 0.15
+            bad = False
+            if delta_dspace != delta_dspace:  # nan
+                bad = True
+            elif expected_dt > 0 and delta_dspace == 0:
+                bad = True
+            elif expected_dt > 0 and (abs(delta_dspace - expected_dt) > max(tol_abs, tol_rel * expected_dt)):
+                bad = True
+            if bad:
+                msg = (
+                    f"[TimeSanity] step #{self._step_count} delta_dspace={delta_dspace:.6f}s "
+                    f"expected timestep={expected_dt:.6f}s (dSPACE time may not advance as expected)"
+                )
+                print(msg)
+                if getattr(self, "_time_sanity_strict", False):
+                    raise RuntimeError(msg)
+            time.sleep(expected_dt)
+            return True
         
         batch_steps = getattr(self, 'batch_steps', 1)
         
@@ -1071,11 +1167,14 @@ class DSpaceSimulation(RacingSimulation):
             
             if self._step_count <= 5 or self._step_count % 50 == 1:
                 t_log = self._step_count * effective_step_size
-                print(f"[step] t={t_log:.2f}s #{self._step_count} Batching: advancing by {effective_step_size:.4f}s (control frequency={control_frequency:.1f}Hz)...")
+                print(f"[step] scenic_sim_t={t_log:.2f}s #{self._step_count} Batching: advancing by {effective_step_size:.4f}s (control frequency={control_frequency:.1f}Hz)...")
 
             # Execute single step with larger step size (one pause/continue cycle)
             _t0 = time.perf_counter()
-            success = cd_session.step(self._cd, effective_step_size)
+            if self._step_count <= getattr(self, "_time_sanity_steps", 50) and self._var_access:
+                success = _do_step_with_time_sanity_check(effective_step_size)
+            else:
+                success = cd_session.step(self._cd, effective_step_size)
             self._timing_last['step_time'] = time.perf_counter() - _t0
             if getattr(self, "_light_step", False):
                 _st = self._timing_last['step_time'] * 1000
@@ -1089,17 +1188,20 @@ class DSpaceSimulation(RacingSimulation):
             if self._step_count <= 5:
                 t_log = self._step_count * effective_step_size
                 if success:
-                    print(f"[step] t={t_log:.2f}s #{self._step_count} [OK] Batched step completed (advanced {effective_step_size:.4f}s)")
+                    print(f"[step] scenic_sim_t={t_log:.2f}s #{self._step_count} [OK] Batched step completed (advanced {effective_step_size:.4f}s)")
                 else:
-                    print(f"[step] t={t_log:.2f}s #{self._step_count} [WARN] Batched step failed (using time.sleep fallback)")
+                    print(f"[step] scenic_sim_t={t_log:.2f}s #{self._step_count} [WARN] Batched step failed (using time.sleep fallback)")
         else:
             # Single step (no batching) - use original timestep
             if self._step_count <= 5 or self._step_count % 50 == 1:
                 t_log = self._step_count * self.timestep
-                print(f"[step] t={t_log:.2f}s #{self._step_count} Advancing simulation by {self.timestep}s...")
+                print(f"[step] scenic_sim_t={t_log:.2f}s #{self._step_count} Advancing simulation by {self.timestep}s...")
 
             _t0 = time.perf_counter()
-            success = cd_session.step(self._cd, self.timestep)
+            if self._step_count <= getattr(self, "_time_sanity_steps", 50) and self._var_access:
+                success = _do_step_with_time_sanity_check(self.timestep)
+            else:
+                success = cd_session.step(self._cd, self.timestep)
             self._timing_last['step_time'] = time.perf_counter() - _t0
             if getattr(self, "_light_step", False):
                 _st = self._timing_last['step_time'] * 1000
@@ -1112,9 +1214,9 @@ class DSpaceSimulation(RacingSimulation):
 
             if self._step_count <= 5:
                 if success:
-                    print(f"[step] t={t_log:.2f}s #{self._step_count} [OK] Step completed")
+                    print(f"[step] scenic_sim_t={t_log:.2f}s #{self._step_count} [OK] Step completed")
                 else:
-                    print(f"[step] t={t_log:.2f}s #{self._step_count} [WARN] Step failed (using time.sleep fallback)")
+                    print(f"[step] scenic_sim_t={t_log:.2f}s #{self._step_count} [WARN] Step failed (using time.sleep fallback)")
         
         # --- Tiny clock debug print (every N sim steps) ---
         try:
@@ -1151,9 +1253,9 @@ class DSpaceSimulation(RacingSimulation):
                             }
                             print(
                                 f"[ClockDebug] FIRST_MOTION step={self._clock_debug_first_motion['step']} "
-                                f"sim_t={self._clock_debug_first_motion['sim_time']:.2f}s "
+                                f"scenic_sim_t={self._clock_debug_first_motion['sim_time']:.2f}s "
                                 f"ctrl_ticks={self._clock_debug_first_motion['control_ticks']} "
-                                f"ctrl_t={self._clock_debug_first_motion['control_time']:.2f}s "
+                                f"ctrl_sched_t={self._clock_debug_first_motion['control_time']:.2f}s "
                                 f"wall={self._clock_debug_first_motion['wall_elapsed']:.2f}s "
                                 f"xyz=({ex:.2f},{ey:.2f},{ez:.2f}) speed={es:.3f}"
                             )
@@ -1166,18 +1268,18 @@ class DSpaceSimulation(RacingSimulation):
                     cd_path = getattr(self, "_clock_debug_cd_time_path", None)
                     if (not cd_path) and getattr(self, "mpc_config", None):
                         cd_path = self.mpc_config.controldesk_paths.get("sim_time", None)
-                    if cd_path:
-                        cd_sim_t = float(self._cd.get_var(cd_path))
+                    if cd_path and self._var_access:
+                        cd_sim_t = float(self._var_access.get_var(cd_path))
                 except Exception:
                     cd_sim_t = None
 
-                cd_part = f" cd_sim_t={cd_sim_t:.2f}s" if cd_sim_t is not None else ""
+                cd_part = f" dspace_maneuver_t={cd_sim_t:.2f}s" if cd_sim_t is not None else ""
 
                 print(
                     f"[ClockDebug] step={int(self.currentTime)} "
-                    f"sim_t={sim_time:.2f}s "
+                    f"scenic_sim_t={sim_time:.2f}s "
                     f"ctrl_ticks={int(self._clock_debug_control_ticks)} "
-                    f"ctrl_t={control_time:.2f}s "
+                    f"ctrl_sched_t={control_time:.2f}s "
                     f"is_ctrl={int(_is_ctrl)} "
                     f"ego_xy=({ex:.2f},{ey:.2f}) "
                     f"z={ez:.2f} speed={es:.3f} yaw={eyaw:.3f}"
@@ -1249,13 +1351,14 @@ class DSpaceSimulation(RacingSimulation):
         }
         # --- Tiny clock debug: capture latest ego snapshot for alignment checks ---
         # Only set after valid ego properties are read; never store None (avoids nan in ClockDebug print)
-        try:
-            _name = str(getattr(obj, "name", "")).lower()
-            _is_ego = bool(getattr(obj, "isEgo", False)) or ("ego" in _name)
-        except Exception:
-            _is_ego = False
-
-        if _is_ego and pos is not None and vel is not None:
+        scene_ego = getattr(self.scene, "egoObject", None)
+        is_ego_obj = (
+            (obj is scene_ego)
+            or bool(getattr(obj, "isEgoObject", False))
+            or bool(getattr(obj, "isEgo", False))
+            or ("ego" in str(getattr(obj, "name", "")).lower())
+        )
+        if is_ego_obj and pos is not None and vel is not None:
             try:
                 # Safe numeric extraction: do not store None (consumer uses .get(key, nan) for missing keys)
                 _x = float(pos.x) if hasattr(pos, "x") and pos.x is not None else 0.0
@@ -1308,15 +1411,17 @@ class DSpaceSimulation(RacingSimulation):
         if self._timing_n > 0:
             n = self._timing_n
             s = self._timing_sums
+            var_backend = "MAPort" if (self._maport is not None and self._var_access is self._maport) else "COM"
             print(
                 f"[Timing] FINAL (steps={n}): mean(s): "
                 f"apply_actions={s['apply_actions']/n:.4f} "
-                f"com_writes={s['com_writes']/n:.4f} "
+                f"var_writes({var_backend})={s['com_writes']/n:.4f} "
                 f"step_time={s['step_time']/n:.4f} "
-                f"com_reads={s['com_reads']/n:.4f} "
+                f"var_reads({var_backend})={s['com_reads']/n:.4f} "
                 f"loop_other={s['loop_other']/n:.4f} "
                 f"get_properties={s['get_properties']/n:.4f}"
             )
+            print(f"[Timing] Variable access backend: {var_backend}  (var_writes/var_reads = {var_backend} set_var/get_var time)")
             total = (s['apply_actions'] + s['com_writes'] + s['step_time'] + s['com_reads'] + s['loop_other'] + s['get_properties']) / n
             print(f"[Timing] mean total per step (all buckets)={total:.4f}s  (get_properties = getProperties wall time incl. behavior; loop_other = gap getProperties->executeActions)")
             sim_time_total = n * self.timestep
@@ -1344,8 +1449,20 @@ class DSpaceSimulation(RacingSimulation):
                     lt_ss = lt[warmup:]
                     mean_ss = sum(lt_ss) / len(lt_ss) * 1000
                     print(f"[LightStep] Steady-state (excluding first {warmup} steps): mean={mean_ss:.2f} ms min={min(lt_ss)*1000:.2f} ms max={max(lt_ss)*1000:.2f} ms")
-        if self._cd and hasattr(self._cd, 'print_timing_summary'):
+        if self._var_access and hasattr(self._var_access, 'print_timing_summary'):
+            if self._maport is not None and self._var_access is self._maport:
+                print("[Timing] MAPort per-path timing (get_var/set_var) below:")
+            self._var_access.print_timing_summary()
+        # Optional: when MAPort was var backend, also print COM timing (step/session) if available
+        if self._cd is not None and self._cd is not self._var_access and hasattr(self._cd, 'print_timing_summary'):
             self._cd.print_timing_summary()
+        if self._maport is not None:
+            print("[VarAccess] Teardown: disposing MAPort (variable backend was MAPort).")
+            try:
+                self._maport.dispose()
+            except Exception:
+                pass
+            self._maport = None
         super().destroy()
 
     def getRacingControllers(self, agent, use_mpc=False, mpc_config_path=None):

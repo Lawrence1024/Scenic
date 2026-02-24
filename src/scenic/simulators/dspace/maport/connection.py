@@ -59,6 +59,7 @@ class MAPortApp:
         self._maport = None
         self._vrf = None  # VariableRefFactory
         self._vf = None   # ValueFactory
+        self._read_ref_cache = {}   # path -> GenericVariableRef
         self._write_refs_cache = {}
         self._timing_log = []  # optional: (path, 'get'|'set', duration_sec)
 
@@ -79,14 +80,34 @@ class MAPortApp:
             self._maport.StartSimulation()
         return self
 
+    def precache(self, paths):
+        """Pre-cache read and write refs for given paths (e.g. after connect)."""
+        for p in paths:
+            try:
+                self._get_read_ref(p)
+            except Exception:
+                pass
+            try:
+                self._get_write_ref(p)
+            except Exception:
+                pass
+
+    def _get_read_ref(self, path: str):
+        """Cached variable reference for reads (avoids repeated CreateGenericVariableRef)."""
+        ref = self._read_ref_cache.get(path)
+        if ref is None:
+            from ASAM.XIL.Interfaces.Testbench.Common.VariableRef.Enum import ValueRepresentation
+            ref = self._vrf.CreateGenericVariableRef(path, ValueRepresentation.ePhysicalValue)
+            self._read_ref_cache[path] = ref
+        return ref
+
     def get_var(self, path: str) -> Any:
         """Read variable at path. Returns scalar (float/int) or Python list for arrays."""
-        from ASAM.XIL.Interfaces.Testbench.Common.VariableRef.Enum import ValueRepresentation
         from .DemoHelpers import convertIBaseValue
 
         t0 = time.perf_counter()
         try:
-            ref = self._vrf.CreateGenericVariableRef(path, ValueRepresentation.ePhysicalValue)
+            ref = self._get_read_ref(path)
             raw = self._maport.Read2(ref)
             conv = convertIBaseValue(raw)
             val = conv.Value
@@ -94,6 +115,26 @@ class MAPortApp:
             return out
         finally:
             self._timing_log.append((path, "get", time.perf_counter() - t0))
+
+    def get_vars(self, paths):
+        """Read multiple variables; returns list of values (reuses cached read refs)."""
+        out = []
+        t0 = time.perf_counter()
+        try:
+            from .DemoHelpers import convertIBaseValue
+            for path in paths:
+                ref = self._get_read_ref(path)
+                raw = self._maport.Read2(ref)
+                conv = convertIBaseValue(raw)
+                val = _to_python_value(conv.Value)
+                if isinstance(val, (list, tuple)):
+                    out.append([float(x) for x in val])
+                else:
+                    out.append(float(val))
+            return out
+        finally:
+            dt = time.perf_counter() - t0
+            self._timing_log.append(("<ego_state_6>", "get", dt))
 
     def _get_write_ref(self, path: str):
         """Cached variable reference for writes (same idea as ControlDesk)."""
@@ -106,7 +147,9 @@ class MAPortApp:
         return ref
 
     def set_var(self, path: str, value: Any):
-        """Write variable at path. value can be scalar (float/int) or list (array)."""
+        """Write variable at path. value can be scalar (float/int) or list (array).
+        Integer scalars are written as UINT (e.g. gear); floats as FLOAT.
+        """
         t0 = time.perf_counter()
         try:
             ref = self._get_write_ref(path)
@@ -116,7 +159,22 @@ class MAPortApp:
                 from System import Array
                 self._maport.Write2(ref, self._vf.CreateFloatVectorValue(Array[System.Double](arr)))
             else:
-                self._maport.Write2(ref, self._vf.CreateFloatValue(float(value)))
+                # Const_gear_cmd expects eUINT. Controller may pass gear as float (e.g. 1.0) after dedup normalize.
+                # Use UINT for Python int or for path "Const_gear_cmd" when value is whole number in 0-6.
+                # Throttle/brake/steering must stay eFLOAT.
+                use_uint = isinstance(value, int)
+                if not use_uint and "Const_gear_cmd" in path:
+                    try:
+                        v = float(value)
+                        if v == int(v) and 0 <= int(v) <= 6:
+                            use_uint = True
+                            value = int(v)
+                    except (TypeError, ValueError):
+                        pass
+                if use_uint:
+                    self._maport.Write2(ref, self._vf.CreateUintValue(int(value)))
+                else:
+                    self._maport.Write2(ref, self._vf.CreateFloatValue(float(value)))
         finally:
             self._timing_log.append((path, "set", time.perf_counter() - t0))
 
@@ -128,6 +186,7 @@ class MAPortApp:
             except Exception:
                 pass
             self._maport = None
+        self._read_ref_cache.clear()
         self._write_refs_cache.clear()
         self._vrf = None
         self._vf = None

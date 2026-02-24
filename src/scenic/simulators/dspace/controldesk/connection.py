@@ -176,10 +176,17 @@ class ControlDeskApp:
         print(f"[COM Timing] TOTAL: {total_all:.3f}s over {len(self._timing_log)} calls")
     
     def set_simulation_step(self, step=0.01):
-        """Set the simulation time step."""
+        """Set the simulation time step (SingleStepTime in ControlDesk).
+
+        0D) Frozen-controller tests suggest the step API may advance a different internal
+        tick than assumed, or the configured timestep may not be applied as expected.
+        If ManeuverTime delta per step does not match this value, investigate
+        SimulationTimeOptions / SingleStep semantics in the experiment.
+        """
         try:
             platform = self._get_platform()
             platform.SimulationTimeOptions.SingleStepTime = str(step)
+            print(f"[ControlDesk] set_simulation_step(SingleStepTime={step}) applied")
         except Exception as e:
             print(f"[ControlDesk] Error setting simulation step: {e}")
 
