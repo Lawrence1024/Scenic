@@ -57,9 +57,7 @@ def main():
     if not cd_session.start_maneuver(cd):
         print("[FrozenController] ERROR: start_maneuver failed.")
         return 1
-    time.sleep(0.3)
     cd_session.pause(cd)
-    time.sleep(0.2)
 
     print(f"[FrozenController] Running {args.steps} steps (timestep={args.timestep}s).")
     print(f"[FrozenController] ManeuverTime path: {MANEUVER_TIME_PATH}")

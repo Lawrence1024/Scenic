@@ -1144,7 +1144,6 @@ class DSpaceSimulation(RacingSimulation):
                 print(msg)
                 if getattr(self, "_time_sanity_strict", False):
                     raise RuntimeError(msg)
-            time.sleep(expected_dt)
             return True
         
         batch_steps = getattr(self, 'batch_steps', 1)
