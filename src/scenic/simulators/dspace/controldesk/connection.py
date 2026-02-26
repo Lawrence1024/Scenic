@@ -190,6 +190,24 @@ class ControlDeskApp:
         except Exception as e:
             print(f"[ControlDesk] Error setting simulation step: {e}")
 
+    def start_simulation(self):
+        """Start the real-time application so the simulation is running (time advances).
+        Call this before pause_simulation() when using step-by-step control, so that
+        SingleStep() advances SimulationTime/ManeuverTime. Without this, time may stay 0.
+        """
+        try:
+            rta = self._get_rta()
+            if hasattr(rta, "Start"):
+                rta.Start()
+                print("[ControlDesk] start_simulation (RTA.Start) called")
+            elif hasattr(rta, "Run"):
+                rta.Run()
+                print("[ControlDesk] start_simulation (RTA.Run) called")
+            else:
+                print("[ControlDesk] RTA has no Start/Run method; simulation may already be started or use different API")
+        except Exception as e:
+            print(f"[ControlDesk] start_simulation failed: {e}")
+
     def pause_simulation(self):
         """Pause the dSPACE simulation for step-by-step control.
         
