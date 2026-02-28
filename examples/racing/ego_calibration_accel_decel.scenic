@@ -9,7 +9,6 @@
 param map = localPath('../../assets/maps/dSPACE/LagunaSeca.xodr')
 param use2DMap = True
 param time_step = 0.05
-param batch_steps = 1
 
 # --- Calibration parameters ---
 param warmup_seconds = 3.0    # Wait for simulator to initialize before starting

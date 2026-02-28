@@ -9,7 +9,6 @@ param use2DMap = True
 # 100 Hz simulation step, 20 Hz control and readback (0.05 s period)
 param time_step = 0.01
 param control_period = 0.05
-param batch_steps = 1
 # Light-step mode: disable COM read/write to test step_time only (vehicle will not move). Set True to test; False for full analytics (COM on).
 param light_step = False
 # Optional: describe this run for analysis (logged as [RacingRun] edit_note=... and stored in result_data)

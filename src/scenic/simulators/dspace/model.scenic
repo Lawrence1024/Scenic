@@ -25,13 +25,6 @@ param scenario_src = "LagunaSeca_ExternalControl"
 param scenario_name = None
 # Support both time_step (from examples) and timestep (from model) for compatibility
 param timestep = (globalParameters.time_step if 'time_step' in globalParameters else (globalParameters.timestep if 'timestep' in globalParameters else 1.0))
-# Batching parameter: multiplies the step size to reduce pause/continue overhead
-# Effective step size = timestep * batch_steps
-# Control frequency = 1 / (timestep * batch_steps)
-# Example: timestep=0.05s, batch_steps=2 → step=0.10s, frequency=10Hz
-# Higher values reduce overhead but lower control frequency
-# Default: 1 (no batching). For 0.05s timestep, use 2 for 10Hz minimum
-param batch_steps = 1
 # Period between control/readback updates in seconds. Must be a multiple of timestep.
 # None or omit = every step. Example: timestep=0.01, control_period=0.05 → 20 Hz control and readback
 param control_period = (globalParameters.control_period if 'control_period' in globalParameters else None)
@@ -43,7 +36,6 @@ simulator dspace.DSpaceSimulator(
     scenario_src=globalParameters.scenario_src,
     scenario_name=globalParameters.scenario_name,
     timestep=globalParameters.timestep,
-    batch_steps=globalParameters.batch_steps,
     control_period=globalParameters.control_period,
     light_step=globalParameters.light_step,
 )

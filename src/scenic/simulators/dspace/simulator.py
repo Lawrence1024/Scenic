@@ -37,12 +37,11 @@ SIMULATED_TIME_PATH = "Platform()://ASM_Traffic/Simulation and RTOS/Simulation/S
 
 class DSpaceSimulator(RacingSimulator):
     def __init__(self, *, scenario_src="LagunaSeca_ExternalControl",
-                 scenario_name=None, timestep=1, batch_steps=1, control_period=None, light_step=False, save_as=True):
+                 scenario_name=None, timestep=1, control_period=None, light_step=False, save_as=True):
         super().__init__()
         self.scenario_src = scenario_src
         self.scenario_name = scenario_name
         self.timestep = float(timestep)
-        self.batch_steps = int(batch_steps)
         # control_period: seconds between control/readback updates (None = every step)
         self.control_period = float(control_period) if control_period is not None else None
         self.light_step = bool(light_step)
@@ -79,7 +78,6 @@ class DSpaceSimulation(RacingSimulation):
         self._ext_index_base = 0
         
         ts = kwargs.pop("timestep", None) or sim.timestep
-        _batch_steps = getattr(sim, 'batch_steps', 1)
         # Timing and control period: init before super().__init__() because parent runs the whole simulation inside __init__
         self._timing_interval = 50
         self._timing_sums = {"apply_actions": 0.0, "com_writes": 0.0, "step_time": 0.0, "com_reads": 0.0, "loop_other": 0.0, "get_properties": 0.0}
@@ -89,27 +87,6 @@ class DSpaceSimulation(RacingSimulation):
         self._wall_start = None  # wall time at start of first executeActions (for total wall/sim ratio)
         # Per-step state cache to avoid duplicate ControlDesk readback in same tick
         self._state_cache = {}   # key: (currentTime, id(obj)) -> state dict
-        # --- Clock / visualization mismatch debug (tiny instrumentation) ---
-        self._clock_debug = os.environ.get("SCENIC_DSPACE_CLOCK_DEBUG", "1").strip().lower() in ("1", "true", "yes")
-        self._clock_debug_interval = int(os.environ.get("SCENIC_DSPACE_CLOCK_DEBUG_INTERVAL", "100"))  # sim steps
-        self._clock_debug_speed_thresh = float(os.environ.get("SCENIC_DSPACE_CLOCK_DEBUG_SPEED_THRESH", "0.5"))  # m/s
-
-        self._clock_debug_control_ticks = 0
-        self._clock_debug_wall_t0 = time.perf_counter()
-
-        # latest ego snapshot (updated in getProperties)
-        self._clock_debug_ego = None
-
-        # first visible motion marker
-        self._clock_debug_first_motion = None  # dict or None
-
-        # Optional: if you know a ControlDesk path for sim time, set it here (or via config)
-        # Example: self._clock_debug_cd_time_path = "Your/Model/SimTime/Path"
-        self._clock_debug_cd_time_path = None
-        # Time-base sanity check: first N steps read dSPACE time before/after advance_simulation_step()
-        self._time_sanity_steps = int(os.environ.get("SCENIC_DSPACE_TIME_SANITY_STEPS", "50"))
-        self._time_sanity_strict = os.environ.get("SCENIC_DSPACE_TIME_SANITY_STRICT", "").strip().lower() in ("1", "true", "yes")
-        # 0C) For debug/validation: treat dSPACE simulated time as source-of-truth until step semantics are fixed.
         # control_period (seconds) -> steps; must be divisible by timestep
         _control_period = getattr(sim, 'control_period', None)
         if _control_period is None or _control_period <= 0:
@@ -128,9 +105,7 @@ class DSpaceSimulation(RacingSimulation):
         self._light_step = getattr(sim, "light_step", False) or _light in ("1", "true", "yes")
         if self._light_step:
             self._light_step_times = []  # for per-step step_time logging
-        
-        self._clock_debug_first_wall = None
-        self._clock_debug_first_step = None
+
         # Behavior timing for [LoopOther] breakdown (waypoint_speed_grade, after_mpc).
         # MUST be set before super().__init__() because the parent runs the entire simulation inside __init__.
         try:
@@ -141,13 +116,11 @@ class DSpaceSimulation(RacingSimulation):
         except Exception as e:
             self.behavior_timing = None
             print(f"[Timing] behavior_timing disabled: {e}")
-        print(f"[DSpaceSimulation] timestep: {ts}, batch_steps: {_batch_steps}, control_interval: {self._control_interval} steps (read/control every {self._control_interval} steps), timing every {self._timing_interval} steps")
+        print(f"[DSpaceSimulation] timestep: {ts}, control_interval: {self._control_interval} steps (read/control every {self._control_interval} steps), timing every {self._timing_interval} steps")
         if self._light_step:
             print("[LightStep] *** COM DISABLED *** set_var and get_var are skipped to test step_time only. Vehicle will not move. Set SCENIC_DSPACE_LIGHT_STEP=0 or unset to restore.")
         # Pass only parameters that Simulation.__init__ accepts (avoids TypeError from
-        # extra kwargs or int/callable confusion). Do NOT set self.batch_steps before
-        # super().__init__ so the parent never sees an int attribute that could be
-        # mistaken for the step() method.
+        # extra kwargs or int/callable confusion).
         parent_kwargs = {
             "maxSteps": kwargs.get("maxSteps"),
             "name": kwargs.get("name"),
@@ -161,7 +134,6 @@ class DSpaceSimulation(RacingSimulation):
             "verbosity": kwargs.get("verbosity", 0),
         }
         super().__init__(scene, **parent_kwargs)
-        self.batch_steps = _batch_steps
 
     @property
     def is_control_step(self):
@@ -733,27 +705,6 @@ class DSpaceSimulation(RacingSimulation):
             self._execute_count = 0
         self._execute_count += 1
 
-        # Optional clock-debug print: map Scenic step index -> sim time -> wall elapsed
-        if getattr(self, "_clock_debug", False):
-            now_wall = time.perf_counter()
-            if self._clock_debug_first_wall is None:
-                self._clock_debug_first_wall = now_wall
-                self._clock_debug_first_step = int(getattr(self, "currentTime", 0))
-
-            if (self._execute_count % max(1, self._clock_debug_interval)) == 1:
-                step_idx = int(getattr(self, "currentTime", 0))
-                sim_t = step_idx * float(self.timestep)
-                wall_elapsed = now_wall - self._clock_debug_first_wall
-                step_from_first = step_idx - int(self._clock_debug_first_step or 0)
-                sim_elapsed = step_from_first * float(self.timestep)
-                ratio = (sim_elapsed / wall_elapsed) if wall_elapsed > 1e-9 else 0.0
-                print(
-                    f"[ClockDebug] exec#{self._execute_count} "
-                    f"step={step_idx} sim_t={sim_t:.3f}s "
-                    f"sim_elapsed={sim_elapsed:.3f}s wall_elapsed={wall_elapsed:.3f}s "
-                    f"sim/wall={ratio:.3f}x control_step={self.is_control_step}"
-                )
-
         # --- Loop-other: time between end of previous getProperties and start of this executeActions (core Scenic loop) ---
         _t_loop_start = time.perf_counter()
         if self._wall_start is None:
@@ -809,18 +760,6 @@ class DSpaceSimulation(RacingSimulation):
 
         # Apply control only every control_interval steps. In light-step mode skip variable writes.
         if not getattr(self, "_light_step", False) and self._vehicle_controller and (self.currentTime % self._control_interval) == 0:
-            # One-time log: evidence of which backend is used for get_var/set_var at runtime
-            if not getattr(self, "_var_access_backend_logged", False) and self._var_access:
-                backend = "MAPort (XIL API)" if (self._maport is not None and self._var_access is self._maport) else "ControlDesk COM"
-                print("[VarAccess] Runtime: get_var/set_var via %s" % backend)
-                self._var_access_backend_logged = True
-            # Read and log simulated time from dSPACE on each control step
-            if self._var_access:
-                try:
-                    _simulated_time_s = float(self._var_access.get_var(SIMULATED_TIME_PATH))
-                    print(f"[Control] dspace_simulated_t={_simulated_time_s:.9f}s (SimulationTime from dSPACE)")
-                except Exception as _e:
-                    print("[Control] SimulationTime[s] read failed: %s" % _e)
             _t0 = time.perf_counter()
             for obj in self.scene.objects:
                 # Determine if this is ego or fellow
@@ -1096,201 +1035,62 @@ class DSpaceSimulation(RacingSimulation):
         return indexing_get_fellow_index(self, obj)
 
     def step(self):
-        """Execute one simulation step (advance physics simulation).
-        
-        This advances the dSPACE simulation by one timestep using ControlDesk.
-        Control variables should already be written by executeActions() before this is called.
-        
-        If batch_steps > 1, SingleStepTime is dynamically set to timestep * batch_steps,
-        and SingleStep() is called once. This reduces pause/continue overhead significantly
-        but increases the control update period (reduces control frequency).
-        
-        Example: timestep=0.05s, batch_steps=2 → SingleStepTime=0.10s, control frequency=10Hz
-        """
-        if not hasattr(self, '_step_count'):
-            self._step_count = 0
-        self._step_count += 1
+        """Execute one simulation step: RTA step, then block until simulated time has advanced by the step amount; print simulated time after the block."""
+        _t0 = time.perf_counter()
 
-        def _do_step_with_time_sanity_check(expected_dt):
-            # 0A) Read dSPACE time before and after advance_simulation_step(); compare delta to expected_dt
+        t_before = None
+        if self._var_access:
             try:
-                dspace_before = float(self._var_access.get_var(SIMULATED_TIME_PATH))
+                t_before = float(self._var_access.get_var(SIMULATED_TIME_PATH))
             except Exception:
-                dspace_before = float("nan")
+                pass
+
+        if self._cd:
             try:
                 self._cd.advance_simulation_step()
-            except Exception:
-                time.sleep(expected_dt)
-                return False
-            try:
-                dspace_after = float(self._var_access.get_var(SIMULATED_TIME_PATH))
-            except Exception:
-                dspace_after = float("nan")
-            delta_dspace = dspace_after - dspace_before if (dspace_before == dspace_before and dspace_after == dspace_after) else float("nan")
-            tol_abs = 1e-6
-            tol_rel = 0.15
-            bad = False
-            if delta_dspace != delta_dspace:  # nan
-                bad = True
-            elif expected_dt > 0 and delta_dspace == 0:
-                bad = True
-            elif expected_dt > 0 and (abs(delta_dspace - expected_dt) > max(tol_abs, tol_rel * expected_dt)):
-                bad = True
-            if bad:
-                msg = (
-                    f"[TimeSanity] step #{self._step_count} delta_dspace={delta_dspace:.6f}s "
-                    f"expected timestep={expected_dt:.6f}s (dSPACE time may not advance as expected)"
-                )
-                print(msg)
-                if getattr(self, "_time_sanity_strict", False):
-                    raise RuntimeError(msg)
-            return True
-        
-        batch_steps = getattr(self, 'batch_steps', 1)
-        
-        if batch_steps > 1:
-            # Dynamic batching: set SingleStepTime to larger value, step once
-            # This reduces overhead from multiple pause/continue cycles
-            effective_step_size = self.timestep * batch_steps
-            control_frequency = 1.0 / effective_step_size
-            
-            # Set SingleStepTime only once (it persists between steps)
-            if not hasattr(self, '_batch_step_size_set'):
-                if self._cd:
+            except Exception as e:
+                time.sleep(self.timestep)
+                self._timing_last['step_time'] = time.perf_counter() - _t0
+                print(f"[Step] advance_failed: {e}")
+                return
+
+        step_logged = False
+        if t_before is not None and self._var_access:
+            deadline = t_before + self.timestep
+            poll_timeout_wall = 10.0 * self.timestep
+            max_retries = 10
+            for attempt in range(max_retries):
+                if attempt > 0 and self._cd:
+                    self._cd.advance_simulation_step()
+                poll_start = time.perf_counter()
+                while time.perf_counter() - poll_start < poll_timeout_wall:
                     try:
-                        self._cd.set_simulation_step(effective_step_size)
-                        self._batch_step_size_set = True
-                        print(f"[step #1] Batching enabled: SingleStepTime={effective_step_size:.4f}s (control frequency={control_frequency:.1f}Hz)")
-                    except Exception as e:
-                        print(f"[step #1] [WARN] Failed to set SingleStepTime: {e}")
-            
-            if self._step_count <= 5 or self._step_count % 50 == 1:
-                t_log = self._step_count * effective_step_size
-                print(f"[step] scenic_sim_t={t_log:.2f}s #{self._step_count} Batching: advancing by {effective_step_size:.4f}s (control frequency={control_frequency:.1f}Hz)...")
-
-            # Execute single step with larger step size (one pause/continue cycle)
-            _t0 = time.perf_counter()
-            if self._step_count <= getattr(self, "_time_sanity_steps", 50) and self._var_access:
-                success = _do_step_with_time_sanity_check(effective_step_size)
-            else:
-                success = cd_session.step(self._cd, effective_step_size)
-            self._timing_last['step_time'] = time.perf_counter() - _t0
-            if getattr(self, "_light_step", False):
-                _st = self._timing_last['step_time'] * 1000
-                self._light_step_times.append(self._timing_last['step_time'])
-                if self._step_count <= 20 or self._step_count % 10 == 0:
-                    print(f"[LightStep] step #{self._step_count} step_time={_st:.2f} ms")
-                if self._step_count >= 10 and self._step_count % 10 == 0:
-                    _recent = self._light_step_times[-10:]
-                    print(f"[LightStep] step_time last 10 mean={sum(_recent)/len(_recent)*1000:.2f} ms")
-
-            if self._step_count <= 5:
-                t_log = self._step_count * effective_step_size
-                if success:
-                    print(f"[step] scenic_sim_t={t_log:.2f}s #{self._step_count} [OK] Batched step completed (advanced {effective_step_size:.4f}s)")
-                else:
-                    print(f"[step] scenic_sim_t={t_log:.2f}s #{self._step_count} [WARN] Batched step failed (using time.sleep fallback)")
-        else:
-            # Single step (no batching) - use original timestep
-            if self._step_count <= 5 or self._step_count % 50 == 1:
-                t_log = self._step_count * self.timestep
-                print(f"[step] scenic_sim_t={t_log:.2f}s #{self._step_count} Advancing simulation by {self.timestep}s...")
-
-            _t0 = time.perf_counter()
-            if self._step_count <= getattr(self, "_time_sanity_steps", 50) and self._var_access:
-                success = _do_step_with_time_sanity_check(self.timestep)
-            else:
-                success = cd_session.step(self._cd, self.timestep)
-            self._timing_last['step_time'] = time.perf_counter() - _t0
-            if getattr(self, "_light_step", False):
-                _st = self._timing_last['step_time'] * 1000
-                self._light_step_times.append(self._timing_last['step_time'])
-                if self._step_count <= 20 or self._step_count % 10 == 0:
-                    print(f"[LightStep] step #{self._step_count} step_time={_st:.2f} ms")
-                if self._step_count >= 10 and self._step_count % 10 == 0:
-                    _recent = self._light_step_times[-10:]
-                    print(f"[LightStep] step_time last 10 mean={sum(_recent)/len(_recent)*1000:.2f} ms")
-
-            if self._step_count <= 5:
-                if success:
-                    print(f"[step] scenic_sim_t={t_log:.2f}s #{self._step_count} [OK] Step completed")
-                else:
-                    print(f"[step] scenic_sim_t={t_log:.2f}s #{self._step_count} [WARN] Step failed (using time.sleep fallback)")
-        
-        # --- Tiny clock debug print (every N sim steps) ---
-        try:
-            # Cross-check control-tick count independently
-            _is_ctrl = bool(getattr(self, "is_control_step", (self.currentTime % self._control_interval) == 0))
-            if _is_ctrl:
-                self._clock_debug_control_ticks += 1
-
-            if self._clock_debug and self.currentTime % max(1, self._clock_debug_interval) == 0:
-                sim_time = float(self.currentTime * self.timestep)
-                control_dt = float(getattr(self, "control_dt", self.timestep * max(1, self._control_interval)))
-                control_time = float(self._clock_debug_control_ticks * control_dt)
-                wall_elapsed = float(time.perf_counter() - self._clock_debug_wall_t0)
-
-                ego = self._clock_debug_ego or {}
-                ex = ego.get("x", float("nan"))
-                ey = ego.get("y", float("nan"))
-                ez = ego.get("z", float("nan"))
-                es = ego.get("speed", float("nan"))
-                eyaw = ego.get("yaw", float("nan"))
-
-                # One-time "first visible motion" marker
-                if self._clock_debug_first_motion is None:
-                    try:
-                        if math.isfinite(es) and es > self._clock_debug_speed_thresh:
-                            self._clock_debug_first_motion = {
-                                "step": int(self.currentTime),
-                                "sim_time": sim_time,
-                                "control_ticks": int(self._clock_debug_control_ticks),
-                                "control_time": control_time,
-                                "wall_elapsed": wall_elapsed,
-                                "x": ex, "y": ey, "z": ez,
-                                "speed": es,
-                            }
-                            print(
-                                f"[ClockDebug] FIRST_MOTION step={self._clock_debug_first_motion['step']} "
-                                f"scenic_sim_t={self._clock_debug_first_motion['sim_time']:.2f}s "
-                                f"ctrl_ticks={self._clock_debug_first_motion['control_ticks']} "
-                                f"ctrl_sched_t={self._clock_debug_first_motion['control_time']:.2f}s "
-                                f"wall={self._clock_debug_first_motion['wall_elapsed']:.2f}s "
-                                f"xyz=({ex:.2f},{ey:.2f},{ez:.2f}) speed={es:.3f}"
-                            )
+                        t_now = float(self._var_access.get_var(SIMULATED_TIME_PATH))
+                        if t_now >= deadline:
+                            print(f"[Step] simulated_time={t_now:.6f}s")
+                            step_logged = True
+                            break
                     except Exception:
                         pass
-
-                # Optional: read a ControlDesk sim-time signal every debug print if available
-                cd_sim_t = None
+                    time.sleep(0.001)
+                if step_logged:
+                    break
+                print(f"[Step] retry attempt count (attempt {attempt + 1})")
+            if not step_logged:
+                print("[Step] timeout (simulated_time deadline not reached after retries)")
+        else:
+            time.sleep(self.timestep)
+            if self._var_access:
                 try:
-                    cd_path = getattr(self, "_clock_debug_cd_time_path", None)
-                    if (not cd_path) and getattr(self, "mpc_config", None):
-                        cd_path = self.mpc_config.controldesk_paths.get("sim_time", None)
-                    if cd_path and self._var_access:
-                        cd_sim_t = float(self._var_access.get_var(cd_path))
+                    t_after = float(self._var_access.get_var(SIMULATED_TIME_PATH))
+                    print(f"[Step] simulated_time={t_after:.6f}s")
+                    step_logged = True
                 except Exception:
-                    cd_sim_t = None
+                    pass
+            if not step_logged:
+                print("[Step] no_var_access (slept, no time read)")
 
-                cd_part = f" dspace_maneuver_t={cd_sim_t:.2f}s" if cd_sim_t is not None else ""
-
-                print(
-                    f"[ClockDebug] step={int(self.currentTime)} "
-                    f"scenic_sim_t={sim_time:.2f}s "
-                    f"ctrl_ticks={int(self._clock_debug_control_ticks)} "
-                    f"ctrl_sched_t={control_time:.2f}s "
-                    f"is_ctrl={int(_is_ctrl)} "
-                    f"ego_xy=({ex:.2f},{ey:.2f}) "
-                    f"z={ez:.2f} speed={es:.3f} yaw={eyaw:.3f}"
-                    f"{cd_part}"
-                )
-        except Exception as _clock_debug_exc:
-            # Keep sim robust even if debug print breaks
-            if self._clock_debug:
-                print(f"[ClockDebug] WARN instrumentation error: {_clock_debug_exc}")
-
-        # NOTE: Debug exit removed - simulation should run for full duration
-        # If you need to limit steps for testing, use --time parameter in scenic command
+        self._timing_last['step_time'] = time.perf_counter() - _t0
 
     def getProperties(self, obj, properties):
         """Read the values of the given properties of the object from the simulator.
@@ -1375,15 +1175,6 @@ class DSpaceSimulation(RacingSimulation):
                     _speed = 0.0
                 if not math.isfinite(_yaw):
                     _yaw = 0.0
-                self._clock_debug_ego = {
-                    "step": int(self.currentTime),
-                    "sim_time": float(self.currentTime * self.timestep),
-                    "x": _x,
-                    "y": _y,
-                    "z": _z,
-                    "speed": _speed,
-                    "yaw": _yaw,
-                }
             except Exception:
                 pass
         self._timing_last['get_properties'] = self._timing_last.get('get_properties', 0.0) + (time.perf_counter() - _t_get_props)
