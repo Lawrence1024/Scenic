@@ -180,7 +180,7 @@ class ControlDeskApp:
 
         0D) Frozen-controller tests suggest the step API may advance a different internal
         tick than assumed, or the configured timestep may not be applied as expected.
-        If ManeuverTime delta per step does not match this value, investigate
+        If simulated time delta per step does not match this value, investigate
         SimulationTimeOptions / SingleStep semantics in the experiment.
         """
         try:
@@ -193,7 +193,7 @@ class ControlDeskApp:
     def start_simulation(self):
         """Start the real-time application so the simulation is running (time advances).
         Call this before pause_simulation() when using step-by-step control, so that
-        SingleStep() advances SimulationTime/ManeuverTime. Without this, time may stay 0.
+        SingleStep() advances SimulationTime. Without this, time may stay 0.
         """
         try:
             rta = self._get_rta()

@@ -31,8 +31,8 @@ from .geometry.params import get_map_path
 from .steer_io import road_rad_to_dspace_value, log_startup_once, DELTA_MAX_RAD, THETA_SW_MAX_DEG, R
 print(f"[PatchID] simulator.py loaded from {__file__}")
 
-# dSPACE path for simulated maneuver time (read on each control step and logged)
-MANEUVER_TIME_PATH = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/UserInterface/DISP_Plant/ManeuverTime[s]/Out1"
+# dSPACE path for simulated time (read on each control step and logged)
+SIMULATED_TIME_PATH = "Platform()://ASM_Traffic/Simulation and RTOS/Simulation/SimulationTime"
 
 
 class DSpaceSimulator(RacingSimulator):
@@ -109,7 +109,7 @@ class DSpaceSimulation(RacingSimulation):
         # Time-base sanity check: first N steps read dSPACE time before/after advance_simulation_step()
         self._time_sanity_steps = int(os.environ.get("SCENIC_DSPACE_TIME_SANITY_STEPS", "50"))
         self._time_sanity_strict = os.environ.get("SCENIC_DSPACE_TIME_SANITY_STRICT", "").strip().lower() in ("1", "true", "yes")
-        # 0C) For debug/validation: treat dSPACE ManeuverTime as source-of-truth until step semantics are fixed.
+        # 0C) For debug/validation: treat dSPACE simulated time as source-of-truth until step semantics are fixed.
         # control_period (seconds) -> steps; must be divisible by timestep
         _control_period = getattr(sim, 'control_period', None)
         if _control_period is None or _control_period <= 0:
@@ -304,7 +304,7 @@ class DSpaceSimulation(RacingSimulation):
                             f"{_fellow_trailer_base}/w_Fellows",
                             f"{_fellow_ext_base}/Const_v_Fellows_External[km|h]/Value",
                             f"{_fellow_ext_base}/Const_d_Fellows_External[m]/Value",
-                            MANEUVER_TIME_PATH,
+                            SIMULATED_TIME_PATH,
                         ]
                         if hasattr(self._maport, "precache"):
                             self._maport.precache(hot_paths)
@@ -814,13 +814,13 @@ class DSpaceSimulation(RacingSimulation):
                 backend = "MAPort (XIL API)" if (self._maport is not None and self._var_access is self._maport) else "ControlDesk COM"
                 print("[VarAccess] Runtime: get_var/set_var via %s" % backend)
                 self._var_access_backend_logged = True
-            # Read and log simulated time (ManeuverTime) from dSPACE on each control step
+            # Read and log simulated time from dSPACE on each control step
             if self._var_access:
                 try:
-                    _maneuver_time_s = float(self._var_access.get_var(MANEUVER_TIME_PATH))
-                    print(f"[Control] dspace_maneuver_t={_maneuver_time_s:.9f}s (ManeuverTime from dSPACE)")
+                    _simulated_time_s = float(self._var_access.get_var(SIMULATED_TIME_PATH))
+                    print(f"[Control] dspace_simulated_t={_simulated_time_s:.9f}s (SimulationTime from dSPACE)")
                 except Exception as _e:
-                    print("[Control] ManeuverTime[s] read failed: %s" % _e)
+                    print("[Control] SimulationTime[s] read failed: %s" % _e)
             _t0 = time.perf_counter()
             for obj in self.scene.objects:
                 # Determine if this is ego or fellow
@@ -1114,7 +1114,7 @@ class DSpaceSimulation(RacingSimulation):
         def _do_step_with_time_sanity_check(expected_dt):
             # 0A) Read dSPACE time before and after advance_simulation_step(); compare delta to expected_dt
             try:
-                dspace_before = float(self._var_access.get_var(MANEUVER_TIME_PATH))
+                dspace_before = float(self._var_access.get_var(SIMULATED_TIME_PATH))
             except Exception:
                 dspace_before = float("nan")
             try:
@@ -1123,7 +1123,7 @@ class DSpaceSimulation(RacingSimulation):
                 time.sleep(expected_dt)
                 return False
             try:
-                dspace_after = float(self._var_access.get_var(MANEUVER_TIME_PATH))
+                dspace_after = float(self._var_access.get_var(SIMULATED_TIME_PATH))
             except Exception:
                 dspace_after = float("nan")
             delta_dspace = dspace_after - dspace_before if (dspace_before == dspace_before and dspace_after == dspace_after) else float("nan")
