@@ -76,7 +76,7 @@ class TestReferenceBuilder(unittest.TestCase):
         dt = 0.05
         speed = 10.0  # 10 m/s
         
-        psi_ref, kappa_ref, v_ref, grade_ref, wp_idx, s_0, s_horizon = self.builder.build_reference(
+        psi_ref, kappa_ref, v_ref, grade_ref, s_0, s_horizon = self.builder.build_reference(
             waypoints, position, heading, horizon, dt, speed
         )
         
@@ -117,7 +117,7 @@ class TestReferenceBuilder(unittest.TestCase):
         dt = 0.05
         speed = 5.0
         
-        psi_ref, kappa_ref, v_ref, grade_ref, wp_idx, s_0, s_horizon = self.builder.build_reference(
+        psi_ref, kappa_ref, v_ref, grade_ref, s_0, s_horizon = self.builder.build_reference(
             waypoints, position, heading, horizon, dt, speed
         )
         

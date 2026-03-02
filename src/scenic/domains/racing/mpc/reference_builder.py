@@ -337,7 +337,8 @@ class ReferenceBuilder:
         # Map u to waypoint index
         if len(u_param) > 0:
             nearest_segment_idx = int(np.interp(u, u_param, np.arange(len(u_param))))
-            nearest_segment_idx = max(0, min(nearest_segment_idx, len(waypoints) - 2))
+            # Closed loop: segment indices 0..n_wp-1 (segment i = waypoint i -> (i+1)%n_wp)
+            nearest_segment_idx = max(0, min(nearest_segment_idx, len(waypoints) - 1))
         else:
             nearest_segment_idx = 0
         
@@ -591,12 +592,11 @@ class ReferenceBuilder:
                 and e_y/e_psi refer to the same path segment.
             
         Returns:
-            Tuple of (psi_ref, kappa_ref, v_ref, grade_ref, new_waypoint_idx, s_0, s_horizon)
+            Tuple of (psi_ref, kappa_ref, v_ref, grade_ref, s_0, s_horizon)
             - psi_ref: Reference heading array (radians) - yaw angle in XY plane
             - kappa_ref: Reference curvature array (1/meters) - curvature in XY plane
             - v_ref: Reference speed array (m/s) - from v_ref_profile or constant speed
             - grade_ref: Reference road grade array (radians) - pitch angle (positive = uphill)
-            - new_waypoint_idx: Updated waypoint index
             - s_0: Current progress along path (arc length from path start to projected position, meters)
             - s_horizon: Arc length at each horizon step (length horizon_steps), meters
         """
@@ -610,7 +610,6 @@ class ReferenceBuilder:
                 np.zeros(horizon_steps),
                 v_ref,
                 np.zeros(horizon_steps),  # grade_ref
-                0,
                 0.0,   # s_0
                 s_horizon
             )
@@ -770,7 +769,7 @@ class ReferenceBuilder:
                         # Successfully used splines (Phase 1: return s_0 and s_horizon)
                         if len(psi_ref) != horizon_steps or len(kappa_ref) != horizon_steps or len(grade_ref) != horizon_steps:
                             raise ValueError("Spline reference arrays have wrong length")
-                        return (psi_ref, kappa_ref, v_ref, grade_ref, nearest_idx, float(s_0), s_horizon)
+                        return (psi_ref, kappa_ref, v_ref, grade_ref, float(s_0), s_horizon)
             except Exception as e:
                 if not getattr(ReferenceBuilder, '_spline_fallback_logged', False):
                     print(f"[ReferenceBuilder] Spline-based reference building failed: {e}, falling back to linear")
@@ -896,5 +895,5 @@ class ReferenceBuilder:
         if len(grade_ref) != horizon_steps:
             raise ValueError(f"grade_ref length mismatch: expected {horizon_steps}, got {len(grade_ref)}. Shape: {grade_ref.shape}, dtype: {grade_ref.dtype}")
         
-        return (psi_ref, kappa_ref, v_ref, grade_ref, nearest_idx, float(s_0), s_horizon)
+        return (psi_ref, kappa_ref, v_ref, grade_ref, float(s_0), s_horizon)
 

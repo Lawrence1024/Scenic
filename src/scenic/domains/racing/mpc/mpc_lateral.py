@@ -457,8 +457,7 @@ class MPCLateralController:
         # Build reference trajectory (Phase 1: returns s_0 and s_horizon for MPCC)
         # Pass reference_segment_idx so kappa_ref/s_0 and e_y/e_psi refer to the same path segment
         try:
-            (psi_ref, kappa_ref, v_ref, grade_ref, new_waypoint_idx,
-             s_0, s_horizon) = self.ref_builder.build_reference(
+            (psi_ref, kappa_ref, v_ref, grade_ref, s_0, s_horizon) = self.ref_builder.build_reference(
                 waypoints=waypoints,
                 current_position=(x, y),
                 current_heading=yaw,
@@ -514,16 +513,15 @@ class MPCLateralController:
         # e_y, e_psi, mpc_segment_idx already computed above (single-segment consistency)
         # Compute reference heading for logging (use segment index from reference = mpc_segment_idx)
         psi_ref_logging = None
-        if waypoints and len(waypoints) > mpc_segment_idx and mpc_segment_idx >= 0:
-            if mpc_segment_idx < len(waypoints) - 1:
-                wp0 = waypoints[mpc_segment_idx]
-                wp1 = waypoints[mpc_segment_idx + 1]
-                seg_dx = wp1[0] - wp0[0]
-                seg_dy = wp1[1] - wp0[1]
-                seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)
-                if seg_len > 1e-6:
-                    psi_ref_logging = np.arctan2(seg_dy, seg_dx)
-                    # No 180° flip (Recommendation #1: removed from _compute_errors)
+        n_wp = len(waypoints) if waypoints else 0
+        if waypoints and n_wp >= 2 and 0 <= mpc_segment_idx < n_wp:
+            wp0 = waypoints[mpc_segment_idx]
+            wp1 = waypoints[(mpc_segment_idx + 1) % n_wp]
+            seg_dx = wp1[0] - wp0[0]
+            seg_dy = wp1[1] - wp0[1]
+            seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)
+            if seg_len > 1e-6:
+                psi_ref_logging = np.arctan2(seg_dy, seg_dx)
         
         # To-Do 2: Conditional CTE deadzone — only apply when |CTE| small AND association good AND curv_ahead_max < curv_deadzone_max
         dz = getattr(self.config, 'cte_deadzone', 0.2)
@@ -780,7 +778,66 @@ class MPCLateralController:
         if not waypoints or len(waypoints) == 0:
             return False
         return self._is_3d_waypoint(waypoints[0])
-    
+
+    def _best_segment_in_window(self,
+                                waypoints: List[Tuple[float, float]],
+                                px: float, py: float,
+                                start_idx: int, length: int, n_wp: int,
+                                is_3d: bool,
+                                last_seg: Optional[int] = None
+                                ) -> Tuple[int, float, float, Optional[float]]:
+        """Scan a window of segments and return the best segment for (px, py).
+
+        Used for initial scan (local or full), reacquire full scan, and gate-triggered full scan
+        so the same rule lives in one place. Closed loop: segment i = waypoints[i] -> waypoints[(i+1)%n_wp].
+
+        Returns:
+            (best_segment_idx, best_score, best_match_dist, prev_seg_score).
+            prev_seg_score is the score of segment last_seg if visited, else None.
+        """
+        best_segment_idx = 0
+        best_score = float('inf')
+        best_match_dist = float('inf')
+        prev_seg_score = None
+        for off in range(length):
+            i = (start_idx + off) % n_wp
+            wp0 = waypoints[i]
+            wp1 = waypoints[(i + 1) % n_wp]
+            x0, y0 = wp0[0], wp0[1]
+            x1, y1 = wp1[0], wp1[1]
+            seg_dx = x1 - x0
+            seg_dy = y1 - y0
+            if is_3d and len(wp0) >= 3 and len(wp1) >= 3:
+                seg_dz = wp1[2] - wp0[2]
+                seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)  # XY for CTE
+            else:
+                seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)
+            if seg_len < 1e-6:
+                continue
+            wx = px - x0
+            wy = py - y0
+            u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
+            u_proj = np.clip(u_proj, 0.0, 1.0)
+            proj_x = x0 + u_proj * seg_dx
+            proj_y = y0 + u_proj * seg_dy
+            dx = px - proj_x
+            dy = py - proj_y
+            distance = np.sqrt(dx*dx + dy*dy)
+            if u_proj < 0.3:
+                behind_penalty = 10.0 * (0.3 - u_proj) / 0.3
+            elif u_proj < 0.5:
+                behind_penalty = 2.0 * (0.5 - u_proj) / 0.5
+            else:
+                behind_penalty = 0.0
+            score = distance + behind_penalty
+            if i == last_seg:
+                prev_seg_score = score
+            if score < best_score:
+                best_score = score
+                best_segment_idx = i
+                best_match_dist = distance
+        return (best_segment_idx, best_score, best_match_dist, prev_seg_score)
+
     def _compute_errors(self,
                        position: Tuple[float, float],
                        heading: float,
@@ -847,106 +904,9 @@ class MPCLateralController:
         else:
             start_idx = 0
             search_len = n_wp                              # FULL scan to acquire lock
-        for off in range(search_len):
-            i = (start_idx + off) % n_wp
-
-            wp0 = waypoints[i]
-            wp1 = waypoints[(i + 1) % n_wp]
-            x0, y0 = wp0[0], wp0[1]
-            x1, y1 = wp1[0], wp1[1]
-
-            seg_dx = x1 - x0
-            seg_dy = y1 - y0
-            # For 3D waypoints, use 3D distance for segment selection, but compute CTE in XY plane
-            if is_3d and len(wp0) >= 3 and len(wp1) >= 3:
-                seg_dz = wp1[2] - wp0[2]
-                seg_len_3d = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy + seg_dz*seg_dz)
-                seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)  # XY projection for CTE
-            else:
-                seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)
-
-            if seg_len < 1e-6:
-                continue
-
-            # Project vehicle position onto segment (in XY plane for CTE computation)
-            wx = px - x0
-            wy = py - y0
-            u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
-            u_proj = np.clip(u_proj, 0.0, 1.0)
-
-            proj_x = x0 + u_proj * seg_dx
-            proj_y = y0 + u_proj * seg_dy
-
-            # Distance from vehicle to projection point (in XY plane)
-            dx = px - proj_x
-            dy = py - proj_y
-            distance = np.sqrt(dx*dx + dy*dy)
-
-            # Score: prefer segments where vehicle is projected ahead (u_proj > 0.5)
-            # Penalize segments where vehicle is at the beginning (u_proj < 0.3) - likely behind
-            # Score = distance + penalty for being behind
-            if u_proj < 0.3:
-                # Vehicle is at the beginning of this segment - likely behind, add large penalty
-                behind_penalty = 10.0 * (0.3 - u_proj) / 0.3  # Max 10m penalty when u_proj=0
-            elif u_proj < 0.5:
-                # Vehicle is in first half - small penalty
-                behind_penalty = 2.0 * (0.5 - u_proj) / 0.5  # Max 2m penalty when u_proj=0.3
-            else:
-                # Vehicle is in second half or beyond - no penalty (ahead)
-                behind_penalty = 0.0
-
-            score = distance + behind_penalty
-
-            if i == last_seg:
-                prev_seg_score = score
-            if score < best_score:
-                best_score = score
-                best_segment_idx = i
-                best_match_dist = distance
-
-        # Reacquire on weak association (match-dist spike) or when very lost: force full-track scan.
-        reacquire_dist_m = getattr(self, '_reacquire_dist_m', 3.0)
-        if best_match_dist > reacquire_dist_m and search_len != n_wp:
-            best_segment_idx = 0
-            best_score = float('inf')
-            best_match_dist = float('inf')
-            for i in range(n_wp):
-                wp0 = waypoints[i]
-                wp1 = waypoints[(i + 1) % n_wp]
-                x0, y0 = wp0[0], wp0[1]
-                x1, y1 = wp1[0], wp1[1]
-                seg_dx = x1 - x0
-                seg_dy = y1 - y0
-                if is_3d and len(wp0) >= 3 and len(wp1) >= 3:
-                    seg_dz = wp1[2] - wp0[2]
-                    seg_len_3d = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy + seg_dz*seg_dz)
-                    seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)
-                else:
-                    seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)
-                if seg_len < 1e-6:
-                    continue
-                wx = px - x0
-                wy = py - y0
-                u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
-                u_proj = np.clip(u_proj, 0.0, 1.0)
-                proj_x = x0 + u_proj * seg_dx
-                proj_y = y0 + u_proj * seg_dy
-                dx = px - proj_x
-                dy = py - proj_y
-                distance = np.sqrt(dx*dx + dy*dy)
-                if u_proj < 0.3:
-                    behind_penalty = 10.0 * (0.3 - u_proj) / 0.3
-                elif u_proj < 0.5:
-                    behind_penalty = 2.0 * (0.5 - u_proj) / 0.5
-                else:
-                    behind_penalty = 0.0
-                score = distance + behind_penalty
-                if i == last_seg:
-                    prev_seg_score = score
-                if score < best_score:
-                    best_score = score
-                    best_segment_idx = i
-                    best_match_dist = distance
+        best_segment_idx, best_score, best_match_dist, prev_seg_score = self._best_segment_in_window(
+            waypoints, px, py, start_idx, search_len, n_wp, is_3d, last_seg
+        )
 
         # Reference continuity gate: reject candidate if too far or non-monotonic progress (data association)
         # Recommendation B: when gate rejects AND match_dist > hard_fail, force re-association (do not keep stale segment)
@@ -986,49 +946,16 @@ class MPCLateralController:
                     best_segment_idx = last_seg
                 # else: keep best_segment_idx (s_jump or too_far with good new match)
 
-        # Gate-triggered reacquire: when gate rejected with too_far or s_jump, force full scan to reestablish segment
-        # Run even when search_len==n_wp so we get a fresh best segment after gate reject (e.g. when current_waypoint_idx was None)
-        if gate_reason in ('too_far', 's_jump'):
-            best_segment_idx = 0
-            best_score = float('inf')
-            best_match_dist = float('inf')
-            for i in range(n_wp):
-                wp0 = waypoints[i]
-                wp1 = waypoints[(i + 1) % n_wp]
-                x0, y0 = wp0[0], wp0[1]
-                x1, y1 = wp1[0], wp1[1]
-                seg_dx = x1 - x0
-                seg_dy = y1 - y0
-                if is_3d and len(wp0) >= 3 and len(wp1) >= 3:
-                    seg_dz = wp1[2] - wp0[2]
-                    seg_len_3d = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy + seg_dz*seg_dz)
-                    seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)
-                else:
-                    seg_len = np.sqrt(seg_dx*seg_dx + seg_dy*seg_dy)
-                if seg_len < 1e-6:
-                    continue
-                wx = px - x0
-                wy = py - y0
-                u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
-                u_proj = np.clip(u_proj, 0.0, 1.0)
-                proj_x = x0 + u_proj * seg_dx
-                proj_y = y0 + u_proj * seg_dy
-                dx = px - proj_x
-                dy = py - proj_y
-                distance = np.sqrt(dx*dx + dy*dy)
-                if u_proj < 0.3:
-                    behind_penalty = 10.0 * (0.3 - u_proj) / 0.3
-                elif u_proj < 0.5:
-                    behind_penalty = 2.0 * (0.5 - u_proj) / 0.5
-                else:
-                    behind_penalty = 0.0
-                score = distance + behind_penalty
-                if i == last_seg:
-                    prev_seg_score = score
-                if score < best_score:
-                    best_score = score
-                    best_segment_idx = i
-                    best_match_dist = distance
+        # One reacquire path: weak association (match-dist spike) or gate reject (too_far/s_jump) -> single full scan
+        reacquire_dist_m = getattr(self, '_reacquire_dist_m', 3.0)
+        need_reacquire = (
+            (best_match_dist > reacquire_dist_m and search_len != n_wp)
+            or (gate_reason in ('too_far', 's_jump'))
+        )
+        if need_reacquire:
+            best_segment_idx, best_score, best_match_dist, prev_seg_score = self._best_segment_in_window(
+                waypoints, px, py, 0, n_wp, n_wp, is_3d, last_seg
+            )
 
         # Smooth segment selection: hysteresis only (no advance cap — cap caused lag at high speed)
         # In bends (high curvature), use stronger hysteresis so we don't switch segment and cause steer flip (generic: curvature in 1/m)

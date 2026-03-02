@@ -1417,7 +1417,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 print(f"[FollowRacingLineMPC] CURV_SANITY kappa_ref_at_proj={_kap_s} kappa_ref_ahead_signed={_kappa_ahead_s} segment_id={_seg_s} s_ref={_s_ref_s}")
             # Heading diff for steering conditioning (segment direction vs vehicle heading, wrapped to [-pi, pi])
             heading_diff = 0.0
-            if car_heading is not None and use_waypoints and wp_list and len(wp_list) >= 2 and wp_last_idx < len(wp_list) - 1:
+            if car_heading is not None and use_waypoints and wp_list and len(wp_list) >= 2:
                 n_wp = len(wp_list)
                 next_idx = (wp_last_idx + 1) % n_wp
                 x0, y0 = float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1])
@@ -1968,13 +1968,16 @@ behavior FollowModeBehavior(target_car, target_gap=31.0, manage_gears=True, use_
             wp_last_idx = nearest_idx
             Ld = float(lookahead)
             tgt_idx = nearest_idx; rem = Ld; j = nearest_idx
-            while rem > 0.0 and j < len(wp_list) - 1:
+            n_wp_la = len(wp_list)
+            steps = 0
+            while rem > 0.0 and steps < n_wp_la:
+                j_next = (j + 1) % n_wp_la
                 x0, y0 = float(wp_list[j][0]), float(wp_list[j][1])
-                x1, y1 = float(wp_list[j+1][0]), float(wp_list[j+1][1])
+                x1, y1 = float(wp_list[j_next][0]), float(wp_list[j_next][1])
                 seg_dx = x1 - x0; seg_dy = y1 - y0
                 seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
                 if seg_len <= 1e-6:
-                    j += 1; continue
+                    j = j_next; steps += 1; continue
                 if rem <= seg_len:
                     u = rem / seg_len
                     # projection for signed error
@@ -1987,11 +1990,14 @@ behavior FollowModeBehavior(target_car, target_gap=31.0, manage_gears=True, use_
                     cte = (px - qx)*nx + (py - qy)*ny
                     break
                 else:
-                    rem -= seg_len; j += 1; tgt_idx = j
+                    rem -= seg_len; j = j_next; tgt_idx = j; steps += 1
             if cte is None:
-                k0 = max(0, min(len(wp_list)-2, wp_last_idx))
+                # Closed loop: last segment index is len(wp_list)-1; next wp is (k0+1)%n_wp
+                n_wp_fb = len(wp_list)
+                k0 = max(0, min(n_wp_fb - 1, wp_last_idx))
+                j1 = (k0 + 1) % n_wp_fb
                 x0, y0 = float(wp_list[k0][0]), float(wp_list[k0][1])
-                x1, y1 = float(wp_list[k0+1][0]), float(wp_list[k0+1][1])
+                x1, y1 = float(wp_list[j1][0]), float(wp_list[j1][1])
                 seg_dx = x1 - x0; seg_dy = y1 - y0
                 seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
                 if seg_len <= 1e-6:

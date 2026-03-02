@@ -210,3 +210,12 @@ Feedforward and feedback refer to the same path segment every step, so no struct
 ---
 
 If you tell me (a) where waypoint selection happens (file/function) and (b) whether your MPCC uses a projected `s` state internally or only segment indices, I can write you **exact pseudocode** for the gating logic in To-Do 1/2/5 in the style of your current stack.
+
+---
+
+## Other incrementals (future work)
+
+* **Hysteresis after reacquire:** Skip or relax hysteresis when we’ve just done a reacquire (or when `gate_reason` in `('too_far','s_jump')`) so the gate doesn’t undo the new segment.
+* **Single notion of “current index”:** Unify so behavior reset and MPC share one notion (e.g. only MPC’s `last_seg_idx` and behavior passes it); or document clearly who owns what.
+* **Legacy CTE vs MPC projection:** Replace legacy CTE for mismatch guard with something based on MPC’s projection/segment (e.g. use `_log_ref_point` and segment id) so there’s one definition of “where the car is on the path.”
+* **Temp docs:** `mpc/temp.md`, `temp2.md`, `temp3.md` describe old patterns that have been fixed in code; optional: delete or move to a “fixes applied” note so they’re not mistaken for current behavior.
