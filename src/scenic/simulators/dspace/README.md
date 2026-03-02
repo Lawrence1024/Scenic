@@ -97,7 +97,7 @@ Use these numbers when choosing `poll_timeout_wall`: allow enough wall time for 
 ## Known limitations
 
 - **T-coordinate (lateral deviation):** ModelDesk may ignore lateral deviation settings for ego and fellows (centerline placement). This is a dSPACE ModelDesk configuration issue. See `debug_ego_cord/README.md`, `debug_route_code/README.md`.
-- **Simulation control:** Currently configured for continuous running; pause/step may be disabled in `simulator.py`.
+- **Simulation control:** The simulator pauses the dSPACE run immediately after starting the maneuver (step 10b) so that variable setup time (COM/MAPort, readback, warmup) does not advance simulated time. Warmup and the main loop use step-by-step advance (SingleStep). This keeps `t_start` and initial state consistent across runs regardless of how long dSPACE takes to connect.
 
 ---
 

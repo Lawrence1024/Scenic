@@ -308,8 +308,12 @@ class DSpaceSimulation(RacingSimulation):
         # 10) NOW start the maneuver via ControlDesk (AFTER VesiInterface is fully initialized)
         if self._cd:
             cd_session.start_maneuver(self._cd)
+
+        # 10b) Pause immediately so setup idle time does not advance sim (consistent t_start/warmup)
+        if self._cd and cd_session.pause(self._cd):
+            print("[Setup] Simulation paused (idle time will not advance sim until warmup/step).")
         
-        # 11) Initialize fellow arrays and verify readback before pausing
+        # 11) Initialize fellow arrays and verify readback (all while paused; warmup uses SingleStep)
         print("[Setup] Initializing fellow arrays...")
         ensure_fellow_arrays_initialized(self)
         
@@ -322,10 +326,10 @@ class DSpaceSimulation(RacingSimulation):
         else:
             print("[Setup] [WARN] Warning: Some ControlDesk readbacks failed, but continuing...")
         
-        # 13) Pause simulation for step-by-step control (after readback verification)
-        print("[Setup] Pausing simulation for step-by-step control...")
+        # 13) Ensure simulation is paused for step-by-step control (already paused since 10b)
+        print("[Setup] Ensuring simulation paused for step-by-step control...")
         if self._cd and cd_session.pause(self._cd):
-            print("[Setup] [OK] Simulation paused successfully")
+            print("[Setup] [OK] Simulation paused for step-by-step control")
         else:
             print("[Setup] [WARN] Could not pause simulation")
 
