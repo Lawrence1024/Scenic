@@ -13,14 +13,7 @@ import scenic.domains.racing.model as _racing
 import math
 import numpy as np
 
-# Import waypoint finding utility
-import sys
-import os
-_scenic_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
-_tools_path = os.path.join(_scenic_root, 'tools')
-if _tools_path not in sys.path:
-    sys.path.insert(0, _tools_path)
-from get_map_bounds import find_best_racing_waypoint
+from scenic.domains.racing.waypoints import find_best_racing_waypoint
 from scenic.domains.racing.segments import (
     build_waypoint_segment_map,
     get_segment_at_waypoint,
