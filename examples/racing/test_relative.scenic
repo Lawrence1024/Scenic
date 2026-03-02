@@ -1,7 +1,8 @@
+# Example: Relative placement (ahead/behind) on main racing road
 param map = localPath('../../assets/maps/dSPACE/LagunaSeca.xodr')
-param carla_map = 'Town01'
 param use2DMap = True
-model scenic.simulators.dspace.model
+
+model scenic.simulators.dspace.racing_model
 
 # ego = new RacingCar on mainRacingRoad
 fellow1 = new RacingCar on mainRacingRoad

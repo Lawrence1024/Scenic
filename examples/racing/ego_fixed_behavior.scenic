@@ -10,8 +10,6 @@ model scenic.domains.driving.model
 # Route R2 s=175: Found XODR coordinate with buffer for vehicle bounding box (2.0m x 4.5m)
 # This ensures the entire vehicle fits in the drivable region, not just the center point
 ego = new RacingCar at (72.567889, 107.574718, 0.0), with behavior FollowRacingLineBehavior()
-# Place fellow car at lookahead target (20m ahead) for visualization
-# This is where the ego is steering towards, not the nearest waypoint
-# Lookahead target calculated from waypoint 3422: (66.428759, 87.330550)
+# Fellow placed ahead of ego for visualization
 fellow1 = new RacingCar at (55.7661373818, 88.2693869080), with regionContainedIn everywhere
 

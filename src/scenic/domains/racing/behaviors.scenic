@@ -423,11 +423,13 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
         # Execute all actions together
         take actions_to_take
 
-behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, lookahead=20.0, mpc_config_path=None):
+behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None):
     """Follow the car's TTL using MPC (Model Predictive Control) for lateral control.
     
     This behavior uses MPC for steering control instead of PID, providing better
     predictive control for racing scenarios, especially in high-speed cornering.
+    Lookahead distance for the MPC path is computed internally from speed and horizon
+    (see lookahead_dist in the behavior); it is not a user parameter.
     
     Outputs NORMALIZED control signals (-1.0 to 1.0).
     The Simulator (simulator.py) automatically scales these to dSPACE VesiInterface units.
@@ -436,7 +438,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         target_speed: Target speed in m/s
         manage_gears: Whether to automatically manage gears
         use_waypoints: Whether to use waypoint-based control
-        lookahead: Lookahead distance for waypoint following (meters)
         mpc_config_path: Path to MPC config YAML file (optional, uses default if None)
     """
     

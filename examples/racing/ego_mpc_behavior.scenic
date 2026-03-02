@@ -12,7 +12,7 @@ param control_period = 0.05
 # Light-step mode: disable COM read/write to test step_time only (vehicle will not move). Set True to test; False for full analytics (COM on).
 param light_step = False
 # Optional: describe this run for analysis (logged as [RacingRun] edit_note=... and stored in result_data)
-# param edit_note = 'baseline'  # e.g. 'higher lookahead', 'curvature cap 0.08', 'TTL v2'
+# param edit_note = 'baseline'  # e.g. 'curvature cap 0.08', 'TTL v2'
 
 # --- dSPACE racing model (RacingCar, behaviors, 100 Hz step / 20 Hz control & readback) ---
 model scenic.simulators.dspace.racing_model
@@ -36,14 +36,8 @@ ego.behavior = FollowRacingLineMPCBehavior(
     target_speed=60,      # 60 m/s (~216 km/h) nominal; capped at 140 mph (62.58 m/s) by MAX_SPEED_LIMIT_MS
     manage_gears=True,    # Auto gear shifting
     use_waypoints=True,   # Use waypoint-based control
-    lookahead=20.0,       # 20m lookahead distance
     mpc_config_path=None  # Use default MPC config (src/scenic/domains/racing/mpc/vehicle_mpc.yaml)
 )
-
-# Using main racing road centerline TTL (3541 waypoints, ~4.2km total length)
-# Waypoints are in XODR coordinate system and guaranteed to be on-road
-# TTL file: ttl_fellow_test_xodr_all.csv (XODR coordinates, transformed from dSPACE)
-# Fellow vehicles placed every 100m starting from 200m (s = 200, 300, 400, ..., 3100)
 
 # fellow0 = new RacingCar at (616.120555,-297.938762), with regionContainedIn everywhere
 # fellow1 = new RacingCar at (617.586835,-293.097982), with regionContainedIn everywhere
