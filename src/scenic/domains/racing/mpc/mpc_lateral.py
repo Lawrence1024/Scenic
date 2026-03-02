@@ -64,6 +64,9 @@ class MPCLateralController:
         self.last_valid_steering = 0.0
         
         # Segment selection smoothing: hysteresis only (no advance cap, to avoid lag at high speed)
+        # Current-index contract: Behavior owns progress (wp_last_idx, arc-length advancement). It passes
+        # that as current_waypoint_idx so we search locally. We choose the segment and store it here;
+        # behavior does not overwrite its index from us — single source of progress is behavior.
         self.last_seg_idx = None  # set after first _compute_errors
         self._segment_hysteresis_m = getattr(
             config, 'segment_hysteresis_m', 0.4
@@ -411,7 +414,8 @@ class MPCLateralController:
                 - 'yaw_rate': yaw rate (rad/s, optional)
                 - 'gear': current gear (optional, for checking if in neutral)
             waypoints: List of waypoint (x, y) tuples
-            current_waypoint_idx: Current waypoint index (for efficiency)
+            current_waypoint_idx: Hint from behavior (its wp_last_idx) for local segment search; we own
+                chosen segment (last_seg_idx), behavior does not sync back from us.
             cte_magnitude: Optional CTE magnitude for adaptive search
             v_ref_profile: Optional speed profile over horizon (m/s). Pass the same
                 profile used by longitudinal MPC for trajectory-consistent control.
@@ -854,6 +858,8 @@ class MPCLateralController:
             position: Current vehicle position (x, y) or (x, y, z)
             heading: Current vehicle heading (radians) - yaw angle in XY plane
             waypoints: List of waypoint (x, y) or (x, y, z) tuples
+            current_waypoint_idx: Optional hint from behavior (wp_last_idx) for local scan start; we choose
+                segment and set last_seg_idx (see class comment on current-index contract).
             prev_e_y: Previous lateral error (m); when |prev_e_y| > threshold, segment is not switched
 
         Returns:
@@ -952,12 +958,15 @@ class MPCLateralController:
             (best_match_dist > reacquire_dist_m and search_len != n_wp)
             or (gate_reason in ('too_far', 's_jump'))
         )
+        did_reacquire = False
         if need_reacquire:
             best_segment_idx, best_score, best_match_dist, prev_seg_score = self._best_segment_in_window(
                 waypoints, px, py, 0, n_wp, n_wp, is_3d, last_seg
             )
+            did_reacquire = True
 
         # Smooth segment selection: hysteresis only (no advance cap — cap caused lag at high speed)
+        # Skip hysteresis when we just reacquired so the new segment is not reverted to last_seg.
         # In bends (high curvature), use stronger hysteresis so we don't switch segment and cause steer flip (generic: curvature in 1/m)
         waypoint_idx = best_segment_idx
         effective_hysteresis_m = self._segment_hysteresis_m
@@ -974,7 +983,7 @@ class MPCLateralController:
                 avg_len = (len1 + len2) / 2.0
                 abs_kappa = abs(2.0 * cross / (len1 * len2 * avg_len))
                 effective_hysteresis_m = self._segment_hysteresis_m * (1.0 + min(abs_kappa * 5.0, 1.5))
-        if last_seg is not None and 0 <= last_seg < n_wp:
+        if last_seg is not None and 0 <= last_seg < n_wp and not did_reacquire:
             if prev_seg_score is not None and best_segment_idx != last_seg:
                 if best_score >= prev_seg_score - effective_hysteresis_m:
                     waypoint_idx = last_seg

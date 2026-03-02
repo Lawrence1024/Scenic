@@ -777,7 +777,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             # To-Do D: Use projection-based CTE (same geometry as MPCC) everywhere. CTE magnitude for speed
             # comes from previous step's waypoint-based e_y (MPCC uses same polyline and projection).
             cte_mag_for_speed = getattr(self, '_last_waypoint_cte_for_speed', 0.0)
-            # Legacy CTE (lookahead-based) only for To-Do E mismatch guard — compute for mismatch check
+            # Legacy CTE: fallback when MPC does not provide e_y (e.g. no waypoints or exception)
             self._legacy_cte_this_tick = None
             if use_waypoints and wp_list and len(wp_list) >= 2:
                 try:
@@ -825,12 +825,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     self._legacy_cte_this_tick = 0.0
             if self._legacy_cte_this_tick is None:
                 self._legacy_cte_this_tick = 0.0
-            # To-Do B fallback (kept for compatibility): when mismatch was detected, trust waypoint CTE for speed
-            if getattr(self, '_cte_mismatch_trust_waypoint', False) and getattr(self, '_cte_mismatch_steps_remaining', 0) > 0:
-                cte_mag_for_speed = getattr(self, '_last_waypoint_cte_for_speed', 0.0)
-                self._cte_mismatch_steps_remaining = getattr(self, '_cte_mismatch_steps_remaining', 0) - 1
-                if self._cte_mismatch_steps_remaining <= 0:
-                    self._cte_mismatch_trust_waypoint = False
             if _bt is not None:
                 _bt.start_section('waypoint_speed_grade')
             # Universal max speed limit: Reduced for better robustness without elevation data
@@ -1351,7 +1345,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 self._waypoints_for_mpc_cache_len = _wp_len
 
             # Compute steering using MPC (mpc_total in [LoopOther] from record_lateral_mpc_ms + record_longitudinal_mpc_ms)
-            # Pass behavior's current waypoint index so MPC does local search around progress and aligns segment choice
+            # Pass behavior's progress index (wp_last_idx) so MPC searches locally; MPC owns chosen segment (last_seg_idx), we do not sync back.
             try:
                 steer_mpc = _lat_controller.run_step(
                     vehicle_state,
@@ -1373,16 +1367,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 self._last_waypoint_cte_for_speed = abs(getattr(_lat_controller, '_log_mpc_e_y'))
     
             # --- CTE-aware safety envelope (for throttle/brake) ---
-            # To-Do D: Use projection-based CTE (same geometry as MPCC). cte_to_waypoints = MPCC e_y from chosen segment.
-            cte = float(getattr(_lat_controller, 'last_e_y', getattr(_lat_controller, '_log_mpc_e_y', 0.0)))
-            # To-Do E: If mismatch triggers, force cte := cte_to_waypoints for this tick and print loud warning (fatal guard).
-            _md = getattr(_lat_controller, '_log_match_dist_m', None)
+            # Single definition: MPC e_y (projection onto chosen segment) when available; legacy only as fallback when MPC did not run.
             _ey = getattr(_lat_controller, '_log_mpc_e_y', None)
-            _legacy = getattr(self, '_legacy_cte_this_tick', None)
-            if _legacy is not None and _md is not None and _ey is not None:
-                if abs(_legacy) > 2.0 and _md < 1.0 and abs(_ey) < 0.5:
-                    print(f"[FollowRacingLineMPC] *** CTE MISMATCH (fatal guard): legacy_cte={_legacy:.2f}m, match_dist_m={_md:.3f}m, e_y_mpc={_ey:.3f}m -> forcing cte_behavior := cte_to_waypoints for this tick")
-                    cte = float(_ey)
+            if _ey is not None:
+                cte = float(_ey)
+            else:
+                cte = float(getattr(self, '_legacy_cte_this_tick', 0.0))
             cte_mag = abs(cte)
             # One ff_log line per MPC tick (feedforward + command side: u_norm, delta_cmd_rad post-clamp, current_delta_max)
             _lc_ff = _lat_controller
@@ -1693,20 +1683,13 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 _stuck_hint = True  # segment not advancing with significant match_dist
             if _stuck_hint:
                 print(f"[FollowRacingLineMPC] projection_check STUCK? (segment_id not advancing or match_dist spike)")
-            # To-Do A: CTE cross-check (cte_to_waypoints = e_y_mpc; cte_behavior now uses same geometry)
+            # CTE cross-check log: cte_to_waypoints = e_y_mpc (single source); cte_behavior is same when MPC ran
             _rp = getattr(_lc, '_log_ref_point', None)
             _ego = getattr(_lc, '_log_ego', None)
             _cte_wp_s = _ey_s
             _rp_s = f"({_rp[0]:.3f},{_rp[1]:.3f})" if _rp is not None and len(_rp) >= 2 else "?"
             _ego_s = f"({_ego[0]:.3f},{_ego[1]:.3f})" if _ego is not None and len(_ego) >= 2 else "?"
             print(f"[FollowRacingLineMPC] ct_crosscheck cte_to_waypoints={_cte_wp_s} cte_behavior={cte_b:.3f} ref_point={_rp_s} ego={_ego_s}")
-            # To-Do B/E: Mismatch guard (legacy vs waypoint) — when triggered, fatal guard already forced cte:=cte_to_waypoints this tick
-            if _md is not None and _ey is not None:
-                _leg = getattr(self, '_legacy_cte_this_tick', None)
-                if _leg is not None and abs(_leg) > 2.0 and _md < 1.0 and abs(_ey) < 0.5:
-                    self._cte_mismatch_trust_waypoint = True
-                    self._cte_mismatch_steps_remaining = 20
-                    self._last_waypoint_cte_for_speed = abs(_ey)
             if _ey is not None:
                 self._last_waypoint_cte_for_speed = abs(_ey)
             # To-Do C: Polyline identity (behavior CTE, MPCC waypoints, segment map) — n_pts, first/last, total length, id
