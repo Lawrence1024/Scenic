@@ -9,7 +9,7 @@ Layers (drawn in order):
 
 Use the matplotlib toolbar: zoom (magnifying glass), pan (hand), save, home.
 Run from Scenic repo root:
-  python create_new_ttl/interactive_map_visualizer.py
+  python src/scenic/simulators/dspace/create_new_ttl/interactive_map_visualizer.py
 """
 
 import argparse
@@ -18,7 +18,8 @@ import sys
 from pathlib import Path
 
 # Scenic repo root and path setup
-REPO_ROOT = Path(__file__).resolve().parent.parent
+_CREATE_NEW_TTL = Path(__file__).resolve().parent
+REPO_ROOT = _CREATE_NEW_TTL.parent.parent.parent.parent.parent
 if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 if str(REPO_ROOT) not in sys.path:
@@ -85,7 +86,7 @@ def main():
     default_xodr = REPO_ROOT / "assets/maps/dSPACE/LagunaSeca.xodr"
     default_main_track_xodr = REPO_ROOT / "assets/maps/dSPACE/LagunaSeca_MainTrack_FromTTL.xodr"
     centerline_path = REPO_ROOT / "assets/ttls/LS_ENU_TTL_CSV/ttl_fellow_test_xodr_all.csv"
-    temp_path = REPO_ROOT / "create_new_ttl/temp_aligned_to_centerline.csv"
+    temp_path = _CREATE_NEW_TTL / "temp_aligned_to_centerline.csv"
 
     parser = argparse.ArgumentParser(description="Interactive map: XODR boundaries + TTL centerline (use toolbar to zoom/pan)")
     parser.add_argument("--xodr", type=Path, default=None,

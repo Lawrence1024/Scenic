@@ -12,7 +12,7 @@ result_data/
 ├── __init__.py
 ├── analyze_racing_log.py        # Parse logs → segments, events, CTE; write per-run outputs
 ├── compare_racing_results.py   # Compare multiple runs (time, waypoint hits, CTE per segment)
-├── ttl_racing_line_xodr/        # One run (from log with TTL ttl_racing_line_xodr.csv)
+├── ttl_main_road/               # One run (from log with TTL ttl_main_road.csv)
 │   ├── summary.json
 │   ├── segments.csv
 │   ├── events.csv
@@ -26,7 +26,7 @@ result_data/
     └── mpc.csv
 ```
 
-Each **run** is a subfolder whose name comes from the log’s TTL (e.g. `ttl_racing_line_xodr` from `ttl_racing_line_xodr.csv`). The analysis scripts live alongside these run folders.
+Each **run** is a subfolder whose name comes from the log’s TTL (e.g. `ttl_main_road` from `ttl_main_road.csv`, or `ttl_pitlane` from `ttl_pitlane.csv`). The analysis scripts live alongside these run folders.
 
 ---
 
@@ -72,7 +72,7 @@ Encoding: tries UTF-8 (with BOM) first; if no matching lines are found, retries 
 | **events.csv** | One row per waypoint hit: t, segment_id, segment_name. |
 | **mpc.csv** | One row per parsed MPC step: t, segment_id, segment_name, speed_mps, cte_m. |
 
-`<run_id>` is the **stem** of the TTL filename from the log (e.g. `ttl_racing_line_xodr` from `ttl_racing_line_xodr.csv`), or the log file stem if no TTL is found.
+`<run_id>` is the **stem** of the TTL filename from the log (e.g. `ttl_main_road` from `ttl_main_road.csv`, `ttl_pitlane` from `ttl_pitlane.csv`), or the log file stem if no TTL is found.
 
 ### Usage
 

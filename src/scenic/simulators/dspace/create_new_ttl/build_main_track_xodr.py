@@ -8,7 +8,7 @@ Output: one road, one lane section, left/right lanes with widths sampled from
 the source XODR at the closest reference-line position for each TTL point.
 
 Run from Scenic repo root:
-  python create_new_ttl/build_main_track_xodr.py [--output path] [--xodr path] [--ttl path]
+  python src/scenic/simulators/dspace/create_new_ttl/build_main_track_xodr.py [--output path] [--xodr path] [--ttl path]
 """
 
 import argparse
@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import List, Tuple
 
 # Scenic repo root and path setup
-REPO_ROOT = Path(__file__).resolve().parent.parent
+_CREATE_NEW_TTL = Path(__file__).resolve().parent
+REPO_ROOT = _CREATE_NEW_TTL.parent.parent.parent.parent.parent
 if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 if str(REPO_ROOT) not in sys.path:

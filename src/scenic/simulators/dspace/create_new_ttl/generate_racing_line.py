@@ -9,8 +9,8 @@ This script:
 4. Respects track width constraints (5-10m max deviation)
 5. Outputs in the same CSV format (x,y,z)
 
-Usage:
-    python create_new_ttl/generate_racing_line.py
+Usage (from repo root):
+    python src/scenic/simulators/dspace/create_new_ttl/generate_racing_line.py
 """
 
 import sys
@@ -23,8 +23,9 @@ from typing import List, Tuple, Optional
 from scipy.interpolate import splprep, splev, UnivariateSpline
 from scipy.optimize import minimize_scalar
 
-# Add Scenic src to path
-scenic_path = Path(__file__).parent.parent / "src"
+# Script lives at src/scenic/simulators/dspace/create_new_ttl/
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
+scenic_path = _REPO_ROOT / "src"
 if scenic_path.exists():
     sys.path.insert(0, str(scenic_path))
 
@@ -438,9 +439,7 @@ def main():
     """Main function to generate racing line."""
     # Paths
     script_dir = Path(__file__).parent
-    project_root = script_dir.parent
-    
-    centerline_path = project_root / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "ttl_fellow_test_xodr_all.csv"
+    centerline_path = _REPO_ROOT / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "ttl_fellow_test_xodr_all.csv"
     output_path = script_dir / "ttl_racing_line_xodr.csv"
     
     print("=" * 70)
@@ -485,7 +484,7 @@ def main():
     # Save racing line (script dir and transformed folder for drop-in use)
     print(f"\nSaving racing line to: {output_path}")
     save_racing_line(racing_line, str(output_path))
-    transformed_path = project_root / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "ttl_racing_line_xodr.csv"
+    transformed_path = _REPO_ROOT / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "ttl_racing_line_xodr.csv"
     if transformed_path != output_path:
         save_racing_line(racing_line, str(transformed_path))
         print(f"Also saved to: {transformed_path}")

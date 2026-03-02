@@ -16,7 +16,7 @@ High‑level behavior:
 Default IO:
 - Input XODR: assets/maps/dSPACE/LagunaSeca.xodr
 - Input main TTL: assets/ttls/LS_ENU_TTL_CSV/ttl_racing_line_xodr.csv
-- Output pit TTL (tooling copy): create_new_ttl/ttl_pitlane_xodr.csv
+- Output pit TTL (tooling copy): create_new_ttl/ttl_pitlane_xodr.csv (in this folder)
 - Output pit TTL (runtime asset): assets/ttls/LS_ENU_TTL_CSV/ttl_pitlane_xodr.csv
 """
 
@@ -32,8 +32,9 @@ from typing import Iterable, List, Sequence, Tuple
 
 import numpy as np
 
-# Add Scenic src to path so we can import the racing domain
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# Script lives at src/scenic/simulators/dspace/create_new_ttl/
+_CREATE_NEW_TTL = Path(__file__).resolve().parent
+REPO_ROOT = _CREATE_NEW_TTL.parent.parent.parent.parent.parent
 SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in os.sys.path:
     os.sys.path.insert(0, str(SRC_ROOT))
@@ -314,7 +315,7 @@ def main() -> int:
         / "LS_ENU_TTL_CSV"
         / "ttl_racing_line_xodr.csv"
     )
-    default_out_tool = REPO_ROOT / "create_new_ttl" / "ttl_pitlane_xodr.csv"
+    default_out_tool = _CREATE_NEW_TTL / "ttl_pitlane_xodr.csv"
     default_out_assets = (
         REPO_ROOT
         / "assets"

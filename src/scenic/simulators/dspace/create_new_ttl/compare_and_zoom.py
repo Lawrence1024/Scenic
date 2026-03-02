@@ -3,7 +3,7 @@
 Compare two TTL CSVs and visualize around a specific coordinate.
 
 Usage:
-  python create_new_ttl/compare_and_zoom.py [--center 614.66 -302.78] [--radius 60] [--save out.png]
+  python src/scenic/simulators/dspace/create_new_ttl/compare_and_zoom.py [--center 614.66 -302.78] [--radius 60] [--save out.png]
 """
 
 import argparse
@@ -13,9 +13,10 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+_CREATE_NEW_TTL = Path(__file__).resolve().parent
+REPO_ROOT = _CREATE_NEW_TTL.parent.parent.parent.parent.parent
 DEFAULT_CENTERLINE = REPO_ROOT / "assets/ttls/LS_ENU_TTL_CSV/ttl_fellow_test_xodr_all.csv"
-DEFAULT_OTHER = REPO_ROOT / "create_new_ttl/temp_aligned_to_centerline.csv"
+DEFAULT_OTHER = _CREATE_NEW_TTL / "temp_aligned_to_centerline.csv"
 
 
 def load_csv(path: str) -> np.ndarray:
@@ -105,7 +106,7 @@ def main():
     plt.suptitle(f"Comparison: {name_a} vs {name_b}", fontsize=12, fontweight="bold")
     plt.tight_layout()
 
-    save_path = args.save or REPO_ROOT / "create_new_ttl" / "compare_zoom_centerline.png"
+    save_path = args.save or _CREATE_NEW_TTL / "compare_zoom_centerline.png"
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     print(f"Saved: {save_path}")
     if not args.no_show:

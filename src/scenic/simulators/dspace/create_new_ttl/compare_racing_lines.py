@@ -13,7 +13,7 @@ Since they may be in different coordinate systems, the script:
 4. Optionally computes pointwise distance when lengths match (after resampling)
 
 Run from Scenic repo root, e.g.:
-  python create_new_ttl/compare_racing_lines.py assets/ttls/.../file_a.csv assets/ttls/.../file_b.csv --save out.png
+  python src/scenic/simulators/dspace/create_new_ttl/compare_racing_lines.py assets/ttls/.../file_a.csv assets/ttls/.../file_b.csv --save out.png
 """
 
 import argparse

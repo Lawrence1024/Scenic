@@ -8,8 +8,8 @@ This script:
 3. Transforms back to XODR coordinates
 4. Reports the XODR coordinates for each (s, t) position
 
-Usage:
-    python create_new_ttl/find_xodr_for_st_coordinates.py
+Usage (from repo root):
+    python src/scenic/simulators/dspace/create_new_ttl/find_xodr_for_st_coordinates.py
 """
 
 import sys
@@ -19,8 +19,9 @@ import math
 import json
 from pathlib import Path
 
-# Add Scenic src to path
-scenic_path = Path(__file__).parent.parent / "src"
+# Script lives at src/scenic/simulators/dspace/create_new_ttl/; repo root is 5 levels up
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
+scenic_path = _REPO_ROOT / "src"
 if scenic_path.exists():
     sys.path.insert(0, str(scenic_path))
 
@@ -404,7 +405,7 @@ def main():
     if not skip_processing:
         # Load coordinate transform
         print("\n[1] Loading coordinate transform...")
-        transform_path = Path(__file__).parent.parent / "assets" / "maps" / "dSPACE" / "Laguna_Seca_transform.json"
+        transform_path = _REPO_ROOT / "assets" / "maps" / "dSPACE" / "Laguna_Seca_transform.json"
         if not transform_path.exists():
             print(f"  [ERROR] Transform file not found: {transform_path}")
             return 1

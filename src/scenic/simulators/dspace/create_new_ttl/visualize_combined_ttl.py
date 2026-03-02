@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
 Visualize the combined TTL in 3 panels: pitlane only, main loop only, combined.
-Run after combine_and_compare_ttl.py has generated ttl_pitlane_main_pitlane.csv.
+Run after combine_and_compare_ttl.py has written ttl_pitlane.csv to assets. From repo root:
 
-  python create_new_ttl/visualize_combined_ttl.py
-  python create_new_ttl/visualize_combined_ttl.py --save comparison.png
+  python src/scenic/simulators/dspace/create_new_ttl/visualize_combined_ttl.py
+  python src/scenic/simulators/dspace/create_new_ttl/visualize_combined_ttl.py --save comparison.png
 """
 import argparse
 import csv
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
 CREATE_NEW_TTL = Path(__file__).resolve().parent
+REPO_ROOT = CREATE_NEW_TTL.parent.parent.parent.parent.parent
 EXISTING_TTL = REPO_ROOT / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "ttl_main_road.csv"
 COMBINED_TTL = CREATE_NEW_TTL / "ttl_pitlane_main_pitlane.csv"
 PITLANE_TTL = CREATE_NEW_TTL / "temp_pitlane_begin_ttl.csv"
@@ -63,7 +63,7 @@ def main():
     if args.overlap:
         # Overlay: Andretti+Corkscrew loop (existing) vs Pit Lane+Corkscrew loop
         if not PIT_CORKSCREW_LOOP_TTL.exists():
-            print(f"[ERROR] {PIT_CORKSCREW_LOOP_TTL.name} not found. Run: python create_new_ttl/combine_and_compare_ttl.py")
+            print(f"[ERROR] {PIT_CORKSCREW_LOOP_TTL.name} not found. Run from repo root: python src/scenic/simulators/dspace/create_new_ttl/combine_and_compare_ttl.py")
             return 1
         pit_loop = load_ttl(PIT_CORKSCREW_LOOP_TTL)
         if len(pit_loop) < 2:
@@ -93,7 +93,7 @@ def main():
     # Default: 3-panel view
     if not COMBINED_TTL.exists():
         print(f"[ERROR] Combined TTL not found: {COMBINED_TTL}")
-        print("Run: python create_new_ttl/combine_and_compare_ttl.py")
+        print("Run from repo root: python src/scenic/simulators/dspace/create_new_ttl/combine_and_compare_ttl.py")
         return 1
     combined = load_ttl(COMBINED_TTL)
     if PITLANE_TTL.exists():

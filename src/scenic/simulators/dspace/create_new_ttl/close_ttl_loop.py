@@ -5,8 +5,8 @@ the last and first waypoints so the track forms a continuous loop.
 
 New segment lengths on the closing arc match the typical spacing of the
 existing track (last segment may not divide perfectly). Run from Scenic repo root:
-  python create_new_ttl/close_ttl_loop.py
-  python create_new_ttl/close_ttl_loop.py --csv path/to/ttl.csv --output path/to/ttl_closed.csv
+  python src/scenic/simulators/dspace/create_new_ttl/close_ttl_loop.py
+  python src/scenic/simulators/dspace/create_new_ttl/close_ttl_loop.py --csv path/to/ttl.csv --output path/to/ttl_closed.csv
 """
 
 import argparse
@@ -15,7 +15,8 @@ from pathlib import Path
 
 import numpy as np
 
-DEFAULT_CSV = Path(__file__).resolve().parent.parent / "assets/ttls/LS_ENU_TTL_CSV/ttl_racing_line_xodr.csv"
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
+DEFAULT_CSV = _REPO_ROOT / "assets/ttls/LS_ENU_TTL_CSV/ttl_racing_line_xodr.csv"
 
 
 def load_csv(path: Path) -> np.ndarray:
@@ -52,8 +53,7 @@ def main():
     ap.add_argument("--exact-close", action="store_true", help="Append first point so file ends exactly at start (gap 0); last segment may be shorter")
     args = ap.parse_args()
 
-    repo = Path(__file__).resolve().parent.parent
-    path = args.csv if args.csv.is_absolute() else repo / args.csv
+    path = args.csv if args.csv.is_absolute() else _REPO_ROOT / args.csv
     if not path.exists():
         print(f"File not found: {path}")
         return 1
@@ -109,7 +109,7 @@ def main():
         if out_path is None:
             out_path = path.parent / (path.stem + "_closed" + path.suffix)
         if not out_path.is_absolute():
-            out_path = repo / out_path
+            out_path = _REPO_ROOT / out_path
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", newline="") as f:

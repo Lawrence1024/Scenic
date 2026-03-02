@@ -8,8 +8,8 @@ this script checks whether the centerline we get from the XODR (via Scenic's
 OpenDRIVE parser) matches it.
 
 Usage (run from Scenic repo root):
-  python create_new_ttl/verify_ttl_against_xodr.py
-  python create_new_ttl/verify_ttl_against_xodr.py --ttl path/to/ttl.csv --xodr path/to/LagunaSeca.xodr --save out.png
+  python src/scenic/simulators/dspace/create_new_ttl/verify_ttl_against_xodr.py
+  python src/scenic/simulators/dspace/create_new_ttl/verify_ttl_against_xodr.py --ttl path/to/ttl.csv --xodr path/to/LagunaSeca.xodr --save out.png
 """
 
 import argparse
@@ -20,8 +20,9 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Scenic repo root (parent of create_new_ttl)
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# Script lives at src/scenic/simulators/dspace/create_new_ttl/
+_CREATE_NEW_TTL = Path(__file__).resolve().parent
+REPO_ROOT = _CREATE_NEW_TTL.parent.parent.parent.parent.parent
 if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
@@ -307,7 +308,7 @@ def main():
 
     save_path = args.save
     if save_path is None:
-        save_path = REPO_ROOT / "create_new_ttl" / "ttl_vs_xodr_centerline.png"
+        save_path = _CREATE_NEW_TTL / "ttl_vs_xodr_centerline.png"
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     print(f"\nSaved: {save_path}")
     if not args.no_show:

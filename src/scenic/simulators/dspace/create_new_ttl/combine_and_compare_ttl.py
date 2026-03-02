@@ -10,8 +10,9 @@ import re
 import shutil
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# Script lives at src/scenic/simulators/dspace/create_new_ttl/; repo root is 5 levels up
 CREATE_NEW_TTL = Path(__file__).resolve().parent
+REPO_ROOT = CREATE_NEW_TTL.parent.parent.parent.parent.parent
 TEMP_TXT = CREATE_NEW_TTL / "temp.txt"
 ST_TO_XODR = CREATE_NEW_TTL / "st_to_xodr_results.txt"
 EXISTING_TTL = REPO_ROOT / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "ttl_main_road.csv"

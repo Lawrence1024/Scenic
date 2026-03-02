@@ -7,8 +7,8 @@ Draws:
   2. TTL CSV (racing line) in a distinct color, in between the boundaries
 
 Use the matplotlib toolbar to zoom in/out and pan. Run from Scenic repo root:
-  python create_new_ttl/visualize_ttl_boundaries.py
-  python create_new_ttl/visualize_ttl_boundaries.py --ttl path/to/ttl.csv --save
+  python src/scenic/simulators/dspace/create_new_ttl/visualize_ttl_boundaries.py
+  python src/scenic/simulators/dspace/create_new_ttl/visualize_ttl_boundaries.py --ttl path/to/ttl.csv --save
 """
 
 import argparse
@@ -16,7 +16,8 @@ import csv
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+_CREATE_NEW_TTL = Path(__file__).resolve().parent
+REPO_ROOT = _CREATE_NEW_TTL.parent.parent.parent.parent.parent
 if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 if str(REPO_ROOT) not in sys.path:
@@ -82,7 +83,7 @@ def _plot_segments(ax, segments, color, linewidth=1.5, label=None, alpha=0.95):
 def main():
     default_xodr = REPO_ROOT / "assets" / "maps" / "dSPACE" / "LagunaSeca.xodr"
     default_ttl = REPO_ROOT / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "ttl_racing_line_xodr.csv"
-    default_save = REPO_ROOT / "create_new_ttl" / "ttl_boundaries_visualization.png"
+    default_save = _CREATE_NEW_TTL / "ttl_boundaries_visualization.png"
 
     parser = argparse.ArgumentParser(
         description="Visualize TTL with track inner/outer boundaries (black). Use toolbar to zoom/pan."

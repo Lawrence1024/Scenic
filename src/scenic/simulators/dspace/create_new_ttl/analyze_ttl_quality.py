@@ -5,9 +5,9 @@ Analyze TTL quality: distance to inner/outer boundaries and curvature.
 Use this to check whether the TTL is too close to a boundary (e.g. "on the
 boundary" in section 1) or has poor geometry in a specific segment (e.g. segment 43).
 Run from Scenic repo root:
-  python create_new_ttl/analyze_ttl_quality.py
-  python create_new_ttl/analyze_ttl_quality.py --csv out.csv
-  python create_new_ttl/analyze_ttl_quality.py --range 800 950   # waypoint index range (e.g. segment 43)
+  python src/scenic/simulators/dspace/create_new_ttl/analyze_ttl_quality.py
+  python src/scenic/simulators/dspace/create_new_ttl/analyze_ttl_quality.py --csv out.csv
+  python src/scenic/simulators/dspace/create_new_ttl/analyze_ttl_quality.py --range 800 950   # waypoint index range (e.g. segment 43)
 """
 
 import argparse
@@ -16,7 +16,8 @@ import math
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+_CREATE_NEW_TTL = Path(__file__).resolve().parent
+REPO_ROOT = _CREATE_NEW_TTL.parent.parent.parent.parent.parent
 if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 if str(REPO_ROOT) not in sys.path:

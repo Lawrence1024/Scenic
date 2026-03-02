@@ -4,7 +4,7 @@ Scenarios for the racing domain using the dSPACE racing simulator. All examples 
 
 | Example | Description |
 |--------|-------------|
-| **ego_mpc_behavior.scenic** | Ego follows the racing line using MPC (recommended for best performance). Uses TTL waypoints from `LS_ENU_TTL_CSV` and 100 Hz sim / 20 Hz control. |
+| **ego_mpc_behavior.scenic** | Ego follows the racing line using MPC (recommended for best performance). Uses TTL waypoints from `LS_ENU_TTL_CSV` (e.g. `ttl_main_road.csv` or `ttl_pitlane.csv`) and 100 Hz sim / 20 Hz control. Ego route (Lap vs Pit) is chosen by TTL distance; when similar, main road is preferred. |
 | **ego_fixed_behavior.scenic** | Ego at fixed position with PID-based `FollowRacingLineBehavior`. |
 | **ego_fixed_placing.scenic** | Single ego at fixed coordinates (no behavior). |
 | **fellow_fixed_placing.scenic** | Ego + fellows at fixed waypoint positions along the track. |

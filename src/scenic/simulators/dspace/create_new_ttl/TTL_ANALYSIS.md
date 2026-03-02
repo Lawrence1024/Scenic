@@ -6,7 +6,7 @@ This document explains why the **boundary graph** can show the TTL on the outer 
 
 **You’re right:** we *are* driving in XODR. Scenic uses the map and the behavior TTL in the **XODR** frame. The pipeline is consistent:
 
-- **TTL and map:** Loaded and used in XODR (e.g. `ttl_racing_line_xodr.csv` in the “transformed” folder with offset (0,0)).
+- **TTL and map:** Loaded and used in XODR (e.g. `ttl_main_road.csv` or `ttl_racing_line_xodr.csv` in `LS_ENU_TTL_CSV` with offset (0,0)).
 - **Placement:** When we place the ego, we take Scenic’s (XODR) position, apply **XODR → RD** with `apply_coordinate_transform`, then project to (s, t) on the RD road. So the car is placed correctly in the sim’s RD world.
 - **Readback:** ControlDesk gives position in **RD**. We apply **RD → XODR** with `apply_inverse_coordinate_transform` and store that in Scenic. So Scenic’s state (position, etc.) is always in XODR.
 - **MPC:** Uses XODR waypoints and XODR position (from readback). CTE and control are computed in one frame (XODR), so tracking is consistent.

@@ -4,8 +4,8 @@ Visualize a TTL racing line CSV and check if the end wraps back to the beginning
 
 Plots the full (x,y) path, marks first and last points, and draws the gap
 between last and first. Run from Scenic repo root:
-  python create_new_ttl/visualize_ttl_wrap.py
-  python create_new_ttl/visualize_ttl_wrap.py --csv path/to/ttl.csv
+  python src/scenic/simulators/dspace/create_new_ttl/visualize_ttl_wrap.py
+  python src/scenic/simulators/dspace/create_new_ttl/visualize_ttl_wrap.py --csv path/to/ttl.csv
 """
 
 import argparse
@@ -16,7 +16,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-DEFAULT_CSV = Path(__file__).resolve().parent.parent / "assets/ttls/LS_ENU_TTL_CSV/ttl_racing_line_xodr.csv"
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
+DEFAULT_CSV = _REPO_ROOT / "assets/ttls/LS_ENU_TTL_CSV/ttl_racing_line_xodr.csv"
 
 
 def load_csv(path: Path) -> np.ndarray:
@@ -47,7 +48,7 @@ def main():
 
     path = args.csv
     if not path.is_absolute():
-        path = Path(__file__).resolve().parent.parent / path
+        path = _REPO_ROOT / path
     if not path.exists():
         print(f"File not found: {path}")
         return 1

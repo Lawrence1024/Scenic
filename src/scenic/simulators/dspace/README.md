@@ -129,9 +129,29 @@ src/scenic/simulators/dspace/
 │   └── route_mapping.py         # Route detection
 ├── modeldesk/
 │   └── placement.py            # place_ego, place_fellow (with transformation logs)
-└── controldesk/
-    └── readback.py             # read_ego_state, read_fellow_state (with readback logs)
+├── controldesk/
+│   └── readback.py             # read_ego_state, read_fellow_state (with readback logs)
+└── create_new_ttl/             # TTL tooling: generate/close/visualize racing and pitlane TTLs
+    ├── README.md                # Full usage and script index
+    ├── combine_and_compare_ttl.py
+    ├── find_xodr_for_st_coordinates.py
+    ├── generate_racing_line.py
+    ├── close_ttl_loop.py
+    └── ...                      # See create_new_ttl/README.md
 ```
+
+---
+
+## TTL tooling
+
+Scripts for generating and validating target trajectory lines (TTLs) live in **`create_new_ttl/`**. Run them from the **Scenic repository root**, e.g.:
+
+```bash
+python src/scenic/simulators/dspace/create_new_ttl/combine_and_compare_ttl.py
+python src/scenic/simulators/dspace/create_new_ttl/visualize_combined_ttl.py --overlap
+```
+
+See **`create_new_ttl/README.md`** for the full script index and usage.
 
 ---
 
