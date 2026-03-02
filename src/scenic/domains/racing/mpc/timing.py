@@ -5,6 +5,8 @@ behavior section times (waypoint_speed_grade, after_mpc) so we can see what
 fraction of loop_other is MPC vs speed profile vs remainder.
 Call record_* from the respective modules; call finish_step() at end of each
 simulation step (from longitudinal run_step, which runs last).
+Note: sim_steps below count simulation steps (one per tick). Control is applied
+every control_interval steps (e.g. every 5), not every sim step.
 """
 
 import time
@@ -92,7 +94,7 @@ def finish_step() -> None:
         mean_sp = (_sum_speed_profile / _count) / 1000.0
         mpc_total_s = mean_lat + mean_lon
         line = (
-            f"[LoopOther] steps={_step} mean(s): "
+            f"[LoopOther] sim_steps={_step} mean(s): "
             f"state_unpack="
         )
         if _behavior_timing is not None:

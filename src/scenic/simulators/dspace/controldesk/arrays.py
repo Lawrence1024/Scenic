@@ -1,89 +1,70 @@
 import time
 
+# Path for simulated time (used for deterministic warmup; same as simulator.SIMULATED_TIME_PATH)
+_SIMULATED_TIME_PATH = "Platform()://ASM_Traffic/Simulation and RTOS/Simulation/SimulationTime"
+
+# Fixed warmup duration in simulated time (seconds) for deterministic runs
+WARMUP_SIM_DURATION = 3.0
+
+
+def _advance_one_step(sim):
+    """Advance simulation by one timestep (poll until simulated time advances). Used during warmup only."""
+    var = getattr(sim, "_var_access", None) or getattr(sim, "_cd", None)
+    cd = getattr(sim, "_cd", None)
+    if not var:
+        return False
+    try:
+        t_before = float(var.get_var(_SIMULATED_TIME_PATH))
+    except Exception:
+        return False
+    deadline = t_before + sim.timestep * 0.9
+    poll_timeout_wall = min(10.0 * sim.timestep, 0.1)
+    max_retries = 10
+    for _ in range(max_retries):
+        if cd:
+            cd.advance_simulation_step()
+        poll_start = time.perf_counter()
+        while time.perf_counter() - poll_start < poll_timeout_wall:
+            try:
+                t_now = float(var.get_var(_SIMULATED_TIME_PATH))
+                if t_now >= deadline:
+                    return True
+            except Exception:
+                pass
+            time.sleep(0.001)
+    return False
+
 
 def ensure_fellow_arrays_initialized(sim):
-    """Advance the simulation until fellow arrays are populated (once)."""
-    var = getattr(sim, "_var_access", None) or getattr(sim, "_cd", None)
-    if sim._fellow_arrays_initialized or sim._initializing_fellow_arrays or not var:
+    """Run warmup until 3 s simulated time has elapsed (poll sim time), then mark fellow arrays ready. Deterministic in sim time."""
+    if sim._fellow_arrays_initialized or sim._initializing_fellow_arrays:
         return
-    base_path = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/FELLOW_POS_VEL/FellowTrailer"
-    array_path = f"{base_path}/x"
+    var = getattr(sim, "_var_access", None) or getattr(sim, "_cd", None)
+    if not var:
+        return
     sim._initializing_fellow_arrays = True
     try:
-        num_fellows = 0
         try:
-            # Count fellows from scene objects (excluding ego). Ego is always present; fellows may be 0.
-            if hasattr(sim, 'scene') and hasattr(sim.scene, 'objects'):
-                num_fellows = len([o for o in sim.scene.objects if o is not getattr(sim.scene, 'egoObject', None)])
-            # Also check _fellow_vehicles dict
-            if hasattr(sim, '_fellow_vehicles') and sim._fellow_vehicles:
-                num_fellows = max(num_fellows, len(sim._fellow_vehicles))
+            t_start = float(var.get_var(_SIMULATED_TIME_PATH))
         except Exception:
-            pass
-        
-        # When there are 0 fellows, no fellow arrays need to be populated; mark ready so ego control runs.
-        if num_fellows == 0:
-            sim._fellow_arrays_initialized = True
-            sim._fellow_index_base = 0
-            return
-
-        # More aggressive warm-up: advance more steps and wait for REAL values
-        max_attempts = 500  # Increased from 200
-        for attempt in range(max_attempts):
-            x_arr = y_arr = yaw_arr = None
+            t_start = 0.0
+        target_sim_time = t_start + WARMUP_SIM_DURATION
+        max_steps = int(WARMUP_SIM_DURATION / sim.timestep) + 100  # safeguard
+        print(f"[dSPACE] Warmup: advancing until sim time >= {target_sim_time:.2f} s (from {t_start:.2f} s)...")
+        step_count = 0
+        for _ in range(max_steps):
+            if not _advance_one_step(sim):
+                print(f"[dSPACE] [WARN] Warmup step {step_count + 1} timed out")
+            step_count += 1
             try:
-                x_arr = var.get_var(array_path)
+                t_now = float(var.get_var(_SIMULATED_TIME_PATH))
+                if t_now >= target_sim_time:
+                    break
             except Exception:
-                x_arr = None
-            try:
-                y_arr = var.get_var(f"{base_path}/y")
-            except Exception:
-                y_arr = None
-            try:
-                yaw_arr = var.get_var(f"{base_path}/yaw_deg_out")
-            except Exception:
-                yaw_arr = None
-
-            ready = False
-            # Check if arrays exist AND have real values (not just zeros)
-            # We need actual position data, not just empty arrays
-            if isinstance(x_arr, (list, tuple)) and len(x_arr) >= num_fellows:
-                # Check that arrays have REAL values (not just zeros)
-                # We need actual position data from the simulation
-                def has_real_values(arr, num_indices):
-                    """Check if arrays have real non-zero values indicating fellows are spawned."""
-                    if not arr or not isinstance(arr, (list, tuple)):
-                        return False
-                    try:
-                        for i in range(min(num_indices, len(arr))):
-                            val = arr[i]
-                            if isinstance(val, (int, float)) and abs(val) > 0.1:  # Real position, not zero
-                                return True
-                    except Exception:
-                        pass
-                    return False
-                
-                # Arrays are ready if we have real position values (x or y)
-                # This means fellows are actually spawned in the simulation
-                if has_real_values(x_arr, num_fellows) or (y_arr and has_real_values(y_arr, num_fellows)):
-                    ready = True
-            if ready:
-                sim._fellow_arrays_initialized = True
-                sim._fellow_index_base = 0
-                break
-
-            if attempt < max_attempts - 1:
-                try:
-                    # Prefer ControlDesk step control for warm-up (session/step still owned by COM)
-                    if getattr(sim, "_cd", None) is not None:
-                        sim._cd.advance_simulation_step()
-                        time.sleep(sim.timestep * 0.5)
-                    else:
-                        time.sleep(sim.timestep)
-                except Exception:
-                    time.sleep(sim.timestep)
-        if not sim._fellow_arrays_initialized:
-            print(f"[dSPACE] [ERROR] Fellow arrays not initialized after {max_attempts} warm-up steps")
+                pass
+        sim._fellow_arrays_initialized = True
+        sim._fellow_index_base = 0
+        print(f"[dSPACE] Warmup done: sim time >= {target_sim_time:.2f} s after {step_count} advances.")
     finally:
         sim._initializing_fellow_arrays = False
 
@@ -126,5 +107,3 @@ def probe_external_index_base(sim):
     sim._ext_index_base = 0
     sim._ext_probe_done = True
     return False
-
-

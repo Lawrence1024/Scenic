@@ -741,20 +741,11 @@ class DSpaceSimulation(RacingSimulation):
         self._timing_last['com_reads'] = 0.0
         self._timing_last['get_properties'] = 0.0
 
-        if not self._fellow_arrays_initialized:
-            ensure_fellow_arrays_initialized(self)
-            if not self._fellow_arrays_initialized:
-                # Skip this tick to give ControlDesk time to produce fellow arrays
-                # Behaviors will run again next tick once arrays are ready
-                # (avoids losing one-shot actions)
-                if self._execute_count % 50 == 1:
-                    print(f"[executeActions #{self._execute_count}] Waiting for fellow arrays...")
-                return
-
         if self._execute_count % 50 == 1:
             step_idx = int(getattr(self, "currentTime", 0))
             sim_t = step_idx * float(self.timestep)
-            print(f"[executeActions] step={step_idx} sim_t={sim_t:.2f}s #{self._execute_count} Executing actions for {len(self.scene.objects)} objects")
+            ctrl_interval = getattr(self, "_control_interval", 1)
+            print(f"[executeActions] sim_step={step_idx} sim_t={sim_t:.2f}s (control every {ctrl_interval} steps) #{self._execute_count} Executing actions for {len(self.scene.objects)} objects")
 
         # First, let actions apply themselves (this calls setThrottle, setSteering, etc.)
         _t0 = time.perf_counter()
