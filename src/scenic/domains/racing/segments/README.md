@@ -11,7 +11,7 @@ The racing domain (`scenic.domains.racing`) extends the driving domain with clos
 ```
 domains/racing/
 ├── constants.py              # Single source of truth: DELTA_MAX_RAD, THETA_SW_MAX_DEG, R
-├── RACING_CONTROL_CONTRACT.md # Steering units (PID vs MPC), constants, simulator contract
+├── README.md                  # Racing domain reference (includes control contract)
 ├── behaviors.scenic          # FollowRacingLineBehavior (PID), FollowRacingLineMPCBehavior (MPC), etc.
 ├── actions.py                # Racing actions (SetMaxSpeed, SetTTL, SetGear, …)
 ├── simulators.py             # RacingSimulation: getRacingControllers(use_mpc=…), sets _racing_steer_units
@@ -25,7 +25,7 @@ domains/racing/
     └── README.md              # MPC-focused documentation
 ```
 
-**Control flow (short):** Behaviors get controllers from `getRacingControllers(agent, use_mpc=True|False)`. PID path uses normalized steering [-1, 1]; MPC path uses road wheel angle in rad. Constants live in `constants.py`; rad→dSPACE conversion only in the simulator’s `steer_io`. See [RACING_CONTROL_CONTRACT.md](../RACING_CONTROL_CONTRACT.md).
+**Control flow (short):** Behaviors get controllers from `getRacingControllers(agent, use_mpc=True|False)`. PID path uses normalized steering [-1, 1]; MPC path uses road wheel angle in rad. Constants live in `constants.py`; rad→dSPACE conversion only in the simulator’s `steer_io`. See [racing README – Control contract](../README.md#control-contract).
 
 **Where segments fit:** Behaviors (e.g. `FollowRacingLineMPCBehavior`) and MPC use waypoints and a **segment map** to know which track segment each waypoint belongs to. That supports logging (e.g. “segment 6 curve”), per-segment analysis, and MPC reference continuity (segment selection, gate, stick). Segment map is built from the same waypoints/centerline used for the racing line; it does not drive control by itself—it labels and indexes.
 
@@ -78,7 +78,7 @@ domains/racing/
 
 ## Related documentation
 
-- [RACING_CONTROL_CONTRACT.md](../RACING_CONTROL_CONTRACT.md) – Steering units, constants, simulator contract.
+- [Racing README – Control contract](../README.md#control-contract) – Steering units, constants, simulator contract.
 - [../README.md](../README.md) – Full racing domain reference (objects, actions, behaviors, simulator implementation).
 - [../mpc/README.md](../mpc/README.md) – MPC formulation, config, and how MPC uses segments/reference.
 - [simulators/dspace/README.md](../../../simulators/dspace/README.md) – dSPACE integration (placement, steering IO, control application).

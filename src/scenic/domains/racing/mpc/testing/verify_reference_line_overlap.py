@@ -1,7 +1,7 @@
 """
 Verify that RD and XODR reference lines overlap with minimal error.
 
-This script proves the claim in temp.md that reference-line points match
+This script verifies that RD and XODR reference-line points match
 up to floating-point noise (~1e-13 m) for Laguna_Seca.rd and LagunaSeca.xodr.
 """
 
@@ -49,7 +49,7 @@ def _seg_type(seg):
 
 def sample_rd_reference_line(rd_path: str, road_name: str, ds: float = 0.5) -> List[Tuple[float, float, float]]:
     """
-    Parse RD file reference line using the documented method from temp.md.
+    Parse RD file reference line (cubic spline segments, world transform).
     
     Returns list of (x, y, s) tuples where s is cumulative distance along the road.
     """
@@ -141,11 +141,11 @@ def sample_rd_reference_line(rd_path: str, road_name: str, ds: float = 0.5) -> L
             s_local = min(L, i * ds)
             t = 0.0 if L <= 0 else (s_local / L)
             
-            # Local parametric cubic (per temp.md)
+            # Local parametric cubic (RD segment convention)
             xL = Ax + Bx*t + Cx*(t*t) + Dx*(t*t*t)
             yL = Ay + By*t + Cy*(t*t) + Dy*(t*t*t)
             
-            # Local -> world transform (per temp.md)
+            # Local -> world transform (RD segment convention)
             xW = X0 + xL*math.cos(theta) - yL*math.sin(theta)
             yW = Y0 + xL*math.sin(theta) + yL*math.cos(theta)
             
@@ -337,7 +337,7 @@ def main():
     print("Reference Line Overlap Verification")
     print("="*80)
     print("\nThis script verifies that RD and XODR reference lines match")
-    print("to floating-point noise (~1e-13 m) as documented in temp.md")
+    print("to floating-point noise (~1e-13 m)")
     print("="*80)
     
     # Find map files - try multiple possible locations

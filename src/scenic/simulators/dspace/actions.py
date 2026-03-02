@@ -32,7 +32,7 @@ class SetVehicleControl(Action):
         brake: Brake input (0.0 to 1.0)
         steer: Steering. For PID / normalized use: -1.0 to 1.0. For ego with MPC
             (agent._racing_steer_units == 'rad'), pass road wheel angle in radians.
-            See RACING_CONTROL_CONTRACT.md.
+            See racing README control contract (domains/racing/README.md#control-contract).
         velocity: Target velocity in m/s (optional)
     """
     

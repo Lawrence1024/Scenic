@@ -28,6 +28,7 @@ The Scenic Racing Domain (`@racing/`) extends the Driving Domain (`@driving/`) w
 10. [Implementation Status](#implementation-status)
 11. [API Reference](#api-reference)
 12. [Simulator Implementation](#simulator-implementation)
+13. [Control contract](#control-contract)
 
 ---
 
@@ -806,6 +807,17 @@ See `src/scenic/simulators/dspace/racing_model.scenic` and `simulator.py` for a 
 
 ---
 
+## Control contract
+
+Single contract for steering (and throttle/brake) across behavior, MPC, and dSPACE.
+
+- **Steering units:** PID path: normalized [-1, 1]. MPC path: **road wheel angle in radians**. Simulator interprets `_control_state['steering']` using `agent._racing_steer_units` (set by `getRacingControllers(agent, use_mpc=...)`): `'rad'` or `'normalized'`.
+- **Constants:** All limits in `scenic.domains.racing.constants` (`DELTA_MAX_RAD`, `THETA_SW_MAX_DEG`, `R`). Do not hardcode 0.2816 or 240 elsewhere.
+- **dSPACE:** Rad → steering wheel deg only in `simulators/dspace/steer_io.py` via `road_rad_to_dspace_value`. Fellow physics expects [-1, 1]; when MPC, convert rad → normalized before physics.
+- **SetSteerAction:** For racing MPC the behavior passes radians; simulators must use `_racing_steer_units`, not assume [-1, 1] only.
+
+---
+
 ## File Structure
 
 ```
@@ -817,16 +829,13 @@ src/scenic/domains/racing/
 ├── actions.py               # Racing actions
 ├── simulators.py            # Racing simulator interfaces (getRacingControllers with use_mpc)
 ├── README.md                # This file (complete reference)
-├── supplement_log_instructions.md  # Optional logging for MPC/deadzone/ref continuity
 ├── mpc/                     # MPC/MPCC lateral + longitudinal controllers
 │   ├── config.py, reference_builder.py, mpc_lateral.py, mpc_longitudinal.py
 │   ├── speed_profile.py, io_adapter.py, utils.py, calibration.py
 │   ├── vehicle_mpc.yaml, README.md
-│   ├── result_data/         # Log analysis (analyze_racing_log, compare_racing_results)
-│   └── testing/             # Unit and integration tests
-└── segments/                # Segment map and racing-line utilities
-    ├── segment_map.py, visualize_racing_segments.py
-    └── README.md
+│   ├── result_data/         # Log analysis (README.md)
+│   └── testing/             # Unit and integration tests (README.md)
+└── segments/                # Segment map and racing-line utilities (README.md)
 
 src/scenic/simulators/dspace/
 └── racing_model.scenic      # dSPACE+Racing integration

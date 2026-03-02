@@ -1,6 +1,6 @@
 # dSPACE Simulator Integration
 
-This folder contains the **dSPACE simulator integration** for Scenic: how the racing domain connects to dSPACE ModelDesk/ControlDesk, including vehicle placement, coordinate transformation, control application (ego and fellow), and steering IO. The integration follows the [racing control contract](../../domains/racing/RACING_CONTROL_CONTRACT.md) so that steering units and constants are consistent with the racing library.
+This folder contains the **dSPACE simulator integration** for Scenic: how the racing domain connects to dSPACE ModelDesk/ControlDesk, including vehicle placement, coordinate transformation, control application (ego and fellow), and steering IO. The integration follows the [racing control contract](../../domains/racing/README.md#control-contract) so that steering units and constants are consistent with the racing library.
 
 ---
 
@@ -24,7 +24,7 @@ The dSPACE backend provides:
 - **Fellow:** Physics model expects steering in [-1, 1]. When `_racing_steer_units == 'rad'`, convert rad → normalized before calling physics.
 - **Constants:** `DELTA_MAX_RAD`, `THETA_SW_MAX_DEG`, `R` are defined in `scenic.domains.racing.constants`; `steer_io` imports them. Do not hardcode 0.2816 or 240 elsewhere.
 
-See [RACING_CONTROL_CONTRACT.md](../../domains/racing/RACING_CONTROL_CONTRACT.md).
+See [racing README – Control contract](../../domains/racing/README.md#control-contract).
 
 ### Steering IO (single conversion point)
 
@@ -119,7 +119,7 @@ src/scenic/simulators/dspace/
 ├── README.md                    # This file
 ├── simulator.py                 # DSpaceSimulation, getRacingControllers override, executeActions
 ├── steer_io.py                  # road_rad_to_dspace_value; only place for rad → steering wheel deg
-├── actions.py                   # SetVehicleControl (dSPACE-specific); steer doc per RACING_CONTROL_CONTRACT
+├── actions.py                   # SetVehicleControl (dSPACE-specific); steer doc per racing README control contract
 ├── vehicle/
 │   ├── controller.py            # apply_ego_control (throttle/brake/steer by _racing_steer_units), apply_fellow_control
 │   └── physics.py               # Fellow kinematic model (steering in [-1, 1])
@@ -137,7 +137,7 @@ src/scenic/simulators/dspace/
 
 ## Related documentation
 
-- [RACING_CONTROL_CONTRACT.md](../../domains/racing/RACING_CONTROL_CONTRACT.md) – Steering units, constants, simulator contract.
+- [Racing README – Control contract](../../domains/racing/README.md#control-contract) – Steering units, constants, simulator contract.
 - [Racing domain README](../../domains/racing/README.md) – Full racing reference (objects, actions, behaviors, simulator implementation).
 - [MPC README](../../domains/racing/mpc/README.md) – MPC formulation, config, wiring; MPC output in rad.
 - [Segments README](../../domains/racing/segments/README.md) – Racing library structure and segment map.

@@ -75,7 +75,7 @@ class RacingSimulation(Simulation):
                 lon_controller = MPCLongitudinalController(config, timestep=dt)
                 lat_controller = MPCLateralController(config, timestep=dt)
                 
-                # Steering contract: MPC path uses road wheel angle in radians (see RACING_CONTROL_CONTRACT.md)
+                # Steering contract: MPC path uses road wheel angle in radians (see racing README control contract)
                 agent._racing_steer_units = 'rad'
                 return lon_controller, lat_controller
             except Exception as e:

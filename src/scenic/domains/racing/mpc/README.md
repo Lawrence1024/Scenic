@@ -3,7 +3,7 @@
 **Last Updated:** 2025-02  
 **Status:** MPCC lateral + longitudinal MPC integrated with racing behaviors
 
-This document focuses on the **MPC submodule**: formulation, configuration, and how it fits into the racing control stack. For the overall racing library structure, see the parent [racing README](../README.md) and [RACING_CONTROL_CONTRACT.md](../RACING_CONTROL_CONTRACT.md).
+This document focuses on the **MPC submodule**: formulation, configuration, and how it fits into the racing control stack. For the overall racing library and control contract, see the parent [racing README](../README.md#control-contract).
 
 ---
 
@@ -17,7 +17,7 @@ This module implements **Model Predictive Contouring Control (MPCC)** for latera
 
 - **Behaviors** (`FollowRacingLineMPCBehavior`) call `getRacingControllers(agent, use_mpc=True)` to obtain lateral and longitudinal MPCs, build waypoints/speed profile, and pass MPC output to `SetSteerAction(rad)` and throttle/brake actions.
 - **MPC** owns lateral clamp (±`max_steer_angle`) and rate limit; returns `delta_cmd_rad`. Config default for `max_steer_angle` uses `DELTA_MAX_RAD` from racing constants.
-- **Simulator (e.g. dSPACE)** interprets `_control_state['steering']` using `agent._racing_steer_units` (set to `'rad'` when MPC is used); conversion rad → steering wheel deg happens only in `steer_io`. See [RACING_CONTROL_CONTRACT.md](../RACING_CONTROL_CONTRACT.md).
+- **Simulator (e.g. dSPACE)** interprets `_control_state['steering']` using `agent._racing_steer_units` (set to `'rad'` when MPC is used); conversion rad → steering wheel deg happens only in `steer_io`. See [racing README – Control contract](../README.md#control-contract).
 
 ---
 
@@ -36,9 +36,8 @@ mpc/
 ├── calibration.py          # Steering scale calibration (skeleton)
 ├── vehicle_mpc.yaml        # Default MPC parameters
 ├── README.md               # This file
-├── result_data/            # Log parsing and run analysis
-├── testing/                # Unit and integration tests
-└── *.md                    # fix.md, steer_restrcutre_plan.md, MPCC_IMPROVEMENT_PLAN.md, etc.
+├── result_data/            # Log parsing and run analysis (README.md)
+└── testing/                # Unit and integration tests (README.md)
 ```
 
 ---
@@ -57,7 +56,7 @@ mpc/
 
 **Cost:** Contouring (`w_ey*e_y^2`, `w_epsi*e_psi^2`), lag, progress reward, feedforward tracking, input/rate/ddu penalties. Weights are adaptive by curvature (low / mid / high).
 
-**Reference continuity (segment selection):** Best segment by perpendicular distance; **gate** (reject switch if too far / backward / s_jump); **stick** when `|prev_e_y| >= segment_stick_cte_m`. Recover mode: when gate rejects and match_dist > `gate_hard_fail_dist_m`, force re-association.
+**Reference continuity (segment selection):** Single helper `_best_segment_in_window` for initial and reacquire scans; one reacquire path (match-dist spike or gate too_far/s_jump). Gate rejects switch if too far / backward / s_jump; stick when `|prev_e_y| >= segment_stick_cte_m`; hysteresis skipped after reacquire. **Current-index:** Behavior passes `current_waypoint_idx` (its `wp_last_idx`) for local search; MPC owns chosen segment (`last_seg_idx`). `build_reference` returns 6-tuple (no waypoint index).
 
 **Conditional deadzone:** Apply CTE deadzone only when association good and curvature low; otherwise do not zero e_y.
 
@@ -102,7 +101,7 @@ After changing config, run a simulation and use `result_data/analyze_racing_log`
 
 ## Wiring and debugging (control pipeline, state, reference, kinematics)
 
-Reference: [RACING_CONTROL_CONTRACT.md](../RACING_CONTROL_CONTRACT.md). This section gives MPC-specific locations.
+Reference: [racing README – Control contract](../README.md#control-contract). This section gives MPC-specific locations.
 
 ### A) Control pipeline (steering chain)
 
@@ -121,7 +120,7 @@ Heading from ControlDesk; yaw rate from readback or behavior; speed from actor/b
 
 ### C) Reference builder and segment selection
 
-Best segment by perpendicular distance; gate (max_wp_match_dist_m, max_s_jump_m, backward); stick (segment_stick_cte_m); recover when gate rejects and match_dist > gate_hard_fail_dist_m. psi_ref = atan2(seg_dy, seg_dx); e_y from projection (no flip). kappa_ref from spline or linear; sign: left turn > 0.
+Segment scan: `_best_segment_in_window`; one reacquire path. Gate (max_wp_match_dist_m, max_s_jump_m, backward); stick (segment_stick_cte_m); recover when gate rejects and match_dist > gate_hard_fail_dist_m. Behavior passes current_waypoint_idx (wp_last_idx); MPC sets last_seg_idx. psi_ref = atan2(seg_dy, seg_dx); e_y from projection (no flip). kappa_ref from spline or linear; sign: left turn > 0.
 
 ### D) Wheelbase and kinematics
 
@@ -131,7 +130,7 @@ wheel_base (e.g. 2.9718 m); delta_ff = atan(L * kappa_ref); max_steer_angle in r
 
 ## Testing
 
-**Location:** `mpc/testing/`. Run: `python run_tests.py` or `python -m pytest test_*.py -v`. Coverage: config, reference builder, lateral MPC (state, gate/stick, OSQP), behavior/simulation integration. See `TEST_CASES.md`. Do not run `scenic` from automated scripts; use `--count 1` when running scenarios manually.
+**Location:** `mpc/testing/`. Run: `python run_tests.py` or `python -m pytest test_*.py -v`. Coverage: config, reference builder, lateral MPC (state, gate/stick, OSQP), behavior/simulation integration. See `testing/README.md`. Do not run `scenic` from automated scripts; use `--count 1` when running scenarios manually.
 
 ---
 
@@ -159,11 +158,13 @@ mpc = MPCLateralController(config, timestep=0.05)
 
 ---
 
-## Related docs
+## Fixes applied (summary)
 
-- **../RACING_CONTROL_CONTRACT.md** – Steering units, constants, simulator contract.
-- **fix.md** – Log of fixes (no e_y flip, steer sign at write, gate/stick, single-segment).
-- **steer_restrcutre_plan.md** – MPC output in rad; single rad→dSPACE conversion in steer_io.
-- **MPCC_IMPROVEMENT_PLAN.md** – Reference gate, conditional deadzone, feedforward, stick.
+Applied in code; the codebase is the source of truth. **Closed-loop:** Segment indices 0..n_wp-1; last segment wraps. **Segment scan:** Single helper `_best_segment_in_window`; one reacquire path; hysteresis skipped after reacquire. **CTE:** Safety envelope uses MPC e_y when available; legacy CTE only as fallback when MPC did not run. **Current-index:** Behavior owns progress (wp_last_idx); MPC owns chosen segment (last_seg_idx). **3D:** Waypoints may be (x,y,z); projection and CTE use XY plane; segment length may use 3D for grade.
+
+---
+
+## Related
+
+- **../README.md** – Racing domain and [control contract](../README.md#control-contract).
 - **result_data/README.md** – Log analysis and comparison.
-- **3D_RESPONSIBILITIES.md** – 3D waypoints and projection.
