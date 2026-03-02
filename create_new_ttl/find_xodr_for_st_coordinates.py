@@ -28,13 +28,15 @@ import pythoncom
 from win32com.client import Dispatch
 from scenic.simulators.dspace.controldesk.connection import ControlDeskApp
 from scenic.simulators.dspace.geometry.coordinate_transform import (
-    load_transform, apply_inverse_coordinate_transform
+    load_transform,
+    apply_inverse_coordinate_transform,
 )
 from scenic.simulators.dspace.utils import legacy as dutils
 
-# Configuration: Generate coordinates from s=200 to s=3790, step 1m, t=0
-S_START = 200.0
-S_END = 3790.0
+# Configuration: Generate coordinates from s=0 to s=900, step 1m, t=0
+# This range is suitable for sampling the pitlane loop (route R1).
+S_START = 3350
+S_END = S_START + 30 * 5
 S_STEP = 1.0
 T_VALUE = 0.0
 BATCH_SIZE = 30
@@ -65,7 +67,7 @@ def copy_scenario(app, exp, source_scenario=None, new_scenario_name=None):
         return exp.TrafficScenario
 
 
-def create_fellow_at_st(ts, fellow_name, s_val, t_val, route_name="R2"):
+def create_fellow_at_st(ts, fellow_name, s_val, t_val, route_name="R1"):
     """Create a fellow vehicle at specified (s, t) coordinate."""
     print(f"\n  Creating fellow '{fellow_name}' at (s={s_val:.1f}, t={t_val:.3f}) on route {route_name}")
     
@@ -169,7 +171,7 @@ def test_all_st_coordinates(test_coordinates, coordinate_transform, ts, exp, cd)
     print(f"\n  Creating {len(test_coordinates)} fellows...")
     for i, (s_val, t_val) in enumerate(test_coordinates):
         fellow_name = f"TestFellow_{i}"
-        fellow = create_fellow_at_st(ts, fellow_name, s_val, t_val, route_name="R2")
+        fellow = create_fellow_at_st(ts, fellow_name, s_val, t_val, route_name="R1")
         print(f"    [OK] Created fellow {i}: {fellow_name} at (s={s_val:.1f}, t={t_val:.3f})")
     
     # Save and download
@@ -219,7 +221,9 @@ def test_all_st_coordinates(test_coordinates, coordinate_transform, ts, exp, cd)
     time.sleep(1.0)
     
     # Read all positions from ControlDesk arrays
-    print(f"\n  [OK] Reading positions from ControlDesk (indices 0-{len(test_coordinates)-1})...")
+    print(
+        f"\n  [OK] Reading positions from ControlDesk (indices 0-{len(test_coordinates)-1})..."
+    )
     results = []
     
     for i, (s_val, t_val) in enumerate(test_coordinates):
@@ -336,10 +340,10 @@ def clear_checkpoint():
 def main():
     """Main function."""
     print("="*80)
-    print("FIND XODR COORDINATES FOR (s, t) COORDINATES ON MAIN RACING ROAD (R2)")
+    print("FIND XODR COORDINATES FOR (s, t) COORDINATES ON ROUTE R1")
     print("="*80)
     print("\nThis script will:")
-    print("  1. Place fellow vehicles in batches at their (s, t) coordinates on R2 route")
+    print("  1. Place fellow vehicles in batches at their (s, t) coordinates on R1 route")
     print("  2. Read ControlDesk RD positions from array indices 0, 1, 2, etc.")
     print("  3. Transform back to XODR coordinates")
     print("  4. Report results")
@@ -496,7 +500,7 @@ def main():
     print("\n" + "="*80)
     print("RESULTS SUMMARY")
     print("="*80)
-    print("\nXODR coordinates for (s, t) coordinates on R2 (main racing road):")
+    print("\nXODR coordinates for (s, t) coordinates on R1:")
     print("\n" + "-"*100)
     print(f"{'s':>10} | {'t':>10} | {'XODR X':>15} | {'XODR Y':>15} | {'XODR Z':>15} | {'RD X':>15} | {'RD Y':>15} | {'RD Z':>15}")
     print("-"*100)
@@ -513,7 +517,7 @@ def main():
     print(f"\n[6] Saving results to: {output_file}")
     try:
         with open(output_file, 'w') as f:
-            f.write("XODR Coordinates for (s, t) Coordinates on R2 (Main Racing Road)\n")
+            f.write("XODR Coordinates for (s, t) Coordinates on R1\n")
             f.write("="*100 + "\n\n")
             f.write(f"{'s':>10} | {'t':>10} | {'XODR X':>15} | {'XODR Y':>15} | {'XODR Z':>15} | {'RD X':>15} | {'RD Y':>15} | {'RD Z':>15}\n")
             f.write("-"*100 + "\n")

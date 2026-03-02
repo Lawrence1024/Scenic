@@ -25,7 +25,7 @@ model scenic.domains.racing.model
 ego = new RacingCar at (55.766137, 88.269387), \
     with regionContainedIn everywhere, \
     with raceNumber 1, \
-    with ttlFileName 'ttl_racing_line_xodr.csv', \
+    with ttlFileName 'ttl_main_road.csv', \
     with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV'), \
     with ttlDX 0.0, \
     with ttlDY 0.0

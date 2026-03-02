@@ -1,5 +1,54 @@
 from ..utils import legacy as dutils
 
+# TTL filenames for route preference (distance to main vs pitlane; if similar, prefer main)
+TTL_MAIN_ROAD_FILE = "ttl_main_road.csv"
+TTL_PITLANE_FILE = "ttl_pitlane.csv"
+# If |dist_main - dist_pit| <= this (m), consider "similar" and prefer main road
+ROUTE_SIMILAR_TOLERANCE_M = 2.0
+
+
+def _min_dist_to_ttl(px, py, points):
+    """Minimum distance from (px, py) to any point in points. points: list of (x,y) or (x,y,z)."""
+    if not points:
+        return float("inf")
+    best = float("inf")
+    for p in points:
+        dx = px - p[0]
+        dy = py - p[1]
+        d = (dx * dx + dy * dy) ** 0.5
+        if d < best:
+            best = d
+    return best
+
+
+def _route_pref_from_ttl_distances(sim, xodr_x, xodr_y):
+    """
+    Prefer route (Lap vs Pit) by distance to main-road TTL vs pitlane TTL.
+    If distances are similar (within ROUTE_SIMILAR_TOLERANCE_M), prefer main road (Lap).
+    Returns 'Lap' or 'Pit', or None if TTLs cannot be loaded (caller should fall back to road-based detection).
+    """
+    try:
+        from ..ttl.loader import get_ttl_config, load_ttl_region
+        scene_params = getattr(getattr(sim, "scene", None), "params", None) or {}
+        ttl_folder, _, dx, dy, _ = get_ttl_config(scene_params)
+        ttl_folder = str(ttl_folder)
+        _, main_pts = load_ttl_region(ttl_folder, 0, dx, dy, TTL_MAIN_ROAD_FILE)
+        _, pit_pts = load_ttl_region(ttl_folder, 0, dx, dy, TTL_PITLANE_FILE)
+        if not main_pts or not pit_pts:
+            return None
+        dist_main = _min_dist_to_ttl(xodr_x, xodr_y, main_pts)
+        dist_pit = _min_dist_to_ttl(xodr_x, xodr_y, pit_pts)
+        # If clearly closer to pit, use Pit; otherwise prefer main road (including when similar)
+        if dist_pit < dist_main - ROUTE_SIMILAR_TOLERANCE_M:
+            print(f"  [Ego route] TTL distances: main={dist_main:.2f}m pit={dist_pit:.2f}m -> Pit (closer to pitlane)")
+            return "Pit"
+        print(f"  [Ego route] TTL distances: main={dist_main:.2f}m pit={dist_pit:.2f}m -> Lap (main road or similar, prefer main)")
+        return "Lap"
+    except Exception as e:
+        print(f"  [Ego route] TTL-based route preference skipped: {e}")
+        return None
+
+
 def place_ego(sim, obj):
     """Create/configure the ego vehicle using the Maneuver API."""
     # 1) Transform Scenic XODR → RD
@@ -15,28 +64,25 @@ def place_ego(sim, obj):
         else:
             work_x, work_y = scenic_x, scenic_y
         
-        # 2) Determine route FIRST (before projection) using RD coordinates
-        route_pref = None
-        try:
-            # Use the transformed RD coordinates for route detection
-            # (road_index is built from RD file, so it expects RD coordinates)
-            position_xy = (work_x, work_y)
-            track_segment = sim.detectTrackSegment(position_xy)
-            if track_segment:
-                route_pref = sim.assignRoute(obj, track_segment)
-        except Exception as e:
-            print(f"  [Route] Could not detect route from RD coordinates: {e}")
-        
-        # Fallback: try original method (uses XODR coordinates)
+        # 2) Determine route: prefer TTL-based (distance to main vs pitlane; if similar, prefer main)
+        route_pref = _route_pref_from_ttl_distances(sim, scenic_x, scenic_y)
+        if not route_pref:
+            try:
+                # Road-based detection (RD coordinates)
+                position_xy = (work_x, work_y)
+                track_segment = sim.detectTrackSegment(position_xy)
+                if track_segment:
+                    route_pref = sim.assignRoute(obj, track_segment)
+            except Exception as e:
+                print(f"  [Route] Could not detect route from RD coordinates: {e}")
         if not route_pref:
             try:
                 route_pref = sim._detect_route_from_road_segment(obj)
             except Exception:
                 pass
-        
-        # Default to 'Lap' if route detection fails
         if not route_pref:
             route_pref = 'Lap'
+        print(f"[Ego] Assigned route: {route_pref} (Lap=main road R2, Pit=pitlane R1)")
         
         # 3) Project RD → (s,t) using route-specific road index
         if sim._road_index:
@@ -51,6 +97,7 @@ def place_ego(sim, obj):
     else:
         s_val, t_val = 0.0, 0.0
         route_pref = 'Lap'  # Default route
+        print(f"[Ego] Assigned route: {route_pref} (Lap=main road R2, Pit=pitlane R1) [no position]")
 
     # 2) Get velocity
     base_v = 0.0

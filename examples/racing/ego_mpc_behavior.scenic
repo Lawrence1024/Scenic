@@ -19,14 +19,16 @@ model scenic.simulators.dspace.racing_model
 
 # --- Ego car with MPC behavior ---
 # Using main racing road centerline TTL (excluding pitlane)
-
-ego = new RacingCar at (134.131413,125.953041),\
-# ego = new RacingCar at (614.659946,-302.782016),\
-# ego = new RacingCar at (-110.956171,-151.841778,8.331000),\
-# ego = new RacingCar at (55.766137,88.269387), \
+# Pitlane Start
+ego = new RacingCar at (79.766382000,97.055717000), \
+# ego = new RacingCar at (134.131413,125.953041),\   # Main End
+# ego = new RacingCar at (614.659946,-302.782016),\  # Weird Curve
+# ego = new RacingCar at (-110.956171,-151.841778,8.331000),\ # Werid Curve
+# ego = new RacingCar at (55.766137,88.269387), \ # Main Start
     with regionContainedIn everywhere, \
     with raceNumber 1, \
-    with ttlFileName 'ttl_racing_line_xodr_closed.csv', \
+    # with ttlFileName 'ttl_main_road.csv', \
+    with ttlFileName 'ttl_pitlane.csv', \
     with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV'), \
     with ttlDX 0.0, \
     with ttlDY 0.0

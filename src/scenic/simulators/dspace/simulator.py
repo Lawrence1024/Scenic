@@ -316,6 +316,12 @@ class DSpaceSimulation(RacingSimulation):
         # 11) Initialize fellow arrays and verify readback (all while paused; warmup uses SingleStep)
         print("[Setup] Initializing fellow arrays...")
         ensure_fellow_arrays_initialized(self)
+
+        # 11b) Initialize External_Signals S/T for fellows so dSPACE starts from correct positions
+        try:
+            self._initializeFellowExternalSignals()
+        except Exception as e:
+            print(f"[Setup] [WARN] Failed to initialize fellow External_Signals: {e}")
         
         # 12) Verify we can read back values from ControlDesk for all vehicles
         print("[Setup] Verifying ControlDesk readback for all vehicles...")
@@ -990,6 +996,114 @@ class DSpaceSimulation(RacingSimulation):
     def _ensureFellowArraysInitialized(self):
         """Deprecated wrapper for controldesk.arrays.ensure_fellow_arrays_initialized."""
         ensure_fellow_arrays_initialized(self)
+
+    def _initializeFellowExternalSignals(self):
+        """Initialize External_Signals S/T arrays for fellows using RD (dSPACE) coordinates.
+
+        This seeds Const_s_Fellows_External[m]/Value and Const_d_Fellows_External[m]/Value
+        with the (s, t) coordinates derived from Scenic placement so that when
+        external control is enabled, the initial fellow positions in dSPACE
+        match the ModelDesk scenario.
+        """
+        # Skip if we have no variable access backend or no fellows
+        var = getattr(self, "_var_access", None) or getattr(self, "_cd", None)
+        if not var:
+            return
+
+        ego = getattr(self.scene, "egoObject", None)
+        fellows = [obj for obj in self.scene.objects if obj is not ego]
+        if not fellows:
+            return
+
+        base_ext = (
+            "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/"
+            "FellowMovement/External_Signals"
+        )
+        s_path = f"{base_ext}/Const_s_Fellows_External[m]/Value"
+        d_path = f"{base_ext}/Const_d_Fellows_External[m]/Value"
+
+        # Read current arrays (best-effort)
+        try:
+            s_arr = list(var.get_var(s_path) or [])
+        except Exception:
+            s_arr = []
+        try:
+            d_arr = list(var.get_var(d_path) or [])
+        except Exception:
+            d_arr = []
+
+        # Helper to obtain (s, t) in dSPACE road coordinates for a fellow
+        def _get_st_for_fellow(obj):
+            st = getattr(obj, "_route_s_t", None)
+            if st is not None and len(st) == 2:
+                return float(st[0]), float(st[1])
+            # Fallback: recompute from Scenic XODR position using current transform
+            if getattr(obj, "position", None) is None:
+                return 0.0, 0.0
+            try:
+                scenic_x, scenic_y = obj.position.x, obj.position.y
+                # Apply XODR→RD transform if available
+                if self._coordinate_transform is not None:
+                    from .geometry.coordinate_transform import apply_coordinate_transform
+                    work_x, work_y = apply_coordinate_transform(
+                        self._coordinate_transform, (scenic_x, scenic_y)
+                    )
+                else:
+                    work_x, work_y = scenic_x, scenic_y
+
+                if self._road_index:
+                    from .geometry.route_projection import project_world_to_st_route_specific
+
+                    # Use stored route preference if available
+                    route_pref = getattr(obj, "_route", None)
+                    s_val, t_val = project_world_to_st_route_specific(
+                        self._road_index,
+                        (work_x, work_y),
+                        route_preference=route_pref,
+                    )
+                    return float(s_val), float(t_val)
+            except Exception:
+                pass
+            return 0.0, 0.0
+
+        # Populate arrays for each fellow
+        updated = False
+        for obj in fellows:
+            try:
+                idx = self._getFellowIndex(obj)
+            except Exception:
+                idx = None
+            if idx is None:
+                continue
+
+            eff_index = idx + (self._fellow_index_base or 0)
+            if eff_index < 0:
+                continue
+
+            s_val, t_val = _get_st_for_fellow(obj)
+
+            need_len = eff_index + 1
+            if len(s_arr) < need_len:
+                s_arr.extend([0.0] * (need_len - len(s_arr)))
+            if len(d_arr) < need_len:
+                d_arr.extend([0.0] * (need_len - len(d_arr)))
+
+            s_arr[eff_index] = s_val
+            d_arr[eff_index] = t_val
+            updated = True
+
+        if not updated:
+            return
+
+        try:
+            var.set_var(s_path, s_arr)
+            var.set_var(d_path, d_arr)
+            print(
+                f"[Setup] Initialized External_Signals S/T for {len(fellows)} fellow(s) "
+                f"using dSPACE (RD) coordinates."
+            )
+        except Exception as e:
+            print(f"[Setup] [WARN] Could not write initial fellow External_Signals S/T arrays: {e}")
 
     def _probe_external_index_base(self):
         """Probe ControlDesk External_Signals vector paths and index base.
