@@ -237,20 +237,26 @@ def compute_speed_reference(
                 dist_ahead = (current_speed or 0.0) * (k + 1) * dt_slew
                 wp_idx = wp_last_idx
                 accumulated_dist = 0.0
-                while wp_idx < n_wp - 1 and accumulated_dist < dist_ahead:
+                lap_count = 0
+                while accumulated_dist < dist_ahead and lap_count < 2:
+                    next_idx = (wp_idx + 1) % n_wp
                     x0, y0 = float(waypoints[wp_idx][0]), float(waypoints[wp_idx][1])
-                    x1, y1 = float(waypoints[wp_idx + 1][0]), float(waypoints[wp_idx + 1][1])
+                    x1, y1 = float(waypoints[next_idx][0]), float(waypoints[next_idx][1])
                     seg_len = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
                     if seg_len < 1e-6:
-                        wp_idx += 1
+                        wp_idx = next_idx
+                        if wp_idx == wp_last_idx:
+                            lap_count += 1
                         continue
                     accumulated_dist += seg_len
-                    if accumulated_dist < dist_ahead:
-                        wp_idx += 1
-                if wp_idx > 0 and wp_idx < n_wp - 1:
-                    p0 = (float(waypoints[wp_idx - 1][0]), float(waypoints[wp_idx - 1][1]))
-                    p1 = (float(waypoints[wp_idx][0]), float(waypoints[wp_idx][1]))
-                    p2 = (float(waypoints[wp_idx + 1][0]), float(waypoints[wp_idx + 1][1]))
+                    wp_idx = next_idx
+                    if wp_idx == wp_last_idx:
+                        lap_count += 1
+                if n_wp >= 3:
+                    i0, i1, i2 = (wp_idx - 1) % n_wp, wp_idx, (wp_idx + 1) % n_wp
+                    p0 = (float(waypoints[i0][0]), float(waypoints[i0][1]))
+                    p1 = (float(waypoints[i1][0]), float(waypoints[i1][1]))
+                    p2 = (float(waypoints[i2][0]), float(waypoints[i2][1]))
                     v1x, v1y = p1[0] - p0[0], p1[1] - p0[1]
                     v2x, v2y = p2[0] - p1[0], p2[1] - p1[1]
                     cross = v1x * v2y - v1y * v2x
@@ -288,20 +294,26 @@ def compute_speed_reference(
                 dist_ahead = (current_speed or 0.0) * (k + 1) * dt_slew
                 wp_idx = wp_last_idx
                 accumulated_dist = 0.0
-                while wp_idx < n_wp - 1 and accumulated_dist < dist_ahead:
-                    wp0, wp1 = waypoints[wp_idx], waypoints[wp_idx + 1]
+                lap_count = 0
+                while accumulated_dist < dist_ahead and lap_count < 2:
+                    next_idx = (wp_idx + 1) % n_wp
+                    wp0, wp1 = waypoints[wp_idx], waypoints[next_idx]
                     dx = float(wp1[0]) - float(wp0[0])
                     dy = float(wp1[1]) - float(wp0[1])
                     dz = float(wp1[2]) - float(wp0[2]) if len(wp1) >= 3 and len(wp0) >= 3 else 0.0
                     seg_len = (dx * dx + dy * dy + dz * dz) ** 0.5
                     if seg_len < 1e-6:
-                        wp_idx += 1
+                        wp_idx = next_idx
+                        if wp_idx == wp_last_idx:
+                            lap_count += 1
                         continue
                     accumulated_dist += seg_len
-                    if accumulated_dist < dist_ahead:
-                        wp_idx += 1
-                if wp_idx < n_wp - 1:
-                    wp0, wp1 = waypoints[wp_idx], waypoints[wp_idx + 1]
+                    wp_idx = next_idx
+                    if wp_idx == wp_last_idx:
+                        lap_count += 1
+                if n_wp >= 2:
+                    next_idx = (wp_idx + 1) % n_wp
+                    wp0, wp1 = waypoints[wp_idx], waypoints[next_idx]
                     dx = float(wp1[0]) - float(wp0[0])
                     dy = float(wp1[1]) - float(wp0[1])
                     dz = float(wp1[2]) - float(wp0[2]) if len(wp1) >= 3 and len(wp0) >= 3 else 0.0

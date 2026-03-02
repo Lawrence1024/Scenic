@@ -212,15 +212,21 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
             tgt_x = None
             tgt_y = None
             
-            # Walk forward along polyline for lookahead target
-            while rem > 0.0 and j < len(wp_list) - 1:
+            # Walk forward along polyline for lookahead target (closed loop: wrap)
+            n_wp_lap = len(wp_list)
+            lap_count_look = 0
+            while rem > 0.0 and lap_count_look < 2:
+                next_j = (j + 1) % n_wp_lap
                 x0, y0 = float(wp_list[j][0]), float(wp_list[j][1])
-                x1, y1 = float(wp_list[j+1][0]), float(wp_list[j+1][1])
+                x1, y1 = float(wp_list[next_j][0]), float(wp_list[next_j][1])
                 seg_dx = x1 - x0; seg_dy = y1 - y0
                 seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
                 
                 if seg_len <= 1e-6:
-                    j += 1; continue
+                    j = next_j
+                    if next_j == 0:
+                        lap_count_look += 1
+                    continue
                 
                 lookahead_seg_idx = j  # Track this segment for CTE calculation
                 
@@ -232,14 +238,16 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
                     break
                 else:
                     rem -= seg_len
-                    j += 1
+                    j = next_j
+                    if next_j == 0:
+                        lap_count_look += 1
             
             # C. Calculate CTE using the lookahead segment (not nearest segment)
             # This provides better control by looking ahead where we want to go
             if found_target and tgt_x is not None and tgt_y is not None:
-                # Use the lookahead segment for CTE calculation
+                # Use the lookahead segment for CTE calculation (closed loop: wrap next index)
                 x0, y0 = float(wp_list[lookahead_seg_idx][0]), float(wp_list[lookahead_seg_idx][1])
-                x1, y1 = float(wp_list[lookahead_seg_idx+1][0]), float(wp_list[lookahead_seg_idx+1][1])
+                x1, y1 = float(wp_list[(lookahead_seg_idx + 1) % n_wp_lap][0]), float(wp_list[(lookahead_seg_idx + 1) % n_wp_lap][1])
                 seg_dx = x1 - x0; seg_dy = y1 - y0
                 seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
                 
@@ -269,8 +277,10 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
             else:
                 # Fallback: use nearest segment if lookahead not found
                 best_seg_idx = nearest_idx
+                n_wp = len(wp_list)
+                next_idx = (best_seg_idx + 1) % n_wp
                 x0, y0 = float(wp_list[best_seg_idx][0]), float(wp_list[best_seg_idx][1])
-                x1, y1 = float(wp_list[best_seg_idx+1][0]), float(wp_list[best_seg_idx+1][1])
+                x1, y1 = float(wp_list[next_idx][0]), float(wp_list[next_idx][1])
                 seg_dx = x1 - x0; seg_dy = y1 - y0
                 seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
                 
@@ -510,15 +520,18 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 veh_fx = math.cos(car_heading)
                 veh_fy = math.sin(car_heading)
                 
-                # Starting from nearest waypoint, find first one ahead
+                # Starting from nearest waypoint, find first one ahead (closed loop: wrap)
                 # A waypoint is "ahead" if the dot product of (vehicle_to_waypoint) and (vehicle_forward) > 0
+                n_wp = len(wp_list_init)
                 wp_last_idx = nearest_idx
-                for i in range(nearest_idx, min(len(wp_list_init), nearest_idx + 100)):
+
+                for off in range(0, min(100, n_wp)):
+                    i = (nearest_idx + off) % n_wp
                     wx, wy = float(wp_list_init[i][0]), float(wp_list_init[i][1])
                     to_wp_x = wx - px
                     to_wp_y = wy - py
                     dot_product = to_wp_x * veh_fx + to_wp_y * veh_fy
-                    
+
                     if dot_product > 0:  # Waypoint is ahead
                         wp_last_idx = i
                         wp_dist = (to_wp_x*to_wp_x + to_wp_y*to_wp_y) ** 0.5
@@ -527,7 +540,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         print(f"  Dot product={dot_product:.2f} (positive means ahead)")
                         break
                 else:
-                    # No waypoint ahead found in search window, use nearest
                     wp_last_idx = nearest_idx
                     print(f"[FollowRacingLineMPCBehavior] Warning: No waypoint ahead found in search window, using nearest waypoint {nearest_idx}")
             else:
@@ -600,6 +612,22 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 if _bt is not None:
                     _bt.end_section('state_unpack')
                     _bt.start_section('path_progress')
+                # When MPC rejects or association is bad, reset wp_last_idx to nearest waypoint (full scan) to avoid stale index and oscillations
+                _md = getattr(_lat_controller, '_log_match_dist_m', None)
+                _gr = getattr(_lat_controller, '_log_gate_reason', None)
+                if (_md is not None and _md > 5.0) or _gr in ('too_far', 's_jump'):
+                    nearest_idx = 0
+                    best_d2 = 1e18
+                    for i in range(len(wp_list)):
+                        wx, wy = float(wp_list[i][0]), float(wp_list[i][1])
+                        d2 = (px - wx)**2 + (py - wy)**2
+                        if d2 < best_d2:
+                            best_d2 = d2
+                            nearest_idx = i
+                    wp_last_idx = nearest_idx
+                    # Invalidate cumulative-dist cache so it is recomputed from new wp_last_idx
+                    self._cached_cumulative_dist_wp_idx = 0
+                    self._cached_cumulative_dist_to_wp = 0.0
                 # Build OpenDRIVE-based segment map once (conventional Laguna Seca = main racing roads only; pit excluded)
                 if not hasattr(self, '_waypoint_segment_map') or self._waypoint_segment_map is None:
                     try:
@@ -624,14 +652,16 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         self._cached_cumulative_dist_wp_idx = 0
                         self._cached_cumulative_dist_to_wp = 0.0
                     # Cumulative distance to current waypoint index (O(1) update when wp_last_idx advances)
+                    # Path is closed: segment i is (wp_list[i], wp_list[(i+1) % n]); wrap last -> first.
+                    n_wp = len(wp_list)
                     cached_idx = getattr(self, '_cached_cumulative_dist_wp_idx', 0)
                     cached_dist = getattr(self, '_cached_cumulative_dist_to_wp', 0.0)
                     if wp_last_idx <= cached_idx:
                         if wp_last_idx < cached_idx:
                             cumulative_dist_to_wp = 0.0
-                            for i in range(min(wp_last_idx, len(wp_list) - 1)):
+                            for i in range(wp_last_idx):
                                 wp0 = wp_list[i]
-                                wp1 = wp_list[i + 1]
+                                wp1 = wp_list[(i + 1) % n_wp]
                                 dx = float(wp1[0]) - float(wp0[0])
                                 dy = float(wp1[1]) - float(wp0[1])
                                 seg_len = (dx*dx + dy*dy) ** 0.5
@@ -642,9 +672,9 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                             cumulative_dist_to_wp = cached_dist
                     else:
                         cumulative_dist_to_wp = cached_dist
-                        for i in range(cached_idx, min(wp_last_idx, len(wp_list) - 1)):
+                        for i in range(cached_idx, wp_last_idx):
                             wp0 = wp_list[i]
-                            wp1 = wp_list[i + 1]
+                            wp1 = wp_list[(i + 1) % n_wp]
                             dx = float(wp1[0]) - float(wp0[0])
                             dy = float(wp1[1]) - float(wp0[1])
                             seg_len = (dx*dx + dy*dy) ** 0.5
@@ -652,106 +682,91 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         self._cached_cumulative_dist_to_wp = cumulative_dist_to_wp
                         self._cached_cumulative_dist_wp_idx = wp_last_idx
 
-                    # Project vehicle position onto current waypoint segment to get progress along segment
+                    # Project vehicle position onto current waypoint segment (closed loop: segment wp_last_idx -> (wp_last_idx+1) % n_wp)
                     s_0 = cumulative_dist_to_wp  # Default: progress to segment start
-                    if wp_last_idx < len(wp_list) - 1:
-                            wp0 = wp_list[wp_last_idx]
-                            wp1 = wp_list[wp_last_idx + 1]
-                            x0, y0 = float(wp0[0]), float(wp0[1])
-                            x1, y1 = float(wp1[0]), float(wp1[1])
-                            seg_dx = x1 - x0
-                            seg_dy = y1 - y0
-                            seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
-                            
-                            if seg_len > 1e-6:
-                                # Project vehicle position onto segment
-                                wx = px - x0
-                                wy = py - y0
-                                u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
-                                u_proj = max(0.0, min(1.0, u_proj))
-                                
-                                # Current progress s_0 = cumulative distance to segment start + progress along segment
-                                s_0 = cumulative_dist_to_wp + u_proj * seg_len
-                                
-                                # Advance waypoint index based on progress
-                                # Only advance if we've progressed past the end of the current segment
-                                # This prevents premature skipping when far off-track
-                                while wp_last_idx < len(wp_list) - 1:
-                                    # Check if we've progressed past the end of current segment
-                                    segment_end_dist = cumulative_dist_to_wp + seg_len
-                                    
-                                    if s_0 >= segment_end_dist - 0.5:  # Small threshold (0.5m) to handle numerical issues
-                                        # Advance to next segment
-                                        wp_last_idx += 1
-                                        
-                                        # Update cumulative distance
-                                        cumulative_dist_to_wp = segment_end_dist
-                                        
-                                        # Compute next segment length
-                                        if wp_last_idx < len(wp_list) - 1:
-                                            wp0 = wp_list[wp_last_idx]
-                                            wp1 = wp_list[wp_last_idx + 1]
-                                            x0, y0 = float(wp0[0]), float(wp0[1])
-                                            x1, y1 = float(wp1[0]), float(wp1[1])
-                                            seg_dx = x1 - x0
-                                            seg_dy = y1 - y0
-                                            seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
-                                            
-                                            # Recompute projection on new segment
-                                            if seg_len > 1e-6:
-                                                wx = px - x0
-                                                wy = py - y0
-                                                u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
-                                                u_proj = max(0.0, min(1.0, u_proj))
-                                                s_0 = cumulative_dist_to_wp + u_proj * seg_len
-                                            else:
-                                                seg_len = 1e-6  # Avoid division by zero
-                                        else:
-                                            break
-                                    else:
-                                        # Haven't progressed past current segment - stop advancing
-                                        break
+                    wp0 = wp_list[wp_last_idx]
+                    wp1 = wp_list[(wp_last_idx + 1) % n_wp]
+                    x0, y0 = float(wp0[0]), float(wp0[1])
+                    x1, y1 = float(wp1[0]), float(wp1[1])
+                    seg_dx = x1 - x0
+                    seg_dy = y1 - y0
+                    seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                    
+                    if seg_len > 1e-6:
+                        # Project vehicle position onto segment
+                        wx = px - x0
+                        wy = py - y0
+                        u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
+                        u_proj = max(0.0, min(1.0, u_proj))
+                        
+                        # Current progress s_0 = cumulative distance to segment start + progress along segment
+                        s_0 = cumulative_dist_to_wp + u_proj * seg_len
+                        
+                        # Advance waypoint index based on progress (wrap last -> first for closed loop)
+                        while True:
+                            segment_end_dist = cumulative_dist_to_wp + seg_len
+                            if s_0 >= segment_end_dist - 0.5:  # Small threshold (0.5m) to handle numerical issues
+                                wp_last_idx = (wp_last_idx + 1) % n_wp
+                                cumulative_dist_to_wp = 0.0 if wp_last_idx == 0 else segment_end_dist
+                                # Next segment
+                                wp0 = wp_list[wp_last_idx]
+                                wp1 = wp_list[(wp_last_idx + 1) % n_wp]
+                                x0, y0 = float(wp0[0]), float(wp0[1])
+                                x1, y1 = float(wp1[0]), float(wp1[1])
+                                seg_dx = x1 - x0
+                                seg_dy = y1 - y0
+                                seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
+                                if seg_len > 1e-6:
+                                    wx = px - x0
+                                    wy = py - y0
+                                    u_proj = (wx*seg_dx + wy*seg_dy) / (seg_len*seg_len)
+                                    u_proj = max(0.0, min(1.0, u_proj))
+                                    s_0 = cumulative_dist_to_wp + u_proj * seg_len
+                                else:
+                                    seg_len = 1e-6
                             else:
-                                # Degenerate segment - advance to next
-                                if wp_last_idx < len(wp_list) - 1:
-                                    wp_last_idx += 1
-                            # Keep cache in sync when wp_last_idx was advanced in the while loop above
-                            self._cached_cumulative_dist_to_wp = cumulative_dist_to_wp
-                            self._cached_cumulative_dist_wp_idx = wp_last_idx
+                                break
+                    else:
+                        # Degenerate segment - advance to next (with wrap)
+                        wp_last_idx = (wp_last_idx + 1) % n_wp
+                        cumulative_dist_to_wp = 0.0 if wp_last_idx == 0 else (cumulative_dist_to_wp + seg_len)
+                    # Keep cache in sync when wp_last_idx was advanced in the while loop or degenerate branch
+                    self._cached_cumulative_dist_to_wp = cumulative_dist_to_wp
+                    self._cached_cumulative_dist_wp_idx = wp_last_idx
 
-                            # Update progress tracking
-                            self._waypoint_progress = s_0
-                            self._waypoint_progress_idx = wp_last_idx
+                    # Update progress tracking
+                    self._waypoint_progress = s_0
+                    self._waypoint_progress_idx = wp_last_idx
 
-                            # Calculate distance to current waypoint for logging
-                            current_wp_dist = None
-                            if wp_last_idx < len(wp_list):
-                                wp_x, wp_y = float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1])
-                                dx = px - wp_x; dy = py - wp_y
-                                current_wp_dist = (dx*dx + dy*dy) ** 0.5
+                    # Calculate distance to current waypoint for logging
+                    current_wp_dist = None
+                    if wp_last_idx < len(wp_list):
+                        wp_x, wp_y = float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1])
+                        dx = px - wp_x; dy = py - wp_y
+                        current_wp_dist = (dx*dx + dy*dy) ** 0.5
 
-                            # Log current waypoint
-                            if wp_last_idx < len(wp_list):
-                                current_wp = wp_list[wp_last_idx]
-                                current_wp_x, current_wp_y = float(current_wp[0]), float(current_wp[1])
-                                if wp_last_idx != old_wp_idx:
-                                    # Initialize waypoint progress tracking
-                                    if not hasattr(self, '_waypoints_passed'):
-                                        self._waypoints_passed = 0
-                                    self._waypoints_passed += 1
-                                    progress_pct = (self._waypoints_passed / len(wp_list)) * 100.0 if len(wp_list) > 0 else 0.0
-                                    sim = simulation()
-                                    ctrl_dt = getattr(sim, 'control_dt', None)
-                                    if ctrl_dt is None or ctrl_dt <= 0:
-                                        ctrl_dt = getattr(sim, 'control_period', None)
-                                    if ctrl_dt is None or ctrl_dt <= 0:
-                                        ctrl_dt = float(getattr(sim, 'timestep', 0.05))
-                                    step_wp = getattr(self, '_behavior_step_count', 0)
-                                    t_wp = step_wp * ctrl_dt
-                                    seg_wp = get_segment_at_waypoint(wp_last_idx, getattr(self, '_waypoint_segment_map', None))
-                                    seg_str = f" {get_segment_label(*seg_wp)}" if seg_wp is not None else " segment ?"
-                                    print(f"[FollowRacingLineMPCBehavior] t={t_wp:.2f}s WAYPOINT HIT: index {old_wp_idx} -> {wp_last_idx} at ({current_wp_x:.2f}, {current_wp_y:.2f}), distance={current_wp_dist:.2f}m{seg_str}")
-                                    print(f"[FollowRacingLineMPCBehavior] t={t_wp:.2f}s Progress: {self._waypoints_passed} waypoints passed ({progress_pct:.1f}% of {len(wp_list)} total waypoints)")
+                    # Log current waypoint
+                    if wp_last_idx < len(wp_list):
+                        current_wp = wp_list[wp_last_idx]
+                        current_wp_x, current_wp_y = float(current_wp[0]), float(current_wp[1])
+                        if wp_last_idx != old_wp_idx:
+                            # Initialize waypoint progress tracking
+                            if not hasattr(self, '_waypoints_passed'):
+                                self._waypoints_passed = 0
+                            self._waypoints_passed += 1
+                            progress_pct = ((self._waypoints_passed % len(wp_list)) / len(wp_list)) * 100.0 if len(wp_list) > 0 else 0.0
+                            sim = simulation()
+                            ctrl_dt = getattr(sim, 'control_dt', None)
+                            if ctrl_dt is None or ctrl_dt <= 0:
+                                ctrl_dt = getattr(sim, 'control_period', None)
+                            if ctrl_dt is None or ctrl_dt <= 0:
+                                ctrl_dt = float(getattr(sim, 'timestep', 0.05))
+                            step_wp = getattr(self, '_behavior_step_count', 0)
+                            t_wp = step_wp * ctrl_dt
+                            seg_wp = get_segment_at_waypoint(wp_last_idx, getattr(self, '_waypoint_segment_map', None))
+                            seg_str = f" {get_segment_label(*seg_wp)}" if seg_wp is not None else " segment ?"
+                            print(f"[FollowRacingLineMPCBehavior] t={t_wp:.2f}s WAYPOINT HIT: index {old_wp_idx} -> {wp_last_idx} at ({current_wp_x:.2f}, {current_wp_y:.2f}), distance={current_wp_dist:.2f}m{seg_str}")
+                            print(f"[FollowRacingLineMPCBehavior] t={t_wp:.2f}s Progress: {self._waypoints_passed} waypoints passed ({progress_pct:.1f}% of {len(wp_list)} total waypoints)")
 
                 except Exception as e:
                     print(f"[FollowRacingLineMPCBehavior] Warning: Waypoint finder error: {e}")
@@ -782,9 +797,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                             if d2 < best_d2:
                                 best_d2 = d2
                                 nearest_idx = i
-                    if nearest_idx < len(wp_list) - 1:
+                    next_idx = (nearest_idx + 1) % len(wp_list)
+                    if len(wp_list) >= 2:
                         x0, y0 = float(wp_list[nearest_idx][0]), float(wp_list[nearest_idx][1])
-                        x1, y1 = float(wp_list[nearest_idx+1][0]), float(wp_list[nearest_idx+1][1])
+                        x1, y1 = float(wp_list[next_idx][0]), float(wp_list[next_idx][1])
                         seg_dx = x1 - x0
                         seg_dy = y1 - y0
                         seg_len = (seg_dx*seg_dx + seg_dy*seg_dy) ** 0.5
@@ -1001,36 +1017,40 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 if getattr(self, '_wp_curve_cache_key', None) != wp_cache_key:
                     nwp = len(wp_list)
                     if nwp >= 2:
-                        seg_len_xy = []
-                        for i in range(nwp - 1):
+                        # Closed-loop segment lengths (including last->first)
+                        seg_len_xy = np.zeros(nwp, dtype=np.float64)
+                        for i in range(nwp):
+                            j = (i + 1) % nwp
                             x0, y0 = float(wp_list[i][0]), float(wp_list[i][1])
-                            x1, y1 = float(wp_list[i+1][0]), float(wp_list[i+1][1])
-                            Lxy = ((x1-x0)**2 + (y1-y0)**2) ** 0.5
-                            seg_len_xy.append(max(Lxy, 1e-9))
-                        seg_len_xy_arr = np.asarray(seg_len_xy, dtype=np.float64)
-                        cum_xy = np.zeros(nwp, dtype=np.float64)
-                        cum_xy[1:] = np.cumsum(seg_len_xy_arr)
-                        self._wp_cumdist_xy = cum_xy
+                            x1, y1 = float(wp_list[j][0]), float(wp_list[j][1])
+                            dx, dy = x1 - x0, y1 - y0
+                            seg_len_xy[i] = max((dx*dx + dy*dy) ** 0.5, 1e-9)
+                        cum = np.zeros(nwp + 1, dtype=np.float64)
+                        cum[1:] = np.cumsum(seg_len_xy)
+                        self._wp_seg_len_xy = seg_len_xy
+                        self._wp_cumdist_xy = cum
+                        self._wp_total_len_xy = float(cum[-1])
+                        # Curvature vmax per waypoint (closed-loop: modulo neighbors)
                         curve_vmax_list = []
                         for i in range(nwp):
-                            if i == 0 or i == nwp - 1:
-                                curve_vmax_list.append(1e6)
+                            i0 = (i - 1) % nwp
+                            i1 = i
+                            i2 = (i + 1) % nwp
+                            p0 = (float(wp_list[i0][0]), float(wp_list[i0][1]))
+                            p1 = (float(wp_list[i1][0]), float(wp_list[i1][1]))
+                            p2 = (float(wp_list[i2][0]), float(wp_list[i2][1]))
+                            v1x = p1[0] - p0[0]; v1y = p1[1] - p0[1]
+                            v2x = p2[0] - p1[0]; v2y = p2[1] - p1[1]
+                            cross = v1x * v2y - v1y * v2x
+                            len1 = (v1x*v1x + v1y*v1y) ** 0.5
+                            len2 = (v2x*v2x + v2y*v2y) ** 0.5
+                            if len1 > 1e-6 and len2 > 1e-6:
+                                avg_len = (len1 + len2) / 2.0
+                                abs_kappa = abs(2.0 * cross / (len1 * len2 * avg_len))
+                                v_max_at_kappa = curvature_speed_margin * (max_lateral_accel / (abs_kappa + curvature_epsilon)) ** 0.5
+                                curve_vmax_list.append(v_max_at_kappa)
                             else:
-                                p0 = (float(wp_list[i-1][0]), float(wp_list[i-1][1]))
-                                p1 = (float(wp_list[i][0]), float(wp_list[i][1]))
-                                p2 = (float(wp_list[i+1][0]), float(wp_list[i+1][1]))
-                                v1x = p1[0] - p0[0]; v1y = p1[1] - p0[1]
-                                v2x = p2[0] - p1[0]; v2y = p2[1] - p1[1]
-                                cross = v1x * v2y - v1y * v2x
-                                len1 = (v1x*v1x + v1y*v1y) ** 0.5
-                                len2 = (v2x*v2x + v2y*v2y) ** 0.5
-                                if len1 > 1e-6 and len2 > 1e-6:
-                                    avg_len = (len1 + len2) / 2.0
-                                    abs_kappa = abs(2.0 * cross / (len1 * len2 * avg_len))
-                                    v_max_at_kappa = curvature_speed_margin * (max_lateral_accel / (abs_kappa + curvature_epsilon)) ** 0.5
-                                    curve_vmax_list.append(v_max_at_kappa)
-                                else:
-                                    curve_vmax_list.append(1e6)
+                                curve_vmax_list.append(1e6)
                         self._wp_curve_vmax = np.asarray(curve_vmax_list, dtype=np.float64)
                         self._wp_curve_cache_key = wp_cache_key
                         self._wp_curve_cache_rebuilds = getattr(self, '_wp_curve_cache_rebuilds', 0) + 1
@@ -1038,17 +1058,19 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     self._wp_curve_cache_hits = getattr(self, '_wp_curve_cache_hits', 0) + 1
                 try:
                     if getattr(self, '_wp_curve_vmax', None) is not None:
-                        # Vectorized: dist_vec, searchsorted, gather curve_vmax, apply min
+                        # Vectorized: dist_vec, modulo lookahead for closed loop, gather curve_vmax, apply min
                         dt = _lon_controller.config.mpc_prediction_dt
                         dist_vec = current_speed * (np.arange(1, horizon + 1, dtype=np.float64)) * dt
-                        base_idx = max(0, min(wp_last_idx, len(wp_list) - 2))
+                        nwp = len(wp_list)
+                        base_idx = int(wp_last_idx) % nwp
                         base_cum = self._wp_cumdist_xy[base_idx]
+                        L = self._wp_total_len_xy
                         target_abs = base_cum + dist_vec
-                        wp_end_idx = np.searchsorted(self._wp_cumdist_xy, target_abs, side='right') - 1
-                        wp_end_idx = np.clip(wp_end_idx, 0, len(self._wp_curve_vmax) - 1)
-                        cap_profile = self._wp_curve_vmax[wp_end_idx]
-                        v_ref_profile = np.minimum(np.asarray(v_ref_profile, dtype=np.float64), cap_profile)
-                        v_ref_profile = v_ref_profile.tolist()
+                        target_mod = np.mod(target_abs, L)
+                        seg_idx = np.searchsorted(self._wp_cumdist_xy, target_mod, side='right') - 1
+                        seg_idx = np.clip(seg_idx, 0, nwp - 1)
+                        cap_profile = self._wp_curve_vmax[seg_idx]
+                        v_ref_profile = np.minimum(np.asarray(v_ref_profile, dtype=np.float64), cap_profile).tolist()
                 except Exception as e:
                     # If profile building fails, use constant speed
                     pass
@@ -1066,11 +1088,13 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 if getattr(self, '_wp_grade_cache_key', None) != wp_cache_key:
                     nwp = len(wp_list)
                     if nwp >= 2:
+                        # Closed-loop grade segments (including last->first)
                         seg_len_3d = []
                         seg_grade = []
-                        for i in range(nwp - 1):
+                        for i in range(nwp):
+                            j = (i + 1) % nwp
                             wp0 = wp_list[i]
-                            wp1 = wp_list[i + 1]
+                            wp1 = wp_list[j]
                             x0, y0 = float(wp0[0]), float(wp0[1])
                             x1, y1 = float(wp1[0]), float(wp1[1])
                             z0 = float(wp0[2]) if len(wp0) >= 3 else 0.0
@@ -1086,11 +1110,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         self._wp_seg_len_3d = np.asarray(seg_len_3d, dtype=np.float64)
                         self._wp_seg_grade = np.asarray(seg_grade, dtype=np.float64)
 
-                        # cumulative distance at waypoint i (length from start to wp i)
-                        # length nwp, with cum[0] = 0
-                        cum = np.zeros(nwp, dtype=np.float64)
+                        cum = np.zeros(nwp + 1, dtype=np.float64)
                         cum[1:] = np.cumsum(self._wp_seg_len_3d)
                         self._wp_cumdist_3d = cum
+                        self._wp_total_len_3d = float(cum[-1])
 
                         self._wp_grade_cache_key = wp_cache_key
                         self._wp_grade_cache_rebuilds = getattr(self, '_wp_grade_cache_rebuilds', 0) + 1
@@ -1104,20 +1127,18 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     horizon = _lon_controller.config.mpc_prediction_horizon
                     dt_mpc = _lon_controller.config.mpc_prediction_dt
 
-                    # distance ahead for each horizon point
                     dist_vec = current_speed * (np.arange(1, horizon + 1, dtype=np.float64)) * dt_mpc
 
-                    # Distance-to-segment-end from current wp_last_idx onward
-                    # seg index range: [0, len(wp_list)-2]
-                    base_idx = max(0, min(wp_last_idx, len(wp_list) - 2))
+                    nwp = len(wp_list)
+                    base_idx = int(wp_last_idx) % nwp
                     base_cum = self._wp_cumdist_3d[base_idx]
+                    L = self._wp_total_len_3d
 
-                    # Find segment index for each dist ahead using waypoint cumulative distances
-                    # We search in waypoint endpoints (base_idx+1 ... end)
                     target_abs = base_cum + dist_vec
-                    # returns waypoint index in [base_idx+1, ...], convert to segment index
-                    wp_end_idx = np.searchsorted(self._wp_cumdist_3d, target_abs, side='right') - 1
-                    seg_idx = np.clip(wp_end_idx, base_idx, len(self._wp_seg_grade) - 1)
+                    target_mod = np.mod(target_abs, L)
+
+                    seg_idx = np.searchsorted(self._wp_cumdist_3d, target_mod, side='right') - 1
+                    seg_idx = np.clip(seg_idx, 0, nwp - 1)
 
                     grade_profile = self._wp_seg_grade[seg_idx].astype(np.float64, copy=False)
             if _bt is not None:
@@ -1330,12 +1351,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 self._waypoints_for_mpc_cache_len = _wp_len
 
             # Compute steering using MPC (mpc_total in [LoopOther] from record_lateral_mpc_ms + record_longitudinal_mpc_ms)
-            # Pass CTE magnitude for adaptive waypoint search
+            # Pass behavior's current waypoint index so MPC does local search around progress and aligns segment choice
             try:
                 steer_mpc = _lat_controller.run_step(
                     vehicle_state,
                     waypoints_for_mpc,
-                    None,  # MPC selects segments dynamically
+                    wp_last_idx if (use_waypoints and wp_list and len(wp_list) >= 2) else None,
                     cte_magnitude=cte_mag_for_speed,
                     v_ref_profile=v_ref_profile,  # Same trajectory as longitudinal: smooth turns, avoid over-steer then correct
                     curvature_ahead_max=curvature_ahead_max  # For deadzone eligibility: never deadzone in moderate curvature (curv_ahead_max < curv_deadzone_max)
@@ -1397,8 +1418,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             # Heading diff for steering conditioning (segment direction vs vehicle heading, wrapped to [-pi, pi])
             heading_diff = 0.0
             if car_heading is not None and use_waypoints and wp_list and len(wp_list) >= 2 and wp_last_idx < len(wp_list) - 1:
+                n_wp = len(wp_list)
+                next_idx = (wp_last_idx + 1) % n_wp
                 x0, y0 = float(wp_list[wp_last_idx][0]), float(wp_list[wp_last_idx][1])
-                x1, y1 = float(wp_list[wp_last_idx+1][0]), float(wp_list[wp_last_idx+1][1])
+                x1, y1 = float(wp_list[next_idx][0]), float(wp_list[next_idx][1])
                 seg_heading = math.atan2(y1 - y0, x1 - x0)
                 heading_diff = math.atan2(math.sin(seg_heading - car_heading), math.cos(seg_heading - car_heading))
             local_throttle_limit = throttle_limit

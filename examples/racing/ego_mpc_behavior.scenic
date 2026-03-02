@@ -20,8 +20,9 @@ model scenic.simulators.dspace.racing_model
 # --- Ego car with MPC behavior ---
 # Using main racing road centerline TTL (excluding pitlane)
 
+ego = new RacingCar at (134.131413,125.953041),\
 # ego = new RacingCar at (614.659946,-302.782016),\
-ego = new RacingCar at (-110.956171,-151.841778,8.331000),\
+# ego = new RacingCar at (-110.956171,-151.841778,8.331000),\
 # ego = new RacingCar at (55.766137,88.269387), \
     with regionContainedIn everywhere, \
     with raceNumber 1, \
@@ -30,7 +31,8 @@ ego = new RacingCar at (-110.956171,-151.841778,8.331000),\
     # with ttlFileName 'laguna_raceable_xy.csv', \
 
     # with ttlFileName 'ttl_fellow_test_xodr_all.csv', \
-    with ttlFileName 'ttl_racing_line_xodr.csv', \
+    # with ttlFileName 'ttl_racing_line_xodr.csv', \
+    with ttlFileName 'ttl_racing_line_xodr_closed.csv', \
     
     # with ttlFileName 'temp_aligned_to_centerline.csv', \
     with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV/transformed'), \

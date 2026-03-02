@@ -115,6 +115,7 @@ class MPCConfig:
         self.max_wp_match_dist_m = config_dict.get('max_wp_match_dist_m', 3.0)  # (m) max perpendicular distance to accept segment switch
         self.max_s_jump_m = config_dict.get('max_s_jump_m', 4.0)  # (m) max along-path progress jump per tick; reject if exceeded
         self.gate_hard_fail_dist_m = config_dict.get('gate_hard_fail_dist_m', 6.0)  # (m) when gate rejects and match_dist > this, force re-association (Rec B)
+        self.reacquire_dist_m = config_dict.get('reacquire_dist_m', 3.0)  # (m) trigger full scan when best_match_dist > this (reacquire on weak association)
         self.stick_association_ok_m = config_dict.get('stick_association_ok_m', 2.0)  # (m) only stick to segment when match_dist < this (Rec C)
         
         # Feedforward preview (Task B: chicane) — blend of at-proj and +10 m ahead curvature for delta_ff

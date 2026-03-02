@@ -86,6 +86,7 @@
     max_wp_match_dist_m: 3.0  # (m) max perpendicular distance to accept segment switch; reject if candidate match point farther
     max_s_jump_m: 4.0  # (m) max along-path progress jump per tick; reject switch if new segment implies larger jump
     gate_hard_fail_dist_m: 6.0  # (m) when gate rejects and match_dist > this, force re-association (Rec B: recover mode)
+    reacquire_dist_m: 3.0  # (m) trigger full scan when best_match_dist > this (reacquire on weak association / match-dist spike)
     stick_association_ok_m: 2.0  # (m) only stick to segment when match_dist < this (Rec C: stick only when association good)
     curvature_smoothing_num: 15  # Number of points for curvature calculation (smoothing window)
     use_splines: true  # Use spline fitting with arc-length parameterization for smooth reference trajectories

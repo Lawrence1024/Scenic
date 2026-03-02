@@ -77,8 +77,10 @@ class ReferenceBuilder:
         pz = position[2] if len(position) >= 3 else 0.0
         is_3d = self._is_3d_waypoints(waypoints)
         
+        n = len(waypoints)
         start_idx = last_idx if last_idx is not None else self._last_nearest_idx
-        
+        start_idx = int(start_idx) % n if start_idx is not None else 0
+
         # Adaptive search window: scale with CTE magnitude
         # Base window: 200 waypoints (~40m at 0.2m spacing)
         # When CTE is large, expand search window AND increase lookback
@@ -114,15 +116,12 @@ class ReferenceBuilder:
             forward_window = base_forward
             lookback_window = base_lookback
         
-        # Search from last index with adaptive lookback
-        # More lookback when off-track to find actual nearest waypoint
-        search_start = max(0, start_idx - lookback_window)
-        search_end = min(len(waypoints), start_idx + forward_window)
-        
+        # Search from last index with adaptive lookback (circular scan: wrap)
         best_idx = start_idx
         best_dist2 = float('inf')
-        
-        for i in range(search_start, search_end):
+
+        for off in range(-lookback_window, forward_window):
+            i = (start_idx + off) % n
             wp = waypoints[i]
             wx, wy = wp[0], wp[1]
             wz = wp[2] if len(wp) >= 3 else 0.0
@@ -621,7 +620,8 @@ class ReferenceBuilder:
         
         # Find segment index for reference: use provided reference_segment_idx (single-segment
         # consistency with lateral MPC e_y/e_psi) or fall back to nearest waypoint by node distance
-        if reference_segment_idx is not None and 0 <= reference_segment_idx < len(waypoints) - 1:
+        n_wp = len(waypoints)
+        if reference_segment_idx is not None and 0 <= reference_segment_idx < n_wp:
             nearest_idx = int(reference_segment_idx)
             self._last_nearest_idx = nearest_idx
         else:
@@ -671,12 +671,16 @@ class ReferenceBuilder:
         # Use spline-based reference building if enabled
         if self.use_splines and len(waypoints) >= 3:
             try:
-                # Extract a window of waypoints around current position for spline fitting
+                # Extract a window of waypoints around current position for spline fitting (closed loop: wrap)
                 # Use enough waypoints to cover horizon distance plus some margin
                 window_size = max(50, int(horizon_dist / 0.2) + 20)  # Assume ~0.2m spacing
-                start_idx = max(0, nearest_idx - 10)
-                end_idx = min(len(waypoints), nearest_idx + window_size)
-                waypoint_window = waypoints[start_idx:end_idx]
+                n_wp = len(waypoints)
+
+                lookback = 10
+                count = min(n_wp, lookback + window_size)
+
+                start_idx = (int(nearest_idx) - lookback) % n_wp
+                waypoint_window = [waypoints[(start_idx + k) % n_wp] for k in range(count)]
                 
                 if len(waypoint_window) >= 3:
                     # Fit spline through waypoint window
@@ -701,17 +705,23 @@ class ReferenceBuilder:
                             ds = np.sqrt(dx*dx + dy*dy)
                         s_cumulative = np.concatenate(([0], np.cumsum(ds)))
                         total_length = s_cumulative[-1]
-                        
+
+                        # Ensure the window is long enough to cover the horizon. If not, fall back to linear closed-loop reference.
+                        horizon_max_dist = horizon_steps * dt * float(np.max(v_ref)) * 1.05
+                        if total_length < horizon_max_dist:
+                            raise ValueError(
+                                f"Waypoint window too short for horizon: window_len={total_length:.2f} < "
+                                f"horizon_max_dist={horizon_max_dist:.2f}; falling back to linear"
+                            )
+
                         # Horizon in s: use v_ref so lateral MPC sees same trajectory as longitudinal (smooth turns, no overshoot)
                         s_horizon = np.zeros(horizon_steps, dtype=np.float64)
                         for k in range(horizon_steps):
                             target_s = s_0 + dt * float(np.sum(v_ref[:k + 1]))
-                            s_horizon[k] = min(target_s, total_length)
-                            
-                            if target_s >= total_length:
-                                u_k = 1.0
-                            else:
-                                u_k = np.interp(target_s, s_cumulative, u_fine)
+                            if total_length > 1e-9:
+                                target_s = target_s % total_length
+                            s_horizon[k] = target_s
+                            u_k = np.interp(target_s, s_cumulative, u_fine)
                             
                             # Evaluate spline and derivatives at u_k
                             point_k = splev(u_k, tck)
@@ -767,11 +777,12 @@ class ReferenceBuilder:
                     ReferenceBuilder._spline_fallback_logged = True
                 # Fall through to linear method
         
-        # Fallback: Linear interpolation along waypoint segments (Phase 1: s-based)
-        # Precompute cumulative arc length from path start: s_cumulative_waypoints[i] = length to waypoint i
+        # Fallback: Linear interpolation along waypoint segments (closed loop: segment i = (wp[i], wp[(i+1)%n]))
+        # s_cumulative_waypoints[i] = arc length from path start to start of segment i (i in 0..n_wp; [n_wp]=total_length)
+        n_wp_r = len(waypoints)
         s_cumulative_waypoints = [0.0]
-        for i in range(1, len(waypoints)):
-            wp0, wp1 = waypoints[i - 1], waypoints[i]
+        for i in range(n_wp_r):
+            wp0, wp1 = waypoints[i], waypoints[(i + 1) % n_wp_r]
             dx = wp1[0] - wp0[0]
             dy = wp1[1] - wp0[1]
             if is_3d and len(wp0) >= 3 and len(wp1) >= 3:
@@ -783,9 +794,9 @@ class ReferenceBuilder:
         total_length = s_cumulative_waypoints[-1]
         
         # Current progress s_0: project current position onto segment at nearest_idx
-        seg_idx_0 = min(nearest_idx, len(waypoints) - 2)
+        seg_idx_0 = nearest_idx if 0 <= nearest_idx < n_wp_r else 0
         wp0 = waypoints[seg_idx_0]
-        wp1 = waypoints[seg_idx_0 + 1]
+        wp1 = waypoints[(seg_idx_0 + 1) % n_wp_r]
         x0, y0 = wp0[0], wp0[1]
         x1, y1 = wp1[0], wp1[1]
         seg_dx, seg_dy = x1 - x0, y1 - y0
@@ -799,17 +810,19 @@ class ReferenceBuilder:
         
         for k in range(horizon_steps):
             target_s = s_0 + dt * float(np.sum(v_ref[:k + 1]))
-            s_horizon[k] = min(target_s, total_length)
+            if total_length > 1e-9:
+                target_s = target_s % total_length  # closed loop wrap
+            s_horizon[k] = min(target_s, total_length) if total_length > 1e-9 else target_s
             target_s = s_horizon[k]
             
             # Find segment j such that s_cumulative_waypoints[j] <= target_s < s_cumulative_waypoints[j+1]
             j = 0
-            while j < len(waypoints) - 1 and s_cumulative_waypoints[j + 1] <= target_s:
+            while j < n_wp_r and s_cumulative_waypoints[j + 1] <= target_s:
                 j += 1
-            current_idx = min(j, len(waypoints) - 2)
+            current_idx = min(j, n_wp_r - 1)
             
             wp0 = waypoints[current_idx]
-            wp1 = waypoints[current_idx + 1]
+            wp1 = waypoints[(current_idx + 1) % n_wp_r]
             x0, y0 = wp0[0], wp0[1]
             x1, y1 = wp1[0], wp1[1]
             dx = x1 - x0
@@ -834,15 +847,10 @@ class ReferenceBuilder:
                 psi_ref[k] = adjust_heading_if_opposite(seg_heading, current_heading)
                 
                 smoothing_offset = max(1, self.curvature_smoothing_num)
-                if current_idx >= smoothing_offset and current_idx < len(waypoints) - smoothing_offset:
-                    p0 = (waypoints[current_idx - smoothing_offset][0], waypoints[current_idx - smoothing_offset][1])
+                if n_wp_r >= 3:
+                    p0 = (waypoints[(current_idx - smoothing_offset) % n_wp_r][0], waypoints[(current_idx - smoothing_offset) % n_wp_r][1])
                     p1 = (waypoints[current_idx][0], waypoints[current_idx][1])
-                    p2 = (waypoints[current_idx + smoothing_offset][0], waypoints[current_idx + smoothing_offset][1])
-                    kappa_ref[k] = self.compute_curvature(p0, p1, p2)
-                elif current_idx > 0 and current_idx < len(waypoints) - 1:
-                    p0 = (waypoints[current_idx - 1][0], waypoints[current_idx - 1][1])
-                    p1 = (waypoints[current_idx][0], waypoints[current_idx][1])
-                    p2 = (waypoints[current_idx + 1][0], waypoints[current_idx + 1][1])
+                    p2 = (waypoints[(current_idx + smoothing_offset) % n_wp_r][0], waypoints[(current_idx + smoothing_offset) % n_wp_r][1])
                     kappa_ref[k] = self.compute_curvature(p0, p1, p2)
                 else:
                     kappa_ref[k] = 0.0

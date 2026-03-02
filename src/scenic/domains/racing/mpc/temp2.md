@@ -1,19 +1,42 @@
-### 2) Dedup clutch one-shot writes too (same pattern as gear)
+### File: `racing/behaviors.scenic`
 
-You already fixed gear one-shots well. Clutch one-shots still do a direct write:
+### Around line ~521–537 (your init “first waypoint AHEAD” search)
 
-* `vehicle/controller.py` → one-shot action handling
-* `clutch` uses `self.cd.set_var(...)` directly, no dedup wrapper
-
-This is not a blocker, but if a behavior queues clutch repeatedly, you could get unnecessary writes.
-
-### Suggested change
-
-Replace clutch one-shot write with `_maybe_write_cd(...)`:
+**Current code (non-wrapping, clamps at end):**
 
 ```python
-elif action_type == "clutch":
-    clutch_pct = float(value * 100.0)
-    if self._maybe_write_cd(self.KEY_CLUTCH, clutch_pct, 1e-6):
-        print(f"[EgoControl] Setting clutch to {clutch_pct}%")
+for i in range(nearest_idx, min(len(wp_list_init), nearest_idx + 100)):
+    wx, wy = float(wp_list_init[i][0]), float(wp_list_init[i][1])
+    ...
+    if dot_product > 0:
+        wp_last_idx = i
+        ...
+        break
+else:
+    wp_last_idx = nearest_idx
+```
+
+**Replace with (wraps properly):**
+
+```python
+n_wp = len(wp_list_init)
+wp_last_idx = nearest_idx
+
+for off in range(0, min(100, n_wp)):
+    i = (nearest_idx + off) % n_wp
+    wx, wy = float(wp_list_init[i][0]), float(wp_list_init[i][1])
+    to_wp_x = wx - px
+    to_wp_y = wy - py
+    dot_product = to_wp_x * veh_fx + to_wp_y * veh_fy
+
+    if dot_product > 0:  # Waypoint is ahead
+        wp_last_idx = i
+        wp_dist = (to_wp_x*to_wp_x + to_wp_y*to_wp_y) ** 0.5
+        print(f"[FollowRacingLineMPCBehavior] Initialized: starting at ({px:.2f}, {py:.2f}), heading={car_heading*180/math.pi:.1f}deg (src={car_heading_src})")
+        print(f"  Found first waypoint AHEAD: index={wp_last_idx} at ({wx:.2f}, {wy:.2f}), distance={wp_dist:.2f}m")
+        print(f"  Dot product={dot_product:.2f} (positive means ahead)")
+        break
+else:
+    wp_last_idx = nearest_idx
+    print(f"[FollowRacingLineMPCBehavior] Warning: No waypoint ahead found in search window, using nearest waypoint {nearest_idx}")
 ```
