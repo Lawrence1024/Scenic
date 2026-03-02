@@ -33,17 +33,21 @@ param startingGridSpacing = 8.0  # meters between grid positions
 param pitLaneRoadId = None  # e.g., "1545702203" for Laguna Seca
 param pitLaneRoadName = "pit"  # Pattern to match pit lane name
 param mainLineRoadId = None  # e.g., "2117817291" for Laguna Seca
+# Junction assignment: OpenDRIVE road IDs of connecting roads for outer loop vs pit (e.g. (24, 34) and (25, 30))
+param main_loop_connecting_road_ids = None  # e.g. (24, 34) for two junctions
+param pit_connecting_road_ids = None  # e.g. (25, 30)
 
 ## Create racing track from the network
 
 # Create track first so it's in scope for this module; then expose as param for scene.params['track'].
-# Segments for Laguna Seca follow the conventional OpenDRIVE layout (main racing roads only).
 _track = createRacingTrack(
     globalParameters.map,
     direction=globalParameters.trackDirection,
     pitLaneRoadId=globalParameters.pitLaneRoadId,
     pitLaneRoadName=globalParameters.pitLaneRoadName,
     mainLineRoadId=globalParameters.mainLineRoadId,
+    main_loop_connecting_road_ids=globalParameters.main_loop_connecting_road_ids,
+    pit_connecting_road_ids=globalParameters.pit_connecting_road_ids,
     **globalParameters.map_options
 )
 param track = _track
@@ -52,7 +56,7 @@ param track = _track
 network = _track.network
 
 # Store road segment IDs in params for simulator access
-param pitLaneRoadIds = [str(_track.pitLaneRoad.id)] if _track.pitLaneRoad else []
+param pitLaneRoadIds = [str(r.id) for r in _track._pitRoads] if getattr(_track, '_pitRoads', None) and _track._pitRoads else []
 param mainRacingRoadIds = [str(r.id) for r in _track._mainRacingRoads] if _track._mainRacingRoads else []
 
 ## Racing-specific regions
@@ -62,11 +66,12 @@ param mainRacingRoadIds = [str(r.id) for r in _track._mainRacingRoads] if _track
 # road          := entire drivable road surface
 # mainRacingRoad, pitLaneRoad are mutually exclusive and their union == road
 
-# Build pitLaneRoad region from identified pit lane road if available
+# Build pitLaneRoad region from all pit roads (primary + junction links)
+_pit_roads = getattr(_track, '_pitRoads', None) or []
+_all_pit_lanes = [lane for r in _pit_roads for lane in (r.lanes or [])]
 pitLaneRoad: Region = (
-    UnionRegion(*[lane for lane in _track.pitLaneRoad.lanes])
-    if _track.pitLaneRoad and _track.pitLaneRoad.lanes and len(_track.pitLaneRoad.lanes) > 1
-    else (_track.pitLaneRoad.lanes[0] if _track.pitLaneRoad and _track.pitLaneRoad.lanes else nowhere)
+    nowhere if not _all_pit_lanes
+    else (UnionRegion(*_all_pit_lanes) if len(_all_pit_lanes) > 1 else _all_pit_lanes[0])
 )
 
 # Main racing road is the rest of the road excluding pitLaneRoad

@@ -335,7 +335,9 @@ def build_waypoint_segment_map(
     if n_wp == 0:
         return []
 
-    roads = getattr(track, "_mainRacingRoads", None)
+    roads = list(getattr(track, "_mainRacingRoads", None) or [])
+    if not exclude_pit:
+        roads = roads + list(getattr(track, "_pitRoads", None) or [])
     if not roads:
         return [(1, "")] * n_wp
 

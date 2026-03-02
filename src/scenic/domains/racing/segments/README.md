@@ -71,6 +71,9 @@ domains/racing/
 
 ## Notes
 
+- **Main racing roads** include ordinary roads plus **junction connecting roads** for the outer loop. If you do not set `main_loop_connecting_road_ids`, at each junction the code picks the connecting road that **smoothly** continues the main loop (smallest total angle change at the two connection points). If you set `main_loop_connecting_road_ids=(24, 34)` (OpenDRIVE IDs), those links are used instead.
+- **Pit lane** links: if you do not set `pit_connecting_road_ids`, at each junction any connecting road that has the pit road in its junction endpoints is taken as the pit link. If you set `pit_connecting_road_ids=(25, 30)`, those links are used instead.
+- The segment map and visualizer can include pit roads (`exclude_pit=False` or omit `--no-pit`) so segments are numbered over main + pit.
 - Only `(x, y)` from waypoints is used; projection onto the nearest main racing road centerline gives arc length `s` for segment lookup.
 - Segments are **map-based:** same map and threshold → same segments across runs.
 
