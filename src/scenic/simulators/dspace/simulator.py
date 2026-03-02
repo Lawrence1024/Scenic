@@ -80,7 +80,7 @@ class DSpaceSimulation(RacingSimulation):
         ts = kwargs.pop("timestep", None) or sim.timestep
         # Timing and control period: init before super().__init__() because parent runs the whole simulation inside __init__
         self._timing_interval = 50
-        self._timing_sums = {"apply_actions": 0.0, "com_writes": 0.0, "step_time": 0.0, "com_reads": 0.0, "loop_other": 0.0, "get_properties": 0.0}
+        self._timing_sums = {"apply_actions": 0.0, "com_writes": 0.0, "step_time": 0.0, "step_time_waiting_ready": 0.0, "step_time_ready_until_call": 0.0, "step_time_call_until_advance": 0.0, "com_reads": 0.0, "loop_other": 0.0, "get_properties": 0.0}
         self._timing_n = 0
         self._timing_last = {}
         self._loop_end = None   # wall time at end of last getProperties (for loop_other)
@@ -715,7 +715,7 @@ class DSpaceSimulation(RacingSimulation):
             self._timing_last['loop_other'] = 0.0
 
         # --- Timing: flush previous step and init this step (only record when all buckets present) ---
-        _timing_keys = ('apply_actions', 'com_writes', 'step_time', 'com_reads', 'loop_other', 'get_properties')
+        _timing_keys = ('apply_actions', 'com_writes', 'step_time', 'step_time_waiting_ready', 'step_time_ready_until_call', 'step_time_call_until_advance', 'com_reads', 'loop_other', 'get_properties')
         _last = self._timing_last
         if all(k in _last for k in _timing_keys):
             for k in self._timing_sums:
@@ -730,6 +730,9 @@ class DSpaceSimulation(RacingSimulation):
                     f"apply_actions={s['apply_actions']/n:.4f} "
                     f"var_writes({var_backend})={s['com_writes']/n:.4f} "
                     f"step_time={s['step_time']/n:.4f} "
+                    f"step_waiting_ready={s['step_time_waiting_ready']/n:.4f} "
+                    f"step_ready_until_call={s['step_time_ready_until_call']/n:.4f} "
+                    f"step_call_until_advance={s['step_time_call_until_advance']/n:.4f} "
                     f"var_reads({var_backend})={s['com_reads']/n:.4f} "
                     f"loop_other={s['loop_other']/n:.4f} "
                     f"get_properties={s['get_properties']/n:.4f}"
@@ -1035,7 +1038,7 @@ class DSpaceSimulation(RacingSimulation):
         return indexing_get_fellow_index(self, obj)
 
     def step(self):
-        """Execute one simulation step: RTA step, then block until simulated time has advanced by the step amount; print simulated time after the block."""
+        """Execute one simulation step: call RTA step, poll until simulated time has advanced; retry up to max_retries if the advance does not register in the poll window (no explicit wait for dSPACE readiness)."""
         _t0 = time.perf_counter()
 
         t_before = None
@@ -1048,37 +1051,42 @@ class DSpaceSimulation(RacingSimulation):
         step_logged = False
         if t_before is not None and self._var_access:
             deadline = t_before + self.timestep * 0.9
-            poll_timeout_wall = min(10.0 * self.timestep, 0.1)
+            poll_timeout_wall = min(10.0 * self.timestep, 0.01)
             max_retries = 10
-            advance_pre_delay_s = 0.01
             for attempt in range(max_retries):
+                attempt_start = time.perf_counter()
                 if self._cd:
                     self._cd.advance_simulation_step()
                 poll_start = time.perf_counter()
                 while time.perf_counter() - poll_start < poll_timeout_wall:
                     t_now = float(self._var_access.get_var(SIMULATED_TIME_PATH))
                     if t_now >= deadline:
-                        print(f"[Step] simulated_time={t_now:.6f}s wall_time={time.perf_counter():.6f}s")
                         step_logged = True
-                        time.sleep(advance_pre_delay_s)
+                        # Time from start of winning attempt to start of poll (advance_simulation_step duration)
+                        self._timing_last['step_time_ready_until_call'] = poll_start - attempt_start
+                        self._timing_last['step_time_call_until_advance'] = time.perf_counter() - poll_start
                         break
                     time.sleep(0.001)
                 if step_logged:
                     break
-                print(f"[Step] retry (attempt {attempt + 1})")
+                else:
+                    self._timing_last['step_time_waiting_ready'] = time.perf_counter() - _t0
             if not step_logged:
                 print("[Step] timeout (simulated_time deadline not reached after retries)")
+                self._timing_last['step_time_waiting_ready'] = time.perf_counter() - _t0
+                self._timing_last['step_time_ready_until_call'] = 0.0
+                self._timing_last['step_time_call_until_advance'] = 0.0
         else:
             time.sleep(self.timestep)
             if self._var_access:
                 try:
-                    t_after = float(self._var_access.get_var(SIMULATED_TIME_PATH))
-                    print(f"[Step] simulated_time={t_after:.6f}s")
+                    float(self._var_access.get_var(SIMULATED_TIME_PATH))
                     step_logged = True
                 except Exception:
                     pass
-            if not step_logged:
-                print("[Step] no_var_access (slept, no time read)")
+            self._timing_last['step_time_waiting_ready'] = 0.0
+            self._timing_last['step_time_ready_until_call'] = 0.0
+            self._timing_last['step_time_call_until_advance'] = 0.0
 
         self._timing_last['step_time'] = time.perf_counter() - _t0
 
@@ -1197,11 +1205,15 @@ class DSpaceSimulation(RacingSimulation):
                 f"apply_actions={s['apply_actions']/n:.4f} "
                 f"var_writes({var_backend})={s['com_writes']/n:.4f} "
                 f"step_time={s['step_time']/n:.4f} "
+                f"step_waiting_ready={s['step_time_waiting_ready']/n:.4f} "
+                f"step_ready_until_call={s['step_time_ready_until_call']/n:.4f} "
+                f"step_call_until_advance={s['step_time_call_until_advance']/n:.4f} "
                 f"var_reads({var_backend})={s['com_reads']/n:.4f} "
                 f"loop_other={s['loop_other']/n:.4f} "
                 f"get_properties={s['get_properties']/n:.4f}"
             )
             print(f"[Timing] Variable access backend: {var_backend}  (var_writes/var_reads = {var_backend} set_var/get_var time)")
+            print(f"[Timing] step_time breakdown: step_waiting_ready = waiting for dSPACE (failed attempts); step_ready_until_call + step_call_until_advance = total time on winning attempt (call duration + poll until advance)")
             total = (s['apply_actions'] + s['com_writes'] + s['step_time'] + s['com_reads'] + s['loop_other'] + s['get_properties']) / n
             print(f"[Timing] mean total per step (all buckets)={total:.4f}s  (get_properties = getProperties wall time incl. behavior; loop_other = gap getProperties->executeActions)")
             sim_time_total = n * self.timestep
@@ -1233,9 +1245,6 @@ class DSpaceSimulation(RacingSimulation):
             if self._maport is not None and self._var_access is self._maport:
                 print("[Timing] MAPort per-path timing (get_var/set_var) below:")
             self._var_access.print_timing_summary()
-        # Optional: when MAPort was var backend, also print COM timing (step/session) if available
-        if self._cd is not None and self._cd is not self._var_access and hasattr(self._cd, 'print_timing_summary'):
-            self._cd.print_timing_summary()
         if self._maport is not None:
             print("[VarAccess] Teardown: disposing MAPort (variable backend was MAPort).")
             try:
