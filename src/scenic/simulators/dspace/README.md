@@ -79,6 +79,21 @@ Verbose messages (e.g. “Creating EGO/FELLOW vehicle”, step-by-step ControlDe
 
 ---
 
+## ControlDesk variable access and step polling
+
+When the simulator waits for simulated time to reach the step deadline, it polls `get_var(SIMULATED_TIME_PATH)` in a loop. This has implications for timeout tuning:
+
+- **`get_var` latency:** Each call to `get_var` (ControlDesk/COM) takes approximately **2–3 ms** per read. This dominates the polling loop cost (in addition to the 1 ms `sleep(0.001)` per iteration).
+- **Sleep counter vs. wall timeout:** With `poll_timeout_wall = 10 × timestep` and `timestep = 0.01` s (so 0.1 s timeout), each iteration is ~3.5 ms (get_var + sleep). The loop therefore runs about **28–29 iterations** before the wall timeout. When a retry is logged (deadline not reached in time), the last printed `sleep_counter` is typically **26–29**. If you see a much lower sleep_counter, something else (e.g. an exception or early exit) is occurring; if you see a much higher one, get_var may be faster than 2–3 ms in your setup.
+
+Use these numbers when choosing `poll_timeout_wall`: allow enough wall time for the sim to advance one timestep, given that each poll iteration costs ~2–3 ms plus the 1 ms sleep.
+
+- **Advance pre-delay:** Even after simulated time has advanced by the timestep amount, dSPACE typically needs around **0.1 s** (10× timestep for `timestep = 0.01` s) of wall time before it is ready to accept the next step command. The simulator can sleep this duration once per step (before or after the advance) so that the next step command is accepted. Without a sufficient delay, the first advance can be effectively ignored and a retry would be needed.
+
+- **Tradeoff: delay vs. total wall time:** Using a **smaller** delay (e.g. **0.01 s**) causes **some retries** (steps where the advance is ignored and a retry is needed), but **overall wall time** (as measured by `time.perf_counter`) can be **less** than using a conservative 0.1 s delay with no retries. Reason: with a small delay, most steps succeed quickly and only pay the short delay; the extra cost (one poll timeout, ~0.1 s) is paid only on the steps that retry. So if the retry rate is modest, the average time per step is lower than fixing 0.1 s every step. Choose a larger delay to avoid retries at the cost of higher wall time, or a smaller delay to minimize wall time and accept occasional retries.
+
+---
+
 ## Known limitations
 
 - **T-coordinate (lateral deviation):** ModelDesk may ignore lateral deviation settings for ego and fellows (centerline placement). This is a dSPACE ModelDesk configuration issue. See `debug_ego_cord/README.md`, `debug_route_code/README.md`.

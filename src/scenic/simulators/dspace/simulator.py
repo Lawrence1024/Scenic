@@ -1044,38 +1044,28 @@ class DSpaceSimulation(RacingSimulation):
                 t_before = float(self._var_access.get_var(SIMULATED_TIME_PATH))
             except Exception:
                 pass
-
-        if self._cd:
-            try:
-                self._cd.advance_simulation_step()
-            except Exception as e:
-                time.sleep(self.timestep)
-                self._timing_last['step_time'] = time.perf_counter() - _t0
-                print(f"[Step] advance_failed: {e}")
-                return
-
+        
         step_logged = False
         if t_before is not None and self._var_access:
-            deadline = t_before + self.timestep
-            poll_timeout_wall = 10.0 * self.timestep
+            deadline = t_before + self.timestep * 0.9
+            poll_timeout_wall = min(10.0 * self.timestep, 0.1)
             max_retries = 10
+            advance_pre_delay_s = 0.01
             for attempt in range(max_retries):
-                if attempt > 0 and self._cd:
+                if self._cd:
                     self._cd.advance_simulation_step()
                 poll_start = time.perf_counter()
                 while time.perf_counter() - poll_start < poll_timeout_wall:
-                    try:
-                        t_now = float(self._var_access.get_var(SIMULATED_TIME_PATH))
-                        if t_now >= deadline:
-                            print(f"[Step] simulated_time={t_now:.6f}s")
-                            step_logged = True
-                            break
-                    except Exception:
-                        pass
+                    t_now = float(self._var_access.get_var(SIMULATED_TIME_PATH))
+                    if t_now >= deadline:
+                        print(f"[Step] simulated_time={t_now:.6f}s wall_time={time.perf_counter():.6f}s")
+                        step_logged = True
+                        time.sleep(advance_pre_delay_s)
+                        break
                     time.sleep(0.001)
                 if step_logged:
                     break
-                print(f"[Step] retry attempt count (attempt {attempt + 1})")
+                print(f"[Step] retry (attempt {attempt + 1})")
             if not step_logged:
                 print("[Step] timeout (simulated_time deadline not reached after retries)")
         else:
