@@ -35,9 +35,9 @@ ego.behavior = FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_
 fellow1 = new RacingCar on mainRacingRoad, \
     with raceNumber 2, \
     ttlFileName 'ttl27_v5.csv', \
-    ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV/needs_refine'), \
-    ttlDX -53.6, \
-    ttlDY -15.7
+    ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV'), \
+    ttlDX 0.0, \
+    ttlDY 0.0
 
 # Assign behavior to make the fellow follow the TTL
 fellow1.behavior = FollowRacingLineBehavior(target_speed=25, manage_gears=True, use_waypoints=True)
@@ -49,10 +49,10 @@ fellow1.behavior = FollowRacingLineBehavior(target_speed=25, manage_gears=True, 
 #
 # 1. VISUALIZATION TOOL (Recommended):
 #    Run this command to visualize the TTL waypoints in a 2D plot:
-#    python tools/visualize_ttl.py assets/ttls/LS_ENU_TTL_CSV/needs_refine/ttl27_v5.csv --dx -53.6 --dy -15.7
+#    python tools/visualize_ttl.py assets/ttls/LS_ENU_TTL_CSV/ttl27_v5.csv --dx 0 --dy 0
 #
 #    With track overlay:
-#    python tools/visualize_ttl.py assets/ttls/LS_ENU_TTL_CSV/needs_refine/ttl27_v5.csv \
+#    python tools/visualize_ttl.py assets/ttls/LS_ENU_TTL_CSV/ttl27_v5.csv \
 #        --xodr assets/maps/dSPACE/LagunaSeca.xodr --dx -53.6 --dy -15.7
 #
 # 2. LOG WAYPOINTS DURING SIMULATION:

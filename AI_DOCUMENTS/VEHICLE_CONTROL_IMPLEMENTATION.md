@@ -191,7 +191,7 @@ The simulator's `executeActions()` method:
 
 ### TTL Loader and Waypoints
 
-- TTL CSVs in `assets/ttls/LS_ENU_TTL_CSV/usable` are loaded with a global offset (default index 17). The loader assigns:
+- TTL CSVs in `assets/ttls/LS_ENU_TTL_CSV` are loaded with offset (0,0) for XODR coordinates. The loader assigns:
   - `ego.ttl` (PolylineRegion for region-based cross-track error)
   - `ego.waypoints` (list of transformed TTL points for waypoint lookahead)
 

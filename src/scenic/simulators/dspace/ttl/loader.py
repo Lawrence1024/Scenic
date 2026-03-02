@@ -39,13 +39,13 @@ def get_ttl_config(scene_params):
     """
     params = scene_params or {}
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
-    default_folder = os.path.join(repo_root, "assets", "ttls", "LS_ENU_TTL_CSV", "transformed")
+    default_folder = os.path.join(repo_root, "assets", "ttls", "LS_ENU_TTL_CSV")
     ttl_folder = params.get("ttlFolder", default_folder)
     ttl_index = int(params.get("ttlIndex", 17))  # default to 17
     
-    # Check if folder is the 'transformed' folder (files are already in XODR coordinates)
+    # This folder holds XODR-coordinate files; use zero offset
     ttl_folder_str = str(ttl_folder).replace("\\", "/")
-    is_transformed = "transformed" in ttl_folder_str.lower()
+    is_transformed = "LS_ENU_TTL_CSV" in ttl_folder_str or "transformed" in ttl_folder_str.lower()
     
     # If in transformed folder, use zero offset (files are already in XODR space)
     # Otherwise, use default offset for files that need transformation
@@ -146,7 +146,7 @@ def load_ttl_region(ttl_folder, ttl_index, dx, dy, ttl_file_name=None):
     
     # Log coordinate system info
     folder_str = str(ttl_folder).replace("\\", "/")
-    if "transformed" in folder_str.lower():
+    if "LS_ENU_TTL_CSV" in folder_str or "transformed" in folder_str.lower():
         coord_system = "XODR (already transformed)"
     else:
         coord_system = "ENU/RD (with offset applied)"
@@ -189,14 +189,14 @@ def attach_ttl(sim, obj, vehicle_type="vehicle"):
             if ttl_folder is None:
                 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
                 ttl_folder = scene_params.get("ttlFolder", 
-                    os.path.join(repo_root, "assets", "ttls", "LS_ENU_TTL_CSV", "transformed"))
+                    os.path.join(repo_root, "assets", "ttls", "LS_ENU_TTL_CSV"))
             
             ttl_folder = str(ttl_folder)
             ttl_index = int(ttl_index)
             
-            # Auto-detect offset based on folder (transformed = 0,0; others = default)
+            # Auto-detect offset (LS_ENU_TTL_CSV = 0,0; others = default)
             folder_str = ttl_folder.replace("\\", "/")
-            is_transformed = "transformed" in folder_str.lower()
+            is_transformed = "LS_ENU_TTL_CSV" in folder_str or "transformed" in folder_str.lower()
             
             # Get offset, with auto-detection if not explicitly set
             if hasattr(obj, 'ttlDX'):

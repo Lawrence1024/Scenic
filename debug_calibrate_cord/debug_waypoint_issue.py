@@ -18,7 +18,7 @@ import os
 def main():
     """Debug waypoint loading and coordinates."""
     scenic_root = Path(__file__).parent.parent
-    ttl_folder = scenic_root / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "transformed"
+    ttl_folder = scenic_root / "assets" / "ttls" / "LS_ENU_TTL_CSV"
     
     # Load waypoints the same way the behavior does
     region, pts = load_ttl_region(str(ttl_folder), 17, 0.0, 0.0)

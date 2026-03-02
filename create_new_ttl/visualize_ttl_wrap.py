@@ -16,7 +16,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-DEFAULT_CSV = Path(__file__).resolve().parent.parent / "assets/ttls/LS_ENU_TTL_CSV/transformed/ttl_racing_line_xodr.csv"
+DEFAULT_CSV = Path(__file__).resolve().parent.parent / "assets/ttls/LS_ENU_TTL_CSV/ttl_racing_line_xodr.csv"
 
 
 def load_csv(path: Path) -> np.ndarray:

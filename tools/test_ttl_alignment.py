@@ -148,7 +148,7 @@ def main():
     # Inputs (adjust paths if needed)
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     default_xodr = os.path.join(repo_root, "assets", "maps", "dSPACE", "LagunaSeca.xodr")
-    ttl_dir = os.path.join(repo_root, "assets", "ttls", "LS_ENU_TTL_CSV", "usable")
+    ttl_dir = os.path.join(repo_root, "assets", "ttls", "LS_ENU_TTL_CSV")
     ttl_candidates = [
         "ttl_2.csv",
         "ttl_9.csv",

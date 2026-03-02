@@ -84,8 +84,8 @@ def _plot_segments(ax, segments, color, linewidth=1.0, label=None, alpha=0.9):
 def main():
     default_xodr = REPO_ROOT / "assets/maps/dSPACE/LagunaSeca.xodr"
     default_main_track_xodr = REPO_ROOT / "assets/maps/dSPACE/LagunaSeca_MainTrack_FromTTL.xodr"
-    centerline_path = REPO_ROOT / "assets/ttls/LS_ENU_TTL_CSV/transformed/ttl_fellow_test_xodr_all.csv"
-    temp_path = REPO_ROOT / "assets/ttls/LS_ENU_TTL_CSV/transformed/temp_aligned_to_centerline.csv"
+    centerline_path = REPO_ROOT / "assets/ttls/LS_ENU_TTL_CSV/ttl_fellow_test_xodr_all.csv"
+    temp_path = REPO_ROOT / "create_new_ttl/temp_aligned_to_centerline.csv"
 
     parser = argparse.ArgumentParser(description="Interactive map: XODR boundaries + TTL centerline (use toolbar to zoom/pan)")
     parser.add_argument("--xodr", type=Path, default=None,

@@ -2,7 +2,7 @@
 fellow1 = new RacingCar on mainRacingRoad, \
     with raceNumber 2, \
     ttlFileName 'ttl27_v5.csv', \
-    ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV/needs_refine'), \
+    ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV'), \
     ttlDX -53.6, \
     ttlDY -15.7
 

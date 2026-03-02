@@ -135,7 +135,7 @@ def path_length(pts: np.ndarray) -> float:
 
 
 def main():
-    default_ttl = REPO_ROOT / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "transformed" / "ttl_fellow_test_xodr_all.csv"
+    default_ttl = REPO_ROOT / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "ttl_fellow_test_xodr_all.csv"
     default_xodr = REPO_ROOT / "assets" / "maps" / "dSPACE" / "LagunaSeca.xodr"
 
     parser = argparse.ArgumentParser(

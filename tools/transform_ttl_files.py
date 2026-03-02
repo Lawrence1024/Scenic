@@ -21,14 +21,14 @@ Usage:
 Examples:
     # Transform all TTLs in directory with known offsets
     python transform_ttl_files.py \
-        --input-dir assets/ttls/LS_ENU_TTL_CSV/original \
-        --output-dir assets/ttls/LS_ENU_TTL_CSV/usable \
+        --input-dir assets/ttls/LS_ENU_TTL_CSV \
+        --output-dir assets/ttls/LS_ENU_TTL_CSV \
         --dx -2.0 --dy -53.0
     
     # Auto-compute and transform
     python transform_ttl_files.py \
-        --input-dir assets/ttls/LS_ENU_TTL_CSV/original \
-        --output-dir assets/ttls/LS_ENU_TTL_CSV/usable \
+        --input-dir assets/ttls/LS_ENU_TTL_CSV \
+        --output-dir assets/ttls/LS_ENU_TTL_CSV \
         --auto-compute \
         --xodr assets/maps/dSPACE/LagunaSeca.xodr
 """

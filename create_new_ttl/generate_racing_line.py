@@ -440,7 +440,7 @@ def main():
     script_dir = Path(__file__).parent
     project_root = script_dir.parent
     
-    centerline_path = project_root / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "transformed" / "ttl_fellow_test_xodr_all.csv"
+    centerline_path = project_root / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "ttl_fellow_test_xodr_all.csv"
     output_path = script_dir / "ttl_racing_line_xodr.csv"
     
     print("=" * 70)
@@ -485,7 +485,7 @@ def main():
     # Save racing line (script dir and transformed folder for drop-in use)
     print(f"\nSaving racing line to: {output_path}")
     save_racing_line(racing_line, str(output_path))
-    transformed_path = project_root / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "transformed" / "ttl_racing_line_xodr.csv"
+    transformed_path = project_root / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "ttl_racing_line_xodr.csv"
     if transformed_path != output_path:
         save_racing_line(racing_line, str(transformed_path))
         print(f"Also saved to: {transformed_path}")

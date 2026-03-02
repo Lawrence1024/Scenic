@@ -6,7 +6,7 @@ from pathlib import Path
 
 def main():
     scenic_root = Path(__file__).parent.parent
-    ttl_file = scenic_root / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "transformed" / "ttl_17.csv"
+    ttl_file = scenic_root / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "ttl_17.csv"
     
     with open(ttl_file, 'r') as f:
         reader = csv.reader(f)

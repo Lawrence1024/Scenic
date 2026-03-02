@@ -18,7 +18,7 @@ Examples:
     python compare_ttls.py
     
     # Compare TTLs in a specific directory
-    python compare_ttls.py --dir assets/ttls/LS_ENU_TTL_CSV/usable
+    python compare_ttls.py --dir assets/ttls/LS_ENU_TTL_CSV
     
     # Compare with track overlay and boundary validation
     python compare_ttls.py --xodr assets/maps/dSPACE/LagunaSeca.xodr
@@ -1291,8 +1291,8 @@ def main():
         epilog=__doc__
     )
     parser.add_argument('--dir', type=str, 
-                       default='assets/ttls/LS_ENU_TTL_CSV/usable',
-                       help='Directory containing TTL CSV files (default: assets/ttls/LS_ENU_TTL_CSV/usable)')
+                       default='assets/ttls/LS_ENU_TTL_CSV',
+                       help='Directory containing TTL CSV files (default: assets/ttls/LS_ENU_TTL_CSV)')
     parser.add_argument('--xodr', type=str, default=None,
                        help='Optional path to XODR track file for overlay (default: auto-detect Laguna Seca)')
     parser.add_argument('--dx', type=float, default=-2.0,

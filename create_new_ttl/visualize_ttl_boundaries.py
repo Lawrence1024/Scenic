@@ -81,7 +81,7 @@ def _plot_segments(ax, segments, color, linewidth=1.5, label=None, alpha=0.95):
 
 def main():
     default_xodr = REPO_ROOT / "assets" / "maps" / "dSPACE" / "LagunaSeca.xodr"
-    default_ttl = REPO_ROOT / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "transformed" / "ttl_racing_line_xodr.csv"
+    default_ttl = REPO_ROOT / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "ttl_racing_line_xodr.csv"
     default_save = REPO_ROOT / "create_new_ttl" / "ttl_boundaries_visualization.png"
 
     parser = argparse.ArgumentParser(

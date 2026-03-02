@@ -26,7 +26,7 @@ param generateStartingGrid = False
 param ttlNumber = 17        # Default TTL index (choose among: 2, 3, 9, 15, 16, 17)
 param ttlDX = -53.6         # Global X offset to apply to TTL points
 param ttlDY = -15.7         # Global Y offset to apply to TTL points
-param ttlFolder = localPath('../../assets/ttls/LS_ENU_TTL_CSV/usable')
+param ttlFolder = localPath('../../assets/ttls/LS_ENU_TTL_CSV')
 
 model scenic.simulators.dspace.model
 

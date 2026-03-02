@@ -14,8 +14,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CENTERLINE = REPO_ROOT / "assets/ttls/LS_ENU_TTL_CSV/transformed/ttl_fellow_test_xodr_all.csv"
-DEFAULT_OTHER = REPO_ROOT / "assets/ttls/LS_ENU_TTL_CSV/transformed/temp_aligned_to_centerline.csv"
+DEFAULT_CENTERLINE = REPO_ROOT / "assets/ttls/LS_ENU_TTL_CSV/ttl_fellow_test_xodr_all.csv"
+DEFAULT_OTHER = REPO_ROOT / "create_new_ttl/temp_aligned_to_centerline.csv"
 
 
 def load_csv(path: str) -> np.ndarray:

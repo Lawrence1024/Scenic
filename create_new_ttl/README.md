@@ -91,8 +91,8 @@ python create_new_ttl/interactive_map_visualizer.py
 ### What It Draws (in order)
 
 1. **Track boundaries** from `assets/maps/dSPACE/LagunaSeca.xodr` (left/right edges; main track + pit in gray/black)
-2. **Centerline** from `assets/ttls/LS_ENU_TTL_CSV/transformed/ttl_fellow_test_xodr_all.csv` (blue)
-3. **Aligned line** from `assets/ttls/LS_ENU_TTL_CSV/transformed/temp_aligned_to_centerline.csv` (orange)
+2. **Centerline** from `assets/ttls/LS_ENU_TTL_CSV/ttl_fellow_test_xodr_all.csv` (blue)
+3. **Aligned line** from `create_new_ttl/temp_aligned_to_centerline.csv` (orange)
 
 Use the matplotlib window toolbar to **zoom** (magnifying glass), **pan** (hand), **save**, or **reset view** (home).
 
@@ -126,7 +126,7 @@ python create_new_ttl/generate_racing_line.py
 
 ### What It Does
 
-1. **Loads centerline** from `assets/ttls/LS_ENU_TTL_CSV/transformed/ttl_fellow_test_xodr_all.csv`
+1. **Loads centerline** from `assets/ttls/LS_ENU_TTL_CSV/ttl_fellow_test_xodr_all.csv`
 2. **Computes curvature** at each point along the path
 3. **Generates racing line** by offsetting from centerline based on:
    - Curvature magnitude and direction
@@ -134,7 +134,7 @@ python create_new_ttl/generate_racing_line.py
    - Track width constraints (max 10m deviation)
 4. **Smooths the racing line** using moving average
 5. **Caps curvature** to the vehicle kinematic limit (κ_max ≈ 0.097 1/m) so the path is followable by the MPC
-6. **Outputs** to `create_new_ttl/ttl_racing_line_xodr.csv` and to `assets/ttls/LS_ENU_TTL_CSV/transformed/ttl_racing_line_xodr.csv` (same format: x,y,z)
+6. **Outputs** to `create_new_ttl/ttl_racing_line_xodr.csv` and to `assets/ttls/LS_ENU_TTL_CSV/ttl_racing_line_xodr.csv` (same format: x,y,z)
 
 ### Racing Line Strategy
 

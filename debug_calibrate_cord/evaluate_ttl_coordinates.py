@@ -154,7 +154,7 @@ def evaluate_ttl_coordinate_system(ttl_path, transform, road_index):
 def main():
     """Main function."""
     scenic_root = Path(__file__).parent.parent
-    ttl_folder = scenic_root / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "transformed"
+    ttl_folder = scenic_root / "assets" / "ttls" / "LS_ENU_TTL_CSV"
     
     # Load coordinate transform
     transform_path = scenic_root / "assets" / "maps" / "dSPACE" / "Laguna_Seca_transform.json"
