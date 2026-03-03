@@ -52,6 +52,34 @@ Ego steering is always in **road wheel angle (radians)** by the time it is writt
 - `modeldesk/placement.py` – Vehicle placement in ModelDesk
 - `controldesk/readback.py` – Position readback from ControlDesk
 
+### GPS ↔ dSPACE local (and to Scenic XODR)
+
+A **GPS ↔ dSPACE local** transform is available for converting between GNSS (lon, lat) and dSPACE Cartesian (x, y). It is calibrated from a run that produced `gps_dspace_table.csv` (ego x, y, z, heading plus GNSS Longitude_deg, Latitude_deg, Heading_deg from GPS_CALC).
+
+- **Calibration:** After a run, fit and save calibration (from repo root):
+  ```bash
+  python src/scenic/simulators/dspace/converters/fit_gps_dspace_calibration.py
+  ```
+  Default: reads `gps_dspace_table.csv` from repo root, writes `src/scenic/simulators/dspace/geometry/gps_dspace_calibration.json`.
+
+- **Usage in code:**
+  ```python
+  from scenic.simulators.dspace.geometry.gps_transform import load_calibration, GPSDspaceTransform
+
+  cal = load_calibration(Path(".../dspace/geometry/gps_dspace_calibration.json"))
+  x_dspace, y_dspace = cal.gps_to_dspace(longitude_deg, latitude_deg)
+  lon_deg, lat_deg = cal.dspace_to_gps(x_dspace, y_dspace)
+  ```
+  From dSPACE (x, y) you can then use the existing **XODR ↔ RD** transform in `geometry/coordinate_transform.py` (e.g. `apply_inverse_coordinate_transform`) to get Scenic XODR coordinates.
+
+- **Round-trip verify:** Ensures Scenic → (place) → read GPS → GPS→dSPACE → dSPACE→Scenic matches the initial Scenic position:
+  ```bash
+  python src/scenic/simulators/dspace/converters/verify_gps_round_trip.py
+  ```
+  With the current table (no `x_rd`/`y_rd`), this checks GPS ↔ Scenic (x_dspace, y_dspace) only. After a run that collects raw dSPACE RD, the CSV will include `x_rd`, `y_rd`; then run `fit_gps_dspace_calibration.py --rd` to produce `gps_rd_calibration.json`, and the verify script will run the full chain (Scenic → RD → GPS → RD → Scenic).
+
+**Key files:** `geometry/gps_transform.py`, `geometry/gps_dspace_calibration.json` (after calibration), `converters/fit_gps_dspace_calibration.py`, `converters/verify_gps_round_trip.py`.
+
 ---
 
 ## Logging and debugging

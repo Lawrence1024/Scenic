@@ -4,11 +4,13 @@
 # - Build XODR reference index from Scenic param `map`
 # - For each Scenic object: (x,y) → (s,t), then seg0 uses absolute Position/Deviation
 
+import csv
 import math
 import os
 import time
 import pythoncom
 from win32com.client import Dispatch
+from pathlib import Path
 
 from scenic.domains.racing.simulators import RacingSimulator, RacingSimulation
 from scenic.core.simulators import SimulationCreationError
@@ -18,7 +20,7 @@ from .controldesk.per_tick_control import ExternalControlManager
 from .vehicle import VehiclePhysicsState, VehicleController
 from .ttl.loader import get_ttl_config, load_ttl_region, attach_to_ego, attach_ttl
 from .controldesk.arrays import ensure_fellow_arrays_initialized, probe_external_index_base
-from .controldesk.readback import read_ego_state, read_fellow_state
+from .controldesk.readback import read_ego_state, read_ego_gps, read_fellow_state
 from .vehicle.actor import ensure_actor, DSpaceVehicleActor
 from .vehicle.indexing import get_fellow_index as indexing_get_fellow_index
 from .geometry.pipeline import build_road_index_and_transform
@@ -87,6 +89,8 @@ class DSpaceSimulation(RacingSimulation):
         self._wall_start = None  # wall time at start of first executeActions (for total wall/sim ratio)
         # Per-step state cache to avoid duplicate ControlDesk readback in same tick
         self._state_cache = {}   # key: (currentTime, id(obj)) -> state dict
+        # Temporary: collect (x,y,z,heading) + GNSS for ego to build GNSS<->dSPACE transform table (written at end only)
+        self._gps_collect_table = []
         # control_period (seconds) -> steps; must be divisible by timestep
         _control_period = getattr(sim, 'control_period', None)
         if _control_period is None or _control_period <= 0:
@@ -1284,6 +1288,28 @@ class DSpaceSimulation(RacingSimulation):
                     _yaw = 0.0
             except Exception:
                 pass
+            # Collect (sim_time, x, y, z, heading_deg) + GNSS for transform table (only on control steps; written at end only)
+            if not getattr(self, "_light_step", False) and (self.currentTime % self._control_interval) == 0 and getattr(self, "_var_access", None):
+                try:
+                    lon_deg, lat_deg, heading_gnss_deg = read_ego_gps(self)
+                    heading_dspace_deg = float(yaw) * (180.0 / math.pi) if yaw is not None else None
+                    row = {
+                        "sim_time": self.currentTime,
+                        "x_dspace": float(pos.x),
+                        "y_dspace": float(pos.y),
+                        "z_dspace": float(getattr(pos, "z", 0.0)),
+                        "heading_dspace_deg": heading_dspace_deg,
+                        "longitude_deg": lon_deg,
+                        "latitude_deg": lat_deg,
+                        "heading_gnss_deg": heading_gnss_deg,
+                    }
+                    rd_pos = getattr(actor, "rd_position", None)
+                    if rd_pos is not None and len(rd_pos) >= 2:
+                        row["x_rd"] = float(rd_pos[0])
+                        row["y_rd"] = float(rd_pos[1])
+                    self._gps_collect_table.append(row)
+                except Exception:
+                    pass
         self._timing_last['get_properties'] = self._timing_last.get('get_properties', 0.0) + (time.perf_counter() - _t_get_props)
         # Mark end of this step's work for loop_other timing (gap until next executeActions)
         self._loop_end = time.perf_counter()
@@ -1350,6 +1376,22 @@ class DSpaceSimulation(RacingSimulation):
                     lt_ss = lt[warmup:]
                     mean_ss = sum(lt_ss) / len(lt_ss) * 1000
                     print(f"[LightStep] Steady-state (excluding first {warmup} steps): mean={mean_ss:.2f} ms min={min(lt_ss)*1000:.2f} ms max={max(lt_ss)*1000:.2f} ms")
+        # Write GNSS/dSPACE transform table once at end (no per-step logging)
+        gps_table = getattr(self, "_gps_collect_table", None)
+        if gps_table and len(gps_table) > 0:
+            out_path = Path("gps_dspace_table.csv")
+            cols = ["sim_time", "x_dspace", "y_dspace", "z_dspace", "heading_dspace_deg", "longitude_deg", "latitude_deg", "heading_gnss_deg"]
+            if any("x_rd" in row for row in gps_table):
+                cols = cols + ["x_rd", "y_rd"]
+            try:
+                with open(out_path, "w", newline="") as f:
+                    w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+                    w.writeheader()
+                    for row in gps_table:
+                        w.writerow({k: ("" if v is None else v) for k, v in row.items()})
+                print(f"[GPS] Wrote {len(gps_table)} rows to {out_path} for GNSS <-> dSPACE local transform.")
+            except Exception as e:
+                print(f"[GPS] Failed to write transform table: {e}")
         if self._var_access and hasattr(self._var_access, 'print_timing_summary'):
             if self._maport is not None and self._var_access is self._maport:
                 print("[Timing] MAPort per-path timing (get_var/set_var) below:")

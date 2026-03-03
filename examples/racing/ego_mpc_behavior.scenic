@@ -20,9 +20,9 @@ model scenic.simulators.dspace.racing_model
 # --- Ego car with MPC behavior ---
 # Using main racing road centerline TTL (excluding pitlane)
 # Pitlane Start
-# ego = new RacingCar at (79.766382000,97.055717000), \
+ego = new RacingCar at (79.766382000,97.055717000), \
 # Pitlane End
-ego = new RacingCar at (196.952588000,9.974341000), \
+# ego = new RacingCar at (196.952588000,9.974341000), \
 # Main End
 # ego = new RacingCar at (134.131413,125.953041),\  
 # Weird Curve
@@ -47,13 +47,13 @@ ego.behavior = FollowRacingLineMPCBehavior(
     mpc_config_path=None  # Use default MPC config (src/scenic/domains/racing/mpc/vehicle_mpc.yaml)
 )
 
-fellow0 = new RacingCar at (178.553226000,43.855936000), with regionContainedIn everywhere
-fellow1 = new RacingCar at (174.210186000,51.888402000), with regionContainedIn everywhere
-fellow2 = new RacingCar at (161.870429800,56.357831800), with regionContainedIn everywhere
+# fellow0 = new RacingCar at (178.553226000,43.855936000), with regionContainedIn everywhere
+# fellow1 = new RacingCar at (174.210186000,51.888402000), with regionContainedIn everywhere
+# fellow2 = new RacingCar at (161.870429800,56.357831800), with regionContainedIn everywhere
 # fellow3 = new RacingCar at (161.393517000,53.432218000), with regionContainedIn everywhere
-fellow4 = new RacingCar at (155.526641000,61.715180000), with regionContainedIn everywhere
-fellow5 = new RacingCar at (150.865108000,68.365371000), with regionContainedIn everywhere
-fellow6 = new RacingCar at (146.798926000,74.193057000), with regionContainedIn everywhere
+# fellow4 = new RacingCar at (155.526641000,61.715180000), with regionContainedIn everywhere
+# fellow5 = new RacingCar at (150.865108000,68.365371000), with regionContainedIn everywhere
+# fellow6 = new RacingCar at (146.798926000,74.193057000), with regionContainedIn everywhere
 
 
 

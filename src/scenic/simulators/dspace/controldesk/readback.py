@@ -13,6 +13,30 @@ EGO_READ_PATHS = (
     EGO_PATH_X, EGO_PATH_Y, EGO_PATH_Z, EGO_PATH_YAW, EGO_PATH_VX, EGO_PATH_VY
 )
 
+# GNSS (GPS) paths for ego - Environment/Road/PlantModel/GPS_POSITION/GPS_CALC
+EGO_GPS_BASE = "Platform()://ASM_Traffic/Model Root/Environment/Road/PlantModel/GPS_POSITION/GPS_CALC"
+EGO_GPS_LONGITUDE_DEG = f"{EGO_GPS_BASE}/Longitude_deg"
+EGO_GPS_LATITUDE_DEG = f"{EGO_GPS_BASE}/Latitude_deg"
+EGO_GPS_HEADING_DEG = f"{EGO_GPS_BASE}/Heading_deg"
+EGO_GPS_READ_PATHS = (EGO_GPS_LONGITUDE_DEG, EGO_GPS_LATITUDE_DEG, EGO_GPS_HEADING_DEG)
+
+
+def read_ego_gps(sim):
+    """Read ego GNSS (Longitude_deg, Latitude_deg, Heading_deg) from GPS_CALC. Returns (lon_deg, lat_deg, heading_deg) or (None, None, None) on failure."""
+    var = getattr(sim, "_var_access", None) or getattr(sim, "_cd", None)
+    if not var:
+        return (None, None, None)
+    try:
+        if hasattr(var, "get_vars"):
+            lon, lat, hdg = var.get_vars(EGO_GPS_READ_PATHS)
+        else:
+            lon = float(var.get_var(EGO_GPS_LONGITUDE_DEG))
+            lat = float(var.get_var(EGO_GPS_LATITUDE_DEG))
+            hdg = float(var.get_var(EGO_GPS_HEADING_DEG))
+        return (float(lon), float(lat), float(hdg))
+    except Exception:
+        return (None, None, None)
+
 
 def read_ego_state(sim, obj):
     """Read ego vehicle state from variable access (MAPort or ControlDesk) into obj.dspaceActor."""
@@ -39,6 +63,7 @@ def read_ego_state(sim, obj):
         if sim._coordinate_transform is not None:
             from ..geometry.coordinate_transform import apply_inverse_coordinate_transform
             rd_x, rd_y = float(x), float(y)
+            setattr(obj.dspaceActor, "rd_position", (rd_x, rd_y))  # for GPS round-trip and calibration
             scenic_x, scenic_y = apply_inverse_coordinate_transform(sim._coordinate_transform, (rd_x, rd_y))
             x, y = scenic_x, scenic_y
             
