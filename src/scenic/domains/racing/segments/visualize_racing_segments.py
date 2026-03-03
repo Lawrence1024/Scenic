@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-Visualize curve/straight segments derived from the OpenDRIVE map.
+Visualize segment types (main straight, main curve, pit straight, pit curve) from the OpenDRIVE map.
 
 Segments are deterministic for the same map: same centerline geometry and
-CURVATURE_THRESHOLD yield the same segment boundaries every run. This script
-loads the same track as the racing scenario, builds the segments, and shows
-them in a window.
+CURVATURE_THRESHOLD yield the same segment boundaries every run. The plot uses
+four colors (one per type), uniform line width, and segment ID labels.
 
 Usage (from repo root):
     python -m scenic.domains.racing.segments.visualize_racing_segments [--map PATH]
@@ -246,53 +245,53 @@ def main():
         if connects:
             print(f"  Segment {seg_id} (connects to junction): start=({start_pt[0]:.2f}, {start_pt[1]:.2f}), end=({end_pt[0]:.2f}, {end_pt[1]:.2f})")
 
-    # All segments: straight=blue, curve=orange (junction segments classified by geometry).
-    COLOR_STRAIGHT = "tab:blue"
-    COLOR_CURVE = "tab:orange"
+    # Four segment types: main straight, main curve, pit straight, pit curve (one color each, no bold).
+    COLOR_MAIN_STRAIGHT = "tab:blue"
+    COLOR_MAIN_CURVE = "tab:orange"
+    COLOR_PIT_STRAIGHT = "tab:green"
+    COLOR_PIT_CURVE = "tab:purple"
+    LINE_WIDTH = 2.0  # uniform, no bold
+
+    def segment_color(is_pit: bool, seg_type: str):
+        if is_pit:
+            return COLOR_PIT_STRAIGHT if seg_type == "straight" else COLOR_PIT_CURVE
+        return COLOR_MAIN_STRAIGHT if seg_type == "straight" else COLOR_MAIN_CURVE
+
     fig, ax = plt.subplots(1, 1, figsize=(12, 10))
 
-    non_junction = [s for s in all_segments if not s[6]]
-    junction_only = [s for s in all_segments if s[6]]
-    for seg in non_junction + junction_only:
+    for seg in all_segments:
         seg_id, road_idx, s_start, s_end, seg_type, centerline, is_junction_link, is_pit = seg
         pts = get_segment_polyline(centerline, s_start, s_end)
         if len(pts) < 2:
             continue
         xs = [p[0] for p in pts]
         ys = [p[1] for p in pts]
-        color = COLOR_STRAIGHT if seg_type == "straight" else COLOR_CURVE
-        lw = 4.0 if is_junction_link else 2.5
-        ax.plot(xs, ys, color=color, linewidth=lw, solid_capstyle="round", linestyle="-")
-        # Place label: junction segments use 0.4/0.6 along segment to reduce overlap
-        if is_junction_link:
-            frac = 0.4 if (seg_id % 2) == 1 else 0.6
-        else:
-            frac = 0.5
-        label_text = str(seg_id)
+        color = segment_color(is_pit, seg_type)
+        ax.plot(xs, ys, color=color, linewidth=LINE_WIDTH, solid_capstyle="round", linestyle="-")
+        frac = 0.4 if is_junction_link and (seg_id % 2) == 1 else (0.6 if is_junction_link else 0.5)
         idx = max(0, min(int(frac * (len(pts) - 1)), len(pts) - 1))
         x_mid, y_mid = pts[idx][0], pts[idx][1]
         ax.text(
-            x_mid, y_mid, label_text,
-            fontsize=8, ha="center", va="center", color="white", fontweight="bold",
+            x_mid, y_mid, str(seg_id),
+            fontsize=8, ha="center", va="center", color="white", fontweight="normal",
             path_effects=[path_effects.withStroke(linewidth=2, foreground="black")],
         )
 
     ax.set_aspect("equal")
     ax.set_xlabel("x (m)")
     ax.set_ylabel("y (m)")
-    n_junc = len(junction_only)
-    junc_ids = sorted(s[0] for s in junction_only)
-    title = f"Final segmenting (n={total}) — main 1–{n_main_seg}, pit {n_main_seg + 1}–{total}. Junction segments {junc_ids} (thick, colored by curve/straight)."
+    n_junc = sum(1 for s in all_segments if s[6])
+    junc_ids = sorted(s[0] for s in all_segments if s[6])
+    title = f"Segment types (n={total}) — main 1–{n_main_seg}, pit {n_main_seg + 1}–{total}. Four colors: main/pit × straight/curve."
     ax.set_title(title)
     legend_handles = [
-        Line2D([0], [0], color=COLOR_STRAIGHT, linewidth=2, label="Straight"),
-        Line2D([0], [0], color=COLOR_CURVE, linewidth=2, label="Curve"),
-        Patch(facecolor="none", edgecolor="none", label=f"Main loop: segments 1–{n_main_seg}"),
+        Line2D([0], [0], color=COLOR_MAIN_STRAIGHT, linewidth=LINE_WIDTH, label="Main straight"),
+        Line2D([0], [0], color=COLOR_MAIN_CURVE, linewidth=LINE_WIDTH, label="Main curve"),
+        Line2D([0], [0], color=COLOR_PIT_STRAIGHT, linewidth=LINE_WIDTH, label="Pit straight"),
+        Line2D([0], [0], color=COLOR_PIT_CURVE, linewidth=LINE_WIDTH, label="Pit curve"),
     ]
-    if n_pit_seg:
-        legend_handles.append(Patch(facecolor="none", edgecolor="none", label=f"Pit: segments {n_main_seg + 1}–{total}"))
     if n_junc:
-        legend_handles.append(Patch(facecolor="none", edgecolor="none", label=f"Junction segments (thick): {junc_ids}"))
+        legend_handles.append(Patch(facecolor="none", edgecolor="none", label=f"Junction segment IDs: {junc_ids}"))
     ax.legend(handles=legend_handles, loc="upper left")
     plt.tight_layout()
     if args.output:

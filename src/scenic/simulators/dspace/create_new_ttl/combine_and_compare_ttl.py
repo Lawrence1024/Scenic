@@ -183,6 +183,43 @@ def run_merge_analysis(label: str, temp_pts: list, existing_pts: list):
                 print(f"    Range {i + 1}: index {a} to {b} (wrapped) — {len(existing_pts) - a + b + 1} points")
 
 
+def _segment_lengths(pts: list) -> list:
+    """Length of each segment between consecutive points. Returns list of length len(pts)-1."""
+    if len(pts) < 2:
+        return []
+    return [
+        dist2((pts[i][0], pts[i][1]), (pts[i + 1][0], pts[i + 1][1])) ** 0.5
+        for i in range(len(pts) - 1)
+    ]
+
+
+def _interpolate_close_loop(loop: list, gap_threshold: float = 2.0) -> list:
+    """
+    If the gap between loop[-1] and loop[0] exceeds gap_threshold (meters),
+    append linearly interpolated points so the loop closes smoothly.
+    """
+    if len(loop) < 2:
+        return loop
+    last_pt = loop[-1]
+    first_pt = loop[0]
+    gap = dist2((last_pt[0], last_pt[1]), (first_pt[0], first_pt[1])) ** 0.5
+    if gap <= gap_threshold:
+        return loop
+    lengths = _segment_lengths(loop)
+    typical = sum(lengths) / len(lengths) if lengths else 2.0
+    k = max(1, int(round(gap / typical) - 1))
+    new_pts = []
+    for i in range(1, k + 1):
+        t = i / (k + 1)
+        pt = (
+            (1 - t) * last_pt[0] + t * first_pt[0],
+            (1 - t) * last_pt[1] + t * first_pt[1],
+            (1 - t) * last_pt[2] + t * first_pt[2],
+        )
+        new_pts.append(pt)
+    return loop + new_pts
+
+
 def blend_segment(end_pts: list, start_pts: list, n_blend: int) -> list:
     """
     Cross-fade between the last n_blend points of end_pts and the first n_blend points of start_pts.
@@ -249,7 +286,7 @@ def build_combined_ttl(begin_pts: list, existing_pts: list, out_path: Path, blen
 
 
 def build_pitlane_corkscrew_loop(
-    pitlane_pts: list, existing_pts: list, out_path: Path, blend_n: int = 6
+    pitlane_pts: list, existing_pts: list, out_path: Path, blend_n: int = 6, trim_end: int = 40
 ) -> bool:
     """
     Closed loop: Pit Lane -> Corkscrew -> Pit Lane.
@@ -280,22 +317,52 @@ def build_pitlane_corkscrew_loop(
         loop.extend(blend_segment(pitlane_pts, main_pts, blend_n))
     # 2) Main (Corkscrew segment) from rejoin to pit entry
     loop.extend(main_pts[blend_n:])
-    # 3) Close loop: main end is near pitlane start. Smooth the curve if gap is noticeable.
+    # 3) Close loop: main end is near pitlane start. Blend curvature then interpolate if gap remains.
     dist_close = dist2((main_pts[-1][0], main_pts[-1][1]), (pitlane_pts[0][0], pitlane_pts[0][1])) ** 0.5
     if dist_close > 2.0 and blend_n >= 2:
-        close_n = min(4, blend_n)
+        close_n = min(max(4, int(dist_close // 2)), blend_n)  # more blend points for larger gap
         close_blend = blend_segment(main_pts, pitlane_pts, close_n)
         if close_blend:
             loop = loop[:-close_n] + close_blend
+    # Trim sharp end: remove last N points then smoothly reconnect to start
+    if trim_end > 0 and len(loop) > trim_end + 1:
+        loop = loop[:-trim_end]
+    loop = _interpolate_close_loop(loop, gap_threshold=0.5)
+    gap_after = dist2((loop[-1][0], loop[-1][1]), (loop[0][0], loop[0][1])) ** 0.5
     write_ttl_csv(out_path, loop)
     print(f"\n[Pit Lane -> Corkscrew -> Pit Lane] Closed loop: pit entry idx {j_pit_entry} ({d_pe:.2f} m), pit exit {j_pit_exit} ({d_px:.2f} m)")
     print(f"  Main segment: existing indices {i_start}..{i_end} ({len(main_slice)} points)")
-    print(f"  Blending: {blend_n} pts at pit->main; close gap {dist_close:.2f} m")
+    print(f"  Blending: {blend_n} pts at pit->main; close gap {dist_close:.2f} m -> after close {gap_after:.2f} m")
     print(f"  Total: {len(loop)} points -> {out_path.name}")
     return True
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser(description="Pitlane TTL: begin/end/merge and closed loop")
+    ap.add_argument("--update-closure-only", action="store_true", help="Only re-apply loop closure to existing ttl_pitlane.csv (no temp file needed)")
+    ap.add_argument("--trim-end", type=int, default=40, metavar="N", help="When closing loop, trim last N points before reconnecting (default 40)")
+    args = ap.parse_args()
+
+    if args.update_closure_only:
+        if not PIT_CORKSCREW_LOOP_TTL.exists():
+            print(f"[ERROR] {PIT_CORKSCREW_LOOP_TTL} not found.")
+            return 1
+        loop = load_ttl_csv(PIT_CORKSCREW_LOOP_TTL)
+        if len(loop) < 2:
+            print("[ERROR] Pitlane loop has too few points.")
+            return 1
+        gap_before = dist2((loop[-1][0], loop[-1][1]), (loop[0][0], loop[0][1])) ** 0.5
+        trim_n = min(args.trim_end, len(loop) - 2)
+        if trim_n > 0:
+            loop = loop[:-trim_n]
+            print(f"Trimmed last {trim_n} points; reconnecting...")
+        loop = _interpolate_close_loop(loop, gap_threshold=0.5)
+        gap_after = dist2((loop[-1][0], loop[-1][1]), (loop[0][0], loop[0][1])) ** 0.5
+        write_ttl_csv(PIT_CORKSCREW_LOOP_TTL, loop)
+        print(f"Closure: gap before {gap_before:.2f} m -> after {gap_after:.2f} m")
+        return 0
+
     print("=" * 60)
     print("Pitlane TTL: begin + end + merge analysis")
     print("=" * 60)

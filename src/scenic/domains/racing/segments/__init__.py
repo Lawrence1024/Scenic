@@ -11,6 +11,7 @@ from scenic.domains.racing.segments.segment_map import (
     build_waypoint_segment_map,
     get_segment_at_waypoint,
     get_segment_label,
+    position_nearest_road_is_pit,
 )
 
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "build_waypoint_segment_map",
     "get_segment_at_waypoint",
     "get_segment_label",
+    "position_nearest_road_is_pit",
 ]

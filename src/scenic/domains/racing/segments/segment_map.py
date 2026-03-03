@@ -306,38 +306,39 @@ def _segment_for_road_s(
 def build_waypoint_segment_map(
     waypoints: List[Tuple[float, ...]],
     track: Any,
-    exclude_pit: bool = True,
     use_curvature_segments: bool = True,
     use_conventional_laguna: bool = False,
 ) -> List[Tuple[int, str]]:
     """Build (segment_id, segment_name) for each waypoint from the OpenDRIVE track.
 
-    Each waypoint (x, y) is projected onto the nearest main racing road centerline
-    to get arc length s; then the segment is determined from the map.
+    Each waypoint (x, y) is projected onto the nearest road centerline (main racing
+    or pit) to get arc length s; then the segment is determined from the map.
+    Including both main and pit roads keeps logging consistent for lap and pitlane TTLs.
 
     Segment modes (in order of precedence):
     - use_curvature_segments True (default): derive curve/straight segments from
-      centerline curvature. Many segments for fine-grained analysis; name is "curve" or "straight".
+      centerline curvature. Segment names are "main straight", "main curve", "pit straight", "pit curve".
     - use_conventional_laguna True and 2 roads: fixed Laguna Seca named sections.
     - Else: one segment per road (id only, name "").
 
     Args:
         waypoints: List of waypoint tuples (at least x, y); can be (x,y) or (x,y,z).
-        track: RacingTrack with _mainRacingRoads (list of Road objects from OpenDRIVE).
-        exclude_pit: If True, only main racing roads are used (default).
+        track: RacingTrack with _mainRacingRoads and _pitRoads (OpenDRIVE).
         use_curvature_segments: If True, use curvature-derived curve/straight segments (default).
         use_conventional_laguna: If True and not curvature, use Laguna Seca named sections when 2 roads.
 
     Returns:
-        List of (segment_id, segment_name) per waypoint. segment_name is "curve"/"straight" or section name or "".
+        List of (segment_id, segment_name) per waypoint. segment_name is "main straight", "main curve",
+        "pit straight", "pit curve", or (for conventional/coarse modes) section name or "".
     """
     n_wp = len(waypoints)
     if n_wp == 0:
         return []
 
-    roads = list(getattr(track, "_mainRacingRoads", None) or [])
-    if not exclude_pit:
-        roads = roads + list(getattr(track, "_pitRoads", None) or [])
+    main_roads = list(getattr(track, "_mainRacingRoads", None) or [])
+    pit_roads = list(getattr(track, "_pitRoads", None) or [])
+    roads = main_roads + pit_roads
+    n_main_roads = len(main_roads)
     if not roads:
         return [(1, "")] * n_wp
 
@@ -392,25 +393,28 @@ def build_waypoint_segment_map(
 
         if use_curvature_segments and road_segments:
             s = _road_s_at_point(x, y, centerlines[best_road_idx])
+            prefix = "main " if best_road_idx < n_main_roads else "pit "
             if s is not None:
-                seg_id, seg_name = _segment_for_curve_straight(
+                seg_id, seg_type = _segment_for_curve_straight(
                     best_road_idx, s, road_segments, segment_id_offset
                 )
-                segment_map.append((seg_id, seg_name))
+                segment_map.append((seg_id, prefix + seg_type))
             else:
-                segment_map.append((segment_id_offset[best_road_idx] + 1, "straight"))
+                segment_map.append((segment_id_offset[best_road_idx] + 1, prefix + "straight"))
         elif conventional:
+            prefix = "main " if best_road_idx < n_main_roads else "pit "
             s = _road_s_at_point(x, y, centerlines[best_road_idx])
             if s is not None:
                 L = road_lengths[best_road_idx]
                 seg_id, seg_name = _segment_for_road_s(
                     best_road_idx, s, L, conventional
                 )
-                segment_map.append((seg_id, seg_name))
+                segment_map.append((seg_id, prefix + seg_name if seg_name else prefix.rstrip()))
             else:
-                segment_map.append((best_road_idx + 1, ""))
+                segment_map.append((best_road_idx + 1, prefix + "road"))
         else:
-            segment_map.append((best_road_idx + 1, ""))
+            prefix = "main " if best_road_idx < n_main_roads else "pit "
+            segment_map.append((best_road_idx + 1, prefix + "road"))
 
     return segment_map
 
@@ -430,3 +434,32 @@ def get_segment_at_waypoint(
     if not segment_map or wp_idx < 0 or wp_idx >= len(segment_map):
         return None
     return segment_map[wp_idx]
+
+
+def position_nearest_road_is_pit(x: float, y: float, track: Any) -> bool:
+    """Return True if (x, y) is nearest to a pit road centerline (for pit speed limit by position).
+
+    Projects the point onto all main and pit road centerlines; if the closest road is a pit road,
+    returns True. Call at moderate frequency (e.g. every 10 behavior steps) and cache if needed.
+    """
+    main_roads = list(getattr(track, "_mainRacingRoads", None) or [])
+    pit_roads = list(getattr(track, "_pitRoads", None) or [])
+    roads = main_roads + pit_roads
+    n_main = len(main_roads)
+    if not roads:
+        return False
+    point = Vector(x, y, 0.0)
+    best_idx = 0
+    best_d = float("inf")
+    for idx, road in enumerate(roads):
+        cl = _get_road_centerline(road)
+        if cl is None:
+            continue
+        try:
+            d = cl.distanceTo(point)
+        except Exception:
+            continue
+        if d < best_d:
+            best_d = d
+            best_idx = idx
+    return best_idx >= n_main

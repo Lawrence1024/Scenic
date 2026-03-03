@@ -48,8 +48,31 @@ def load_ttl(path: Path) -> np.ndarray:
 def main():
     p = argparse.ArgumentParser(description="Visualize TTLs: 3-panel view or overlay of the two closed loops")
     p.add_argument("--overlap", action="store_true", help="Overlay the two closed-loop TTLs (Andretti+Corkscrew vs Pit Lane+Corkscrew)")
+    p.add_argument("--pitlane-only", action="store_true", help="Show only pitlane TTL (ttl_pitlane.csv) as a single line, no start marker")
     p.add_argument("--save", type=Path, default=None, metavar="PATH", help="Save figure to file (and still show window)")
     args = p.parse_args()
+
+    if args.pitlane_only:
+        if not PIT_CORKSCREW_LOOP_TTL.exists():
+            print(f"[ERROR] {PIT_CORKSCREW_LOOP_TTL.name} not found. Run combine_and_compare_ttl.py first.")
+            return 1
+        pts = load_ttl(PIT_CORKSCREW_LOOP_TTL)
+        if len(pts) < 2:
+            print("[ERROR] Pitlane TTL has too few points.")
+            return 1
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.plot(pts[:, 0], pts[:, 1], "-", color="C1", linewidth=1.8, alpha=0.95)
+        ax.set_xlabel("X (m)")
+        ax.set_ylabel("Y (m)")
+        ax.set_title(f"Pitlane TTL ({len(pts)} points)")
+        ax.grid(True, alpha=0.3)
+        ax.set_aspect("equal", adjustable="box")
+        plt.tight_layout()
+        if args.save is not None:
+            fig.savefig(args.save, dpi=150, bbox_inches="tight")
+            print("Saved:", args.save)
+        plt.show()
+        return 0
 
     if not EXISTING_TTL.exists():
         print(f"[ERROR] Existing TTL not found: {EXISTING_TTL}")

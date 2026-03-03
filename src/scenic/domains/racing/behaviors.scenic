@@ -18,6 +18,7 @@ from scenic.domains.racing.segments import (
     build_waypoint_segment_map,
     get_segment_at_waypoint,
     get_segment_label,
+    position_nearest_road_is_pit,
 )
 from scenic.domains.racing.constants import DELTA_MAX_RAD
 
@@ -622,7 +623,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     # Invalidate cumulative-dist cache so it is recomputed from new wp_last_idx
                     self._cached_cumulative_dist_wp_idx = 0
                     self._cached_cumulative_dist_to_wp = 0.0
-                # Build OpenDRIVE-based segment map once (conventional Laguna Seca = main racing roads only; pit excluded)
+                # Build OpenDRIVE-based segment map once (main + pit roads so lap and pitlane TTLs log consistently)
                 if not hasattr(self, '_waypoint_segment_map') or self._waypoint_segment_map is None:
                     try:
                         scene = simulation().scene
@@ -630,7 +631,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         if track is not None:
                             self._waypoint_segment_map = build_waypoint_segment_map(wp_list, track)
                             num_seg = len(set(seg_id for seg_id, _ in self._waypoint_segment_map)) if self._waypoint_segment_map else 0
-                            print(f"[FollowRacingLineMPCBehavior] Segment map built from OpenDRIVE ({num_seg} segments); log will show segment N [name] for performance analysis")
+                            print(f"[FollowRacingLineMPCBehavior] Segment map built from OpenDRIVE ({num_seg} segments, main+pit); log will show segment N [name] for performance analysis")
                         else:
                             self._waypoint_segment_map = None
                             print(f"[FollowRacingLineMPCBehavior] Segment map not built (no track in scene); log will show segment ?")
@@ -823,6 +824,18 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 _bt.start_section('waypoint_speed_grade')
             # Universal max speed limit: Reduced for better robustness without elevation data
             MAX_SPEED_LIMIT_MS = 62.58  # 140 mph in m/s (~225 km/h) for IAC vehicle capability
+            PIT_MAX_SPEED_MS = 15.646   # 35 mph in m/s for pit lane
+            seg_current = get_segment_at_waypoint(wp_last_idx, getattr(self, '_waypoint_segment_map', None))
+            segment_name_current = seg_current[1] if seg_current else ""
+            in_pit_by_waypoint = (segment_name_current.startswith("pit ") if segment_name_current else False)
+            # Position-based pit check (every 10 steps) so we cap speed when physically on pit even on main TTL
+            PIT_POSITION_CHECK_INTERVAL = 10
+            step_count = getattr(self, '_behavior_step_count', 0)
+            scene = simulation().scene
+            track = (getattr(scene, 'params', None) or {}).get('track') or getattr(scene, 'track', None)
+            if track is not None and step_count % PIT_POSITION_CHECK_INTERVAL == 0:
+                self._position_on_pit_cached = position_nearest_road_is_pit(px, py, track)
+            in_pit_segment = in_pit_by_waypoint or getattr(self, '_position_on_pit_cached', False)
             
             # --- Curvature-based speed gate (from suggestion.md) ---
             # Formula: v_max(s) = sqrt(a_y_max / (|κ(s)| + ε))
@@ -977,6 +990,9 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             
             # Apply universal max speed limit
             effective_target_speed = min(effective_target_speed, MAX_SPEED_LIMIT_MS)
+            # Pit lane: cap at 35 mph
+            if in_pit_segment:
+                effective_target_speed = min(effective_target_speed, PIT_MAX_SPEED_MS)
             
             # --- Slew-rate limit on speed reference (smooth ramps into/out of turns) ---
             # When CTE is large, allow faster slew-down so the CTE speed cap takes effect quickly (generic run-off fix).
@@ -1065,8 +1081,9 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             
             # Task 4: enforce curvature-based speed cap on entire profile
             v_ref_profile = [min(v, curvature_speed_cap) for v in v_ref_profile]
-            # Apply universal max speed limit to profile
-            v_ref_profile = [min(v, MAX_SPEED_LIMIT_MS) for v in v_ref_profile]
+            # Apply max speed limit to profile (pit: 35 mph, main: 140 mph)
+            profile_speed_limit = PIT_MAX_SPEED_MS if in_pit_segment else MAX_SPEED_LIMIT_MS
+            v_ref_profile = [min(v, profile_speed_limit) for v in v_ref_profile]
             
             # --- Build grade profile for longitudinal MPC (if 3D waypoints available) ---
             grade_profile = None
@@ -1493,18 +1510,19 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             final_throttle = max(0.0, min(local_throttle_limit, throttle_mpc))
             final_brake = raw_brake  # Already merged and capped above
             
-            # Apply universal max speed limit with deadband + hysteresis (smooth brake/throttle, no flip-flop)
+            # Apply max speed limit with deadband + hysteresis (main track or pit: 35 mph in pit)
+            current_speed_limit_ms = PIT_MAX_SPEED_MS if in_pit_segment else MAX_SPEED_LIMIT_MS
             SPEED_LIMIT_DEADBAND = 0.5  # m/s: trigger brake when speed > limit+deadband; release when speed < limit-deadband
             speed_limit_applied_this_step = False
             was_limit_active = getattr(self, '_speed_limit_active', False)
-            if current_speed > MAX_SPEED_LIMIT_MS + SPEED_LIMIT_DEADBAND:
+            if current_speed > current_speed_limit_ms + SPEED_LIMIT_DEADBAND:
                 self._speed_limit_active = True
-            if current_speed < MAX_SPEED_LIMIT_MS - SPEED_LIMIT_DEADBAND:
+            if current_speed < current_speed_limit_ms - SPEED_LIMIT_DEADBAND:
                 self._speed_limit_active = False
-            if self._speed_limit_active and current_speed > MAX_SPEED_LIMIT_MS - SPEED_LIMIT_DEADBAND:
+            if self._speed_limit_active and current_speed > current_speed_limit_ms - SPEED_LIMIT_DEADBAND:
                 # In hysteresis band or above: apply limit to avoid sharp brake then sharp throttle
                 speed_limit_applied_this_step = True
-                speed_excess = current_speed - MAX_SPEED_LIMIT_MS
+                speed_excess = current_speed - current_speed_limit_ms
                 if speed_excess > 2.0:
                     final_throttle = 0.0
                     final_brake = max(final_brake, 0.5)
@@ -1515,7 +1533,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     final_throttle = max(0.0, final_throttle * 0.5)
                     final_brake = max(final_brake, 0.1)
                 step_for_log = getattr(self, '_behavior_step_count', 0) + 1
-                print(f"[Speed Limit] step={step_for_log} Speed {current_speed:.2f}m/s exceeds limit {MAX_SPEED_LIMIT_MS:.1f}m/s, applying brake={final_brake:.3f}")
+                limit_label = "pit 35mph" if in_pit_segment else "main"
+                print(f"[Speed Limit] step={step_for_log} Speed {current_speed:.2f}m/s exceeds limit {current_speed_limit_ms:.1f}m/s ({limit_label}), applying brake={final_brake:.3f}")
     
             # Global mutual exclusion: never command throttle and brake at the same time.
             # When slowing (e.g. for a turn), lift throttle and brake only—no simultaneous throttle+brake.
