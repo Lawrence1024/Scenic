@@ -13,6 +13,8 @@ param control_period = 0.05
 param light_step = False
 # Optional: describe this run for analysis (logged as [RacingRun] edit_note=... and stored in result_data)
 # param edit_note = 'baseline'  # e.g. 'curvature cap 0.08', 'TTL v2'
+# Temporary: use centerline TTLs for segment map instead of OpenDRIVE (when the map is flawed)
+param use_ttl_segments = True
 
 # --- dSPACE racing model (RacingCar, behaviors, 100 Hz step / 20 Hz control & readback) ---
 model scenic.simulators.dspace.racing_model
@@ -20,7 +22,7 @@ model scenic.simulators.dspace.racing_model
 # --- Ego car with MPC behavior ---
 # Using main racing road centerline TTL (excluding pitlane)
 # Pitlane Start
-ego = new RacingCar at (79.766382000,97.055717000), \
+# ego = new RacingCar at (79.766382000,97.055717000), \
 # Pitlane End
 # ego = new RacingCar at (196.952588000,9.974341000), \
 # Main End
@@ -30,11 +32,12 @@ ego = new RacingCar at (79.766382000,97.055717000), \
 # Werid Curve
 # ego = new RacingCar at (-110.956171,-151.841778,8.331000),\ 
 # Main Start
-# ego = new RacingCar at (55.766137,88.269387), \ 
+ego = new RacingCar at (55.766137,88.269387), \
     with regionContainedIn everywhere, \
     with raceNumber 1, \
     # with ttlFileName 'ttl_main_road.csv', \
-    with ttlFileName 'ttl_pitlane.csv', \
+    # with ttlFileName 'ttl_pitlane.csv', \
+    with ttlFileName 'ttl_optimal_xodr.csv', \
     with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV'), \
     with ttlDX 0.0, \
     with ttlDY 0.0

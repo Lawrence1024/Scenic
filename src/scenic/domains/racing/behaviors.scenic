@@ -16,11 +16,13 @@ import numpy as np
 from scenic.domains.racing.waypoints import find_best_racing_waypoint
 from scenic.domains.racing.segments import (
     build_waypoint_segment_map,
+    build_waypoint_segment_map_from_ttl,
     get_segment_at_waypoint,
+    get_segment_at_waypoint_ring_strict,
     get_segment_label,
-    position_nearest_road_is_pit,
 )
 from scenic.domains.racing.constants import DELTA_MAX_RAD
+from scenic.domains.racing.mode import RACING_MODE_MAIN, RACING_MODE_PIT
 
 behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoints=True, lookahead=20.0):
     """Follow the car's TTL using controllers.
@@ -564,6 +566,13 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             final_steer = getattr(self, '_last_final_steer', 0.0)
             final_throttle = getattr(self, '_last_final_throttle', 0.0)
             final_brake = getattr(self, '_last_final_brake', 0.0)
+            # Pit mode (segment-based): coast when speed >= 35 mph, else cap throttle at 50%
+            PIT_LIMIT_MS = 15.646   # 35 mph — same as PIT_MAX_SPEED_MS in full-control block
+            if getattr(self, '_in_pit_by_segment', False):
+                if current_speed >= PIT_LIMIT_MS:
+                    final_throttle = 0.0
+                else:
+                    final_throttle = min(final_throttle, 0.5)
             _fast_actions = [SetSteerAction(final_steer), SetThrottleAction(final_throttle), SetBrakeAction(final_brake)]
             take _fast_actions
             wait
@@ -623,18 +632,31 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     # Invalidate cumulative-dist cache so it is recomputed from new wp_last_idx
                     self._cached_cumulative_dist_wp_idx = 0
                     self._cached_cumulative_dist_to_wp = 0.0
-                # Build OpenDRIVE-based segment map once (main + pit roads so lap and pitlane TTLs log consistently)
+                # Build segment map once (main + pit): from OpenDRIVE track or from TTL waypoints (same as visualization).
                 if not hasattr(self, '_waypoint_segment_map') or self._waypoint_segment_map is None:
                     try:
                         scene = simulation().scene
-                        track = (getattr(scene, 'params', None) or {}).get('track') or getattr(scene, 'track', None)
-                        if track is not None:
-                            self._waypoint_segment_map = build_waypoint_segment_map(wp_list, track)
+                        params = getattr(scene, 'params', None) or {}
+                        use_ttl_segments = params.get('use_ttl_segments', False)
+                        main_ttl = getattr(scene, '_main_ttl_waypoints', None) if use_ttl_segments else None
+                        if use_ttl_segments and main_ttl is not None:
+                            pit_ttl = getattr(scene, '_pit_ttl_waypoints', None) or []
+                            self._waypoint_segment_map = build_waypoint_segment_map_from_ttl(main_ttl, pit_ttl, waypoints=wp_list)
+                            self._last_valid_segment_id = None
+                            self._last_valid_segment_name = ""
                             num_seg = len(set(seg_id for seg_id, _ in self._waypoint_segment_map)) if self._waypoint_segment_map else 0
-                            print(f"[FollowRacingLineMPCBehavior] Segment map built from OpenDRIVE ({num_seg} segments, main+pit); log will show segment N [name] for performance analysis")
+                            print(f"[FollowRacingLineMPCBehavior] Segment map built from TTL waypoints ({num_seg} segments, main+pit, overlap=main); ring-strict segment filtering active")
                         else:
-                            self._waypoint_segment_map = None
-                            print(f"[FollowRacingLineMPCBehavior] Segment map not built (no track in scene); log will show segment ?")
+                            track = params.get('track') or getattr(scene, 'track', None)
+                            if track is not None:
+                                self._waypoint_segment_map = build_waypoint_segment_map(wp_list, track)
+                                self._last_valid_segment_id = None
+                                self._last_valid_segment_name = ""
+                                num_seg = len(set(seg_id for seg_id, _ in self._waypoint_segment_map)) if self._waypoint_segment_map else 0
+                                print(f"[FollowRacingLineMPCBehavior] Segment map built from OpenDRIVE ({num_seg} segments, main+pit); ring-strict segment filtering active")
+                            else:
+                                self._waypoint_segment_map = None
+                                print(f"[FollowRacingLineMPCBehavior] Segment map not built (no track and no TTL waypoints); log will show segment ?")
                     except Exception as e:
                         self._waypoint_segment_map = None
                         print(f"[FollowRacingLineMPCBehavior] Segment map not built: {e}; log will show segment ?")
@@ -758,8 +780,15 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                                 ctrl_dt = float(getattr(sim, 'timestep', 0.05))
                             step_wp = getattr(self, '_behavior_step_count', 0)
                             t_wp = step_wp * ctrl_dt
-                            seg_wp = get_segment_at_waypoint(wp_last_idx, getattr(self, '_waypoint_segment_map', None))
-                            seg_str = f" {get_segment_label(*seg_wp)}" if seg_wp is not None else " segment ?"
+                            _smap_w = getattr(self, '_waypoint_segment_map', None)
+                            _raw_w = get_segment_at_waypoint(wp_last_idx, _smap_w) if _smap_w else None
+                            _path_w = "pit" if (_raw_w and _raw_w[1] and _raw_w[1].startswith("pit ")) else "main"
+                            _lid_w = getattr(self, '_last_valid_segment_id', None)
+                            _lname_w = getattr(self, '_last_valid_segment_name', "") or ""
+                            _eid, _ename, _ = get_segment_at_waypoint_ring_strict(wp_last_idx, _smap_w, _path_w, _lid_w, _lname_w)
+                            self._last_valid_segment_id = _eid
+                            self._last_valid_segment_name = _ename or ""
+                            seg_str = f" {get_segment_label(_eid, _ename)}" if (_eid is not None or _ename) else " segment ?"
                             print(f"[FollowRacingLineMPCBehavior] t={t_wp:.2f}s WAYPOINT HIT: index {old_wp_idx} -> {wp_last_idx} at ({current_wp_x:.2f}, {current_wp_y:.2f}), distance={current_wp_dist:.2f}m{seg_str}")
                             print(f"[FollowRacingLineMPCBehavior] t={t_wp:.2f}s Progress: {self._waypoints_passed} waypoints passed ({progress_pct:.1f}% of {len(wp_list)} total waypoints)")
 
@@ -824,18 +853,34 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 _bt.start_section('waypoint_speed_grade')
             # Universal max speed limit: Reduced for better robustness without elevation data
             MAX_SPEED_LIMIT_MS = 62.58  # 140 mph in m/s (~225 km/h) for IAC vehicle capability
-            PIT_MAX_SPEED_MS = 15.646   # 35 mph in m/s for pit lane
-            seg_current = get_segment_at_waypoint(wp_last_idx, getattr(self, '_waypoint_segment_map', None))
-            segment_name_current = seg_current[1] if seg_current else ""
-            in_pit_by_waypoint = (segment_name_current.startswith("pit ") if segment_name_current else False)
-            # Position-based pit check (every 10 steps) so we cap speed when physically on pit even on main TTL
-            PIT_POSITION_CHECK_INTERVAL = 10
-            step_count = getattr(self, '_behavior_step_count', 0)
-            scene = simulation().scene
-            track = (getattr(scene, 'params', None) or {}).get('track') or getattr(scene, 'track', None)
-            if track is not None and step_count % PIT_POSITION_CHECK_INTERVAL == 0:
-                self._position_on_pit_cached = position_nearest_road_is_pit(px, py, track)
-            in_pit_segment = in_pit_by_waypoint or getattr(self, '_position_on_pit_cached', False)
+            PIT_MAX_SPEED_MS = 15.646   # 35 mph in m/s for pit lane (cap only; we coast in pit)
+            # Pit lane: coast at 35 mph; only add throttle when "too slow" to avoid brake/throttle oscillation
+            PIT_COAST_TOO_SLOW_MS = 10.0   # below this speed we add a bit of throttle
+            PIT_COAST_MIN_TARGET_MS = 15.646  # 35 mph — pit target and coast threshold (match PIT_MAX_SPEED_MS)
+            # Segment (and thus pit vs main): use raw segment at waypoint so we never rely on ModelDesk route for control.
+            _smap = getattr(self, '_waypoint_segment_map', None)
+            _raw_seg = get_segment_at_waypoint(wp_last_idx, _smap) if _smap else None
+            _seg_name_raw = (_raw_seg[1] or "") if _raw_seg else ""
+            in_pit_by_segment = _seg_name_raw.startswith("pit ")
+            _path = "pit" if in_pit_by_segment else "main"
+            _lid = getattr(self, '_last_valid_segment_id', None)
+            _lname = getattr(self, '_last_valid_segment_name', "") or ""
+            _eff_id, _eff_name, _transition = get_segment_at_waypoint_ring_strict(wp_last_idx, _smap, _path, _lid, _lname)
+            self._last_valid_segment_id = _eff_id
+            self._last_valid_segment_name = _eff_name or ""
+            # Pit exit/enter: update ModelDesk route and _route (for logging/transition only); control uses segment, not route
+            if _transition == "pit_exit" and self is simulation().scene.egoObject:
+                self._route = RACING_MODE_MAIN
+                if hasattr(simulation(), "request_ego_route"):
+                    simulation().request_ego_route(self, RACING_MODE_MAIN)
+            elif _transition == "pit_enter" and self is simulation().scene.egoObject:
+                self._route = RACING_MODE_PIT
+                if hasattr(simulation(), "request_ego_route"):
+                    simulation().request_ego_route(self, RACING_MODE_PIT)
+            segment_name_current = _eff_name
+            # Pit mode for speed limit and throttle: segment-based only (pit road = pit limit; main = no limit)
+            pit_mode = in_pit_by_segment
+            self._in_pit_by_segment = pit_mode
             
             # --- Curvature-based speed gate (from suggestion.md) ---
             # Formula: v_max(s) = sqrt(a_y_max / (|κ(s)| + ε))
@@ -990,30 +1035,36 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             
             # Apply universal max speed limit
             effective_target_speed = min(effective_target_speed, MAX_SPEED_LIMIT_MS)
-            # Pit lane: cap at 35 mph
-            if in_pit_segment:
-                effective_target_speed = min(effective_target_speed, PIT_MAX_SPEED_MS)
-            
-            # --- Slew-rate limit on speed reference (smooth ramps into/out of turns) ---
-            # When CTE is large, allow faster slew-down so the CTE speed cap takes effect quickly (generic run-off fix).
-            dt_slew = _lon_controller.config.mpc_prediction_dt if hasattr(_lon_controller, 'config') else 0.05
-            slew_down_ms = 12.0 if cte_mag_for_speed >= 3.0 else 7.0   # faster ramp-down when off-line
-            slew_up_ms = 5.0     # max speed increase per second
-            if not hasattr(self, '_last_effective_target_speed'):
+            # Pit mode (racing library): fixed coast target, no slew — drive differently than main
+            if pit_mode:
+                if current_speed < PIT_COAST_TOO_SLOW_MS:
+                    effective_target_speed = min(PIT_MAX_SPEED_MS, PIT_COAST_MIN_TARGET_MS, curvature_speed_cap)
+                else:
+                    effective_target_speed = min(PIT_COAST_MIN_TARGET_MS, PIT_MAX_SPEED_MS, curvature_speed_cap)
                 self._last_effective_target_speed = float(effective_target_speed)
-            last_eff = float(self._last_effective_target_speed)
-            effective_target_speed = max(last_eff - slew_down_ms * dt_slew, min(last_eff + slew_up_ms * dt_slew, float(effective_target_speed)))
-            self._last_effective_target_speed = float(effective_target_speed)
+            else:
+                # --- Slew-rate limit on speed reference (smooth ramps into/out of turns) ---
+                # When CTE is large, allow faster slew-down so the CTE speed cap takes effect quickly (generic run-off fix).
+                dt_slew = _lon_controller.config.mpc_prediction_dt if hasattr(_lon_controller, 'config') else 0.05
+                slew_down_ms = 12.0 if cte_mag_for_speed >= 3.0 else 7.0   # faster ramp-down when off-line
+                slew_up_ms = 5.0     # max speed increase per second
+                if not hasattr(self, '_last_effective_target_speed'):
+                    self._last_effective_target_speed = float(effective_target_speed)
+                last_eff = float(self._last_effective_target_speed)
+                effective_target_speed = max(last_eff - slew_down_ms * dt_slew, min(last_eff + slew_up_ms * dt_slew, float(effective_target_speed)))
+                self._last_effective_target_speed = float(effective_target_speed)
             
             # --- Build speed reference profile for MPC ---
-            # MPC needs a speed profile over the prediction horizon
-            # Build profile that accounts for curvature and CTE
             horizon = _lon_controller.config.mpc_prediction_horizon
-            # Build speed reference array (use list, MPC will convert to numpy)
-            v_ref_profile = [float(effective_target_speed)] * horizon
-            
-            # If we have waypoints, build a speed profile that reduces speed for upcoming turns (cached + vectorized)
-            if use_waypoints and wp_list and len(wp_list) >= 2:
+            # Pit mode: constant profile at coast target (no curvature lookahead)
+            if pit_mode:
+                v_ref_profile = [float(effective_target_speed)] * horizon
+                v_ref_profile = [min(v, PIT_MAX_SPEED_MS) for v in v_ref_profile]
+            else:
+                # Main mode: profile from effective_target_speed, then reduce for upcoming turns
+                v_ref_profile = [float(effective_target_speed)] * horizon
+            # If we have waypoints (main mode only; pit already has constant profile), build a speed profile that reduces speed for upcoming turns (cached + vectorized)
+            if not pit_mode and use_waypoints and wp_list and len(wp_list) >= 2:
                 # Stable cache key (shape + first/last waypoint) so cache hits when racing line is unchanged
                 wp_cache_key = (len(wp_list), (float(wp_list[0][0]), float(wp_list[0][1])), (float(wp_list[-1][0]), float(wp_list[-1][1])))
                 self._wp_cache_tick = getattr(self, '_wp_cache_tick', 0) + 1
@@ -1079,11 +1130,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     # If profile building fails, use constant speed
                     pass
             
-            # Task 4: enforce curvature-based speed cap on entire profile
-            v_ref_profile = [min(v, curvature_speed_cap) for v in v_ref_profile]
-            # Apply max speed limit to profile (pit: 35 mph, main: 140 mph)
-            profile_speed_limit = PIT_MAX_SPEED_MS if in_pit_segment else MAX_SPEED_LIMIT_MS
-            v_ref_profile = [min(v, profile_speed_limit) for v in v_ref_profile]
+            # Task 4: enforce curvature-based speed cap on entire profile (main mode; pit already constant)
+            if not pit_mode:
+                v_ref_profile = [min(v, curvature_speed_cap) for v in v_ref_profile]
+            # Apply max speed limit to profile (pit mode: already capped above; main: 140 mph cap)
+            if not pit_mode:
+                v_ref_profile = [min(v, MAX_SPEED_LIMIT_MS) for v in v_ref_profile]
             
             # --- Build grade profile for longitudinal MPC (if 3D waypoints available) ---
             grade_profile = None
@@ -1510,8 +1562,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             final_throttle = max(0.0, min(local_throttle_limit, throttle_mpc))
             final_brake = raw_brake  # Already merged and capped above
             
-            # Apply max speed limit with deadband + hysteresis (main track or pit: 35 mph in pit)
-            current_speed_limit_ms = PIT_MAX_SPEED_MS if in_pit_segment else MAX_SPEED_LIMIT_MS
+            # Hard speed limit: pit mode vs main (racing library mode drives which limit applies)
+            current_speed_limit_ms = PIT_MAX_SPEED_MS if pit_mode else MAX_SPEED_LIMIT_MS
             SPEED_LIMIT_DEADBAND = 0.5  # m/s: trigger brake when speed > limit+deadband; release when speed < limit-deadband
             speed_limit_applied_this_step = False
             was_limit_active = getattr(self, '_speed_limit_active', False)
@@ -1519,8 +1571,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 self._speed_limit_active = True
             if current_speed < current_speed_limit_ms - SPEED_LIMIT_DEADBAND:
                 self._speed_limit_active = False
-            if self._speed_limit_active and current_speed > current_speed_limit_ms - SPEED_LIMIT_DEADBAND:
-                # In hysteresis band or above: apply limit to avoid sharp brake then sharp throttle
+            # Pit mode: when over limit we only coast (no brake); throttle is zeroed in pit block when speed >= 35 mph
+            apply_pit_limit = pit_mode and current_speed > PIT_MAX_SPEED_MS
+            apply_main_limit = (not pit_mode) and self._speed_limit_active and current_speed > current_speed_limit_ms - SPEED_LIMIT_DEADBAND
+            if apply_main_limit:
                 speed_limit_applied_this_step = True
                 speed_excess = current_speed - current_speed_limit_ms
                 if speed_excess > 2.0:
@@ -1533,8 +1587,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     final_throttle = max(0.0, final_throttle * 0.5)
                     final_brake = max(final_brake, 0.1)
                 step_for_log = getattr(self, '_behavior_step_count', 0) + 1
-                limit_label = "pit 35mph" if in_pit_segment else "main"
-                print(f"[Speed Limit] step={step_for_log} Speed {current_speed:.2f}m/s exceeds limit {current_speed_limit_ms:.1f}m/s ({limit_label}), applying brake={final_brake:.3f}")
+                print(f"[Speed Limit] step={step_for_log} Speed {current_speed:.2f}m/s exceeds limit {current_speed_limit_ms:.1f}m/s (main), applying brake={final_brake:.3f}")
+            elif apply_pit_limit:
+                # Pit: over 35 mph — coast only (no brake); throttle is zeroed below when speed >= PIT_MAX_SPEED_MS
+                speed_limit_applied_this_step = False
+                step_for_log = getattr(self, '_behavior_step_count', 0) + 1
+                print(f"[Speed Limit] step={step_for_log} Speed {current_speed:.2f}m/s exceeds limit {current_speed_limit_ms:.1f}m/s (pit 35mph, coast only)")
     
             # Global mutual exclusion: never command throttle and brake at the same time.
             # When slowing (e.g. for a turn), lift throttle and brake only—no simultaneous throttle+brake.
@@ -1560,6 +1618,19 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 self._throttle_ramp_steps_remaining = ramp_remaining - 1
             else:
                 self._throttle_ramp_steps_remaining = 0
+            # Pit mode: cap throttle at 50%; when speed >= 35 mph use zero throttle to coast (don't push past limit)
+            PIT_MAX_THROTTLE = 0.5
+            if pit_mode:
+                if current_speed >= PIT_COAST_MIN_TARGET_MS:
+                    final_throttle = 0.0
+                else:
+                    final_throttle = min(final_throttle, PIT_MAX_THROTTLE)
+                # Debug: log pit mode every 50 steps (speed, throttle, target 35 mph)
+                _step_num = getattr(self, '_behavior_step_count', 0) + 1
+                if _step_num % 50 == 0 or _step_num == 1:
+                    _t_log = _step_num * (getattr(simulation(), 'control_dt', None) or getattr(simulation(), 'timestep', 0.05))
+                    _reason = "coast (speed>=35mph)" if current_speed >= PIT_COAST_MIN_TARGET_MS else f"cap {PIT_MAX_THROTTLE}"
+                    print(f"[Pit] step={_step_num} t={_t_log:.2f}s pit_mode=True speed={current_speed:.2f}m/s target=35mph throttle={final_throttle:.2f} ({_reason})")
             self._last_final_steer = final_steer
             self._last_final_throttle = final_throttle
             self._last_final_brake = final_brake
@@ -1654,8 +1725,9 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             if ctrl_dt is None or ctrl_dt <= 0:
                 ctrl_dt = float(getattr(sim, 'timestep', 0.05))
             t_log = self._behavior_step_count * ctrl_dt
-            seg = get_segment_at_waypoint(wp_last_idx, getattr(self, '_waypoint_segment_map', None))
-            segment_str = f" {get_segment_label(*seg)}" if seg is not None else " segment ?"
+            _eid_log = getattr(self, '_last_valid_segment_id', None)
+            _ename_log = getattr(self, '_last_valid_segment_name', "") or ""
+            segment_str = f" {get_segment_label(_eid_log, _ename_log)}" if (_eid_log is not None or _ename_log) else " segment ?"
             print(f"[FollowRacingLineMPC] t={t_log:.2f}s Step {self._behavior_step_count}: pos=({px:.2f},{py:.2f}) speed={current_speed:.2f}m/s CTE={cte:.3f}m steer={final_steer:.3f} throttle={final_throttle:.3f} brake={final_brake:.3f} gear={gear_val} curv_ahead={curvature_ahead_max:.3f}{segment_str}")
             # Ref continuity / gate logging (todo1: match_dist, gate ACCEPT/REJECT, s_ref/dS_ref/s_jump_flag, segment_prev->new, stick_blocked, e_y_mpc vs cte_behavior)
             _lc = _lat_controller

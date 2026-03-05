@@ -25,7 +25,7 @@ from .vehicle.actor import ensure_actor, DSpaceVehicleActor
 from .vehicle.indexing import get_fellow_index as indexing_get_fellow_index
 from .geometry.pipeline import build_road_index_and_transform
 from .modeldesk.authoring import author_scenario, configure_fellow
-from .modeldesk.placement import place_ego, place_fellow
+from .modeldesk.placement import place_ego, place_fellow, TTL_MAIN_ROAD_FILE, TTL_PITLANE_FILE
 from .geometry.route_mapping import detect_track_segment, assign_route_for_segment
 from .modeldesk.routes import set_route as routes_set_route
 from .controldesk import session as cd_session
@@ -373,6 +373,20 @@ class DSpaceSimulation(RacingSimulation):
         result = place_ego(self, obj)
         # Assign TTL to ego if available (delegated)
         attach_to_ego(self, obj)
+        # If use_ttl_segments (temporary workaround for flawed OpenDRIVE), load both centerline TTLs
+        # so the behavior can build the segment map from TTLs instead of the map.
+        params = getattr(self.scene, "params", None) or {}
+        if params.get("use_ttl_segments", False):
+            try:
+                ttl_folder, _, dx, dy, _ = get_ttl_config(params)
+                _, main_pts = load_ttl_region(ttl_folder, 0, dx, dy, TTL_MAIN_ROAD_FILE)
+                _, pit_pts = load_ttl_region(ttl_folder, 0, dx, dy, TTL_PITLANE_FILE)
+                if main_pts:
+                    setattr(self.scene, "_main_ttl_waypoints", main_pts)
+                    setattr(self.scene, "_pit_ttl_waypoints", pit_pts if pit_pts else [])
+                    print(f"[Segment map] use_ttl_segments=True: loaded main ({len(main_pts)} pts) and pit ({len(pit_pts) if pit_pts else 0} pts) centerlines for TTL-based segments")
+            except Exception as e:
+                print(f"[Segment map] use_ttl_segments=True but failed to load TTLs: {e}; will fall back to OpenDRIVE if track present")
         return result
     
     def createFellowInSimulator(self, obj):
@@ -1288,28 +1302,7 @@ class DSpaceSimulation(RacingSimulation):
                     _yaw = 0.0
             except Exception:
                 pass
-            # Collect (sim_time, x, y, z, heading_deg) + GNSS for transform table (only on control steps; written at end only)
-            if not getattr(self, "_light_step", False) and (self.currentTime % self._control_interval) == 0 and getattr(self, "_var_access", None):
-                try:
-                    lon_deg, lat_deg, heading_gnss_deg = read_ego_gps(self)
-                    heading_dspace_deg = float(yaw) * (180.0 / math.pi) if yaw is not None else None
-                    row = {
-                        "sim_time": self.currentTime,
-                        "x_dspace": float(pos.x),
-                        "y_dspace": float(pos.y),
-                        "z_dspace": float(getattr(pos, "z", 0.0)),
-                        "heading_dspace_deg": heading_dspace_deg,
-                        "longitude_deg": lon_deg,
-                        "latitude_deg": lat_deg,
-                        "heading_gnss_deg": heading_gnss_deg,
-                    }
-                    rd_pos = getattr(actor, "rd_position", None)
-                    if rd_pos is not None and len(rd_pos) >= 2:
-                        row["x_rd"] = float(rd_pos[0])
-                        row["y_rd"] = float(rd_pos[1])
-                    self._gps_collect_table.append(row)
-                except Exception:
-                    pass
+            # GPS/dSPACE calibration logging disabled (data already collected; no per-step recording)
         self._timing_last['get_properties'] = self._timing_last.get('get_properties', 0.0) + (time.perf_counter() - _t_get_props)
         # Mark end of this step's work for loop_other timing (gap until next executeActions)
         self._loop_end = time.perf_counter()
@@ -1376,22 +1369,7 @@ class DSpaceSimulation(RacingSimulation):
                     lt_ss = lt[warmup:]
                     mean_ss = sum(lt_ss) / len(lt_ss) * 1000
                     print(f"[LightStep] Steady-state (excluding first {warmup} steps): mean={mean_ss:.2f} ms min={min(lt_ss)*1000:.2f} ms max={max(lt_ss)*1000:.2f} ms")
-        # Write GNSS/dSPACE transform table once at end (no per-step logging)
-        gps_table = getattr(self, "_gps_collect_table", None)
-        if gps_table and len(gps_table) > 0:
-            out_path = Path("gps_dspace_table.csv")
-            cols = ["sim_time", "x_dspace", "y_dspace", "z_dspace", "heading_dspace_deg", "longitude_deg", "latitude_deg", "heading_gnss_deg"]
-            if any("x_rd" in row for row in gps_table):
-                cols = cols + ["x_rd", "y_rd"]
-            try:
-                with open(out_path, "w", newline="") as f:
-                    w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
-                    w.writeheader()
-                    for row in gps_table:
-                        w.writerow({k: ("" if v is None else v) for k, v in row.items()})
-                print(f"[GPS] Wrote {len(gps_table)} rows to {out_path} for GNSS <-> dSPACE local transform.")
-            except Exception as e:
-                print(f"[GPS] Failed to write transform table: {e}")
+        # GPS/dSPACE calibration table write disabled (we no longer need this log; data already have been collected)
         if self._var_access and hasattr(self._var_access, 'print_timing_summary'):
             if self._maport is not None and self._var_access is self._maport:
                 print("[Timing] MAPort per-path timing (get_var/set_var) below:")
@@ -1578,3 +1556,61 @@ class DSpaceSimulation(RacingSimulation):
         """
         # Delegate to routes module
         routes_set_route(sequence, obj, self.detectTrackSegment, self.assignRoute)
+
+    def _switch_ego_ttl(self, ego, route_pref: str):
+        """Load TTL waypoints for the given route and attach to ego; invalidate segment map so behavior rebuilds it.
+        
+        Called on pit exit (Lap) or pit enter (Pit) so the behavior follows the correct path and segments.
+        """
+        try:
+            scene_params = getattr(getattr(self, "scene", None), "params", None) or {}
+            ttl_folder, _, dx, dy, _ = get_ttl_config(scene_params)
+            ttl_folder = str(ttl_folder)
+            filename = TTL_MAIN_ROAD_FILE if route_pref == "Lap" else TTL_PITLANE_FILE
+            region, pts = load_ttl_region(ttl_folder, 0, dx, dy, filename)
+            if not pts or len(pts) < 2:
+                print(f"[Ego] TTL switch skipped: could not load {filename} ({len(pts) if pts else 0} points)")
+                return
+            setattr(ego, "ttl", region)
+            setattr(ego, "waypoints", list(pts))
+            setattr(ego, "_waypoint_segment_map", None)
+            setattr(ego, "_last_valid_segment_id", None)
+            setattr(ego, "_last_valid_segment_name", "")
+            setattr(ego, "_ttl_switched", True)
+            setattr(ego, "_cached_cumulative_dist_wp_idx", 0)
+            setattr(ego, "_cached_cumulative_dist_to_wp", 0.0)
+            print(f"[Ego] TTL switched to {filename} ({len(pts)} waypoints); segment map will rebuild")
+        except Exception as e:
+            print(f"[Ego] _switch_ego_ttl failed: {e}")
+
+    def request_ego_route(self, ego, route_pref: str):
+        """Set the ego vehicle's ModelDesk route at runtime (e.g. on pit exit / pit enter).
+        
+        Call when segment transitions indicate pit exit (switch to Lap/R2) or pit enter
+        (switch to Pit/R1). Updates ModelDesk Route.Activate, ego._route, and ego waypoints/TTL
+        so the behavior follows the correct path and segment labels.
+        
+        Args:
+            ego: The Scenic ego object (vehicle).
+            route_pref: 'Lap' for main road (R2) or 'Pit' for pitlane (R1).
+        """
+        route_name_map = {'Pit': 'R1', 'Lap': 'R2'}
+        modeldesk_route = route_name_map.get(route_pref, 'R2')
+        try:
+            if self.ts is None:
+                return
+            maneuver_collection = self.ts.Maneuver
+            if maneuver_collection.Count == 0:
+                return
+            ego_maneuver = maneuver_collection.Item(0)
+            sequences = ego_maneuver.Sequences
+            if sequences.Count == 0:
+                return
+            seq = sequences.Item(0)
+            route_sel = seq.Route
+            route_sel.Activate(modeldesk_route)
+            ego._route = route_pref
+            print(f"[Ego] Route switched to: {modeldesk_route} ({route_pref})")
+            # No TTL/waypoint switch mid-drive; control uses segment-based pit vs main, not ModelDesk route
+        except Exception as e:
+            print(f"[Ego] request_ego_route failed: {e}")

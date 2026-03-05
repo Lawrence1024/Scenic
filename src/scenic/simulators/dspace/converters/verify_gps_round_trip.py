@@ -21,11 +21,10 @@ _REPO_ROOT = _DSPACE.parent.parent.parent.parent
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from scenic.simulators.dspace.geometry.gps_transform import (
+from scenic.domains.racing.gnss_transform import (
     load_calibration,
     load_calibration_table_csv,
     load_gps_table_rows,
-    GPSDspaceTransform,
 )
 from scenic.simulators.dspace.geometry.coordinate_transform import (
     load_transform,
@@ -92,7 +91,7 @@ def main():
 
         if has_rd:
             rd_table = (r["x_rd"], r["y_rd"])
-            rd_from_gps = cal_rd.gps_to_dspace(lon, lat)
+            rd_from_gps = cal_rd.gnss_to_local(lon, lat)
             xodr_back = apply_inverse_coordinate_transform(xodr_rd, rd_from_gps)
             err_rd = _dist(rd_from_gps, rd_table)
             err_scenic = _dist(xodr_back, xodr)
@@ -102,8 +101,8 @@ def main():
             xy_cal = cal_xodr.gps_to_dspace(lon, lat)
             err_xy = _dist(xy_cal, xodr)
             errs_xy.append(err_xy)
-            lon2, lat2 = cal_xodr.dspace_to_gps(xodr[0], xodr[1])
-            xy2 = cal_xodr.gps_to_dspace(lon2, lat2)
+            lon2, lat2 = cal_xodr.local_to_gnss(xodr[0], xodr[1])
+            xy2 = cal_xodr.gnss_to_local(lon2, lat2)
             err_back = _dist(xy2, xodr)
             errs_scenic_back.append(err_back)
 

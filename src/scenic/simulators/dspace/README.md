@@ -62,15 +62,17 @@ A **GPS ↔ dSPACE local** transform is available for converting between GNSS (l
   ```
   Default: reads `gps_dspace_table.csv` from repo root, writes `src/scenic/simulators/dspace/geometry/gps_dspace_calibration.json`.
 
-- **Usage in code:**
+- **Usage in code:** The GNSS ↔ Scenic local transform lives in the **racing library** so that the read-in contract is GNSS and conversion is centralized there:
   ```python
-  from scenic.simulators.dspace.geometry.gps_transform import load_calibration, GPSDspaceTransform
+  from scenic.domains.racing.gnss_transform import load_calibration, GNSSLocalTransform
 
-  cal = load_calibration(Path(".../dspace/geometry/gps_dspace_calibration.json"))
-  x_dspace, y_dspace = cal.gps_to_dspace(longitude_deg, latitude_deg)
-  lon_deg, lat_deg = cal.dspace_to_gps(x_dspace, y_dspace)
+  cal = load_calibration(Path(".../geometry/gps_dspace_calibration.json"))
+  x_local, y_local = cal.gnss_to_local(longitude_deg, latitude_deg)
+  lon_deg, lat_deg = cal.local_to_gnss(x_local, y_local)
   ```
   From dSPACE (x, y) you can then use the existing **XODR ↔ RD** transform in `geometry/coordinate_transform.py` (e.g. `apply_inverse_coordinate_transform`) to get Scenic XODR coordinates.
+
+- **Racing library:** GNSS ↔ Scenic local transform lives in `scenic.domains.racing.gnss_transform` so the racing library enforces that read-in can be GNSS; conversion to Scenic local is done there. When **use_gnss_readback** is enabled (scene param), dSPACE reads GNSS and uses the racing transform to get (x, y, heading) in Scenic frame; z and velocity are still read from dSPACE. Set `param use_gnss_readback = True` and optionally `param gnss_calibration_path = localPath('...')` (default: `dspace/geometry/gps_dspace_calibration.json`). **Ego** uses `Environment/Road/PlantModel/GPS_POSITION/GPS_CALC`; **Fellows** use `VesiInterface/VehicleSensors/ground_truth/GPS_POSITION/GPS_CALC` with indexed signals `Longitude_deg[i]`, `Latitude_deg[i]`, `Heading_deg[i]` (see `controldesk/readback.py`).
 
 - **Round-trip verify:** Ensures Scenic → (place) → read GPS → GPS→dSPACE → dSPACE→Scenic matches the initial Scenic position:
   ```bash
@@ -78,7 +80,20 @@ A **GPS ↔ dSPACE local** transform is available for converting between GNSS (l
   ```
   With the current table (no `x_rd`/`y_rd`), this checks GPS ↔ Scenic (x_dspace, y_dspace) only. After a run that collects raw dSPACE RD, the CSV will include `x_rd`, `y_rd`; then run `fit_gps_dspace_calibration.py --rd` to produce `gps_rd_calibration.json`, and the verify script will run the full chain (Scenic → RD → GPS → RD → Scenic).
 
-**Key files:** `geometry/gps_transform.py`, `geometry/gps_dspace_calibration.json` (after calibration), `converters/fit_gps_dspace_calibration.py`, `converters/verify_gps_round_trip.py`.
+**Key files:** Racing library `scenic.domains.racing.gnss_transform`; calibration JSON (e.g. `dspace/geometry/gps_dspace_calibration.json`); `converters/fit_gps_dspace_calibration.py`, `converters/verify_gps_round_trip.py`.
+
+### Segment map: OpenDRIVE (default) vs centerline TTLs
+
+By default, the segment map (curve/straight, main/pit) is built from the **OpenDRIVE track**. When the OpenDRIVE file is flawed (e.g. does not match the dSPACE visualization), you can switch to building segments from the **two centerline TTLs** only (no map), so logging and ring-strict logic still work.
+
+- **Param:** `param use_ttl_segments = True`  
+  When set, the simulator loads both `ttl_main_road.csv` and `ttl_pitlane.csv` at ego creation and attaches them to the scene. The behavior then builds the segment map from these TTLs instead of the track. Same segment structure and parsing downstream.
+
+- **Temporary:** This is a workaround for a bad OpenDRIVE map; default remains `False` (use OpenDRIVE).
+
+- **Usage in a .scenic file:**  
+  `param use_ttl_segments = True`  
+  Requires the same TTL folder/files as for ego (`ttlFolder`, `ttl_main_road.csv`, `ttl_pitlane.csv`).
 
 ---
 

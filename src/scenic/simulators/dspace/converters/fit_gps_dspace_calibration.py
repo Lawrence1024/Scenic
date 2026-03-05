@@ -19,12 +19,12 @@ _REPO_ROOT = _DSPACE.parent.parent.parent.parent
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from scenic.simulators.dspace.geometry.gps_transform import (
+from scenic.domains.racing.gnss_transform import (
     fit_transform_from_csv,
     load_calibration,
     save_calibration,
     load_calibration_table_csv,
-    GPSDspaceTransform,
+    GNSSLocalTransform,
 )
 
 
