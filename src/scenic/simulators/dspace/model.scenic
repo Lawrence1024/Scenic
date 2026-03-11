@@ -30,6 +30,9 @@ param timestep = (globalParameters.time_step if 'time_step' in globalParameters 
 param control_period = (globalParameters.control_period if 'control_period' in globalParameters else None)
 # Light-step mode: disable COM read/write to test step_time only (no vehicle motion). Default False.
 param light_step = (globalParameters.light_step if 'light_step' in globalParameters else False)
+# Manual control: default True = ego controlled by Scenic (Manual Control / VesiInterface).
+# Set to False for External Control (apply baseline from external_control_baseline.json).
+param manual_control = (globalParameters.manual_control if 'manual_control' in globalParameters else True)
 
 # Configure the dSPACE simulator
 simulator dspace.DSpaceSimulator(
@@ -38,6 +41,7 @@ simulator dspace.DSpaceSimulator(
     timestep=globalParameters.timestep,
     control_period=globalParameters.control_period,
     light_step=globalParameters.light_step,
+    manual_control=globalParameters.manual_control,
 )
 
 # dSPACE-specific racing car implementation

@@ -37,7 +37,8 @@ ego = new RacingCar at (55.766137,88.269387), \
     with raceNumber 1, \
     # with ttlFileName 'ttl_main_road.csv', \
     # with ttlFileName 'ttl_pitlane.csv', \
-    with ttlFileName 'ttl_optimal_xodr.csv', \
+    #with ttlFileName 'ttl_optimal_xodr.csv', \
+    with ttlFileName 'ttl_right_xodr.csv', \
     with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV'), \
     with ttlDX 0.0, \
     with ttlDY 0.0

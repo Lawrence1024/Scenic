@@ -39,7 +39,8 @@ SIMULATED_TIME_PATH = "Platform()://ASM_Traffic/Simulation and RTOS/Simulation/S
 
 class DSpaceSimulator(RacingSimulator):
     def __init__(self, *, scenario_src="LagunaSeca_ExternalControl",
-                 scenario_name=None, timestep=1, control_period=None, light_step=False, save_as=True):
+                 scenario_name=None, timestep=1, control_period=None, light_step=False, save_as=True,
+                 manual_control=True):
         super().__init__()
         self.scenario_src = scenario_src
         self.scenario_name = scenario_name
@@ -48,6 +49,8 @@ class DSpaceSimulator(RacingSimulator):
         self.control_period = float(control_period) if control_period is not None else None
         self.light_step = bool(light_step)
         self.save_as = bool(save_as)
+        # manual_control: default True = manual mode (ego controlled by Scenic via VesiInterface)
+        self.manual_control = bool(manual_control)
 
     def createSimulation(self, scene, **kwargs):
         return DSpaceSimulation(scene, self, **kwargs)
@@ -335,6 +338,25 @@ class DSpaceSimulation(RacingSimulation):
             print("[Setup] [OK] ControlDesk readback verified successfully")
         else:
             print("[Setup] [WARN] Warning: Some ControlDesk readbacks failed, but continuing...")
+        
+        # 12b) Apply race "Go" signals (manual_mode, track_flag, vehicle_flag) so cars are allowed to start moving.
+        # Use same array write pattern as fellows: whole-array path, read-modify-write (see VehicleController
+        # apply_fellow_control and _initializeFellowExternalSignals).
+        var = getattr(self, "_var_access", None) or getattr(self, "_cd", None)
+        if var and not getattr(self, "_light_step", False):
+            try:
+                track_path = "Platform()://RaceControl/Model Root/Parameters/track_flag_manual"
+                veh_path = "Platform()://RaceControl/Model Root/Parameters/veh_flag_manual"
+                for path, idx0_val in ((track_path, 1), (veh_path, 0)):
+                    arr = list(var.get_var(path) or [])
+                    if len(arr) < 1:
+                        arr = [0.0] * 1
+                    arr[0] = idx0_val
+                    var.set_var(path, arr)
+                var.set_var("Platform()://RaceControl/Model Root/Parameters/manual_mode", 1.0)
+                print("[Setup] Race go signals applied (track_flag[0]=1, vehicle_flag[0]=0, manual_mode=1).")
+            except Exception as e:
+                print(f"[Setup] [WARN] Failed to apply race go signals: {e}")
         
         # 13) Ensure simulation is paused for step-by-step control (already paused since 10b)
         print("[Setup] Ensuring simulation paused for step-by-step control...")
