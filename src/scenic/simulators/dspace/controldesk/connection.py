@@ -127,6 +127,12 @@ class ControlDeskApp:
         mc = exp.ManeuverControl
         mc.Reset()
 
+    def start_maneuver_via_com(self):
+        """Start the active experiment's maneuver via ControlDesk COM (ManeuverControl.Start), not variable pulse or RTA."""
+        exp = self.app.ActiveExperiment
+        mc = exp.ManeuverControl
+        mc.Start(False)
+
     # Simulation control
     def _get_platform(self):
         """Get cached platform object, creating if needed."""

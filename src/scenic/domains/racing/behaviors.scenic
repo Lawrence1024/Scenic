@@ -1964,6 +1964,21 @@ behavior LaneSelectionBehavior(ttl_selection="race", manage_gears=True):
         do FlagBasedSpeedBehavior(speed_type="green", speed_limit=120.0, manage_gears=manage_gears)
 
 
+behavior ARTStackControlBehavior():
+    """Wrapper behavior: do not control the vehicle; let the ART stack control it.
+    
+    Use this when the ego is driven by the ART (Automated Racing Technology) stack
+    (e.g. VKS, race decision engine) instead of Scenic controllers. The behavior
+    runs every step but does not send throttle, brake, or steering commands, so
+    Scenic does not overwrite ART's control outputs.
+    
+    Similar in spirit to other shell/wrapper behaviors (e.g. LaneSelectionBehavior
+    that delegates to FlagBasedSpeedBehavior).
+    """
+    while True:
+        wait
+
+
 behavior StopBehavior(stop_type="safe"):
     """Stop car with specified stop type (decision tree behavior).
     

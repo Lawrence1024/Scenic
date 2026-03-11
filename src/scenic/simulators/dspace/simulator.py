@@ -7,6 +7,7 @@
 import csv
 import math
 import os
+import subprocess
 import time
 import pythoncom
 from win32com.client import Dispatch
@@ -36,11 +37,26 @@ print(f"[PatchID] simulator.py loaded from {__file__}")
 # dSPACE path for simulated time (read on each control step and logged)
 SIMULATED_TIME_PATH = "Platform()://ASM_Traffic/Simulation and RTOS/Simulation/SimulationTime"
 
+# MAPort paths for ART reset workflow (manual off, Stop, Reset, Start)
+MANUAL_MODE_PATH = "Platform()://RaceControl/Model Root/Parameters/manual_mode"
+MANEUVER_STOP_PATH = (
+    "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/"
+    "UserInterface/PAR_Plant/ManeuverControl/MANEUVER_STOP/MDLDCtrl_ManeuverStop"
+)
+MANEUVER_RESET_PATH = (
+    "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/"
+    "UserInterface/PAR_Plant/ManeuverControl/RESET/MDLDCtrl_Reset"
+)
+MANEUVER_START_PATH = (
+    "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/"
+    "UserInterface/PAR_Plant/ManeuverControl/MANEUVER_START/MDLDCtrl_ManeuverStart"
+)
+
 
 class DSpaceSimulator(RacingSimulator):
     def __init__(self, *, scenario_src="LagunaSeca_ExternalControl",
                  scenario_name=None, timestep=1, control_period=None, light_step=False, save_as=True,
-                 manual_control=True):
+                 manual_control=True, art_stack_container="art_driving_stack"):
         super().__init__()
         self.scenario_src = scenario_src
         self.scenario_name = scenario_name
@@ -51,6 +67,8 @@ class DSpaceSimulator(RacingSimulator):
         self.save_as = bool(save_as)
         # manual_control: default True = manual mode (ego controlled by Scenic via VesiInterface)
         self.manual_control = bool(manual_control)
+        # ART stack: Docker container name for ROS2 reset_vks_state and set_selected_ttl
+        self.art_stack_container = str(art_stack_container)
 
     def createSimulation(self, scene, **kwargs):
         return DSpaceSimulation(scene, self, **kwargs)
@@ -165,8 +183,115 @@ class DSpaceSimulation(RacingSimulation):
     def _get_scx_map_path(self):
         return get_map_path(getattr(self.scene, "params", {}) or {})
 
+    def _run_maport_reset_and_start(self):
+        """Reset workflow: manual off, then first set (RTA start + pulse STOP + pulse RESET), then ModelDesk COM Reset, then second start via ControlDesk API, then Pause."""
+        var = getattr(self, "_var_access", None) or getattr(self, "_cd", None)
+        if not var or getattr(self, "_light_step", False):
+            if self._cd:
+                cd_session.pause(self._cd)
+            return
+        try:
+            print("[Setup] ART reset workflow: manual off, then first set (RTA start, pulse STOP, pulse RESET)...")
+            var.set_var(MANUAL_MODE_PATH, 0.0)
+            time.sleep(0.3)
+            # First set: RTA start, pulse MANEUVER_STOP, pulse MANEUVER_RESET
+            if self._cd:
+                try:
+                    self._cd.start_simulation()
+                    time.sleep(0.5)
+                except Exception as e:
+                    print(f"[Setup] [WARN] First RTA start failed: {e}")
+            var.set_var(MANEUVER_STOP_PATH, 1.0)
+            time.sleep(0.5)
+            var.set_var(MANEUVER_STOP_PATH, 0.0)
+            time.sleep(1.0)
+            var.set_var(MANEUVER_RESET_PATH, 1.0)
+            time.sleep(0.5)
+            var.set_var(MANEUVER_RESET_PATH, 0.0)
+            time.sleep(1.5)
+            print("[Setup] ART reset workflow: first set done.")
+            # Then ModelDesk COM Reset
+            if getattr(self, "exp", None) is not None:
+                try:
+                    mc = self.exp.ManeuverControl
+                    mc.Reset()
+                    time.sleep(0.5)
+                    print("[Setup] ART reset workflow: ModelDesk COM Reset done.")
+                except Exception as e:
+                    print(f"[Setup] [WARN] ModelDesk COM Reset failed: {e}")
+            # Second start: ControlDesk COM API (ManeuverControl.Start), not variable pulse and not RTA
+            if self._cd:
+                try:
+                    self._cd.start_maneuver_via_com()
+                except Exception as e:
+                    print(f"[Setup] [WARN] ControlDesk COM Start failed: {e}; falling back to variable pulse.")
+                    cd_session.start_maneuver(self._cd)
+            else:
+                var.set_var(MANEUVER_START_PATH, 1.0)
+                time.sleep(0.5)
+                var.set_var(MANEUVER_START_PATH, 0.0)
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"[Setup] [WARN] Reset sequence failed: {e}")
+        if self._cd and cd_session.pause(self._cd):
+            print("[Setup] Simulation paused (idle time will not advance sim until warmup/step).")
+
+    def _get_initial_ttl_for_art(self):
+        """Return 'pit' or 'race' for ART set_selected_ttl from ego initial position."""
+        try:
+            ego = getattr(self.scene, "egoObject", None)
+            if ego is None:
+                return "race"
+            pos = getattr(ego, "position", None)
+            if pos is None:
+                return "race"
+            position_xy = (float(pos.x), float(pos.y))
+            params = getattr(self.scene, "params", {}) or {}
+            seg = detect_track_segment(position_xy, self._road_index, params, dutils)
+            return "pit" if seg == "pitLane" else "race"
+        except Exception as e:
+            print(f"[Setup] [WARN] TTL selection fallback to 'race': {e}")
+            return "race"
+
+    def _call_art_stack_reset(self):
+        """Call ART stack ROS2 services: reset_vks_state, then set_selected_ttl (pit/race)."""
+        container = getattr(self.sim, "art_stack_container", "art_driving_stack")
+        setup_cmd = "source /opt/race_common/install/setup.bash"
+        selected_ttl = self._get_initial_ttl_for_art()
+        print(f"[Setup] ART stack reset: container={container}, selected_ttl={selected_ttl}")
+        try:
+            cmd_reset = [
+                "docker", "exec", container,
+                "bash", "-c",
+                f"{setup_cmd} && ros2 service call /vehicle_kinematic_state_node/reset_vks_state std_srvs/srv/Trigger '{{}}'",
+            ]
+            r = subprocess.run(cmd_reset, capture_output=True, text=True, timeout=15)
+            if r.returncode != 0:
+                print(f"[Setup] [WARN] ART reset_vks_state failed (return {r.returncode}): {r.stderr or r.stdout}")
+            else:
+                print("[Setup] ART reset_vks_state OK.")
+            # set_selected_ttl: YAML-style argument {selected_ttl: 'pit'} or {selected_ttl: 'race'}
+            cmd_ttl = [
+                "docker", "exec", container,
+                "bash", "-c",
+                f"{setup_cmd} && ros2 service call /race_decision_engine_node/set_selected_ttl race_decision_engine/srv/SetSelectedTtl \"{{selected_ttl: '{selected_ttl}'}}\"",
+            ]
+            r2 = subprocess.run(cmd_ttl, capture_output=True, text=True, timeout=15)
+            if r2.returncode != 0:
+                print(f"[Setup] [WARN] ART set_selected_ttl failed (return {r2.returncode}): {r2.stderr or r2.stdout}")
+            else:
+                print(f"[Setup] ART set_selected_ttl({selected_ttl}) OK.")
+        except FileNotFoundError:
+            print("[Setup] [WARN] docker not found; ART stack reset skipped (ensure ART container is reachable).")
+        except subprocess.TimeoutExpired:
+            print("[Setup] [WARN] ART stack reset timed out.")
+        except Exception as e:
+            print(f"[Setup] [WARN] ART stack reset failed: {e}")
+
     def setup(self):
-        """SaveAs/Activate first, then create Fellows, then Save/Download/Reset/Start."""
+        """Run once per resample: SaveAs/Activate, place ego/fellows, Save/Download, Connect, reset (Stop/Reset/Start), warmup, ART stack, set flags.
+        Called from Simulation.__init__ for each new sample (each new DSpaceSimulation instance).
+        """
         pythoncom.CoInitialize()
         app = Dispatch("ModelDesk.Application")
         proj = app.ActiveProject
@@ -239,24 +364,11 @@ class DSpaceSimulation(RacingSimulation):
         except Exception as e:
             print(f"[ModelDesk] Save/Download failed: {e}")
 
-        # 8) Reset maneuver (but do NOT start yet)
-        try:
-            mc = self.exp.ManeuverControl
-            try: 
-                mc.Stop()
-            except Exception: 
-                pass
-            time.sleep(0.2)
-            mc.Reset()  # Reset to initial state
-            time.sleep(0.2)
-        except Exception:
-            pass
-
-        # 9) Connect ControlDesk and initialize VesiInterface BEFORE starting maneuver
+        # 8) Connect ControlDesk and initialize VesiInterface (single connection before reset)
         self._cd = cd_session.connect_and_prepare(self)
         if self._cd:
             self._var_access = self._cd  # default fallback
-            # 9b) Prefer MAPort for variable read/write (faster); fall back to ControlDesk COM
+            # 8b) Prefer MAPort for variable read/write (faster); fall back to ControlDesk COM
             try:
                 from .maport import session as maport_session
                 self._maport = maport_session.connect_and_prepare_maport(self, start_if_needed=False)
@@ -312,25 +424,21 @@ class DSpaceSimulation(RacingSimulation):
             print("\nWithout ControlDesk, Fellow vehicles CANNOT move.")
             print("="*70 + "\n")
 
-        # 10) NOW start the maneuver via ControlDesk (AFTER VesiInterface is fully initialized)
+        # 9) Reset workflow: manual off, first set (RTA start + pulse STOP + pulse RESET), ModelDesk COM Reset, second start via ControlDesk COM, then Pause
         if self._cd:
-            cd_session.start_maneuver(self._cd)
+            self._run_maport_reset_and_start()
 
-        # 10b) Pause immediately so setup idle time does not advance sim (consistent t_start/warmup)
-        if self._cd and cd_session.pause(self._cd):
-            print("[Setup] Simulation paused (idle time will not advance sim until warmup/step).")
-        
-        # 11) Initialize fellow arrays and verify readback (all while paused; warmup uses SingleStep)
+        # 10) Initialize fellow arrays and verify readback (all while paused; warmup uses SingleStep)
         print("[Setup] Initializing fellow arrays...")
         ensure_fellow_arrays_initialized(self)
 
-        # 11b) Initialize External_Signals S/T for fellows so dSPACE starts from correct positions
+        # 10b) Initialize External_Signals S/T for fellows so dSPACE starts from correct positions
         try:
             self._initializeFellowExternalSignals()
         except Exception as e:
             print(f"[Setup] [WARN] Failed to initialize fellow External_Signals: {e}")
         
-        # 12) Verify we can read back values from ControlDesk for all vehicles
+        # 11) Verify we can read back values from ControlDesk for all vehicles
         print("[Setup] Verifying ControlDesk readback for all vehicles...")
         readback_success = self._verifyControlDeskReadback()
         
@@ -339,9 +447,19 @@ class DSpaceSimulation(RacingSimulation):
         else:
             print("[Setup] [WARN] Warning: Some ControlDesk readbacks failed, but continuing...")
         
-        # 12b) Apply race "Go" signals (manual_mode, track_flag, vehicle_flag) so cars are allowed to start moving.
-        # Use same array write pattern as fellows: whole-array path, read-modify-write (see VehicleController
-        # apply_fellow_control and _initializeFellowExternalSignals).
+        # 12) ART stack reset: wait for sim to settle, then reset VKS and set_selected_ttl (pit/race)
+        print("[Setup] ART stack reset (reset_vks_state, set_selected_ttl)...")
+        time.sleep(3)
+        self._call_art_stack_reset()
+        
+        # 13) Ensure simulation is paused for step-by-step control (already paused since step 9)
+        print("[Setup] Ensuring simulation paused for step-by-step control...")
+        if self._cd and cd_session.pause(self._cd):
+            print("[Setup] [OK] Simulation paused for step-by-step control")
+        else:
+            print("[Setup] [WARN] Could not pause simulation")
+        
+        # 14) Apply race "Go" signals (manual_mode, track_flag, vehicle_flag) so cars are allowed to start moving. Done after pause so all warmups complete first.
         var = getattr(self, "_var_access", None) or getattr(self, "_cd", None)
         if var and not getattr(self, "_light_step", False):
             try:
@@ -357,13 +475,6 @@ class DSpaceSimulation(RacingSimulation):
                 print("[Setup] Race go signals applied (track_flag[0]=1, vehicle_flag[0]=0, manual_mode=1).")
             except Exception as e:
                 print(f"[Setup] [WARN] Failed to apply race go signals: {e}")
-        
-        # 13) Ensure simulation is paused for step-by-step control (already paused since 10b)
-        print("[Setup] Ensuring simulation paused for step-by-step control...")
-        if self._cd and cd_session.pause(self._cd):
-            print("[Setup] [OK] Simulation paused for step-by-step control")
-        else:
-            print("[Setup] [WARN] Could not pause simulation")
 
     def createObjectInSimulator(self, obj):
         """Place car (ego or fellow) by absolute (s,t) computed from (x,y) and XODR.
@@ -1397,6 +1508,28 @@ class DSpaceSimulation(RacingSimulation):
                 print("[Timing] MAPort per-path timing (get_var/set_var) below:")
             self._var_access.print_timing_summary()
         if self._maport is not None:
+            # Restore manual_mode to 0 and run first-block sequence (RTA start, pulse STOP, pulse RESET) before releasing MAPort
+            var = getattr(self, "_var_access", None) or getattr(self, "_cd", None)
+            if var:
+                try:
+                    var.set_var(MANUAL_MODE_PATH, 0.0)
+                    time.sleep(0.3)
+                    if self._cd:
+                        try:
+                            self._cd.start_simulation()
+                            time.sleep(0.5)
+                        except Exception:
+                            pass
+                    var.set_var(MANEUVER_STOP_PATH, 1.0)
+                    time.sleep(0.5)
+                    var.set_var(MANEUVER_STOP_PATH, 0.0)
+                    time.sleep(1.0)
+                    var.set_var(MANEUVER_RESET_PATH, 1.0)
+                    time.sleep(0.5)
+                    var.set_var(MANEUVER_RESET_PATH, 0.0)
+                    time.sleep(0.5)
+                except Exception as e:
+                    print(f"[VarAccess] Teardown: reset sequence failed: {e}")
             print("[VarAccess] Teardown: disposing MAPort (variable backend was MAPort).")
             try:
                 self._maport.dispose()
