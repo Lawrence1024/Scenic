@@ -22,6 +22,7 @@ EGO_GPS_READ_PATHS = (EGO_GPS_LONGITUDE_DEG, EGO_GPS_LATITUDE_DEG, EGO_GPS_HEADI
 
 # GNSS (GPS) paths for Fellows - VehicleSensors/ground_truth/GPS_POSITION/GPS_CALC (indexed [i]). Use VesiInterface or Vesilnterface to match your ASM_Traffic model.
 FELLOW_GPS_BASE = "Platform()://ASM_Traffic/Model Root/VesiInterface/VehicleSensors/ground_truth/GPS_POSITION/GPS_CALC"
+FELLOW_GPS_BASE_ALT = "Platform()://ASM_Traffic/Model Root/Vesilnterface/VehicleSensors/ground_truth/GPS_POSITION/GPS_CALC"
 
 
 def read_ego_gps(sim):
@@ -43,14 +44,36 @@ def read_ego_gps(sim):
 
 def read_fellow_gps(sim, var, eff_index: int):
     """Read Fellow GNSS (Longitude_deg, Latitude_deg, Heading_deg) from VehicleSensors/ground_truth GPS_CALC.
-    eff_index is the fellow array index (0-based). Returns (lon_deg, lat_deg, heading_deg) or (None, None, None) on failure."""
-    try:
-        lon = float(var.get_var(f"{FELLOW_GPS_BASE}/Longitude_deg[{eff_index}]"))
-        lat = float(var.get_var(f"{FELLOW_GPS_BASE}/Latitude_deg[{eff_index}]"))
-        hdg = float(var.get_var(f"{FELLOW_GPS_BASE}/Heading_deg[{eff_index}]"))
-        return (lon, lat, hdg)
-    except Exception:
-        return (None, None, None)
+    Tries FELLOW_GPS_BASE then FELLOW_GPS_BASE_ALT (VesiInterface vs Vesilnterface). Uses array variables
+    when available, else indexed path. Returns (lon_deg, lat_deg, heading_deg) or (None, None, None) on failure."""
+    for base in (FELLOW_GPS_BASE, FELLOW_GPS_BASE_ALT):
+        try:
+            lon_arr = var.get_var(f"{base}/Longitude_deg")
+            lat_arr = var.get_var(f"{base}/Latitude_deg")
+            hdg_arr = var.get_var(f"{base}/Heading_deg")
+            if (
+                isinstance(lon_arr, (list, tuple))
+                and isinstance(lat_arr, (list, tuple))
+                and isinstance(hdg_arr, (list, tuple))
+                and 0 <= eff_index < len(lon_arr)
+                and 0 <= eff_index < len(lat_arr)
+                and 0 <= eff_index < len(hdg_arr)
+            ):
+                lon = lon_arr[eff_index]
+                lat = lat_arr[eff_index]
+                hdg = hdg_arr[eff_index]
+                if lon is not None and lat is not None and hdg is not None:
+                    return (float(lon), float(lat), float(hdg))
+        except Exception:
+            continue
+        try:
+            lon = float(var.get_var(f"{base}/Longitude_deg[{eff_index}]"))
+            lat = float(var.get_var(f"{base}/Latitude_deg[{eff_index}]"))
+            hdg = float(var.get_var(f"{base}/Heading_deg[{eff_index}]"))
+            return (lon, lat, hdg)
+        except Exception:
+            continue
+    return (None, None, None)
 
 
 def _read_ego_state_gnss(sim, obj, var):

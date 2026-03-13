@@ -2,7 +2,7 @@
 
 This package provides scripts to build XODR with:
 - Main track and pit track as two roads from TTL centerlines
-- Fixed lane widths (e.g. 6 m main, 3.25 m pit)
+- Fixed lane widths (e.g. 5.5 m main, 3 m pit)
 - Predecessor/successor links so the roads form one connected loop (no junctions)
 
 Usage:

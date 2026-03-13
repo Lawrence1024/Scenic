@@ -3,9 +3,9 @@
 Build an OpenDRIVE file from TTL centerline CSVs (main + pit) with fixed lane widths.
 
 Creates three roads connected by predecessor/successor links (no junction elements):
-- Road 1 (main arc A): pit entry → pit exit along main centerline (6 m each side).
-- Road 2 (pit): pit centerline trimmed in overlap so main dominates (3.25 m each side).
-- Road 3 (main arc B): pit exit → pit entry along main centerline (6 m each side).
+- Road 1 (main arc A): pit entry → pit exit along main centerline (5.5 m each side).
+- Road 2 (pit): pit centerline trimmed in overlap so main dominates (3 m each side).
+- Road 3 (main arc B): pit exit → pit entry along main centerline (5.5 m each side).
 
 The full main loop (Andretti, Corkscrew, etc.) is road 1 + road 3. In overlap regions
 (Corkscrew, Andretti) pit points within OVERLAP_MAIN_WINS_M of main are trimmed so
@@ -33,8 +33,8 @@ _DEFAULT_PIT_TTL = _REPO_ROOT / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "ttl_pitl
 _DEFAULT_OUTPUT = _PKG_DIR / "generated" / "track_from_ttl.xodr"
 
 # Lane widths (meters each side of centerline)
-MAIN_LANE_WIDTH = 6.0
-PIT_LANE_WIDTH = 3.25
+MAIN_LANE_WIDTH = 5.5
+PIT_LANE_WIDTH = 3.0
 
 # Where pit centerline is within this distance of main, trim pit so main dominates (same idea as track_regions).
 OVERLAP_MAIN_WINS_M = 5.0
@@ -232,9 +232,9 @@ def build_connected_ttl_xodr(
     """
     Build an OpenDRIVE file with full main loop (two arcs) and pit road, connected (no junctions).
 
-    - Road 1 (MainTrack arc A): pit entry → pit exit along main centerline (6 m).
-    - Road 2 (PitTrack): pit centerline trimmed where within overlap_main_wins_m of main (3.25 m).
-    - Road 3 (MainTrack arc B): pit exit → pit entry along main centerline (6 m).
+    - Road 1 (MainTrack arc A): pit entry → pit exit along main centerline (5.5 m).
+    - Road 2 (PitTrack): pit centerline trimmed where within overlap_main_wins_m of main (3 m).
+    - Road 3 (MainTrack arc B): pit exit → pit entry along main centerline (5.5 m).
 
     So the full main loop (including Andretti Hairpin) is road 1 + road 3. In overlap
     (e.g. Corkscrew) pit is trimmed so main track width dominates.

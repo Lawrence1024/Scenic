@@ -5,11 +5,11 @@ This folder contains scripts and utilities to generate OpenDRIVE (`.xodr`) files
 ## What is generated
 
 - **Three roads** built from TTL centerline CSVs:
-  - **Road 1 (MainTrack_A):** Arc from pit entry to pit exit along the main centerline (6 m each side).
-  - **Road 2 (PitTrack):** Pit lane centerline, **trimmed** where it overlaps main (within 5 m) so main track width dominates (3.25 m each side).
-  - **Road 3 (MainTrack_B):** Arc from pit exit to pit entry along the main centerline (6 m each side) — includes Andretti Hairpin, Corkscrew, etc.
+  - **Road 1 (MainTrack_A):** Arc from pit entry to pit exit along the main centerline (5.5 m each side).
+  - **Road 2 (PitTrack):** Pit lane centerline, **trimmed** where it overlaps main (within 5 m) so main track width dominates (3 m each side).
+  - **Road 3 (MainTrack_B):** Arc from pit exit to pit entry along the main centerline (5.5 m each side) — includes Andretti Hairpin, Corkscrew, etc.
 - **Full main loop** = Road 1 + Road 3. In overlap regions (e.g. Corkscrew) pit points near main are removed so only main track width is used.
-- **Fixed lane widths:** 6 m each side for main, 3.25 m each side for pit (configurable).
+- **Fixed lane widths:** 5.5 m each side for main, 3 m each side for pit (configurable).
 - **Connected topology:** Predecessor/successor links (no junction elements). Cycle: MainTrack_A → PitTrack → MainTrack_B → MainTrack_A.
 
 The output XODR can be used as `param map = localPath('...')` in Scenic racing scenarios so that the drivable region matches your TTL-based geometry and avoids “does not fit in container” issues from mismatched OpenDRIVE.
@@ -37,7 +37,7 @@ python -m scenic.domains.racing.XODR_generation.build_ttl_xodr \
 
 # Custom lane widths (meters each side)
 python -m scenic.domains.racing.XODR_generation.build_ttl_xodr \
-  --main-width 6 --pit-width 3.25 -o generated/track_from_ttl.xodr
+  --main-width 5.5 --pit-width 3 -o generated/track_from_ttl.xodr
 ```
 
 Or run the script directly:
@@ -64,8 +64,8 @@ out_path = build_connected_ttl_xodr(
     main_ttl_path=Path("assets/ttls/LS_ENU_TTL_CSV/ttl_main_road.csv"),
     pit_ttl_path=Path("assets/ttls/LS_ENU_TTL_CSV/ttl_pitlane.csv"),
     output_path=Path("generated/track_from_ttl.xodr"),
-    main_width=6.0,
-    pit_width=3.25,
+    main_width=5.5,
+    pit_width=3.0,
 )
 ```
 

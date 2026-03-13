@@ -100,6 +100,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--settle-sleep", type=float, default=DEFAULT_SETTLE_SLEEP, help="Sleep between settle steps (seconds)")
     parser.add_argument("--startup-sleep", type=float, default=DEFAULT_STARTUP_SLEEP, help="Sleep after maneuver start/reset (seconds)")
     parser.add_argument("--reset-checkpoint", action="store_true", help="Delete existing checkpoint/results before starting")
+    parser.add_argument(
+        "--accept-checkpoint",
+        action="store_true",
+        help="If checkpoint exists but its config differs from current args, resume anyway using the checkpoint's config (e.g. to finish R2).",
+    )
     return parser.parse_args()
 
 
@@ -244,7 +249,7 @@ def configure_measurement_seg1(segs) -> None:
     Longitudinal stays at Constant Velocity = 0, while lateral uses Continue so the
     segment does not force a constant lateral deviation during the calibration sweep.
     """
-    dutils.configure_seg1_motion(segs, v=0.0, t=0.0, source_type="Constant")
+    dutils.configure_seg1_motion(segs, v=0.0, t=0.0)
     lat1 = segs[1].Activity.LateralType
     dutils.activate_type(lat1, "Continue")
 
@@ -501,17 +506,36 @@ def _config_matches(checkpoint_config: dict, current: dict) -> bool:
     return True
 
 
-def load_checkpoint(config: MeasurementConfig):
+def _config_from_checkpoint_dict(c: dict) -> MeasurementConfig:
+    """Reconstruct MeasurementConfig from checkpoint JSON (lists -> tuples)."""
+    return MeasurementConfig(
+        routes=tuple(c["routes"]),
+        s_start=float(c["s_start"]),
+        s_end=float(c["s_end"]),
+        s_step=float(c["s_step"]),
+        t_values=tuple(float(x) for x in c["t_values"]),
+        batch_size=int(c["batch_size"]),
+        settle_steps=int(c["settle_steps"]),
+        settle_sleep_s=float(c["settle_sleep_s"]),
+        startup_sleep_s=float(c["startup_sleep_s"]),
+    )
+
+
+def load_checkpoint(config: MeasurementConfig, accept_any: bool = False):
+    """Load checkpoint if present. Returns (payload, config_matched).
+    If accept_any is False and saved config differs, raises RuntimeError.
+    If accept_any is True and config differs, returns (payload, False) so caller can resume using checkpoint's config."""
     if not CHECKPOINT_JSON.exists():
-        return None
+        return None, True
     with open(CHECKPOINT_JSON, "r", encoding="utf-8") as checkpoint_file:
         payload = json.load(checkpoint_file)
-    if not _config_matches(payload.get("config", {}), asdict(config)):
+    config_matched = _config_matches(payload.get("config", {}), asdict(config))
+    if not config_matched and not accept_any:
         raise RuntimeError(
             "Existing checkpoint configuration does not match current arguments. "
-            "Use --reset-checkpoint to start over."
+            "Use --reset-checkpoint to start over or --accept-checkpoint to resume using the checkpoint's config."
         )
-    return payload
+    return payload, config_matched
 
 
 def clear_checkpoint() -> None:
@@ -543,9 +567,28 @@ def main() -> int:
     if args.reset_checkpoint:
         reset_output_files()
 
-    all_samples = build_samples(config)
-    batches = build_batches(all_samples, config.batch_size)
-    total_batches = len(batches)
+    checkpoint, config_matched = load_checkpoint(config, accept_any=args.accept_checkpoint)
+    if checkpoint and not config_matched:
+        # Resume using checkpoint's config so we continue the same run (e.g. finish R2).
+        config = _config_from_checkpoint_dict(checkpoint["config"])
+        all_samples = build_samples(config)
+        batches = build_batches(all_samples, config.batch_size)
+        total_batches = int(checkpoint.get("total_batches", len(batches)))
+        results = checkpoint.get("results", [])
+        start_batch_index = int(checkpoint.get("next_batch_index", 0))
+        print("[CHECKPOINT] Resuming with --accept-checkpoint using saved config (config differed from current args).")
+    elif checkpoint:
+        all_samples = build_samples(config)
+        batches = build_batches(all_samples, config.batch_size)
+        total_batches = len(batches)
+        results = checkpoint.get("results", [])
+        start_batch_index = int(checkpoint.get("next_batch_index", 0))
+    else:
+        all_samples = build_samples(config)
+        batches = build_batches(all_samples, config.batch_size)
+        total_batches = len(batches)
+        results = []
+        start_batch_index = 0
 
     print("=" * 80)
     print("MEASURE dSPACE ROUTE GEOMETRY (s,t -> RD -> XODR)")
@@ -558,16 +601,10 @@ def main() -> int:
     print(f"Batch size: {config.batch_size} (max {MAX_BATCH_SIZE})")
     print(f"Total samples: {len(all_samples)} in {total_batches} batches")
     print(f"Outputs: {OUTPUT_DIR}")
-
-    checkpoint = load_checkpoint(config)
     if checkpoint:
-        results = checkpoint.get("results", [])
-        start_batch_index = int(checkpoint.get("next_batch_index", 0))
         print(f"[CHECKPOINT] Resuming at batch {start_batch_index + 1}/{total_batches} with {len(results)} saved results.")
     else:
-        results = []
-        start_batch_index = 0
-        print("[CHECKPOINT] No matching checkpoint found; starting from scratch.")
+        print("[CHECKPOINT] No checkpoint found; starting from scratch.")
 
     coordinate_transform = load_coordinate_transform()
     scenario_name = f"{SCENARIO_BASENAME}_{time.strftime('%Y%m%d_%H%M%S')}"
