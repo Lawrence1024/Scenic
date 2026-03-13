@@ -14,6 +14,15 @@ This folder contains scripts and utilities to generate OpenDRIVE (`.xodr`) files
 
 The output XODR can be used as `param map = localPath('...')` in Scenic racing scenarios so that the drivable region matches your TTL-based geometry and avoids “does not fit in container” issues from mismatched OpenDRIVE.
 
+## Centerline and lanes
+
+Each generated road has **one reference line** (OpenDRIVE planView), which is the TTL centerline polyline. There is **one lane section** for the whole road:
+
+- **Center** (lane id=0, type=none): the reference line itself.
+- **Left** (lane id=1) and **Right** (lane id=-1): driving lanes with constant width (7 m or 3.5 m each side).
+
+So there is **no "multiple lanes" in the sense of multiple centerlines**: there is a single reference line per road, and (s, t) projection / placement is done against that **reference line** (not against a specific lane's center). For maps with true multi-lane roads (e.g. several lanes each side), you would want lane-specific centerlines; this generator intentionally uses one centerline per road and symmetric left/right width, so "centerline" here is the road reference line to which all lanes are attached.
+
 ## Requirements
 
 - TTL centerline CSVs with columns `x,y,z` (or at least `x,y`). Typical inputs:

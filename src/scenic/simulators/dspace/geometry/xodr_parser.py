@@ -77,46 +77,46 @@ def build_xodr_sec_points(xodr_path, step=2.0):
         
         road_index = {'roads': {}}
         
-        # Process each road independently - FILTER TO MAIN ROADS ONLY
+        # Prefer known main road names (original Laguna Seca); otherwise include all roads
+        # so generated XODR (e.g. track_from_ttl with MainTrack_A, PitTrack, MainTrack_B) is supported
         from .utils import MAIN_ROAD_NAMES
-        main_road_names = MAIN_ROAD_NAMES
-        
-        for road_elem in road_elements:
+        main_road_names = set(MAIN_ROAD_NAMES)
+
+        def add_road(road_elem):
             road_id = road_elem.get('id')
             road_name = road_elem.get('name', f'Road_{road_id}')
             road_length = float(road_elem.get('length', '0'))
-            
-            # Only process main roads, skip junction roads
-            if road_name not in main_road_names:
-                continue
-                
             if road_length <= 0:
-                continue
-            
-            # Build reference line for this specific road
+                return False
             pts, L, _ = _road_local_ref(root, road_id, ns, step)
             if not pts:
-                continue
-            
-            # Convert to independent s-coordinate system (starting from 0)
+                return False
             sec_points_list = []
             for s_local, x, y, z, h in pts:
-                # Use local s-coordinate (0 to road_length) instead of cumulative
                 sec_points_list.append((x, y, s_local))
-            
-            # Store road data with independent s-coordinate system
             road_data = {
                 'id': road_id,
                 'name': road_name,
                 'length': road_length,
                 'sec_points': [sec_points_list]
             }
-            
-            # Use road name as key for easier identification
             road_index['roads'][road_name] = road_data
-            
             print(f"  Built independent road: {road_name} (ID: {road_id}, Length: {road_length:.1f}m, Points: {len(sec_points_list)})")
-        
+            return True
+
+        for road_elem in road_elements:
+            road_name = road_elem.get('name', f'Road_{road_elem.get("id")}')
+            if road_name not in main_road_names:
+                continue
+            add_road(road_elem)
+
+        # Fallback: if no roads matched (e.g. generated track_from_ttl has MainTrack_A, PitTrack, MainTrack_B),
+        # include all roads so projection and route detection work
+        if not road_index['roads']:
+            print("  [XODR] No roads matched MAIN_ROAD_NAMES; including all roads (e.g. track_from_ttl / generated map).")
+            for road_elem in road_elements:
+                add_road(road_elem)
+
         print(f"Built {len(road_index['roads'])} independent roads with separate s-coordinate systems")
         return road_index
         

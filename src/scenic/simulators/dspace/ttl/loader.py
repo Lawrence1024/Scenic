@@ -17,7 +17,7 @@ def get_ttl_config(scene_params):
     params = scene_params or {}
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
     default_folder = os.path.join(repo_root, "assets", "ttls", "LS_ENU_TTL_CSV")
-    ttl_folder = params.get("ttlFolder", default_folder)
+    ttl_folder = params.get("ttlFolder") or default_folder
     ttl_index = int(params.get("ttlIndex", 17))  # default to 17
     
     # This folder holds XODR-coordinate files; use zero offset

@@ -3,8 +3,10 @@
 
 Reads route_st_to_xodr_measurements.csv (R2 = main track, R1 = pitlane + Andretti),
 extracts centerline points (t_input_m == 0) in (s_input_m) order, and writes
-x,y,z using XODR coordinates so the result can replace ttl_main_road.csv and
-ttl_pitlane.csv.
+x,y,z. By default uses xodr_x_m, xodr_y_m (old XODR from inverse transform).
+Use --rd to use rd_x_m, rd_y_m (dSPACE RD) so the map built from these
+centerlines matches the 4 _xodr TTLs (left/right/optimal/pit) converted with
+gps_rd_calibration.json.
 
 R2 is the main track; R1 is the pit lane (incomplete collection is still used;
 overlap with R2 at the end is assumed).
@@ -12,6 +14,7 @@ overlap with R2 at the end is assumed).
 Usage (from repo root):
   python src/scenic/simulators/dspace/create_new_ttl/measurements_to_centerlines.py
   python .../measurements_to_centerlines.py --copy-to-assets
+  python .../measurements_to_centerlines.py --rd --copy-to-assets   # RD coords: map will align with 4 _xodr TTLs
   python .../measurements_to_centerlines.py -o path/to/dir
 """
 
@@ -25,16 +28,22 @@ from typing import List, Tuple
 THIS_DIR = Path(__file__).resolve().parent
 MEASUREMENTS_DIR = THIS_DIR / "measurements"
 MEASUREMENTS_CSV = MEASUREMENTS_DIR / "route_st_to_xodr_measurements.csv"
-REPO_ROOT = THIS_DIR.parent.parent.parent.parent
+REPO_ROOT = THIS_DIR.parent.parent.parent.parent.parent
 ASSETS_TTL = REPO_ROOT / "assets" / "ttls" / "LS_ENU_TTL_CSV"
 
 MAIN_FROM_MEASUREMENTS = "ttl_main_road_from_measurements.csv"
 PIT_FROM_MEASUREMENTS = "ttl_pitlane_from_measurements.csv"
 
 
-def load_centerline(csv_path: Path, route: str) -> List[Tuple[float, float, float]]:
-    """Load centerline (t_input_m == 0) for the given route. Returns list of (x, y, z) in s order."""
+def load_centerline(
+    csv_path: Path, route: str, use_rd: bool = False
+) -> List[Tuple[float, float, float]]:
+    """Load centerline (t_input_m == 0) for the given route. Returns list of (x, y, z) in s order.
+    use_rd: if True use rd_x_m, rd_y_m (RD coords); else use xodr_x_m, xodr_y_m (old XODR)."""
     rows = []
+    x_key = "rd_x_m" if use_rd else "xodr_x_m"
+    y_key = "rd_y_m" if use_rd else "xodr_y_m"
+    z_key = "rd_z_m" if use_rd else "xodr_z_m"
     with open(csv_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -44,9 +53,9 @@ def load_centerline(csv_path: Path, route: str) -> List[Tuple[float, float, floa
                 t = float(row["t_input_m"])
                 if t != 0.0:
                     continue
-                x = float(row["xodr_x_m"])
-                y = float(row["xodr_y_m"])
-                z = float(row["xodr_z_m"])
+                x = float(row[x_key])
+                y = float(row[y_key])
+                z = float(row[z_key])
                 s = float(row["s_input_m"])
                 rows.append((s, x, y, z))
             except (KeyError, ValueError):
@@ -87,15 +96,20 @@ def main() -> int:
         default=MEASUREMENTS_CSV,
         help=f"Path to route_st_to_xodr_measurements.csv",
     )
+    parser.add_argument(
+        "--rd",
+        action="store_true",
+        help="Use rd_x_m, rd_y_m (dSPACE RD) instead of xodr_x_m, xodr_y_m. Use so map built from these centerlines aligns with 4 _xodr TTLs (gps_rd_calibration).",
+    )
     args = parser.parse_args()
 
     if not args.csv.exists():
         print(f"ERROR: Measurements CSV not found: {args.csv}", file=sys.stderr)
         return 1
 
-    print(f"Loading centerlines from {args.csv.name} ...")
-    main_pts = load_centerline(args.csv, "R2")
-    pit_pts = load_centerline(args.csv, "R1")
+    print(f"Loading centerlines from {args.csv.name} (coords: {'RD' if args.rd else 'old XODR'}) ...")
+    main_pts = load_centerline(args.csv, "R2", use_rd=args.rd)
+    pit_pts = load_centerline(args.csv, "R1", use_rd=args.rd)
     if not main_pts:
         print("ERROR: No R2 (main track) centerline points found.", file=sys.stderr)
         return 1

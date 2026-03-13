@@ -1,3 +1,5 @@
+import math
+
 from ..utils import legacy as dutils
 
 # TTL filenames for route preference (distance to main vs pitlane; if similar, prefer main)
@@ -21,6 +23,29 @@ def _min_dist_to_ttl(px, py, points):
     return best
 
 
+def _min_dist_to_polyline(px, py, points):
+    """Minimum distance from (px, py) to any segment of the polyline. points: list of (x,y) or (x,y,z)."""
+    if not points or len(points) < 2:
+        return _min_dist_to_ttl(px, py, points)
+    best = float("inf")
+    for i in range(len(points) - 1):
+        x0, y0 = points[i][0], points[i][1]
+        x1, y1 = points[i + 1][0], points[i + 1][1]
+        dx, dy = x1 - x0, y1 - y0
+        qx, qy = px - x0, py - y0
+        seg_len_sq = dx * dx + dy * dy
+        if seg_len_sq < 1e-18:
+            d = math.hypot(qx, qy)
+        else:
+            t = max(0.0, min(1.0, (qx * dx + qy * dy) / seg_len_sq))
+            proj_x = x0 + t * dx
+            proj_y = y0 + t * dy
+            d = math.hypot(px - proj_x, py - proj_y)
+        if d < best:
+            best = d
+    return best
+
+
 def _route_pref_from_ttl_distances(sim, xodr_x, xodr_y):
     """
     Prefer route (Lap vs Pit) by distance to main-road TTL vs pitlane TTL.
@@ -36,16 +61,17 @@ def _route_pref_from_ttl_distances(sim, xodr_x, xodr_y):
         _, pit_pts = load_ttl_region(ttl_folder, 0, dx, dy, TTL_PITLANE_FILE)
         if not main_pts or not pit_pts:
             return None
-        dist_main = _min_dist_to_ttl(xodr_x, xodr_y, main_pts)
-        dist_pit = _min_dist_to_ttl(xodr_x, xodr_y, pit_pts)
+        # Use polyline (segment) distance so assignment is by closest centerline
+        dist_main = _min_dist_to_polyline(xodr_x, xodr_y, main_pts)
+        dist_pit = _min_dist_to_polyline(xodr_x, xodr_y, pit_pts)
         # If clearly closer to pit, use Pit; otherwise prefer main road (including when similar)
         if dist_pit < dist_main - ROUTE_SIMILAR_TOLERANCE_M:
-            print(f"  [Ego route] TTL distances: main={dist_main:.2f}m pit={dist_pit:.2f}m -> Pit (closer to pitlane)")
+            print(f"  [Route] TTL distances: main={dist_main:.2f}m pit={dist_pit:.2f}m -> Pit (closer to pitlane)")
             return "Pit"
-        print(f"  [Ego route] TTL distances: main={dist_main:.2f}m pit={dist_pit:.2f}m -> Lap (main road or similar, prefer main)")
+        print(f"  [Route] TTL distances: main={dist_main:.2f}m pit={dist_pit:.2f}m -> Lap (main road or similar, prefer main)")
         return "Lap"
     except Exception as e:
-        print(f"  [Ego route] TTL-based route preference skipped: {e}")
+        print(f"  [Route] TTL-based route preference skipped: {e}")
         return None
 
 
@@ -249,24 +275,21 @@ def place_fellow(sim, obj):
         else:
             work_x, work_y = scenic_x, scenic_y
         
-        # 2) Determine route FIRST (before projection) using RD coordinates
-        route_pref = None
-        try:
-            position_xy = (work_x, work_y)
-            track_segment = sim.detectTrackSegment(position_xy)
-            if track_segment:
-                route_pref = sim.assignRoute(obj, track_segment)
-        except Exception as e:
-            pass
-        
-        # Fallback: try original method (uses XODR coordinates)
+        # 2) Determine route: TTL centerlines (ttl_main_road.csv vs ttl_pitlane.csv), assign to whichever is closer
+        route_pref = _route_pref_from_ttl_distances(sim, scenic_x, scenic_y)
+        if not route_pref:
+            try:
+                position_xy = (work_x, work_y)
+                track_segment = sim.detectTrackSegment(position_xy)
+                if track_segment:
+                    route_pref = sim.assignRoute(obj, track_segment)
+            except Exception:
+                pass
         if not route_pref:
             try:
                 route_pref = sim._detect_route_from_road_segment(obj)
             except Exception:
                 pass
-        
-        # Default to 'Lap' if route detection fails
         if not route_pref:
             route_pref = 'Lap'
         
