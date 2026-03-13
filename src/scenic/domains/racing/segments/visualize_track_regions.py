@@ -3,7 +3,7 @@
 Visualize mainTrack and pitTrack regions (buffered centerlines with width).
 
 Track regions are the same as used by the racing model for placement
-(new RacingCar on mainTrack / on pitTrack): main = 7 m each side of main
+(new RacingCar on mainTrack / on pitTrack): main = 6 m each side of main
 centerline, pit = 3.25 m each side of pit centerline, with overlap rule
 (main wins over pit, so Corkscrew etc. are main only).
 

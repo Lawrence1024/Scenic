@@ -32,14 +32,14 @@ ego = new RacingCar at (60.3811498,103.7450019), \
 
 
 
-ego.behavior = ARTStackControlBehavior()
+# ego.behavior = ARTStackControlBehavior()
 
 # Dummy fellow: no behavior; driven by External_Signals (Velocity/Lateral deviation = Extern in dSPACE)
-param fellow_dummy_centerline = True
-param fellow_dummy_velocity_kmh = 50
-fellow0 = new RacingCar at (49.3895,87.9318), with regionContainedIn everywhere, with raceNumber 2
-# fellow1 = new RacingCar on mainTrack
-# fellow2 = new RacingCar on mainTrack
+# param fellow_dummy_centerline = True
+# param fellow_dummy_velocity_kmh = 50
+# fellow0 = new RacingCar at (49.3895,87.9318), with regionContainedIn everywhere, with raceNumber 2
+fellow1 = new RacingCar right of ego by 5, with regionContainedIn everywhere
+fellow2 = new RacingCar ahead of ego by 20, with regionContainedIn everywhere
 # fellow3 = new RacingCar on mainTrack
 # fellow4 = new RacingCar on mainTrack
 # fellow5 = new RacingCar on mainTrack

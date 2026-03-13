@@ -4,7 +4,7 @@ This package provides:
 - OpenDRIVE-based and TTL-based segment mapping (segment_map)
 - RacingTrack and createRacingTrack (tracks) — track built from OpenDRIVE
 - mainTrack/pitTrack region building from segment centerlines (track_regions),
-  with 5 m and 2 m buffer from centerline, from either OpenDRIVE or TTL CSVs
+  with 6 m and 3.25 m buffer from centerline (main/pit), from either OpenDRIVE or TTL CSVs
 """
 
 from scenic.domains.racing.segments.segment_map import (
