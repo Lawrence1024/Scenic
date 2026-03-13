@@ -321,16 +321,73 @@ class VehicleController:
     # -------------------------------------------------------------------------
     # Fellow control
     # -------------------------------------------------------------------------
+    def _is_fellow_dummy_centerline(self, obj):
+        """True if scene param fellow_dummy_centerline is set (all fellows use constant v, d=0)."""
+        params = getattr(getattr(self.simulation, "scene", None), "params", None) or {}
+        return bool(params.get("fellow_dummy_centerline", False))
+
+    def _get_fellow_dummy_velocity_kmh(self):
+        """Constant velocity in km/h for dummy centerline fellows (from scene param)."""
+        params = getattr(getattr(self.simulation, "scene", None), "params", None) or {}
+        return float(params.get("fellow_dummy_velocity_kmh", 50.0))
+
+    def _get_fellow_placed_lateral_deviation(self, obj):
+        """Lateral deviation (d) from placement so fellow stays where specified in Scenic (not forced to centerline)."""
+        st = getattr(obj, "_route_s_t", None)
+        if st is not None and len(st) == 2:
+            return float(st[1])
+        return 0.0
+
+    def _apply_fellow_control_dummy(self, obj, fellow_index, eff_index):
+        """Write constant velocity and placed lateral deviation to External_Signals (Velocity/Lateral deviation Extern).
+        Uses the fellow's Scenic placement for d so the vehicle starts and stays at that lateral position;
+        only velocity drives motion."""
+        v_value = self._get_fellow_dummy_velocity_kmh()
+        d_value = self._get_fellow_placed_lateral_deviation(obj)
+
+        base_ext = (
+            "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/"
+            "FellowMovement/External_Signals"
+        )
+        v_path_bulk = f"{base_ext}/Const_v_Fellows_External[km|h]/Value"
+        d_path_bulk = f"{base_ext}/Const_d_Fellows_External[m]/Value"
+
+        try:
+            v_arr = list(self.cd.get_var(v_path_bulk) or [])
+            d_arr = list(self.cd.get_var(d_path_bulk) or [])
+        except Exception:
+            v_arr = []
+            d_arr = []
+
+        need_len = eff_index + 1
+        if len(v_arr) < need_len:
+            v_arr.extend([0.0] * (need_len - len(v_arr)))
+        if len(d_arr) < need_len:
+            d_arr.extend([0.0] * (need_len - len(d_arr)))
+
+        v_arr[eff_index] = v_value
+        d_arr[eff_index] = d_value
+
+        self.cd.set_var(v_path_bulk, v_arr)
+        self.cd.set_var(d_path_bulk, d_arr)
+
+        if not hasattr(obj, "_fellow_control_count"):
+            obj._fellow_control_count = 0
+        obj._fellow_control_count += 1
+        if obj._fellow_control_count <= 3 or obj._fellow_control_count % 50 == 0:
+            print(
+                f"[Fellow {fellow_index}] Dummy: v={v_value:.1f} km/h, d={d_value:.2f} m (from placement)"
+            )
+
     def apply_fellow_control(self, obj):
-        """Apply kinematic control for fellow vehicle using physics model.
+        """Apply control for fellow vehicle.
 
-        Fellows use kinematic control: throttle/brake/steering → physics model
-        → velocity/deviation. The physics model computes realistic motion, then
-        velocity and lateral deviation are written to ControlDesk External_Signals.
+        When fellow_dummy_centerline is True: write constant velocity and lateral deviation
+        from placement to External_Signals (Velocity/Lateral deviation Extern in dSPACE).
+        Otherwise
+        use kinematic model: throttle/brake/steering → physics → velocity/deviation
+        written to ControlDesk External_Signals.
         """
-        if not hasattr(obj, "_control_state") or not obj._control_state:
-            return
-
         # Ensure fellow arrays are initialized before attempting to write
         from ..controldesk.arrays import ensure_fellow_arrays_initialized
 
@@ -344,6 +401,16 @@ class VehicleController:
 
         # Adjust for base (0-based vs 1-based arrays) for writing
         eff_index = fellow_index + (self.simulation._fellow_index_base or 0)
+
+        # Dummy mode: constant velocity, lateral deviation from placement (no physics, no _control_state)
+        if self._is_fellow_dummy_centerline(obj):
+            self._apply_fellow_control_dummy(obj, fellow_index, eff_index)
+            return
+
+        # Kinematic path requires _control_state from behavior
+        if not hasattr(obj, "_control_state") or not obj._control_state:
+            return
+
         control = obj._control_state
 
         # Extract controls (default to 0 if not present)

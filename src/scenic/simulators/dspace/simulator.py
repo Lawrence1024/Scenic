@@ -529,6 +529,13 @@ class DSpaceSimulation(RacingSimulation):
         attach_ttl(self, obj, vehicle_type="fellow")
         return result
     
+    def _is_fellow_dummy_centerline(self, obj):
+        """True if this fellow should be driven in dummy centerline mode (constant v, d=0)."""
+        if obj is self.scene.egoObject:
+            return False
+        params = getattr(self.scene, "params", None) or {}
+        return bool(params.get("fellow_dummy_centerline", False))
+
     def _needsDynamicControl(self):
         """Check if any Scenic objects need dynamic control (have behaviors with dSPACE actions)."""
         try:
@@ -924,8 +931,8 @@ class DSpaceSimulation(RacingSimulation):
                     # Ego: Use VesiInterface physics-based control
                     self._vehicle_controller.apply_ego_control(obj)
                 else:
-                    # Fellow: Only drive if a behavior exists; otherwise leave stationary
-                    if getattr(obj, 'behavior', None):
+                    # Fellow: drive if behavior exists or dummy centerline mode (Velocity/Lateral deviation Extern)
+                    if getattr(obj, 'behavior', None) or self._is_fellow_dummy_centerline(obj):
                         self._vehicle_controller.apply_fellow_control(obj)
 
                 # Clear control state after applying
