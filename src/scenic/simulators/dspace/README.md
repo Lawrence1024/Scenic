@@ -86,14 +86,8 @@ A **GPS ↔ dSPACE local** transform is available for converting between GNSS (l
 
 By default, the segment map (curve/straight, main/pit) is built from the **OpenDRIVE track**. When the OpenDRIVE file is flawed (e.g. does not match the dSPACE visualization), you can switch to building segments from the **two centerline TTLs** only (no map), so logging and ring-strict logic still work.
 
-- **Param:** `param use_ttl_segments = True`  
-  When set, the simulator loads both `ttl_main_road.csv` and `ttl_pitlane.csv` at ego creation and attaches them to the scene. The behavior then builds the segment map from these TTLs instead of the track. Same segment structure and parsing downstream.
-
-- **Temporary:** This is a workaround for a bad OpenDRIVE map; default remains `False` (use OpenDRIVE).
-
-- **Usage in a .scenic file:**  
-  `param use_ttl_segments = True`  
-  Requires the same TTL folder/files as for ego (`ttlFolder`, `ttl_main_road.csv`, `ttl_pitlane.csv`).
+- **Param:** `param ttlFolder = localPath('../../assets/ttls/LS_ENU_TTL_CSV')`  
+  When set, both the segment map and mainTrack/pitTrack regions use TTL centerlines (`ttl_main_road.csv`, `ttl_pitlane.csv`). When not set, both use OpenDRIVE. Same segment structure and parsing downstream.
 
 ---
 

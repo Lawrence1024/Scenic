@@ -637,9 +637,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     try:
                         scene = simulation().scene
                         params = getattr(scene, 'params', None) or {}
-                        use_ttl_segments = params.get('use_ttl_segments', False)
-                        main_ttl = getattr(scene, '_main_ttl_waypoints', None) if use_ttl_segments else None
-                        if use_ttl_segments and main_ttl is not None:
+                        main_ttl = getattr(scene, '_main_ttl_waypoints', None)
+                        if main_ttl is not None:
                             pit_ttl = getattr(scene, '_pit_ttl_waypoints', None) or []
                             self._waypoint_segment_map = build_waypoint_segment_map_from_ttl(main_ttl, pit_ttl, waypoints=wp_list)
                             self._last_valid_segment_id = None

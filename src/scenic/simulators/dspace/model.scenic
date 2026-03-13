@@ -28,9 +28,9 @@ param timestep = (globalParameters.time_step if 'time_step' in globalParameters 
 # Period between control/readback updates in seconds. Must be a multiple of timestep.
 # None or omit = every step. Example: timestep=0.01, control_period=0.05 → 20 Hz control and readback
 param control_period = (globalParameters.control_period if 'control_period' in globalParameters else None)
-# Manual control: default True = ego controlled by Scenic (Manual Control / VesiInterface).
-# Set to False for External Control (apply baseline from external_control_baseline.json).
-param manual_control = (globalParameters.manual_control if 'manual_control' in globalParameters else True)
+# scenic_control: default True = racing library sends control signals (Scenic controls ego).
+# Set to False for external control (e.g. baseline from external_control_baseline.json).
+param scenic_control = (globalParameters.scenic_control if 'scenic_control' in globalParameters else True)
 
 # Configure the dSPACE simulator
 simulator dspace.DSpaceSimulator(
@@ -38,7 +38,7 @@ simulator dspace.DSpaceSimulator(
     scenario_name=globalParameters.scenario_name,
     timestep=globalParameters.timestep,
     control_period=globalParameters.control_period,
-    manual_control=globalParameters.manual_control,
+    scenic_control=globalParameters.scenic_control,
 )
 
 # dSPACE-specific racing car implementation

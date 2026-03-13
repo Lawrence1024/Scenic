@@ -4,12 +4,10 @@ Two Mutually Exclusive Track Segments
 This scenario demonstrates the racing domain's two-segment architecture
 for the Laguna Seca track.
 
-Track Segments (auto-identified from OpenDRIVE):
-1. mainRacingRoad: Union of all racing roads
-   - The Corkscrew1 (2484.58m)
-   - Andretti Hairpin1_3 (988.05m)
-   - Any other parallel racing roads
-2. pitLaneRoad: Pit lane only
+Track Segments (segment centerlines with buffer; from OpenDRIVE or TTL):
+1. mainTrack (alias mainRacingRoad): Main road centerline + 5 m each side
+   - Corkscrew, Andretti Hairpin, junction links
+2. pitTrack (alias pitLaneRoad): Pit lane centerline + 2 m each side
    - Pit Lane1_2 (883.46m)
 
 Architecture:
@@ -39,12 +37,13 @@ param generateStartingGrid = False
 
 model scenic.simulators.dspace.racing_model
 
-# Vehicles on track segments - routes auto-detected from projection road ID
-ego = new RacingCar on pitLaneRoad
-fellow1 = new RacingCar on mainRacingRoad
-fellow2 = new RacingCar on mainRacingRoad
-fellow3 = new RacingCar on mainRacingRoad
-fellow4 = new RacingCar on pitLaneRoad
-fellow5 = new RacingCar on pitLaneRoad
-fellow6 = new RacingCar on pitLaneRoad
+# Vehicles on track segments - use mainTrack/pitTrack (or mainRacingRoad/pitLaneRoad)
+# Routes auto-detected from placement (dSPACE)
+ego = new RacingCar on pitTrack
+fellow1 = new RacingCar on mainTrack
+fellow2 = new RacingCar on mainTrack
+fellow3 = new RacingCar on mainTrack
+fellow4 = new RacingCar on pitTrack
+fellow5 = new RacingCar on pitTrack
+fellow6 = new RacingCar on pitTrack
 

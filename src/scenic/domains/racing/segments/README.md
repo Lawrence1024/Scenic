@@ -61,7 +61,7 @@ domains/racing/
 
 1. **OpenDRIVE:** `build_waypoint_segment_map(waypoints, track, ...)` — segments from the map’s centerlines and ring topology.
 
-2. **TTL waypoints:** `build_waypoint_segment_map_from_ttl(main_ttl_waypoints, pit_ttl_waypoints=None, waypoints=None, ...)` — segments from TTL polylines only. Uses the **same pipeline as the visualization**: build polyline(s) from waypoints, segment each with `_build_curve_straight_segments` (same `CURVATURE_THRESHOLD`, `MIN_SEGMENT_LENGTH`, `MAX_STRAIGHT_ABSORB_INTO_CURVE`). In overlap (e.g. Andretti, Corkscrew) waypoints are assigned to **main** (`TTL_OVERLAP_MAIN_WINS_M`), so segment boundaries and main-vs-pit match what you see in `visualize_racing_segments --ttl-folder`. Behaviors use this when `use_ttl_segments=True` and scene has `_main_ttl_waypoints`.
+2. **TTL waypoints:** `build_waypoint_segment_map_from_ttl(main_ttl_waypoints, pit_ttl_waypoints=None, waypoints=None, ...)` — segments from TTL polylines only. Uses the **same pipeline as the visualization**: build polyline(s) from waypoints, segment each with `_build_curve_straight_segments` (same `CURVATURE_THRESHOLD`, `MIN_SEGMENT_LENGTH`, `MAX_STRAIGHT_ABSORB_INTO_CURVE`). In overlap (e.g. Andretti, Corkscrew) waypoints are assigned to **main** (`TTL_OVERLAP_MAIN_WINS_M`), so segment boundaries and main-vs-pit match what you see in `visualize_racing_segments --ttl-folder`. Behaviors use this when the scene has `_main_ttl_waypoints` (set by the simulator when `ttlFolder` is set).
 
 Both return `_SegmentMapWithSequences`; `get_segment_at_waypoint`, `get_ring_segment_ids`, and behaviors work unchanged.
 
@@ -69,7 +69,7 @@ Both return `_SegmentMapWithSequences`; `get_segment_at_waypoint`, `get_ring_seg
 1. Build main polyline from `main_ttl_waypoints`, pit polyline from `pit_ttl_waypoints` (`_ttl_polyline_from_waypoints`).
 2. Segment each polyline with `_build_curve_straight_segments` (same `CURVATURE_THRESHOLD`, `MIN_SEGMENT_LENGTH`, `MAX_STRAIGHT_ABSORB_INTO_CURVE` as OpenDRIVE).
 3. Overlap rule: waypoint within `TTL_OVERLAP_MAIN_WINS_M` of main (or closer to main than pit) → assign to main segment (Andretti, Corkscrew count as main); else assign to pit segment.
-4. Visualization draws main in full and pit only where pit-only (overlap removed from pit), so what you see matches the segment map used by behaviors when `use_ttl_segments=True`.
+4. Visualization draws main in full and pit only where pit-only (overlap removed from pit), so what you see matches the segment map used by behaviors when `ttlFolder` is set.
 
 ---
 
@@ -77,7 +77,7 @@ Both return `_SegmentMapWithSequences`; `get_segment_at_waypoint`, `get_ring_seg
 
 - **From Scenic (e.g. behaviors):**  
   `from scenic.domains.racing.segments import build_waypoint_segment_map, build_waypoint_segment_map_from_ttl, get_segment_at_waypoint, get_segment_label`  
-  Use `build_waypoint_segment_map(wp_list, track)` when you have an OpenDRIVE track, or `build_waypoint_segment_map_from_ttl(main_ttl, pit_ttl, waypoints=wp_list)` when using TTL waypoints (e.g. `use_ttl_segments=True`). Then `get_segment_at_waypoint(wp_idx, segment_map)` / `get_segment_label(...)` for logging or MPC.
+  Use `build_waypoint_segment_map(wp_list, track)` when you have an OpenDRIVE track, or `build_waypoint_segment_map_from_ttl(main_ttl, pit_ttl, waypoints=wp_list)` when using TTL waypoints (when `ttlFolder` is set). Then `get_segment_at_waypoint(wp_idx, segment_map)` / `get_segment_label(...)` for logging or MPC.
 
 - **Visualization:**  
   From repo root:  

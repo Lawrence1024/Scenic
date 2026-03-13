@@ -2,8 +2,7 @@ param map = localPath('../../assets/maps/dSPACE/LagunaSeca.xodr')
 param use2DMap = True
 param time_step = 0.01
 param control_period = 0.05
-param use_ttl_segments = True
-manual_control = True
+param ttlFolder = localPath('../../assets/ttls/LS_ENU_TTL_CSV')
 model scenic.simulators.dspace.racing_model
 
 

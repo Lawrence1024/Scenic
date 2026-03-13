@@ -35,15 +35,15 @@ def connect_and_prepare(sim):
     """Connect to ControlDesk, go online, start measurement, init VESI (or apply baseline), set step.
     
     Args:
-        sim: DSpaceSimulation object with timestep attribute; sim.sim.manual_control determines
+        sim: DSpaceSimulation object with timestep attribute; sim.sim.scenic_control determines
              whether to initialize Manual Control (True) or apply External Control baseline (False).
     """
     try:
         cd = ControlDeskApp().connect()
         cd.go_online()
         cd.start_measurement()
-        manual_control = getattr(getattr(sim, "sim", None), "manual_control", True)
-        if manual_control:
+        scenic_control = getattr(getattr(sim, "sim", None), "scenic_control", True)
+        if scenic_control:
             cd.initialize_vesi_interface()
             print("[ControlDesk] Manual Control: VesiInterface initialized for Scenic-controlled ego.")
         else:

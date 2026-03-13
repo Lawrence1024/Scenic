@@ -9,9 +9,8 @@ param use2DMap = True
 # 100 Hz simulation step, 20 Hz control and readback (0.05 s period)
 param time_step = 0.01
 param control_period = 0.05
-# Temporary: use centerline TTLs for segment map instead of OpenDRIVE (when the map is flawed)
-param use_ttl_segments = True
-param manual_control = False
+param ttlFolder = localPath('../../assets/ttls/LS_ENU_TTL_CSV')
+param scenic_control = False
 
 # --- dSPACE racing model (RacingCar, behaviors, 100 Hz step / 20 Hz control & readback) ---
 model scenic.simulators.dspace.racing_model

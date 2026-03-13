@@ -21,6 +21,7 @@ from scenic.domains.racing.tracks import RacingTrack, createRacingTrack
 from scenic.domains.racing.behaviors import *
 from scenic.domains.racing.actions import *
 from scenic.core.regions import UnionRegion
+from scenic.domains.racing.segments.track_regions import create_track_regions
 
 ## Racing-specific parameters
 
@@ -36,6 +37,12 @@ param mainLineRoadId = None  # e.g., "2117817291" for Laguna Seca
 # Junction assignment: OpenDRIVE road IDs of connecting roads for outer loop vs pit (e.g. (24, 34) and (25, 30))
 param main_loop_connecting_road_ids = None  # e.g. (24, 34) for two junctions
 param pit_connecting_road_ids = None  # e.g. (25, 30)
+
+# Segment and track source: when ttlFolder is set, both segments and mainTrack/pitTrack use TTL centerlines
+# (ttl_main_road.csv, ttl_pitlane.csv). When ttlFolder is not set, both use OpenDRIVE.
+param ttlFolder = None  # e.g. localPath('../../assets/ttls/LS_ENU_TTL_CSV')
+param mainTrackBuffer = 5.0  # meters on each side of main segment centerline
+param pitTrackBuffer = 2.0   # meters on each side of pit segment centerline
 
 ## Create racing track from the network
 
@@ -59,26 +66,36 @@ network = _track.network
 param pitLaneRoadIds = [str(r.id) for r in _track._pitRoads] if getattr(_track, '_pitRoads', None) and _track._pitRoads else []
 param mainRacingRoadIds = [str(r.id) for r in _track._mainRacingRoads] if _track._mainRacingRoads else []
 
-## Racing-specific regions
+## Racing-specific regions (segment-based: mainTrack and pitTrack)
 
-## Racing regions (simplified per architecture):
-#
-# road          := entire drivable road surface
-# mainRacingRoad, pitLaneRoad are mutually exclusive and their union == road
+## mainTrack and pitTrack are built from segment centerlines (OpenDRIVE or TTL) with fixed buffer widths:
+## - mainTrack: 5 m on each side of main road centerline (includes Corkscrew, Andretti, junction links)
+## - pitTrack: 2 m on each side of pit lane centerline
+## Use: new RacingCar on mainTrack  or  new RacingCar on pitTrack
 
-# Build pitLaneRoad region from all pit roads (primary + junction links)
-_pit_roads = getattr(_track, '_pitRoads', None) or []
-_all_pit_lanes = [lane for r in _pit_roads for lane in (r.lanes or [])]
-pitLaneRoad: Region = (
-    nowhere if not _all_pit_lanes
-    else (UnionRegion(*_all_pit_lanes) if len(_all_pit_lanes) > 1 else _all_pit_lanes[0])
+_mainTrack, _pitTrack, _ = create_track_regions(
+    map_file=globalParameters.map,
+    ttl_folder=globalParameters.ttlFolder if globalParameters.ttlFolder else None,
+    track=_track,
+    main_buffer_m=globalParameters.mainTrackBuffer,
+    pit_buffer_m=globalParameters.pitTrackBuffer,
+    direction=globalParameters.trackDirection,
+    pitLaneRoadId=globalParameters.pitLaneRoadId,
+    pitLaneRoadName=globalParameters.pitLaneRoadName,
+    mainLineRoadId=globalParameters.mainLineRoadId,
+    main_loop_connecting_road_ids=globalParameters.main_loop_connecting_road_ids,
+    pit_connecting_road_ids=globalParameters.pit_connecting_road_ids,
+    **globalParameters.map_options
 )
+mainTrack: Region = _mainTrack
+pitTrack: Region = _pitTrack
 
-# Main racing road is the rest of the road excluding pitLaneRoad
-mainRacingRoad: Region = road.difference(pitLaneRoad)
+# Backward compatibility: mainRacingRoad and pitLaneRoad alias to mainTrack and pitTrack
+mainRacingRoad: Region = mainTrack
+pitLaneRoad: Region = pitTrack
 
 # Keep racingLine as the TTL default (can be overridden by actions)
-racingLine: Region = _track.racingLine.region if hasattr(_track, 'racingLine') and _track.racingLine else mainRacingRoad
+racingLine: Region = _track.racingLine.region if hasattr(_track, 'racingLine') and _track.racingLine else mainTrack
 
 #: Start/finish line region
 # TODO: Create actual start/finish line region from track data

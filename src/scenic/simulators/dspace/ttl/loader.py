@@ -37,6 +37,9 @@ def get_ttl_config(scene_params):
     dx = float(params.get("ttlDX", default_dx))
     dy = float(params.get("ttlDY", default_dy))
     ttl_file = params.get("ttlFileName", None)
+    # When ttlFolder is set and no file specified, use centerline file instead of legacy ttl_{index}.csv
+    if ttl_file is None and params.get("ttlFolder"):
+        ttl_file = "ttl_main_road.csv"
     
     if is_transformed and (dx != 0.0 or dy != 0.0):
         print(f"[TTL] Note: Using 'transformed' folder but offset is ({dx}, {dy}). "
@@ -161,6 +164,9 @@ def attach_ttl(sim, obj, vehicle_type="vehicle"):
             ttl_folder = getattr(obj, 'ttlFolder', scene_params.get("ttlFolder", None))
             ttl_index = getattr(obj, 'ttlIndex', scene_params.get("ttlIndex", 17))
             ttl_file = getattr(obj, 'ttlFileName', scene_params.get("ttlFileName", None))
+            # Default to centerline file when folder is set (avoid legacy ttl_{index}.csv)
+            if ttl_file is None and (ttl_folder or scene_params.get("ttlFolder")):
+                ttl_file = "ttl_main_road.csv"
             
             # If folder not specified on object, use scene param or default
             if ttl_folder is None:

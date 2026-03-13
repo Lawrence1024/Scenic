@@ -56,7 +56,7 @@ MANEUVER_START_PATH = (
 class DSpaceSimulator(RacingSimulator):
     def __init__(self, *, scenario_src="LagunaSeca_ExternalControl",
                  scenario_name=None, timestep=1, control_period=None, save_as=True,
-                 manual_control=True, art_stack_container="art_driving_stack"):
+                 scenic_control=True, art_stack_container="art_driving_stack"):
         super().__init__()
         self.scenario_src = scenario_src
         self.scenario_name = scenario_name
@@ -64,8 +64,8 @@ class DSpaceSimulator(RacingSimulator):
         # control_period: seconds between control/readback updates (None = every step)
         self.control_period = float(control_period) if control_period is not None else None
         self.save_as = bool(save_as)
-        # manual_control: default True = manual mode (ego controlled by Scenic via VesiInterface)
-        self.manual_control = bool(manual_control)
+        # scenic_control: default True = racing library sends control signals (Scenic controls ego)
+        self.scenic_control = bool(scenic_control)
         # ART stack: Docker container name for ROS2 reset_vks_state and set_selected_ttl
         self.art_stack_container = str(art_stack_container)
 
@@ -160,12 +160,14 @@ class DSpaceSimulation(RacingSimulation):
     # --- TTL (Target Trajectory Line) loading utilities ---
     def _load_ttl_region(self):
         """Load a TTL CSV as a PolylineRegion, applying global transform (dx,dy)."""
-        ttl_folder, ttl_index, dx, dy = get_ttl_config(getattr(self.scene, "params", {}) or {})
+        params = getattr(self.scene, "params", {}) or {}
+        ttl_folder, ttl_index, dx, dy, ttl_file = get_ttl_config(params)
         try:
-            region, pts = load_ttl_region(ttl_folder, ttl_index, dx, dy)
+            region, pts = load_ttl_region(ttl_folder, ttl_index, dx, dy, ttl_file)
             if region is None:
                 return None
-            print(f"[TTL] Loaded {len(pts)} points from ttl_{ttl_index}.csv with offset ({dx}, {dy})")
+            ttl_name = params.get("ttlFileName") or ttl_file or f"ttl_{ttl_index}.csv"
+            print(f"[TTL] Loaded {len(pts)} points from {ttl_name} with offset ({dx}, {dy})")
             self._ttl_points_loaded = pts
             return region
         except Exception as e:
@@ -498,10 +500,9 @@ class DSpaceSimulation(RacingSimulation):
         result = place_ego(self, obj)
         # Assign TTL to ego if available (delegated)
         attach_to_ego(self, obj)
-        # If use_ttl_segments (temporary workaround for flawed OpenDRIVE), load both centerline TTLs
-        # so the behavior can build the segment map from TTLs instead of the map.
+        # If ttlFolder is set, load both centerline TTLs so segments and track use TTL; otherwise OpenDRIVE.
         params = getattr(self.scene, "params", None) or {}
-        if params.get("use_ttl_segments", False):
+        if params.get("ttlFolder"):
             try:
                 ttl_folder, _, dx, dy, _ = get_ttl_config(params)
                 _, main_pts = load_ttl_region(ttl_folder, 0, dx, dy, TTL_MAIN_ROAD_FILE)
@@ -509,9 +510,9 @@ class DSpaceSimulation(RacingSimulation):
                 if main_pts:
                     setattr(self.scene, "_main_ttl_waypoints", main_pts)
                     setattr(self.scene, "_pit_ttl_waypoints", pit_pts if pit_pts else [])
-                    print(f"[Segment map] use_ttl_segments=True: loaded main ({len(main_pts)} pts) and pit ({len(pit_pts) if pit_pts else 0} pts) centerlines for TTL-based segments")
+                    print(f"[Segment map] ttlFolder set: loaded main ({len(main_pts)} pts) and pit ({len(pit_pts) if pit_pts else 0} pts) centerlines for TTL-based segments")
             except Exception as e:
-                print(f"[Segment map] use_ttl_segments=True but failed to load TTLs: {e}; will fall back to OpenDRIVE if track present")
+                print(f"[Segment map] ttlFolder set but failed to load TTLs: {e}; will fall back to OpenDRIVE if track present")
         return result
     
     def createFellowInSimulator(self, obj):

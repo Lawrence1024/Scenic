@@ -1,8 +1,10 @@
 """Racing track segment logic for evaluation and logging.
 
-This package provides OpenDRIVE-based segment mapping: curve/straight segments
-from centerline curvature, optional Laguna Seca conventional sections, and
-waypoint-to-segment lookup. See segment_map module and README.md for details.
+This package provides:
+- OpenDRIVE-based and TTL-based segment mapping (segment_map)
+- RacingTrack and createRacingTrack (tracks) — track built from OpenDRIVE
+- mainTrack/pitTrack region building from segment centerlines (track_regions),
+  with 5 m and 2 m buffer from centerline, from either OpenDRIVE or TTL CSVs
 """
 
 from scenic.domains.racing.segments.segment_map import (
@@ -18,6 +20,20 @@ from scenic.domains.racing.segments.segment_map import (
     get_segment_sequences,
     position_nearest_road_is_pit,
 )
+from scenic.domains.racing.segments.tracks import (
+    RacingTrack,
+    createRacingTrack,
+    PitLane,
+    RacingLine,
+    Sector,
+)
+from scenic.domains.racing.segments.track_regions import (
+    create_track_regions,
+    build_track_regions_from_opendrive,
+    build_track_regions_from_ttl,
+    MAIN_TRACK_BUFFER_M,
+    PIT_TRACK_BUFFER_M,
+)
 
 __all__ = [
     "CURVATURE_THRESHOLD",
@@ -31,4 +47,14 @@ __all__ = [
     "get_segment_label",
     "get_segment_sequences",
     "position_nearest_road_is_pit",
+    "RacingTrack",
+    "createRacingTrack",
+    "PitLane",
+    "RacingLine",
+    "Sector",
+    "create_track_regions",
+    "build_track_regions_from_opendrive",
+    "build_track_regions_from_ttl",
+    "MAIN_TRACK_BUFFER_M",
+    "PIT_TRACK_BUFFER_M",
 ]
