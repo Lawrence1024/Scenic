@@ -55,8 +55,8 @@ except ImportError:
 RE_TIME = re.compile(r"t=(\d+\.?\d*)s")
 # Regex for segment: "segment 44 straight" or "segment 2 curve"
 RE_SEGMENT = re.compile(r"segment\s+(\d+)\s*(\w*)")
-# Run identifier from dSPACE TTL loader: [RacingRun] TTL=... run_timestamp=... edit_note=... (edit_note optional, may contain spaces)
-RE_RACING_RUN = re.compile(r"\[RacingRun\]\s+TTL=(\S+)(?:\s+run_timestamp=(\S+))?(?:\s+edit_note=(.*))?")
+# Run identifier from dSPACE TTL loader: [RacingRun] TTL=... run_timestamp=...
+RE_RACING_RUN = re.compile(r"\[RacingRun\]\s+TTL=(\S+)(?:\s+run_timestamp=(\S+))?")
 # Fallback for logs before [RacingRun] existed: [TTL] Assigned TTL PolylineRegion to ego (ttl_racing_line_xodr.csv)
 RE_TTL_ASSIGNED_EGO = re.compile(r"\[TTL\]\s+Assigned TTL PolylineRegion to ego\s+\(([^)]+)\)")
 
@@ -91,15 +91,12 @@ def _parse_log_with_encoding(
                     if rm:
                         run_info["ttl_name"] = rm.group(1).strip()
                         run_info["run_timestamp"] = (rm.group(2) or "").strip()
-                        edit_note = (rm.group(3) or "").strip()
-                        if edit_note:
-                            run_info["edit_note"] = edit_note
-                        run_info_filled = True  # only stop looking when we have [RacingRun] (so we get edit_note)
+                        run_info_filled = True
                     else:
                         tm = RE_TTL_ASSIGNED_EGO.search(line)
                         if tm:
                             run_info["ttl_name"] = tm.group(1).strip()
-                            # do not set run_info_filled: [RacingRun] often appears next and has edit_note/run_timestamp
+                            # do not set run_info_filled: [RacingRun] often appears next with run_timestamp
                 time_m = RE_TIME.search(line)
                 seg_m = RE_SEGMENT.search(line)
                 if not time_m or not seg_m:
@@ -294,8 +291,6 @@ def write_result_data(
         summary_out["ttl_name"] = run_info["ttl_name"]
     if run_info.get("run_timestamp"):
         summary_out["run_timestamp"] = run_info["run_timestamp"]
-    if run_info.get("edit_note"):
-        summary_out["edit_note"] = run_info["edit_note"]
     with open(out_dir / "summary.json", "w", encoding="utf-8") as f:
         json.dump(summary_out, f, indent=2)
 
@@ -337,9 +332,6 @@ def print_report(
             print(f"  TTL (from log):                   {ttl}")
         if ts:
             print(f"  Run timestamp (from log):         {ts}")
-        note = run_info.get("edit_note", "")
-        if note:
-            print(f"  Edit note (from log):             {note}")
     print(f"  Total time (from waypoint events): {total_time_s:.2f} s")
     print(f"  Last event time:                   {t_end:.2f} s")
     print(f"  Waypoint hits:                     {n_waypoints}")
@@ -554,8 +546,6 @@ def run_analysis(log_path: Optional[Path] = None) -> "AnalysisResult":
         summary["ttl_name"] = run_info["ttl_name"]
     if run_info.get("run_timestamp"):
         summary["run_timestamp"] = run_info["run_timestamp"]
-    if run_info.get("edit_note"):
-        summary["edit_note"] = run_info["edit_note"]
     return AnalysisResult(
         segments_df=segments_df,
         events_df=events_df,

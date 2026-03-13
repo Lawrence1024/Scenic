@@ -55,7 +55,7 @@ MANEUVER_START_PATH = (
 
 class DSpaceSimulator(RacingSimulator):
     def __init__(self, *, scenario_src="LagunaSeca_ExternalControl",
-                 scenario_name=None, timestep=1, control_period=None, light_step=False, save_as=True,
+                 scenario_name=None, timestep=1, control_period=None, save_as=True,
                  manual_control=True, art_stack_container="art_driving_stack"):
         super().__init__()
         self.scenario_src = scenario_src
@@ -63,7 +63,6 @@ class DSpaceSimulator(RacingSimulator):
         self.timestep = float(timestep)
         # control_period: seconds between control/readback updates (None = every step)
         self.control_period = float(control_period) if control_period is not None else None
-        self.light_step = bool(light_step)
         self.save_as = bool(save_as)
         # manual_control: default True = manual mode (ego controlled by Scenic via VesiInterface)
         self.manual_control = bool(manual_control)
@@ -125,11 +124,6 @@ class DSpaceSimulation(RacingSimulation):
                 )
             self._control_interval = max(1, int(round(steps_float)))
         self.control_dt = float(ts) * max(1, self._control_interval)
-        # Light-step mode: disable COM read/write to test step_time in isolation (param light_step or env SCENIC_DSPACE_LIGHT_STEP)
-        _light = os.environ.get("SCENIC_DSPACE_LIGHT_STEP", "").strip().lower()
-        self._light_step = getattr(sim, "light_step", False) or _light in ("1", "true", "yes")
-        if self._light_step:
-            self._light_step_times = []  # for per-step step_time logging
 
         # Behavior timing for [LoopOther] breakdown (waypoint_speed_grade, after_mpc).
         # MUST be set before super().__init__() because the parent runs the entire simulation inside __init__.
@@ -142,8 +136,6 @@ class DSpaceSimulation(RacingSimulation):
             self.behavior_timing = None
             print(f"[Timing] behavior_timing disabled: {e}")
         print(f"[DSpaceSimulation] timestep: {ts}, control_interval: {self._control_interval} steps (read/control every {self._control_interval} steps), timing every {self._timing_interval} steps")
-        if self._light_step:
-            print("[LightStep] *** COM DISABLED *** set_var and get_var are skipped to test step_time only. Vehicle will not move. Set SCENIC_DSPACE_LIGHT_STEP=0 or unset to restore.")
         # Pass only parameters that Simulation.__init__ accepts (avoids TypeError from
         # extra kwargs or int/callable confusion).
         parent_kwargs = {
@@ -186,7 +178,7 @@ class DSpaceSimulation(RacingSimulation):
     def _run_maport_reset_and_start(self):
         """Reset workflow: manual off, then first set (RTA start + pulse STOP + pulse RESET), then ModelDesk COM Reset, then second start via ControlDesk API, then Pause."""
         var = getattr(self, "_var_access", None) or getattr(self, "_cd", None)
-        if not var or getattr(self, "_light_step", False):
+        if not var:
             if self._cd:
                 cd_session.pause(self._cd)
             return
@@ -461,7 +453,7 @@ class DSpaceSimulation(RacingSimulation):
         
         # 14) Apply race "Go" signals (manual_mode, track_flag, vehicle_flag) so cars are allowed to start moving. Done after pause so all warmups complete first.
         var = getattr(self, "_var_access", None) or getattr(self, "_cd", None)
-        if var and not getattr(self, "_light_step", False):
+        if var:
             try:
                 track_path = "Platform()://RaceControl/Model Root/Parameters/track_flag_manual"
                 veh_path = "Platform()://RaceControl/Model Root/Parameters/veh_flag_manual"
@@ -920,8 +912,8 @@ class DSpaceSimulation(RacingSimulation):
         super().executeActions(allActions)
         self._timing_last['apply_actions'] = time.perf_counter() - _t0
 
-        # Apply control only every control_interval steps. In light-step mode skip variable writes.
-        if not getattr(self, "_light_step", False) and self._vehicle_controller and (self.currentTime % self._control_interval) == 0:
+        # Apply control only every control_interval steps.
+        if self._vehicle_controller and (self.currentTime % self._control_interval) == 0:
             _t0 = time.perf_counter()
             for obj in self.scene.objects:
                 # Determine if this is ego or fellow
@@ -941,10 +933,6 @@ class DSpaceSimulation(RacingSimulation):
                 if hasattr(obj, '_oneshot_actions'):
                     obj._oneshot_actions = []
             self._timing_last['com_writes'] = time.perf_counter() - _t0
-        elif getattr(self, "_light_step", False):
-            self._timing_last['com_writes'] = 0.0
-            if self._execute_count == 1:
-                print("[LightStep] COM writes disabled (set_var skipped) for this run.")
         else:
             if self._execute_count == 1:
                 print(f"\n{'='*70}")
@@ -1374,16 +1362,11 @@ class DSpaceSimulation(RacingSimulation):
         # Initialize dspaceActor if it doesn't exist
         self._initializeDSpaceActor(obj)
 
-        # Read from ControlDesk only on control steps (same cadence as apply). Skip in light-step mode.
-        if not getattr(self, "_light_step", False) and (self.currentTime % self._control_interval) == 0:
+        # Read from ControlDesk only on control steps (same cadence as apply).
+        if (self.currentTime % self._control_interval) == 0:
             _t0 = time.perf_counter()
             self._readVehicleStateFromControlDesk(obj)
             self._timing_last['com_reads'] = self._timing_last.get('com_reads', 0.0) + (time.perf_counter() - _t0)
-        elif getattr(self, "_light_step", False):
-            if not getattr(self, "_light_step_read_logged", False):
-                self._light_step_read_logged = True
-                print("[LightStep] COM reads disabled (get_var skipped) for this run.")
-            self._timing_last['com_reads'] = self._timing_last.get('com_reads', 0.0) + 0.0
 
         # Get state from dspaceActor (fresh or cached from last read)
         actor = obj.dspaceActor
@@ -1493,22 +1476,6 @@ class DSpaceSimulation(RacingSimulation):
                 total_wall = _now - self._wall_start
                 ratio_total = total_wall / sim_time_total if sim_time_total > 0 else 0
                 print(f"[Timing] total wall (first step to destroy)={total_wall:.2f}s for {sim_time_total:.2f}s sim -> wall/sim={ratio_total:.2f}  (excludes setup before first step)")
-        if getattr(self, "_light_step", False) and getattr(self, "_light_step_times", None):
-            lt = self._light_step_times
-            if lt:
-                n_lt = len(lt)
-                mean_ms = sum(lt) / n_lt * 1000
-                sim_total = n_lt * self.timestep
-                wall_total = sum(lt)
-                ratio_lt = wall_total / sim_total if sim_total > 0 else 0
-                print(f"[LightStep] FINAL step_time: n={n_lt} mean={mean_ms:.2f} ms min={min(lt)*1000:.2f} ms max={max(lt)*1000:.2f} ms (COM was disabled)")
-                print(f"[LightStep] Total step wall={wall_total:.2f}s for {sim_total:.2f}s sim -> wall/sim={ratio_lt:.2f}  (setup time before first step is not included)")
-                # Steady-state: exclude first 20 steps (warm-up)
-                warmup = 20
-                if n_lt > warmup:
-                    lt_ss = lt[warmup:]
-                    mean_ss = sum(lt_ss) / len(lt_ss) * 1000
-                    print(f"[LightStep] Steady-state (excluding first {warmup} steps): mean={mean_ss:.2f} ms min={min(lt_ss)*1000:.2f} ms max={max(lt_ss)*1000:.2f} ms")
         # GPS/dSPACE calibration table write disabled (we no longer need this log; data already have been collected)
         if self._var_access and hasattr(self._var_access, 'print_timing_summary'):
             if self._maport is not None and self._var_access is self._maport:

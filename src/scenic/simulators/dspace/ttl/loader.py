@@ -3,30 +3,7 @@ import csv
 from datetime import datetime, timezone
 from pathlib import Path
 
-import yaml
-
 from scenic.core.regions import PolylineRegion
-
-
-def _get_mpc_run_edit_note():
-    """Read run_edit_note from vehicle_mpc.yaml so [RacingRun] edit_note identifies tuning for analyze_racing_log."""
-    try:
-        # Resolve path: this file is in .../simulators/dspace/ttl/loader.py -> scenic pkg root is parent^4
-        pkg_root = Path(__file__).resolve().parent.parent.parent.parent
-        mpc_yaml = pkg_root / "domains" / "racing" / "mpc" / "vehicle_mpc.yaml"
-        if not mpc_yaml.exists():
-            return ""
-        with open(mpc_yaml, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-        if not data:
-            return ""
-        params = data.get("/**:") or data.get("/**") or data
-        if isinstance(params, dict):
-            params = params.get("ros__parameters") or params
-        note = (params or {}).get("run_edit_note") or ""
-        return str(note).strip().replace("\n", " ")[:200] if note else ""
-    except Exception:
-        return ""
 
 
 def get_ttl_config(scene_params):
@@ -219,16 +196,10 @@ def attach_ttl(sim, obj, vehicle_type="vehicle"):
             setattr(obj, "ttl", region)
             name = ttl_file if ttl_file else f"ttl_{ttl_index}.csv"
             print(f"[TTL] Assigned TTL PolylineRegion to {vehicle_type} ({name})")
-            # Log run identifier for analysis scripts (TTL, timestamp, optional edit_note for config/ideas)
+            # Log run identifier for analysis scripts (TTL, timestamp)
             if vehicle_type == "ego":
                 ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                edit_note = str(scene_params.get("edit_note", "") or scene_params.get("editNote", "")).strip().replace("\n", " ")
-                if not edit_note:
-                    edit_note = _get_mpc_run_edit_note()
-                if edit_note:
-                    print(f"[RacingRun] TTL={name} run_timestamp={ts} edit_note={edit_note}")
-                else:
-                    print(f"[RacingRun] TTL={name} run_timestamp={ts}")
+                print(f"[RacingRun] TTL={name} run_timestamp={ts}")
             # Only set waypoints if they weren't already set manually (e.g., via "with waypoints")
             if pts and not hasattr(obj, "waypoints"):
                 setattr(obj, "waypoints", list(pts))

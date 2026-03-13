@@ -68,7 +68,7 @@ mpc/
 
 **Key groups:** Timing, vehicle (`wheel_base`, `max_steer_angle` from constants when not overridden), lateral weights, adaptive curvature, feedforward, MPCC (Q_lag, Q_progress), oscillation/deadzone, reference gate, safety, longitudinal (weights, deadbands, curvature speed limits).
 
-After changing config, run a simulation and use `result_data/analyze_racing_log` (and optionally `compare_racing_results`). Set `run_edit_note` in the YAML to tag runs.
+After changing config, run a simulation and use `result_data/analyze_racing_log` (and optionally `compare_racing_results`).
 
 ---
 

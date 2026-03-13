@@ -40,8 +40,8 @@ The script parses Scenic/dSPACE racing logs that contain:
   Used for: time `t`, segment id/name, speed, and **CTE (cross-track error)** at each logged MPC step (e.g. every 50 steps).
 - **`[FollowRacingLineMPCBehavior] t=X.Xs WAYPOINT HIT: index i -> j at (x,y), distance=...m segment N name`**  
   Used for: time `t`, segment id/name, and waypoint progress.
-- **`[RacingRun] TTL=... run_timestamp=...`** or **`[RacingRun] TTL=... run_timestamp=... edit_note=...`** or **`[TTL] Assigned TTL PolylineRegion to ego (...)`**  
-  Used for: run identifier (TTL name) so results are written under the correct `result_data/<run_id>/`. If present, **edit_note** is stored in `summary.json` and shown in `compare_racing_results` so you know what tuning produced the run. The TTL loader can set edit_note from scene param `edit_note`/`editNote`, or from **`run_edit_note`** in `vehicle_mpc.yaml` (e.g. `run_edit_note: "high_curvature_threshold=0.06"`).
+- **`[RacingRun] TTL=... run_timestamp=...`** or **`[TTL] Assigned TTL PolylineRegion to ego (...)`**  
+  Used for: run identifier (TTL name) so results are written under the correct `result_data/<run_id>/`.
 
 Encoding: tries UTF-8 (with BOM) first; if no matching lines are found, retries with UTF-16 (for some Windows logs).
 

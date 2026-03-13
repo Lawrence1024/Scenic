@@ -111,21 +111,18 @@ def main() -> int:
 
     # --- Summary comparison ---
     print("=== Run summary comparison ===")
-    print(f"  {'Run':<18} {'TTL':<24} {'Edit note':<36} {'Time (s)':>10} {'WP hits':>8} {'MPC':>6} {'t_end':>8}")
-    print("  " + "-" * 122)
+    print(f"  {'Run':<18} {'TTL':<24} {'Time (s)':>10} {'WP hits':>8} {'MPC':>6} {'t_end':>8}")
+    print("  " + "-" * 82)
     for name in runs:
         s = summaries.get(name) or {}
         ttl = (s.get("ttl_name") or "")[:22]
         if len((s.get("ttl_name") or "")) > 22:
             ttl = ttl + "..."
-        note = (s.get("edit_note") or "").strip()
-        if len(note) > 34:
-            note = note[:31] + "..."
         total = s.get("total_time_s", 0)
         wp = s.get("n_waypoints", 0)
         mpc = s.get("n_mpc_samples", 0)
         t_end = s.get("t_end", 0)
-        print(f"  {name:<18} {ttl:<24} {note:<36} {total:>10.2f} {wp:>8} {mpc:>6} {t_end:>8.2f}")
+        print(f"  {name:<18} {ttl:<24} {total:>10.2f} {wp:>8} {mpc:>6} {t_end:>8.2f}")
     print()
 
     # --- Per-segment comparison (requires pandas and at least one segments.csv) ---
