@@ -7,6 +7,77 @@ TTL_MAIN_ROAD_FILE = "ttl_main_road.csv"
 TTL_PITLANE_FILE = "ttl_pitlane.csv"
 # If |dist_main - dist_pit| <= this (m), consider "similar" and prefer main road
 ROUTE_SIMILAR_TOLERANCE_M = 2.0
+# |t| above this (m) is treated as out-of-bounds for logging; we never clamp (s,t), we place as-is
+T_OUT_OF_BOUNDS_THRESHOLD_M = 15.0
+
+
+def _racing_st_offset_to_deltas(offset):
+    """Convert _racing_st_offset to (delta_s, delta_t) in meters.
+    offset can be:
+    - (delta_s, delta_t): used as-is (ahead = +s, behind = -s). For raw (0, dt): our projection uses t<0=right, but ModelDesk placement uses t>0=right; use keywords to get correct side.
+    - ('ahead', d) or ('behind', d) or ('left', d) or ('right', d): converted to (ds, dt).
+    Returns None if offset is invalid.
+
+    Note: Our world->(s,t) projection uses t<0=right (left normal). ModelDesk/Additional lateral offset
+    empirically uses the opposite (positive t = right). So for 'right' we use +d and for 'left' we use -d
+    so the fellow appears on the correct side in the sim. Heading does not change this (t is road-relative).
+    """
+    if offset is None:
+        return None
+    try:
+        if len(offset) == 2:
+            first, second = offset[0], offset[1]
+            if isinstance(first, (int, float)) and isinstance(second, (int, float)):
+                return (float(first), float(second))
+            if isinstance(first, str) and isinstance(second, (int, float)):
+                d = float(second)
+                kind = str(first).strip().lower()
+                if kind == 'ahead':
+                    return (d, 0.0)
+                if kind == 'behind':
+                    return (-d, 0.0)
+                # ModelDesk placement: positive t = right, negative t = left (opposite of our projection)
+                if kind == 'left':
+                    return (0.0, -d)
+                if kind == 'right':
+                    return (0.0, d)
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _road_direction_deg_at(road_index, px, py):
+    """Return road direction at (px, py) in degrees (Scenic convention: 0=North, 90=East). None if not found."""
+    if not road_index or not road_index.get("roads"):
+        return None
+    best_dist2 = float("inf")
+    best_heading_rad = None
+    for road in road_index["roads"].values():
+        sec_list = road.get("sec_points") or []
+        for pts in sec_list:
+            if not pts or len(pts) < 2:
+                continue
+            for i in range(len(pts) - 1):
+                x0, y0 = pts[i][0], pts[i][1]
+                x1, y1 = pts[i + 1][0], pts[i + 1][1]
+                vx, vy = x1 - x0, y1 - y0
+                seg_len2 = vx * vx + vy * vy
+                if seg_len2 <= 1e-12:
+                    continue
+                wx, wy = px - x0, py - y0
+                u = (wx * vx + wy * vy) / seg_len2
+                u = max(0.0, min(1.0, u))
+                qx = x0 + u * vx
+                qy = y0 + u * vy
+                dx, dy = px - qx, py - qy
+                dist2 = dx * dx + dy * dy
+                if dist2 < best_dist2:
+                    best_dist2 = dist2
+                    # Scenic: 0 = North = +Y, so heading = atan2(vx, vy)
+                    best_heading_rad = math.atan2(vx, vy)
+    if best_heading_rad is None:
+        return None
+    return math.degrees(best_heading_rad)
 
 
 def _min_dist_to_ttl(px, py, points):
@@ -50,15 +121,17 @@ def _route_pref_from_ttl_distances(sim, xodr_x, xodr_y):
     """
     Prefer route (Lap vs Pit) by distance to main-road TTL vs pitlane TTL.
     If distances are similar (within ROUTE_SIMILAR_TOLERANCE_M), prefer main road (Lap).
-    Returns 'Lap' or 'Pit', or None if TTLs cannot be loaded (caller should fall back to road-based detection).
+    Returns 'Lap' or 'Pit', or None if TTLs cannot be loaded or scenario did not set ttlFolder (caller uses road-based detection).
     """
     try:
-        from ..ttl.loader import get_ttl_config, load_ttl_region
         scene_params = getattr(getattr(sim, "scene", None), "params", None) or {}
-        ttl_folder, _, dx, dy, _ = get_ttl_config(scene_params)
+        if not scene_params.get("ttlFolder"):
+            return None  # Scenario uses XODR track; don't use TTL centerlines for route
+        from ..ttl.loader import get_ttl_config, load_ttl_region
+        ttl_folder, _, _ = get_ttl_config(scene_params)
         ttl_folder = str(ttl_folder)
-        _, main_pts = load_ttl_region(ttl_folder, 0, dx, dy, TTL_MAIN_ROAD_FILE)
-        _, pit_pts = load_ttl_region(ttl_folder, 0, dx, dy, TTL_PITLANE_FILE)
+        _, main_pts = load_ttl_region(ttl_folder, 0, TTL_MAIN_ROAD_FILE)
+        _, pit_pts = load_ttl_region(ttl_folder, 0, TTL_PITLANE_FILE)
         if not main_pts or not pit_pts:
             return None
         # Use polyline (segment) distance so assignment is by closest centerline
@@ -77,19 +150,11 @@ def _route_pref_from_ttl_distances(sim, xodr_x, xodr_y):
 
 def place_ego(sim, obj):
     """Create/configure the ego vehicle using the Maneuver API."""
-    # 1) Transform Scenic XODR → RD
+    # 1) Position in map frame (Scenic = map = RD-aligned)
     if getattr(obj, "position", None) is not None:
         scenic_x, scenic_y = obj.position.x, obj.position.y
-        # Apply coordinate transformation if available
-        if sim._coordinate_transform is not None:
-            from ..geometry.coordinate_transform import apply_coordinate_transform
-            transformed_x, transformed_y = apply_coordinate_transform(
-                sim._coordinate_transform, (scenic_x, scenic_y)
-            )
-            work_x, work_y = transformed_x, transformed_y
-        else:
-            work_x, work_y = scenic_x, scenic_y
-        
+        work_x, work_y = scenic_x, scenic_y
+
         # 2) Determine route: prefer TTL-based (distance to main vs pitlane; if similar, prefer main)
         route_pref = _route_pref_from_ttl_distances(sim, scenic_x, scenic_y)
         if not route_pref:
@@ -109,17 +174,43 @@ def place_ego(sim, obj):
         if not route_pref:
             route_pref = 'Lap'
         print(f"[Ego] Assigned route: {route_pref} (Lap=main road R2, Pit=pitlane R1)")
-        
+
+        # Use TTL centerlines for projection only when the scenario explicitly set ttlFolder.
+        # Otherwise mainTrack may be from XODR; projecting onto TTL would give wrong (s,t) and large |t|.
+        scene_params = getattr(getattr(sim, "scene", None), "params", None) or {}
+        use_ttl_for_projection = bool(scene_params.get("ttlFolder"))
+        if use_ttl_for_projection and not getattr(sim, '_road_index_ttl', None):
+            try:
+                from ..ttl.loader import get_ttl_config
+                from ..ttl.road_index import build_road_index_from_ttl
+                ttl_folder, _, _ = get_ttl_config(scene_params)
+                if ttl_folder:
+                    ttl_index = build_road_index_from_ttl(str(ttl_folder))
+                    if ttl_index is not None:
+                        sim._road_index_ttl = ttl_index
+            except Exception as e:
+                pass  # Fall back to XODR-based index
+        road_index_for_projection = getattr(sim, '_road_index_ttl', None) or sim._road_index
+
+        # One-time note: t is lateral offset from projection centerline
+        if road_index_for_projection and not getattr(sim, '_placement_t_note_logged', False):
+            src = "TTL centerline" if getattr(sim, '_road_index_ttl', None) else "XODR centerline"
+            print(f"[Placement] t = signed lateral offset from {src} (t<0 = right in road direction).")
+            sim._placement_t_note_logged = True
+
         # 3) Project RD → (s,t) using route-specific road index
-        if sim._road_index:
+        if road_index_for_projection:
             from ..geometry.route_projection import project_world_to_st_route_specific
             s_val, t_val = project_world_to_st_route_specific(
-                sim._road_index,
+                road_index_for_projection,
                 (work_x, work_y),
                 route_preference=route_pref
             )
         else:
             s_val, t_val = dutils.project_world_to_st(sim._road_index, (work_x, work_y))
+        # We never clamp (s,t) to track bounds; out-of-bounds positions are sent to ModelDesk as-is
+        if abs(t_val) > T_OUT_OF_BOUNDS_THRESHOLD_M:
+            print(f"[Placement] Ego: t={t_val:.2f} m (out of track bounds; placing as-is, no clamping)")
     else:
         s_val, t_val = 0.0, 0.0
         route_pref = 'Lap'  # Default route
@@ -181,6 +272,21 @@ def place_ego(sim, obj):
         seq.StartPosition = float(s_val)
         seq.InitialLongitudinalVelocity = float(base_v)
 
+        # Set lateral offset (t) on sequence - UI "Additional lateral offset"
+        ego_lat_set = False
+        for lat_prop in ('AdditionalLateralOffset', 'InitialLateralOffset', 'LateralOffset', 'AdditionalLateralPosition'):
+            if hasattr(seq, lat_prop):
+                try:
+                    setattr(seq, lat_prop, float(t_val))
+                    ego_lat_set = True
+                    if abs(t_val) > 0.01:
+                        print(f"[Ego] Set {lat_prop}={t_val:.3f} m (Additional lateral offset)")
+                    break
+                except Exception:
+                    continue
+        if not ego_lat_set and abs(t_val) > 0.01:
+            pass  # Fall back to segment lateral below
+
         # Iterate through segments to ensure they don't override the start pos
         for i in range(seq.Segments.Count):
             seg = seq.Segments.Item(i)
@@ -194,7 +300,6 @@ def place_ego(sim, obj):
         # Orientation conversion
         # Transform from Scenic ENU (North=0°) to dSPACE RD (East=0°)
         # Use orientation.yaw directly for clarity (equivalent to heading for most cases)
-        import math
         try:
             if hasattr(obj, 'orientation') and hasattr(obj.orientation, 'yaw'):
                 scenic_yaw = obj.orientation.yaw
@@ -209,46 +314,32 @@ def place_ego(sim, obj):
         except Exception:
             seq.VehicleOrientation = 0.0
 
-        # Optional lateral position (Fix for 'Constant' error)
-        # NOTE: Known limitation - dSPACE ModelDesk may ignore t-coordinate (lateral deviation)
-        # for both ego and fellow vehicles. Testing shows "Could not activate Deviation mode"
-        # warning and vehicles are placed on centerline regardless of t value.
-        # This is a dSPACE ModelDesk configuration issue, not a bug in our code.
-        # See debug_ego_cord/README.md and debug_route_code/README.md for details.
-        if abs(t_val) > 0.01: # Lower threshold to catch small offsets
+        # Fallback: set lateral via segment Activity.LateralType when sequence "Additional lateral offset" not available
+        # NOTE: Prefer sequence-level AdditionalLateralOffset (or similar) when the UI shows it; segment lateral may be ignored.
+        if not ego_lat_set and abs(t_val) > 0.01:
             try:
                 segments = seq.Segments
                 if segments.Count > 0:
                     seg0 = segments.Item(0)
                     lat0 = seg0.Activity.LateralType
                     dutils.activate_type(lat0, "Deviation")
-                    
                     dep = getattr(lat0.ActiveElement, "DependencyType", None)
                     if dep is not None:
                         dutils.activate_type(dep, "Absolute")
-                    
-                    # RETRY LOGIC for Lateral Property
-                    # Try 'Constant', then 'Value', then 'Offset'
                     success_lat = False
                     for prop_name in ['Constant', 'Value', 'Offset', 'LateralOffset']:
                         try:
-                            # Try setting property directly on ActiveElement
                             if hasattr(lat0.ActiveElement, prop_name):
                                 setattr(lat0.ActiveElement, prop_name, float(t_val))
                                 success_lat = True
                                 break
-                            # Try dutils helper
                             dutils.set_activity_constant(lat0, t_val)
                             success_lat = True
                             break
-                        except:
+                        except Exception:
                             continue
-                    
-                    if not success_lat:
-                        pass  # Known limitation - t-coordinate may be ignored by dSPACE
-
             except Exception:
-                pass  # Known limitation - t-coordinate may be ignored by dSPACE
+                pass
 
         sim._ego_created = True
 
@@ -263,18 +354,11 @@ def place_fellow(sim, obj):
     # Get vehicle name for logging
     vehicle_name = getattr(obj, "name", f"Fellow_{sim.ts.Fellows.Count}")
     
-    # 1) Transform Scenic XODR → RD
+    # 1) Position in map frame (Scenic = map = RD-aligned)
     if getattr(obj, "position", None) is not None:
         scenic_x, scenic_y = obj.position.x, obj.position.y
-        if sim._coordinate_transform is not None:
-            from ..geometry.coordinate_transform import apply_coordinate_transform
-            transformed_x, transformed_y = apply_coordinate_transform(
-                sim._coordinate_transform, (scenic_x, scenic_y)
-            )
-            work_x, work_y = transformed_x, transformed_y
-        else:
-            work_x, work_y = scenic_x, scenic_y
-        
+        work_x, work_y = scenic_x, scenic_y
+
         # 2) Determine route: TTL centerlines (ttl_main_road.csv vs ttl_pitlane.csv), assign to whichever is closer
         route_pref = _route_pref_from_ttl_distances(sim, scenic_x, scenic_y)
         if not route_pref:
@@ -292,25 +376,134 @@ def place_fellow(sim, obj):
                 pass
         if not route_pref:
             route_pref = 'Lap'
-        
-        # 3) Project RD → (s,t) using route-specific road index
-        if sim._road_index:
-            from ..geometry.route_projection import project_world_to_st_route_specific
-            s_val, t_val = project_world_to_st_route_specific(
-                sim._road_index, 
-                (work_x, work_y),
-                route_preference=route_pref
-            )
-        else:
-            s_val, t_val = dutils.project_world_to_st(sim._road_index, (work_x, work_y))
-        
+
+        # Use TTL centerline index if built (by ego placement); else XODR index
+        road_index_for_projection = getattr(sim, '_road_index_ttl', None) or sim._road_index
+
+        # 3) (s,t): racing-library semantics when _racing_st_offset is set (ahead/behind → keep t, move s; left/right → keep s, move t)
+        use_racing_offset = False
+        st_offset = getattr(obj, '_racing_st_offset', None)
+        deltas = _racing_st_offset_to_deltas(st_offset) if st_offset is not None else None
+        if deltas is not None:
+            ego = getattr(getattr(sim, 'scene', None), 'egoObject', None)
+            if ego is not None:
+                ego_st = getattr(ego, '_route_s_t', None)
+                ego_route = getattr(ego, '_route', None)
+                if ego_st is not None and len(ego_st) >= 2 and ego_route is not None:
+                    ego_s, ego_t = float(ego_st[0]), float(ego_st[1])
+                    delta_s, delta_t = deltas
+                    s_val = ego_s + delta_s
+                    t_val = ego_t + delta_t
+                    route_pref = ego_route
+                    use_racing_offset = True
+                    print(f"[Placement] {vehicle_name}: racing (s,t) from ego + {st_offset} -> s={s_val:.2f}, t={t_val:.2f} (same route as ego)")
+
+        if not use_racing_offset:
+            # Project RD → (s,t) using route-specific road index
+            if road_index_for_projection:
+                from ..geometry.route_projection import project_world_to_st_route_specific
+                s_val, t_val = project_world_to_st_route_specific(
+                    road_index_for_projection,
+                    (work_x, work_y),
+                    route_preference=route_pref
+                )
+            else:
+                s_val, t_val = dutils.project_world_to_st(sim._road_index, (work_x, work_y))
+
         obj._route_s_t = (s_val, t_val)
         obj._route = route_pref
-        # Log fellow (s, t) decision for debugging (e.g. absurd t values)
+        # We never clamp (s,t); out-of-bounds positions are sent to ModelDesk as-is
+        if abs(t_val) > T_OUT_OF_BOUNDS_THRESHOLD_M:
+            print(f"[Placement] {vehicle_name}: t={t_val:.2f} m (out of track bounds; placing as-is, no clamping)")
+        # Log ego once for context (heading vs road explains absurd t when "ahead/right of ego")
+        if not getattr(sim, '_placement_ego_debug_logged', False):
+            try:
+                ego = getattr(sim, 'scene', None) and getattr(sim.scene, 'egoObject', None)
+                if ego and getattr(ego, 'position', None) is not None:
+                    ex, ey = ego.position.x, ego.position.y
+                    # Use simulator-aligned heading if set (Scenic may cache orientation)
+                    if getattr(ego, '_road_aligned_heading_deg', None) is not None:
+                        yaw_deg = float(ego._road_aligned_heading_deg)
+                    else:
+                        yaw = getattr(
+                            getattr(ego, 'orientation', None), 'yaw',
+                            getattr(ego, 'heading', 0.0)
+                        )
+                        yaw_deg = math.degrees(yaw)
+                    road_deg = _road_direction_deg_at(getattr(sim, '_road_index', None), ex, ey)
+                    road_deg_str = f"{road_deg:.1f}" if road_deg is not None else "n/a"
+                    ego_s, ego_t = getattr(ego, '_route_s_t', (None, None))
+                    st_str = f" s={ego_s:.2f}, t={ego_t:.2f}" if ego_s is not None and ego_t is not None else ""
+                    msg = (
+                        f"[Ego debug] xy=({ex:.4f}, {ey:.4f}) ->{st_str}, heading_deg={yaw_deg:.2f}, "
+                        f"road_direction_deg={road_deg_str} (0=North, 90=East, -90=West)"
+                    )
+                    if road_index_for_projection:
+                        ego_road_id = dutils.find_road_id_for_position(road_index_for_projection, ex, ey)
+                        ego_road_name = dutils.get_road_name_for_id(road_index_for_projection, ego_road_id) if ego_road_id is not None else None
+                        msg += f" | projected onto road_id={ego_road_id} ({ego_road_name or 'n/a'})"
+                    # Diagnostic: distance from ego to TTL main centerline (TTL = source used to generate XODR)
+                    try:
+                        from ..ttl.loader import get_ttl_config, load_ttl_region
+                        scene_params = getattr(getattr(sim, "scene", None), "params", None) or {}
+                        ttl_folder, _, _ = get_ttl_config(scene_params)
+                        if ttl_folder:
+                            _, main_pts = load_ttl_region(str(ttl_folder), 0, TTL_MAIN_ROAD_FILE)
+                            if main_pts:
+                                dist_to_ttl = _min_dist_to_polyline(ex, ey, main_pts)
+                                msg += f" | dist_to_ttl_main_centerline_m={dist_to_ttl:.2f}"
+                                if ego_s is not None and ego_t is not None and abs(ego_t) > 0.5:
+                                    msg += " (if dist_to_ttl<<|t| then projection centerline is offset from TTL)"
+                    except Exception:
+                        pass
+                    if road_deg is not None:
+                        diff = abs((yaw_deg - road_deg + 180) % 360 - 180)
+                        if diff > 20:
+                            msg += f" | MISMATCH {diff:.0f}deg -> 'ahead of ego' will be off road (ego heading aligned in simulator)"
+                    print(msg)
+            except Exception as e:
+                print(f"[Ego debug] Could not log ego: {e}")
+            sim._placement_ego_debug_logged = True
+        # Log fellow (s, t) and placement context for debugging absurd t values
         modeldesk_route = 'R2' if route_pref == 'Lap' else 'R1'
+        distance_from_ego = float('nan')
+        angle_from_ego_deg = float('nan')
+        try:
+            ego = getattr(sim, 'scene', None) and getattr(sim.scene, 'egoObject', None)
+            if ego and getattr(ego, 'position', None) is not None:
+                ex, ey = ego.position.x, ego.position.y
+                if getattr(ego, '_road_aligned_heading_deg', None) is not None:
+                    yaw = math.radians(float(ego._road_aligned_heading_deg))
+                else:
+                    yaw = getattr(
+                        getattr(ego, 'orientation', None), 'yaw',
+                        getattr(ego, 'heading', 0.0)
+                    )
+                dx = scenic_x - ex
+                dy = scenic_y - ey
+                distance_from_ego = math.hypot(dx, dy)
+                # Angle of (fellow - ego) vs ego heading: 0 = ahead, 90 = right (+X), -90 = left (-X)
+                angle_world = math.atan2(dx, dy)
+                angle_from_ego_deg = math.degrees(angle_world - yaw)
+                # Normalize to [-180, 180] for readability
+                while angle_from_ego_deg > 180:
+                    angle_from_ego_deg -= 360
+                while angle_from_ego_deg < -180:
+                    angle_from_ego_deg += 360
+        except Exception:
+            pass
+        # Which road this fellow projects onto (for debugging large |t|)
+        fellow_road_id = None
+        fellow_road_name = None
+        if road_index_for_projection:
+            fellow_road_id = dutils.find_road_id_for_position(road_index_for_projection, work_x, work_y)
+            fellow_road_name = dutils.get_road_name_for_id(road_index_for_projection, fellow_road_id) if fellow_road_id is not None else None
+        road_info = f" | projected onto road_id={fellow_road_id} ({fellow_road_name or 'n/a'})" if road_index_for_projection else ""
         print(
             f"[Fellow s,t] {vehicle_name}: route={route_pref} ({modeldesk_route}), "
-            f"scenic_xy=({scenic_x:.4f}, {scenic_y:.4f}), work_xy(RD)=({work_x:.4f}, {work_y:.4f}) -> s={s_val:.4f}, t={t_val:.4f}"
+            f"xy=({scenic_x:.4f}, {scenic_y:.4f}) -> s={s_val:.4f}, t={t_val:.4f} | "
+            f"distance_from_ego={distance_from_ego:.2f}m, angle_from_ego_deg={angle_from_ego_deg:.1f} (0=ahead, 90=right, -90=left)"
+            f"{road_info}"
         )
     else:
         s_val, t_val = 0.0, 0.0
@@ -354,7 +547,6 @@ def place_fellow(sim, obj):
     # Transform from Scenic ENU (North=0°) to dSPACE RD (East=0°)
     # Use orientation.yaw directly for clarity (equivalent to heading for most cases)
     try:
-        import math
         if hasattr(obj, 'orientation') and hasattr(obj.orientation, 'yaw'):
             scenic_yaw = obj.orientation.yaw
             dspace_orientation = scenic_yaw - math.pi / 2

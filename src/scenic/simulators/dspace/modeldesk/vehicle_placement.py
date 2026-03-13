@@ -12,32 +12,11 @@ from ..geometry import (
 
 def project_scenic_to_st(obj, road_index, coordinate_transform=None):
     """Project Scenic object position to road (s,t) coordinates.
-    
-    Args:
-        obj: Scenic object with position
-        road_index: Road geometry index
-        coordinate_transform: Optional coordinate transformation
-        
-    Returns:
-        (s, t) tuple for ModelDesk
+    coordinate_transform is ignored (map is single source).
     """
     if not getattr(obj, "position", None):
         return 0.0, 0.0
-    
-    scenic_x, scenic_y = obj.position.x, obj.position.y
-    
-    # Apply coordinate transformation if available
-    if coordinate_transform is not None:
-        from ..geometry.coordinate_transform import apply_coordinate_transform
-        transformed_x, transformed_y = apply_coordinate_transform(
-            coordinate_transform, (scenic_x, scenic_y)
-        )
-        print(f"  Scenic coords ({scenic_x:.3f}, {scenic_y:.3f}) -> "
-              f"RD coords ({transformed_x:.3f}, {transformed_y:.3f})")
-        work_x, work_y = transformed_x, transformed_y
-    else:
-        work_x, work_y = scenic_x, scenic_y
-    
+    work_x, work_y = obj.position.x, obj.position.y
     # Use road index for proper geometric projection
     if road_index:
         s_val, t_val = project_world_to_st(road_index, (work_x, work_y))
@@ -60,20 +39,8 @@ def create_fellow_vehicle(ts, obj, road_index, coordinate_transform, fellow_stor
     Returns:
         Fellow object
     """
-    # 1) Project position
-    scenic_x, scenic_y = obj.position.x, obj.position.y
-    
-    if coordinate_transform is not None:
-        from ..geometry.coordinate_transform import apply_coordinate_transform
-        transformed_x, transformed_y = apply_coordinate_transform(
-            coordinate_transform, (scenic_x, scenic_y)
-        )
-        print(f"Scenic coords ({scenic_x:.3f}, {scenic_y:.3f}) -> "
-              f"RD coords ({transformed_x:.3f}, {transformed_y:.3f})")
-        work_x, work_y = transformed_x, transformed_y
-    else:
-        work_x, work_y = scenic_x, scenic_y
-    
+    # 1) Project position (map frame = Scenic)
+    work_x, work_y = obj.position.x, obj.position.y
     if road_index:
         s_val, t_val = project_world_to_st(road_index, (work_x, work_y))
         print(f"World coordinates ({work_x:.3f}, {work_y:.3f}) -> Road coordinates (s={s_val:.1f}, t={t_val:.3f})")
@@ -129,24 +96,12 @@ def create_ego_vehicle(ego_maneuver, obj, road_index, coordinate_transform):
     """
     print(f"  Configuring ego vehicle (Maneuver)")
     
-    # Project position
+    # Project position (map frame = Scenic)
     if not getattr(obj, "position", None):
         s_val, t_val = 0.0, 0.0
         print("  Warning: No position available, using default coordinates (s=0, t=0)")
     else:
-        scenic_x, scenic_y = obj.position.x, obj.position.y
-        
-        if coordinate_transform is not None:
-            from ..geometry.coordinate_transform import apply_coordinate_transform
-            transformed_x, transformed_y = apply_coordinate_transform(
-                coordinate_transform, (scenic_x, scenic_y)
-            )
-            print(f"  Scenic coords ({scenic_x:.3f}, {scenic_y:.3f}) -> "
-                  f"RD coords ({transformed_x:.3f}, {transformed_y:.3f})")
-            work_x, work_y = transformed_x, transformed_y
-        else:
-            work_x, work_y = scenic_x, scenic_y
-        
+        work_x, work_y = obj.position.x, obj.position.y
         if road_index:
             s_val, t_val = project_world_to_st(road_index, (work_x, work_y))
             print(f"  World coordinates ({work_x:.3f}, {work_y:.3f}) -> Road coordinates (s={s_val:.1f}, t={t_val:.3f})")

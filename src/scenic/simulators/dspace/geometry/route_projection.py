@@ -303,20 +303,28 @@ def project_world_to_st_route_specific(
     """
     from .projection import project_world_to_st, find_road_id_for_position
     
-    # First, project to get road-relative (s, t)
-    s_road, t_val = project_world_to_st(road_index, pos)
-    
+    # When route is specified, project only onto roads that belong to that route.
+    # Otherwise we can project onto the wrong road (e.g. Lap vehicle projected onto pit TTL).
+    index_for_projection = road_index
+    if route_preference and route_preference in ROUTE_NAME_MAP:
+        filtered = build_route_specific_road_index(road_index, route_preference)
+        if filtered is not None and filtered.get("roads"):
+            index_for_projection = filtered
+
+    # Project to get road-relative (s, t)
+    s_road, t_val = project_world_to_st(index_for_projection, pos)
+
     # If no route specified, return road-relative s (original behavior)
     if not route_preference or route_preference not in ROUTE_NAME_MAP:
         return (s_road, t_val)
-    
+
     route_name = ROUTE_NAME_MAP[route_preference]
     
     if route_name not in ROUTE_ROAD_SEQUENCES:
         return (s_road, t_val)
     
-    # Find which road this projects onto
-    road_id = find_road_id_for_position(road_index, pos[0], pos[1])
+    # Find which road this projects onto (use same index we projected with)
+    road_id = find_road_id_for_position(index_for_projection, pos[0], pos[1])
     
     if road_id is None:
         # Fallback: use distance from route origin

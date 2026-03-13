@@ -19,16 +19,17 @@ model scenic.simulators.dspace.racing_model
 # Werid Curve
 # ego = new RacingCar at (-110.956171,-151.841778,8.331000),\ 
 # Main Start
-ego = new RacingCar at (60.3811498,103.7450019), \
+# Facing roadDirection aligns ego with the track so "ahead of ego by 20" / "right of ego by 5" give sensible (s,t).
+# ego = new RacingCar at (60.3811498,103.7450019), \
+ego = new RacingCar on mainTrack, \
+    facing roadDirection, \
     with regionContainedIn everywhere, \
     with raceNumber 1, \
     # with ttlFileName 'ttl_main_road.csv', \
     # with ttlFileName 'ttl_pitlane.csv', \
     with ttlFileName 'ttl_optimal_xodr.csv', \
     # with ttlFileName 'ttl_right_xodr.csv', \
-    with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV'), \
-    with ttlDX 0.0, \
-    with ttlDY 0.0
+    with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV')
 
 
 
@@ -38,8 +39,9 @@ ego = new RacingCar at (60.3811498,103.7450019), \
 # param fellow_dummy_centerline = True
 # param fellow_dummy_velocity_kmh = 50
 # fellow0 = new RacingCar at (49.3895,87.9318), with regionContainedIn everywhere, with raceNumber 2
-fellow1 = new RacingCar right of ego by 5, with regionContainedIn everywhere
-fellow2 = new RacingCar ahead of ego by 20, with regionContainedIn everywhere
+# Racing-library (s,t): ahead/behind keep t and move s; left/right keep s and move t
+fellow1 = new RacingCar with regionContainedIn everywhere, with _racing_st_offset ('right', 3)
+fellow2 = new RacingCar with regionContainedIn everywhere, with _racing_st_offset ('ahead', 20)
 # fellow3 = new RacingCar on mainTrack
 # fellow4 = new RacingCar on mainTrack
 # fellow5 = new RacingCar on mainTrack

@@ -15,10 +15,6 @@ param map = localPath('../../assets/maps/dSPACE/LagunaSeca.xodr')
 param use2DMap = True
 param trackDirection = 'counterclockwise'
 
-# Global TTL defaults (can be overridden per vehicle)
-param ttlDX = -53.6         # Global X offset to apply to TTL points
-param ttlDY = -15.7         # Global Y offset to apply to TTL points
-
 model scenic.simulators.dspace.model
 
 # ============================================================================
@@ -34,9 +30,7 @@ ego.behavior = FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_
 fellow1 = new RacingCar on mainRacingRoad, \
     with raceNumber 2, \
     ttlFileName 'ttl27_v5.csv', \
-    ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV'), \
-    ttlDX 0.0, \
-    ttlDY 0.0
+    ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV')
 
 # Assign behavior to make the fellow follow the TTL
 fellow1.behavior = FollowRacingLineBehavior(target_speed=25, manage_gears=True, use_waypoints=True)
@@ -75,8 +69,6 @@ fellow1.behavior = FollowRacingLineBehavior(target_speed=25, manage_gears=True, 
 # ============================================================================
 # fellow2 = new RacingCar on mainRacingRoad, \
 #     with raceNumber 3, \
-#     ttlIndex 17, \
-#     ttlDX -53.6, \
-#     ttlDY -15.7
+#     ttlIndex 17
 # fellow2.behavior = FollowRacingLineBehavior(target_speed=28, manage_gears=True, use_waypoints=True)
 

@@ -218,14 +218,8 @@ def read_ego_state(sim, obj):
             vx_kmh = float(var.get_var(EGO_PATH_VX))
             vy_kmh = float(var.get_var(EGO_PATH_VY))
         
-        # CRITICAL: Transform position from RD/dSPACE coordinates back to Scenic/XODR coordinates
-        # Position read from ControlDesk is in RD coordinate system, but Scenic expects XODR coordinates
-        if sim._coordinate_transform is not None:
-            from ..geometry.coordinate_transform import apply_inverse_coordinate_transform
-            rd_x, rd_y = float(x), float(y)
-            setattr(obj.dspaceActor, "rd_position", (rd_x, rd_y))  # for GPS round-trip and calibration
-            scenic_x, scenic_y = apply_inverse_coordinate_transform(sim._coordinate_transform, (rd_x, rd_y))
-            x, y = scenic_x, scenic_y
+        # Position from ControlDesk is in same frame as map (RD-aligned); use as Scenic position
+        setattr(obj.dspaceActor, "rd_position", (float(x), float(y)))
 
         # yaw_deg, vx_kmh, vy_kmh already read above (get_vars or get_var)
         yaw_rad_raw = yaw_deg * (math.pi / 180.0)
@@ -316,17 +310,8 @@ def read_fellow_state(sim, obj, dutils):
         if hasattr(obj, '_array_bounds_warning_shown'):
             delattr(obj, '_array_bounds_warning_shown')
         
-        # CRITICAL: Transform position from RD/dSPACE coordinates back to Scenic/XODR coordinates
-        # Position read from ControlDesk is in RD coordinate system, but Scenic expects XODR coordinates
-        vehicle_name = getattr(obj, "name", f"Fellow_{fellow_index}")
-        
-        if sim._coordinate_transform is not None:
-            from ..geometry.coordinate_transform import apply_inverse_coordinate_transform
-            rd_x, rd_y = float(x), float(y)
-            scenic_x, scenic_y = apply_inverse_coordinate_transform(sim._coordinate_transform, (rd_x, rd_y))
-        else:
-            scenic_x, scenic_y = float(x), float(y)
-
+        # Position from ControlDesk is in same frame as map (RD-aligned); use as Scenic position
+        scenic_x, scenic_y = float(x), float(y)
         obj.dspaceActor.position = Vector(scenic_x, scenic_y, float(z))
         
         # Convert heading from degrees to radians

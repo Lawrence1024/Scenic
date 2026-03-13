@@ -26,11 +26,6 @@ from scenic.domains.racing.gnss_transform import (
     load_calibration_table_csv,
     load_gps_table_rows,
 )
-from scenic.simulators.dspace.geometry.coordinate_transform import (
-    load_transform,
-    apply_coordinate_transform,
-    apply_inverse_coordinate_transform,
-)
 
 
 def _dist(a, b):
@@ -43,7 +38,6 @@ def main():
     ap.add_argument("--samples", type=int, default=100, help="Number of sample rows to verify")
     ap.add_argument("--cal-xodr", type=Path, default=_DSPACE / "geometry" / "gps_dspace_calibration.json", help="GPS->XODR (or position) calibration")
     ap.add_argument("--cal-rd", type=Path, default=_DSPACE / "geometry" / "gps_rd_calibration.json", help="GPS->RD calibration (when table has x_rd, y_rd)")
-    ap.add_argument("--xodr-rd-transform", type=Path, default=None, help="XODR<->RD transform JSON (default: assets/maps/dSPACE/Laguna_Seca_transform.json)")
     args = ap.parse_args()
 
     csv_path = args.csv if args.csv.is_absolute() else _REPO_ROOT / args.csv
@@ -64,13 +58,8 @@ def main():
             print(f"[ERROR] Table has x_rd/y_rd but could not load GPS->RD calibration: {e}")
             print("        Run: python .../fit_gps_dspace_calibration.py --csv <table> --output .../geometry/gps_rd_calibration.json (with CSV that has x_rd, y_rd)")
             return 1
-        transform_path = args.xodr_rd_transform or _REPO_ROOT / "assets" / "maps" / "dSPACE" / "Laguna_Seca_transform.json"
-        transform_path = transform_path if transform_path.is_absolute() else _REPO_ROOT / transform_path
-        if not transform_path.exists():
-            print(f"[ERROR] XODR<->RD transform not found: {transform_path}")
-            return 1
-        xodr_rd = load_transform(str(transform_path))
-        print("Round trip: Scenic (XODR) -> RD -> GPS -> RD (from GPS cal) -> Scenic (XODR)")
+        # Map is RD-aligned; Scenic position = RD (no separate transform)
+        print("Round trip: Scenic (= RD) -> GPS -> RD (from GPS cal); comparing to initial (x_rd, y_rd)")
     else:
         cal_xodr = load_calibration(args.cal_xodr if args.cal_xodr.is_absolute() else _REPO_ROOT / args.cal_xodr)
         print("Table has no x_rd/y_rd: verifying GPS <-> Scenic (x_dspace, y_dspace) round trip only.")
@@ -92,9 +81,9 @@ def main():
         if has_rd:
             rd_table = (r["x_rd"], r["y_rd"])
             rd_from_gps = cal_rd.gnss_to_local(lon, lat)
-            xodr_back = apply_inverse_coordinate_transform(xodr_rd, rd_from_gps)
+            # Map = RD; "Scenic" position in table is x_dspace/y_dspace, compare to rd_from_gps
             err_rd = _dist(rd_from_gps, rd_table)
-            err_scenic = _dist(xodr_back, xodr)
+            err_scenic = _dist(rd_from_gps, xodr)
             errs_xy.append(err_rd)
             errs_scenic_back.append(err_scenic)
         else:

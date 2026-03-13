@@ -39,10 +39,6 @@ from scenic.simulators.dspace.controldesk.readback import (
     FELLOW_GPS_BASE,
     FELLOW_GPS_BASE_ALT,
 )
-from scenic.simulators.dspace.geometry.coordinate_transform import (
-    apply_inverse_coordinate_transform,
-    load_transform,
-)
 from scenic.simulators.dspace.utils import legacy as dutils
 
 MAX_BATCH_SIZE = 30
@@ -59,7 +55,6 @@ RESULTS_CSV = OUTPUT_DIR / "route_st_to_xodr_measurements.csv"
 SUMMARY_TXT = OUTPUT_DIR / "route_st_to_xodr_summary.txt"
 CHECKPOINT_JSON = OUTPUT_DIR / "route_st_to_xodr_checkpoint.json"
 SCENARIO_BASENAME = "RouteGeometryMeasurement"
-TRANSFORM_PATH = REPO_ROOT / "assets" / "maps" / "dSPACE" / "Laguna_Seca_transform.json"
 
 BASE_FELLOW_PATH = (
     "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/"
@@ -170,15 +165,6 @@ def reset_output_files() -> None:
     for path in (RESULTS_CSV, SUMMARY_TXT, CHECKPOINT_JSON):
         if path.exists():
             path.unlink()
-
-
-def load_coordinate_transform():
-    if not TRANSFORM_PATH.exists():
-        raise FileNotFoundError(f"Transform file not found: {TRANSFORM_PATH}")
-    transform = load_transform(str(TRANSFORM_PATH))
-    if transform is None:
-        raise RuntimeError(f"Failed to load coordinate transform: {TRANSFORM_PATH}")
-    return transform
 
 
 def connect_modeldesk():
@@ -380,7 +366,7 @@ def read_batch_gps(cd: ControlDeskApp, count: int) -> list[dict]:
     return readings
 
 
-def measure_batch(batch_samples: list[dict], coordinate_transform, ts, exp, cd: ControlDeskApp, config: MeasurementConfig, batch_index: int) -> list[dict]:
+def measure_batch(batch_samples: list[dict], ts, exp, cd: ControlDeskApp, config: MeasurementConfig, batch_index: int) -> list[dict]:
     print("\n" + "=" * 80)
     print(
         f"Batch {batch_index + 1}: route={batch_samples[0]['route']} "
@@ -401,16 +387,13 @@ def measure_batch(batch_samples: list[dict], coordinate_transform, ts, exp, cd: 
     measured_at = time.strftime("%Y-%m-%dT%H:%M:%S")
     batch_results = []
     for offset, (sample, position, gps_reading) in enumerate(zip(batch_samples, positions, gps_readings)):
-        xodr_x, xodr_y = apply_inverse_coordinate_transform(
-            coordinate_transform,
-            (position["rd_x_m"], position["rd_y_m"]),
-        )
+        # Map is RD-aligned; XODR columns = RD (same frame)
         result = {
             **sample,
             **position,
             **gps_reading,
-            "xodr_x_m": float(xodr_x),
-            "xodr_y_m": float(xodr_y),
+            "xodr_x_m": float(position["rd_x_m"]),
+            "xodr_y_m": float(position["rd_y_m"]),
             "xodr_z_m": float(position["rd_z_m"]),
             "batch_index": batch_index,
             "fellow_index_in_batch": offset,
@@ -606,7 +589,6 @@ def main() -> int:
     else:
         print("[CHECKPOINT] No checkpoint found; starting from scratch.")
 
-    coordinate_transform = load_coordinate_transform()
     scenario_name = f"{SCENARIO_BASENAME}_{time.strftime('%Y%m%d_%H%M%S')}"
 
     app = proj = exp = ts = cd = None
@@ -622,7 +604,7 @@ def main() -> int:
 
         for batch_index in range(start_batch_index, total_batches):
             batch_samples = batches[batch_index]
-            batch_results = measure_batch(batch_samples, coordinate_transform, ts, exp, cd, config, batch_index)
+            batch_results = measure_batch(batch_samples, ts, exp, cd, config, batch_index)
             results.extend(batch_results)
             save_results_csv(results)
             save_summary(results, config)

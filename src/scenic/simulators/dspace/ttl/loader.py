@@ -8,62 +8,31 @@ from scenic.core.regions import PolylineRegion
 
 def get_ttl_config(scene_params):
     """Build TTL configuration from scene params with sensible defaults.
-    
-    Automatically detects if TTL files are in the 'transformed' folder (already in XODR coordinates)
-    and sets offset to (0, 0) in that case. Otherwise uses default offset.
-    
-    Returns: (ttl_folder, ttl_index, dx, dy, ttl_file_name_or_None)
+
+    Returns: (ttl_folder, ttl_index, ttl_file_name_or_None)
     """
     params = scene_params or {}
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
     default_folder = os.path.join(repo_root, "assets", "ttls", "LS_ENU_TTL_CSV")
     ttl_folder = params.get("ttlFolder") or default_folder
     ttl_index = int(params.get("ttlIndex", 17))  # default to 17
-    
-    # This folder holds XODR-coordinate files; use zero offset
-    ttl_folder_str = str(ttl_folder).replace("\\", "/")
-    is_transformed = "LS_ENU_TTL_CSV" in ttl_folder_str or "transformed" in ttl_folder_str.lower()
-    
-    # If in transformed folder, use zero offset (files are already in XODR space)
-    # Otherwise, use default offset for files that need transformation
-    if is_transformed:
-        default_dx = 0.0
-        default_dy = 0.0
-    else:
-        default_dx = -53.6
-        default_dy = -15.7
-    
-    # Allow explicit override via params
-    dx = float(params.get("ttlDX", default_dx))
-    dy = float(params.get("ttlDY", default_dy))
     ttl_file = params.get("ttlFileName", None)
-    # When ttlFolder is set and no file specified, use centerline file instead of legacy ttl_{index}.csv
-    if ttl_file is None and params.get("ttlFolder"):
+    # Default to main road centerline so we never request missing ttl_{index}.csv (e.g. ttl_17.csv)
+    if ttl_file is None:
         ttl_file = "ttl_main_road.csv"
-    
-    if is_transformed and (dx != 0.0 or dy != 0.0):
-        print(f"[TTL] Note: Using 'transformed' folder but offset is ({dx}, {dy}). "
-              f"Files in 'transformed' folder are already in XODR coordinates, "
-              f"so offset should typically be (0, 0).")
-    
-    return ttl_folder, ttl_index, dx, dy, ttl_file
+    return ttl_folder, ttl_index, ttl_file
 
 
-def load_ttl_region(ttl_folder, ttl_index, dx, dy, ttl_file_name=None):
-    """Load TTL CSV, apply (dx, dy) offset, return (PolylineRegion, waypoints).
-    
+def load_ttl_region(ttl_folder, ttl_index, ttl_file_name=None):
+    """Load TTL CSV and return (PolylineRegion, waypoints). No offset applied (TTL files are in map/XODR coordinates).
+
     If ttl_file_name is provided, use that exact file; otherwise uses ttl_{index}.csv.
-    
-    Note: Files in the 'transformed' folder are already in XODR coordinates and should
-    use offset (0, 0). Files in other folders may need offset transformation.
-    
+
     Args:
         ttl_folder: Path to folder containing TTL CSV files
         ttl_index: Index of TTL file (e.g., 17 for ttl_17.csv)
-        dx: X offset to apply (typically 0.0 for transformed files, -53.6 for others)
-        dy: Y offset to apply (typically 0.0 for transformed files, -15.7 for others)
         ttl_file_name: Optional specific filename (overrides ttl_index)
-    
+
     Returns:
         (PolylineRegion, list_of_waypoints) or (None, []) if loading fails
     """
@@ -90,8 +59,8 @@ def load_ttl_region(ttl_folder, ttl_index, dx, dy, ttl_file_name=None):
                 has_z_column = len(first_line) >= 3  # Assume 3D if 3+ columns
                 if len(first_line) >= 2:
                     try:
-                        x = float(first_line[0]) + dx
-                        y = float(first_line[1]) + dy
+                        x = float(first_line[0])
+                        y = float(first_line[1])
                         if has_z_column and len(first_line) >= 3:
                             z = float(first_line[2])
                             pts.append((x, y, z))
@@ -107,8 +76,8 @@ def load_ttl_region(ttl_folder, ttl_index, dx, dy, ttl_file_name=None):
             if not row or len(row) < 2:
                 continue
             try:
-                x = float(row[0]) + dx
-                y = float(row[1]) + dy
+                x = float(row[0])
+                y = float(row[1])
                 # Support 3D waypoints if z coordinate is available
                 # If CSV has no z column (len(row) < 3), create 2D waypoint (z implicitly 0)
                 if len(row) >= 3:
@@ -123,81 +92,42 @@ def load_ttl_region(ttl_folder, ttl_index, dx, dy, ttl_file_name=None):
     if len(pts) < 2:
         print(f"[TTL] Not enough points in {ttl_path}")
         return None, []
-    
-    # Log coordinate system info
-    folder_str = str(ttl_folder).replace("\\", "/")
-    if "LS_ENU_TTL_CSV" in folder_str or "transformed" in folder_str.lower():
-        coord_system = "XODR (already transformed)"
-    else:
-        coord_system = "ENU/RD (with offset applied)"
-    
-    print(f"[TTL] Loaded {len(pts)} waypoints from {os.path.basename(ttl_path)} "
-          f"(offset: ({dx}, {dy}), coordinate system: {coord_system})")
-    
-    return PolylineRegion(pts), pts
+
+    print(f"[TTL] Loaded {len(pts)} waypoints from {os.path.basename(ttl_path)}")
+    # PolylineRegion expects 2D points to avoid "nonzero Z components" warnings
+    pts_2d = [(p[0], p[1]) for p in pts]
+    return PolylineRegion(pts_2d), pts
 
 
 def attach_ttl(sim, obj, vehicle_type="vehicle"):
     """Load TTL based on scene params or object properties and attach region/waypoints to object.
-    
-    Args:
-        sim: Simulation object
-        obj: Scenic object (ego or fellow) to attach TTL to
-        vehicle_type: String identifier for logging ("ego", "fellow", etc.)
-    
+
     TTL configuration priority:
-    1. Object-specific properties (obj.ttlIndex, obj.ttlDX, obj.ttlDY, obj.ttlFolder, obj.ttlFileName)
-    2. Scene parameters (ttlIndex, ttlDX, ttlDY, ttlFolder, ttlFileName)
-    3. Auto-detected defaults:
-       - If folder contains 'transformed': offset (0, 0) - files already in XODR coordinates
-       - Otherwise: offset (-53.6, -15.7) - files need transformation
-       - Default index: 17
+    1. Object-specific properties (obj.ttlIndex, obj.ttlFolder, obj.ttlFileName)
+    2. Scene parameters (ttlIndex, ttlFolder, ttlFileName)
     """
     try:
         # Check for object-specific TTL configuration
         scene_params = getattr(sim.scene, "params", {}) or {}
-        
+
         # Priority 1: Object-specific properties
-        if hasattr(obj, 'ttlIndex') or hasattr(obj, 'ttlDX') or hasattr(obj, 'ttlDY') or \
-           hasattr(obj, 'ttlFolder') or hasattr(obj, 'ttlFileName'):
-            # Build config from object properties, falling back to scene params
+        if hasattr(obj, 'ttlIndex') or hasattr(obj, 'ttlFolder') or hasattr(obj, 'ttlFileName'):
             ttl_folder = getattr(obj, 'ttlFolder', scene_params.get("ttlFolder", None))
             ttl_index = getattr(obj, 'ttlIndex', scene_params.get("ttlIndex", 17))
             ttl_file = getattr(obj, 'ttlFileName', scene_params.get("ttlFileName", None))
-            # Default to centerline file when folder is set (avoid legacy ttl_{index}.csv)
             if ttl_file is None and (ttl_folder or scene_params.get("ttlFolder")):
                 ttl_file = "ttl_main_road.csv"
-            
-            # If folder not specified on object, use scene param or default
             if ttl_folder is None:
                 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-                ttl_folder = scene_params.get("ttlFolder", 
+                ttl_folder = scene_params.get("ttlFolder",
                     os.path.join(repo_root, "assets", "ttls", "LS_ENU_TTL_CSV"))
-            
             ttl_folder = str(ttl_folder)
             ttl_index = int(ttl_index)
-            
-            # Auto-detect offset (LS_ENU_TTL_CSV = 0,0; others = default)
-            folder_str = ttl_folder.replace("\\", "/")
-            is_transformed = "LS_ENU_TTL_CSV" in folder_str or "transformed" in folder_str.lower()
-            
-            # Get offset, with auto-detection if not explicitly set
-            if hasattr(obj, 'ttlDX'):
-                dx = float(getattr(obj, 'ttlDX'))
-            else:
-                dx = float(scene_params.get("ttlDX", 0.0 if is_transformed else -53.6))
-            
-            if hasattr(obj, 'ttlDY'):
-                dy = float(getattr(obj, 'ttlDY'))
-            else:
-                dy = float(scene_params.get("ttlDY", 0.0 if is_transformed else -15.7))
-            
             ttl_file = str(ttl_file) if ttl_file else None
         else:
-            # Priority 2: Scene parameters (existing behavior)
-            ttl_folder, ttl_index, dx, dy, ttl_file = get_ttl_config(scene_params)
-        
-        region, pts = load_ttl_region(ttl_folder, ttl_index, dx, dy, ttl_file)
+            ttl_folder, ttl_index, ttl_file = get_ttl_config(scene_params)
+
+        region, pts = load_ttl_region(ttl_folder, ttl_index, ttl_file)
         if region is not None:
             setattr(obj, "ttl", region)
             name = ttl_file if ttl_file else f"ttl_{ttl_index}.csv"

@@ -66,6 +66,11 @@ class DSPACERacingCar(RacingCar, _DSpaceVehicle, Steers, HasManualTransmission, 
     # dSPACE-specific properties
     dspaceActor: None  # Link to dSPACE internal representation
     routeId: None      # dSPACE route identifier
+    # Optional: (s,t) placement relative to ego (racing-library semantics). When set, fellow (s,t) = ego (s,t) + offset
+    # instead of projecting world position. Use for "ahead/behind" (keep t, move s) or "left/right" (keep s, move t).
+    # - (delta_s, delta_t) in meters: e.g. (5, 0) = 5 m ahead; (0, -2) = 2 m right (t<0 = right in road direction).
+    # - Or ('ahead'|'behind'|'left'|'right', distance): e.g. ('ahead', 5), ('right', 2).
+    _racing_st_offset: None
     
     # Racing-specific methods
     def setMaxSpeed(self, max_speed):

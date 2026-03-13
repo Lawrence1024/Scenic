@@ -23,8 +23,7 @@ In Scenic, set `ttlFolder` to this folder and optionally `ttlFileName` (e.g. `tt
 
 ```scenic
 with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV'), \
-     with ttlFileName 'ttl_main_road.csv', \
-     with ttlDX 0.0, with ttlDY 0.0
+     with ttlFileName 'ttl_main_road.csv'
 ```
 
 Default in the dSPACE TTL loader is this folder with offset (0, 0). When ego placement is similar to both main road and pitlane (TTL distances within ~2 m), the loader assigns **Lap** (main road) by default; the assigned route is logged (e.g. `[Ego] Assigned route: Lap`).

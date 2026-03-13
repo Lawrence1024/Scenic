@@ -1,26 +1,13 @@
-# TTL coordinate system integration
+# TTL loading
 
-The TTL loading code automatically detects and handles coordinate system transformations based on the folder containing the TTL files.
-
-## Automatic detection
-
-- **`LS_ENU_TTL_CSV` folder:** Files are in XODR coordinates. Offset set to `(0, 0)`; no transformation. Waypoints can be used directly with Scenic vehicle positions.
-- **Other folders:** Files in ENU/RD. Default offset `(-53.6, -15.7)` applied during loading.
+TTL CSV files are loaded without any offset; they are assumed to be in map (XODR) coordinates, matching Scenic vehicle positions.
 
 ## Key functions
 
-- **`get_ttl_config(scene_params)`** – Detects `LS_ENU_TTL_CSV` (or `transformed`) in path; sets offset to (0,0) for that folder, (-53.6,-15.7) otherwise.
-- **`load_ttl_region(...)`** – Logs coordinate system and offset used.
-- **`attach_ttl(sim, obj, vehicle_type="vehicle")`** – Auto-detects offset from folder path; respects explicit overrides; default folder `LS_ENU_TTL_CSV`.
+- **`get_ttl_config(scene_params)`** – Returns `(ttl_folder, ttl_index, ttl_file_name_or_None)` from scene params.
+- **`load_ttl_region(ttl_folder, ttl_index, ttl_file_name=None)`** – Loads TTL CSV and returns `(PolylineRegion, waypoints)`.
+- **`attach_ttl(sim, obj, vehicle_type="vehicle")`** – Loads TTL from object or scene params and attaches region/waypoints to the object.
 
 ## Usage
 
-**Default (recommended):** Use `assets/ttls/LS_ENU_TTL_CSV`; offset (0, 0) is automatic.
-
-**Explicit override:** Set `param ttlFolder`, `param ttlDX`, `param ttlDY` as needed.
-
-**Other folders:** If path is not LS_ENU_TTL_CSV, offset is auto-set to (-53.6, -15.7).
-
-## Alignment
-
-Vehicle positions (Scenic) and TTL waypoints from `LS_ENU_TTL_CSV` both use XODR coordinates, so waypoint following works without manual offset.
+Set `param ttlFolder` and optionally `param ttlFileName` or per-vehicle `ttlFolder` / `ttlFileName`. Default folder is `assets/ttls/LS_ENU_TTL_CSV`.

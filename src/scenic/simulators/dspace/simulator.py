@@ -8,6 +8,7 @@ import csv
 import math
 import os
 import subprocess
+import sys
 import time
 import pythoncom
 from win32com.client import Dispatch
@@ -26,7 +27,13 @@ from .vehicle.actor import ensure_actor, DSpaceVehicleActor
 from .vehicle.indexing import get_fellow_index as indexing_get_fellow_index
 from .geometry.pipeline import build_road_index_and_transform
 from .modeldesk.authoring import author_scenario, configure_fellow
-from .modeldesk.placement import place_ego, place_fellow, TTL_MAIN_ROAD_FILE, TTL_PITLANE_FILE
+from .modeldesk.placement import (
+    place_ego,
+    place_fellow,
+    TTL_MAIN_ROAD_FILE,
+    TTL_PITLANE_FILE,
+    _road_direction_deg_at,
+)
 from .geometry.route_mapping import detect_track_segment, assign_route_for_segment
 from .modeldesk.routes import set_route as routes_set_route
 from .controldesk import session as cd_session
@@ -79,7 +86,7 @@ class DSpaceSimulation(RacingSimulation):
         self.exp = None
         self.ts  = None
         self._road_index = None   # parsed from XODR or RD
-        self._coordinate_transform = None  # XODR→RD transformation if needed
+        self._coordinate_transform = None  # Unused; map is single source (RD-aligned)
         self._ego_created = False  # Track if ego vehicle was created
         
         # dSPACE two-phase architecture
@@ -159,15 +166,14 @@ class DSpaceSimulation(RacingSimulation):
 
     # --- TTL (Target Trajectory Line) loading utilities ---
     def _load_ttl_region(self):
-        """Load a TTL CSV as a PolylineRegion, applying global transform (dx,dy)."""
+        """Load a TTL CSV as a PolylineRegion."""
         params = getattr(self.scene, "params", {}) or {}
-        ttl_folder, ttl_index, dx, dy, ttl_file = get_ttl_config(params)
+        ttl_folder, ttl_index, ttl_file = get_ttl_config(params)
         try:
-            region, pts = load_ttl_region(ttl_folder, ttl_index, dx, dy, ttl_file)
+            region, pts = load_ttl_region(ttl_folder, ttl_index, ttl_file)
             if region is None:
                 return None
             ttl_name = params.get("ttlFileName") or ttl_file or f"ttl_{ttl_index}.csv"
-            print(f"[TTL] Loaded {len(pts)} points from {ttl_name} with offset ({dx}, {dy})")
             self._ttl_points_loaded = pts
             return region
         except Exception as e:
@@ -334,9 +340,7 @@ class DSpaceSimulation(RacingSimulation):
         except Exception:
             pass
 
-        # 4) Build road geometry index and coordinate transformation
-        # Strategy: Scenic gives us coordinates in XODR system, but ModelDesk/Aurelion
-        # uses RD system. We need to transform between them.
+        # 4) Build road geometry index from map (single source; map is RD-aligned)
         map_path = self._get_scx_map_path()
         if map_path:
             self._road_index, self._coordinate_transform = build_road_index_and_transform(map_path, dutils)
@@ -345,6 +349,7 @@ class DSpaceSimulation(RacingSimulation):
 
         # 5) Let Scenic create objects (calls createObjectInSimulator)
         super().setup()
+        sys.stdout.flush()  # Flush placement debug ([Ego debug], [Fellow s,t]) so it appears promptly
 
         # 6) Phase 1: Author scenario in ModelDesk (if dynamic control is needed)
         if self._needsDynamicControl():
@@ -498,15 +503,22 @@ class DSpaceSimulation(RacingSimulation):
         is accessed through TrafficScenario.Maneuver.Item(0) and configured.
         """
         result = place_ego(self, obj)
+        # Align ego heading with road when Scenic's facing roadDirection didn't apply (e.g. roadAt returns None)
+        if getattr(obj, "position", None) and getattr(self, "_road_index", None):
+            road_deg = _road_direction_deg_at(self._road_index, obj.position.x, obj.position.y)
+            if road_deg is not None:
+                obj.yaw = math.radians(road_deg)
+                obj._road_aligned_heading_deg = road_deg  # placement debug uses this (Scenic may cache heading)
+                print(f"[Ego] Aligned heading with road: road_direction_deg={road_deg:.1f}")
         # Assign TTL to ego if available (delegated)
         attach_to_ego(self, obj)
         # If ttlFolder is set, load both centerline TTLs so segments and track use TTL; otherwise OpenDRIVE.
         params = getattr(self.scene, "params", None) or {}
         if params.get("ttlFolder"):
             try:
-                ttl_folder, _, dx, dy, _ = get_ttl_config(params)
-                _, main_pts = load_ttl_region(ttl_folder, 0, dx, dy, TTL_MAIN_ROAD_FILE)
-                _, pit_pts = load_ttl_region(ttl_folder, 0, dx, dy, TTL_PITLANE_FILE)
+                ttl_folder, _, _ = get_ttl_config(params)
+                _, main_pts = load_ttl_region(ttl_folder, 0, TTL_MAIN_ROAD_FILE)
+                _, pit_pts = load_ttl_region(ttl_folder, 0, TTL_PITLANE_FILE)
                 if main_pts:
                     setattr(self.scene, "_main_ttl_waypoints", main_pts)
                     setattr(self.scene, "_pit_ttl_waypoints", pit_pts if pit_pts else [])
@@ -1189,14 +1201,7 @@ class DSpaceSimulation(RacingSimulation):
                 return 0.0, 0.0
             try:
                 scenic_x, scenic_y = obj.position.x, obj.position.y
-                # Apply XODR→RD transform if available
-                if self._coordinate_transform is not None:
-                    from .geometry.coordinate_transform import apply_coordinate_transform
-                    work_x, work_y = apply_coordinate_transform(
-                        self._coordinate_transform, (scenic_x, scenic_y)
-                    )
-                else:
-                    work_x, work_y = scenic_x, scenic_y
+                work_x, work_y = scenic_x, scenic_y
 
                 if self._road_index:
                     from .geometry.route_projection import project_world_to_st_route_specific
@@ -1694,10 +1699,10 @@ class DSpaceSimulation(RacingSimulation):
         """
         try:
             scene_params = getattr(getattr(self, "scene", None), "params", None) or {}
-            ttl_folder, _, dx, dy, _ = get_ttl_config(scene_params)
+            ttl_folder, _, _ = get_ttl_config(scene_params)
             ttl_folder = str(ttl_folder)
             filename = TTL_MAIN_ROAD_FILE if route_pref == "Lap" else TTL_PITLANE_FILE
-            region, pts = load_ttl_region(ttl_folder, 0, dx, dy, filename)
+            region, pts = load_ttl_region(ttl_folder, 0, filename)
             if not pts or len(pts) < 2:
                 print(f"[Ego] TTL switch skipped: could not load {filename} ({len(pts) if pts else 0} points)")
                 return

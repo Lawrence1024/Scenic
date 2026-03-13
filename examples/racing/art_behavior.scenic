@@ -21,9 +21,7 @@ ego = new RacingCar at (79.766382000,97.055717000), \
     with regionContainedIn everywhere, \
     with raceNumber 1, \
     with ttlFileName 'ttl_right_xodr.csv', \
-    with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV'), \
-    with ttlDX 0.0, \
-    with ttlDY 0.0
+    with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV')
 
 # Use ART wrapper behavior 
 ego.behavior = ARTStackControlBehavior()

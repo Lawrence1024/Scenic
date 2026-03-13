@@ -39,11 +39,21 @@ Ego steering is always in **road wheel angle (radians)** by the time it is writt
 
 ## Coordinate transformation and placement
 
-1. **XODR → RD:** Apply coordinate transform (rotation + translation).
-2. **Route detection:** Determine if vehicle is on pitLane or mainRacing road.
-3. **RD → (s,t):** Project RD coordinates to route-relative (s,t) using route-specific road sequences.
-4. **Placement:** Set (s,t) in ModelDesk with appropriate route.
-5. **Readback:** Read actual position from ControlDesk and compare with expected.
+**Scenic vs dSPACE frames:**
+- **Position:** The map is RD-aligned, so Scenic (x, y) and the road index (and dSPACE placement) share the same Cartesian frame. No position transform is applied.
+- **Orientation:** Scenic uses **ENU** (North = 0°, yaw from North). dSPACE ModelDesk uses **RD** (East = 0°). When writing vehicle orientation to ModelDesk we convert: `dspace_yaw = scenic_yaw - π/2`. Readback may apply a 180° flip (see `controldesk/readback.py`) because ModelDesk orients vehicles backward along the track.
+
+Placement flow:
+1. **Route detection:** Determine if vehicle is on pitLane or mainRacing road.
+2. **World → (s,t):** Project Scenic (x, y) to route-relative (s, t) using the map’s road index.
+3. **Placement:** Set (s, t) and orientation in ModelDesk (orientation converted ENU → RD as above).
+4. **Readback:** Read actual position from ControlDesk and compare with expected.
+
+**Racing-library (s,t) semantics:** For fellows specified relative to ego (ahead/behind/left/right), you can set `_racing_st_offset` so (s,t) is computed from ego's (s,t) instead of projecting world position: **ahead/behind** → keep t, move s; **left/right** → keep s, move t. Use `with _racing_st_offset ('ahead', 5)` or `('right', 2)` or raw `(delta_s, delta_t)` e.g. `(5, 0)` or `(0, -2)` (t<0 = right). Same route as ego is used.
+
+**Out-of-bounds:** (s,t) are never clamped to track bounds. If a Scenic position projects to a large |t| (e.g. vehicle off the track), that (s,t) is sent to ModelDesk as-is so the car is placed out of bounds rather than estimated onto the track.
+
+**TTL vs XODR:** TTL centerlines are used for projection only when the scenario sets `param ttlFolder`. Otherwise the XODR-based road index is used so (s,t) matches the track (avoids large |t| when mainTrack is from XODR). **Route-filtered projection:** For a given route (Lap vs Pit), (s,t) is computed on the road that belongs to that route (e.g. Lap → main road only), so vehicles are never projected onto the wrong road.
 
 **Key files:**
 - `geometry/coordinate_transform.py` – XODR ↔ RD transformation
@@ -70,7 +80,7 @@ A **GPS ↔ dSPACE local** transform is available for converting between GNSS (l
   x_local, y_local = cal.gnss_to_local(longitude_deg, latitude_deg)
   lon_deg, lat_deg = cal.local_to_gnss(x_local, y_local)
   ```
-  From dSPACE (x, y) you can then use the existing **XODR ↔ RD** transform in `geometry/coordinate_transform.py` (e.g. `apply_inverse_coordinate_transform`) to get Scenic XODR coordinates.
+  The map is the single geometry source (RD-aligned); dSPACE (x, y) are in the same frame as Scenic positions.
 
 - **Racing library:** GNSS ↔ Scenic local transform lives in `scenic.domains.racing.gnss_transform` so the racing library enforces that read-in can be GNSS; conversion to Scenic local is done there. When **use_gnss_readback** is enabled (scene param), dSPACE reads GNSS and uses the racing transform to get (x, y, heading) in Scenic frame; z and velocity are still read from dSPACE. Set `param use_gnss_readback = True` and optionally `param gnss_calibration_path = localPath('...')` (default: `dspace/geometry/gps_dspace_calibration.json`). **Ego** uses `Environment/Road/PlantModel/GPS_POSITION/GPS_CALC`; **Fellows** use `VesiInterface/VehicleSensors/ground_truth/GPS_POSITION/GPS_CALC` with indexed signals `Longitude_deg[i]`, `Latitude_deg[i]`, `Heading_deg[i]` (see `controldesk/readback.py`).
 

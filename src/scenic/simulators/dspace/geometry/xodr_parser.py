@@ -1,4 +1,9 @@
-"""XODR file parser for dSPACE geometry."""
+"""XODR file parser for dSPACE geometry (reference line only).
+
+Used as fallback when the driving-domain road index (lane 0 centerlines) is not
+available. For (s,t) projection that matches mainTrack/pitTrack, the pipeline
+prefers build_road_index_from_driving_network in driving_road_index.py.
+"""
 
 import math
 import xml.etree.ElementTree as ET

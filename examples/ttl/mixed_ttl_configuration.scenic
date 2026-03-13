@@ -9,9 +9,8 @@ Features demonstrated:
 - Automatic TTL attachment for both ego and fellows
 
 TTL Configuration Priority:
-1. Object-specific properties (obj.ttlIndex, obj.ttlDX, obj.ttlDY, etc.)
-2. Scene parameters (ttlIndex, ttlDX, ttlDY, etc.)
-3. Default values (index=17, dx=-53.6, dy=-15.7)
+1. Object-specific properties (obj.ttlIndex, obj.ttlFolder, obj.ttlFileName)
+2. Scene parameters (ttlIndex, ttlFolder, ttlFileName)
 
 Available TTL indices for Laguna Seca: 2, 3, 9, 15, 16, 17
 """
@@ -23,8 +22,6 @@ param trackDirection = 'counterclockwise'
 
 # Global TTL defaults - these apply to vehicles without specific TTL config
 param ttlNumber = 17        # Default TTL index (choose among: 2, 3, 9, 15, 16, 17)
-param ttlDX = -53.6         # Global X offset to apply to TTL points
-param ttlDY = -15.7         # Global Y offset to apply to TTL points
 param ttlFolder = localPath('../../assets/ttls/LS_ENU_TTL_CSV')
 
 model scenic.simulators.dspace.model
@@ -41,11 +38,8 @@ ego.behavior = FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_
 # ============================================================================
 fellow1 = new RacingCar on mainRacingRoad, \
     with raceNumber 2, \
-    ttlIndex 15, \
-    ttlDX -53.6, \
-    ttlDY -15.7
+    ttlIndex 15
 # Fellow1 gets TTL 15 (overrides global ttlNumber=17)
-# Uses same offset as global (can be overridden if needed)
 fellow1.behavior = FollowRacingLineBehavior(target_speed=25, manage_gears=True, use_waypoints=True)
 
 # ============================================================================
@@ -53,9 +47,7 @@ fellow1.behavior = FollowRacingLineBehavior(target_speed=25, manage_gears=True, 
 # ============================================================================
 fellow2 = new RacingCar on mainRacingRoad, \
     with raceNumber 3, \
-    ttlIndex 9, \
-    ttlDX -53.6, \
-    ttlDY -15.7
+    ttlIndex 9
 # Fellow2 gets TTL 9 (different from both ego and fellow1)
 fellow2.behavior = FollowRacingLineBehavior(target_speed=20, manage_gears=True, use_waypoints=True)
 
@@ -72,7 +64,7 @@ fellow3.behavior = FollowRacingLineBehavior(target_speed=28, manage_gears=True, 
 fellow4 = new RacingCar on mainRacingRoad, \
     with raceNumber 5, \
     ttlIndex 16
-# Fellow4 gets TTL 16, but uses global ttlDX and ttlDY from scene params
+# Fellow4 gets TTL 16 (object-specific index, global ttlFolder)
 fellow4.behavior = FollowRacingLineBehavior(target_speed=22, manage_gears=True, use_waypoints=True)
 
 # ============================================================================
@@ -81,6 +73,6 @@ fellow4.behavior = FollowRacingLineBehavior(target_speed=22, manage_gears=True, 
 # - fellow1:    TTL 15 (object-specific)
 # - fellow2:    TTL 9  (object-specific)
 # - fellow3:    TTL 17 (global default, no override)
-# - fellow4:    TTL 16 (object-specific index, global offset)
+# - fellow4:    TTL 16 (object-specific index, global ttlFolder)
 # ============================================================================
 

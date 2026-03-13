@@ -70,8 +70,52 @@ LAGUNA_SECA_SEGMENTS: List[Tuple[int, float, float, int, str]] = [
 ]
 
 
+def _midline_from_edges(left_edge: Any, right_edge: Any, num_points: int = 500) -> Optional[List[Tuple[float, float]]]:
+    """Compute midline as average of left and right boundary polylines.
+
+    Samples both edges at the same normalized arc length (0..1) and averages (x,y).
+    This gives the true geometric center of the track regardless of XODR reference/lanes.
+    """
+    try:
+        left_ls = getattr(left_edge, "lineString", left_edge)
+        right_ls = getattr(right_edge, "lineString", right_edge)
+        if not hasattr(left_ls, "interpolate") or not hasattr(right_ls, "interpolate"):
+            return None
+        if left_ls.is_empty or right_ls.is_empty or len(left_ls.coords) < 2 or len(right_ls.coords) < 2:
+            return None
+        pts = []
+        for i in range(num_points):
+            t = i / max(1, num_points - 1)
+            try:
+                l_pt = left_ls.interpolate(t, normalized=True)
+                r_pt = right_ls.interpolate(t, normalized=True)
+            except Exception:
+                return None
+            lx, ly = float(l_pt.x), float(l_pt.y)
+            rx, ry = float(r_pt.x), float(r_pt.y)
+            pts.append(((lx + rx) * 0.5, (ly + ry) * 0.5))
+        return pts
+    except Exception:
+        return None
+
+
 def _get_road_centerline(road: Any) -> Optional[Any]:
-    """Get the road centerline as the centerline of lane 0 (rightmost lane)."""
+    """Get the road centerline for track regions.
+
+    Prefer the geometric midline (average of left and right boundaries) when both
+    exist; that is the true track center regardless of XODR lanes/reference.
+    Fallback to Road.centerline (reference line), then lane 0 centerline.
+    """
+    left_edge = getattr(road, "leftEdge", None)
+    right_edge = getattr(road, "rightEdge", None)
+    if left_edge is not None and right_edge is not None:
+        mid_pts = _midline_from_edges(left_edge, right_edge)
+        if mid_pts and len(mid_pts) >= 2:
+            from scenic.core.regions import PolylineRegion
+            return PolylineRegion(points=mid_pts)
+    centerline = getattr(road, "centerline", None)
+    if centerline is not None:
+        return centerline
     lanes = getattr(road, "lanes", None)
     if not lanes or len(lanes) == 0:
         return None
