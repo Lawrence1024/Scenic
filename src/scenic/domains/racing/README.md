@@ -8,7 +8,6 @@ The Scenic Racing Domain (`@racing/`) extends the Driving Domain (`@driving/`) w
 
 - **Closed-loop circuits** with defined direction (clockwise/counterclockwise)
 - **Pit lanes** separate from racing lanes with automatic detection
-- **Starting grids** for race starts (OpenDRIVE-based; see model comments for TTL vs OpenDRIVE)
 - **Racing controllers:** PID (driving domain) or **MPC** (MPCC lateral + longitudinal) via `getRacingControllers(agent, use_mpc=True)`
 - **Waypoint-based racing line** with segment maps and TTL loading (`segments/`, `mpc/`)
 - **Minimal but extensible API** that simulators can implement
@@ -41,9 +40,9 @@ param use2DMap = True
 param trackDirection = 'counterclockwise'
 model scenic.domains.racing.model
 
-# Create cars on starting grid
-ego = new RacingCar at startingGrid[0]
-opponent = new RacingCar at startingGrid[1]
+# Create cars on track
+ego = new RacingCar on mainTrack
+opponent = new RacingCar on mainTrack
 ```
 
 ### With Behaviors
@@ -53,7 +52,7 @@ param map = localPath('LagunaSeca.xodr')
 param use2DMap = True
 model scenic.domains.racing.model
 
-ego = new RacingCar at startingGrid[0], \
+ego = new RacingCar on mainTrack, \
     with behavior FollowRacingLineBehavior(target_speed=30)
 ```
 
@@ -113,7 +112,6 @@ def setTTL(self, ttl) -> None: ...  # ttl is a Region-like line with signedDista
 - `pitLaneRoad`: Optional Road object for pit lane
 - `mainRacingRoad`: Union of all non-pit roads
 - `racingLine`: Optional `RacingLine` object (defaults to `mainRacingRoad`)
-- `startingGrid`: List of starting grid positions (when generateStartingGrid is True)
 - `trackLength`: Total track length in meters
 
 ---
@@ -401,8 +399,6 @@ Main track management class extending the driving domain's Network.
 **Key Methods**:
 - `isOnPitLane(position) → bool` - Check if position is on pit lane
 - `enforceTrackDirection(heading, position) → bool` - Validate heading matches track direction
-- `generateStartingGrid(numPositions, spacing) → List[Lane]` - Generate grid positions
-
 **Initialization**:
 ```python
 track = createRacingTrack(
@@ -425,12 +421,7 @@ track = createRacingTrack(
 
 ```scenic
 param trackDirection = 'counterclockwise'  # or 'clockwise'
-param generateStartingGrid = True
-param startingGridPositions = 20
-param startingGridSpacing = 8.0  # meters between grid positions
 ```
-
-**Starting grid vs TTL regions:** When `ttlFolder` is set, `mainTrack` and `pitTrack` are built from TTL centerlines (ttl_main_road.csv, ttl_pitlane.csv). The **starting grid** does not use those regions: it is built from the OpenDRIVE map via `_track.generateStartingGrid()` (main racing lane from the road network). So placement on track uses TTL when available (`new RacingCar on mainTrack`); formation/race-start positions use `startingGrid[i]` and require a valid OpenDRIVE map. For TTL-only or corrupted OpenDRIVE, set `generateStartingGrid = False` and place cars on `mainTrack`/`pitTrack` instead.
 
 ### Track Segment Identification (Optional)
 
@@ -491,9 +482,9 @@ param trackDirection = 'counterclockwise'
 model scenic.domains.racing.model
 
 # Cars automatically placed on grid
-ego = new RacingCar at startingGrid[0]
-opponent1 = new RacingCar at startingGrid[1]
-opponent2 = new RacingCar at startingGrid[2]
+ego = new RacingCar on mainTrack
+opponent1 = new RacingCar on mainTrack
+opponent2 = new RacingCar on mainTrack
 ```
 
 ### With Behaviors
@@ -504,11 +495,11 @@ param use2DMap = True
 model scenic.domains.racing.model
 
 # Ego on grid with racing behavior
-ego = new RacingCar at startingGrid[0], \
+ego = new RacingCar on mainTrack, \
     with behavior FollowRacingLineBehavior(target_speed=30)
 
 # Opponent with defensive behavior
-opponent = new RacingCar at startingGrid[1], \
+opponent = new RacingCar on mainTrack, \
     with behavior DefensiveBehavior()
 ```
 
@@ -607,7 +598,6 @@ These features are referenced in documentation or behaviors but are **not** in t
 ```python
 track.isOnPitLane(position: Vector) -> bool
 track.enforceTrackDirection(heading: float, position: Vector) -> bool
-track.generateStartingGrid(numPositions: int, spacing: float, offset: float = 0.0) -> List[Lane]
 ```
 
 ### Utility Functions
@@ -835,7 +825,7 @@ The Racing Domain provides a **minimal but functional** foundation for racing sc
 - **5 Actions**: Max speed, TTL, gear, clutch (press/release)
 - **5 Behaviors**: Racing line following (PID), **racing line following with MPC**, pit stops, overtaking, defense
 - **3 Regions**: Main racing road, pit lane road, racing line
-- **Multiple Track Features**: Pit lanes, racing lines, starting grids
+- **Multiple Track Features**: Pit lanes, racing lines
 - **MPC submodule**: MPCC lateral + longitudinal MPC, waypoint reference, speed profile, log analysis (`mpc/`, `segments/`)
 
 The implementation is intentionally lean, focusing on core racing functionality that simulators can build upon. The domain supports both PID and MPC-based racing line following; see `mpc/README.md` for MPC details.

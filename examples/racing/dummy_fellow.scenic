@@ -4,7 +4,6 @@ param use2DMap = True
 param time_step = 0.01
 param control_period = 0.05
 param scenic_control = False
-generateStartingGrid = False
 model scenic.simulators.dspace.racing_model
 
 # --- Ego car with MPC behavior ---

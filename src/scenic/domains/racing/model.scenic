@@ -11,7 +11,6 @@ Example::
     param map = localPath('laguna_seca.xodr')
     param use2DMap = True
     param trackDirection = 'counterclockwise'  # or 'clockwise'
-    param generateStartingGrid = True
     model scenic.domains.racing.model
 """
 
@@ -26,9 +25,6 @@ from scenic.domains.racing.segments.track_regions import create_track_regions
 ## Racing-specific parameters
 
 param trackDirection = 'counterclockwise'
-param generateStartingGrid = True
-param startingGridPositions = 20
-param startingGridSpacing = 8.0  # meters between grid positions
 
 # Track segment identification (optional)
 param pitLaneRoadId = None  # e.g., "1545702203" for Laguna Seca
@@ -100,28 +96,6 @@ racingLine: Region = _track.racingLine.region if hasattr(_track, 'racingLine') a
 #: Start/finish line region
 # TODO: Create actual start/finish line region from track data
 
-## Starting grid
-#
-# Starting grid is the list of positions for race starts (e.g. ego at startingGrid[0], opponents at [1], [2], ...).
-# It is built from the OpenDRIVE track only: _track.generateStartingGrid() uses the road network (main racing
-# lane from _getMainRacingLane()). It does NOT use TTL or the mainTrack/pitTrack regions.
-#
-# When you set ttlFolder, mainTrack and pitTrack are TTL-based regions (centerlines ± buffer from ttl_main_road
-# and ttl_pitlane). Starting grid does not inherit that: it still comes from the map/OpenDRIVE. So:
-# - For placement on track (anywhere on main/pit): use "new RacingCar on mainTrack" or "on pitTrack" (TTL when ttlFolder set).
-# - For formation/race start positions: use startingGrid[i] (OpenDRIVE-based; requires valid map/network).
-# If you use TTL-only (no OpenDRIVE or corrupted map), set generateStartingGrid = False and place cars on mainTrack/pitTrack.
-
-# Generate starting grid if requested
-if globalParameters.generateStartingGrid:
-    #: List of starting grid positions (OpenDRIVE-based; each entry is the main racing lane region)
-    startingGrid = _track.generateStartingGrid(
-        numPositions=globalParameters.startingGridPositions,
-        spacing=globalParameters.startingGridSpacing
-    )
-else:
-    startingGrid = []
-
 ## Racing-specific object types
 
 class RacingCar(Car):
@@ -189,10 +163,10 @@ def carsInFormation(positions):
     
     Example::
     
-        cars = carsInFormation(startingGrid[:10])
+        cars = carsInFormation([mainTrack, mainTrack, mainTrack])  # 3 cars on main track
     
     Args:
-        positions: List of positions (typically from startingGrid)
+        positions: List of positions or regions (e.g. mainTrack repeated, or a list of specific regions)
         
     Returns:
         List of RacingCar objects

@@ -31,10 +31,10 @@ Example racing scenario::
     param use2DMap = True
     model scenic.domains.racing.model
     
-    # Create cars on racing grid
-    ego = new RacingCar at startingGrid[0]
-    opponent1 = new RacingCar at startingGrid[1]
-    opponent2 = new RacingCar at startingGrid[2]
+    # Create cars on track (use mainTrack or pitTrack for placement)
+    ego = new RacingCar on mainTrack
+    opponent1 = new RacingCar on mainTrack
+    opponent2 = new RacingCar on mainTrack
     
     # Follow racing line behavior
     ego with behavior FollowRacingLineBehavior()

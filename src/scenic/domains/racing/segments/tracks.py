@@ -188,7 +188,6 @@ class RacingTrack:
     - Pit lane identification
     - Racing line
     - Start/finish line
-    - Starting grid positions
     
     Attributes:
         network: The underlying road Network
@@ -197,7 +196,6 @@ class RacingTrack:
         racingLine: The optimal racing line
         startFinishLine: Position of the start/finish line
         trackLength: Total length of the racing circuit in meters
-        startingGrid: List of positions for race starts
     """
     
     def __init__(
@@ -242,7 +240,6 @@ class RacingTrack:
         self.pitLane: Optional[PitLane] = None
         self.racingLine: Optional[RacingLine] = None
         self.startFinishLine: Optional[Vector] = None
-        self.startingGrid: List[Vector] = []
 
         # Track segments: Two mutually exclusive regions
         # mainRacingRoad = union of all main loop roads (main line + chosen junction links)
@@ -768,60 +765,6 @@ class RacingTrack:
             return lane.road == self.pitLaneRoad
         return False
     
-    def generateStartingGrid(
-        self, 
-        numPositions: int = 20,
-        spacing: float = 8.0,
-        offset: float = 0.0
-    ) -> List:
-        """Generate starting grid positions.
-        
-        Args:
-            numPositions: Number of grid positions to generate
-            spacing: Distance between grid positions (meters)
-            offset: Distance from start/finish line (meters)
-            
-        Returns:
-            List of lane regions for the starting grid (Scenic will sample positions from these)
-        """
-        if self.startFinishLine is None:
-            # Use the beginning of the longest road as start/finish
-            longest_road = max(
-                self.network.roads,
-                key=lambda r: sum(lane.centerline.length for lane in r.lanes)
-            )
-            self.startFinishLine = longest_road.lanes[0].centerline.start
-        
-        # Generate grid positions along the main straight
-        # For now, return the main lane region and let Scenic sample positions from it
-        # This ensures cars are always placed within valid lane boundaries
-        positions = []
-        main_lane = self._getMainRacingLane()
-        
-        if main_lane:
-            # Return the lane region for each grid position
-            # Scenic will sample actual positions from this region
-            for i in range(numPositions):
-                positions.append(main_lane)
-        
-        self.startingGrid = positions
-        return positions
-    
-    def _getMainRacingLane(self) -> Optional[Lane]:
-        """Get the main racing lane (typically the widest or most central lane)."""
-        # Find the longest lane that's not a pit lane
-        main_lane = None
-        max_length = 0.0
-        
-        for road in self.network.roads:
-            for lane in road.lanes:
-                if not self._isPitLane(lane):
-                    if lane.centerline.length > max_length:
-                        max_length = lane.centerline.length
-                        main_lane = lane
-        
-        return main_lane
-
     def isOnPitLane(self, position: Vector) -> bool:
         """Check if a position is on the pit lane."""
         if self.pitLane is None:

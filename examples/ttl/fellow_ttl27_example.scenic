@@ -14,7 +14,6 @@ Key points:
 param map = localPath('../../assets/maps/dSPACE/LagunaSeca.xodr')
 param use2DMap = True
 param trackDirection = 'counterclockwise'
-param generateStartingGrid = False
 
 # Global TTL defaults (can be overridden per vehicle)
 param ttlDX = -53.6         # Global X offset to apply to TTL points

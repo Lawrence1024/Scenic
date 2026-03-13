@@ -3,7 +3,7 @@ Test script for the racing domain with dSPACE simulator.
 
 This script verifies that the racing domain works correctly:
 1. Compiles a racing scenario
-2. Generates a scene with racing cars on starting grid
+2. Generates a scene with racing cars on track (mainTrack)
 3. Sets up the simulation in dSPACE
 """
 
@@ -61,9 +61,9 @@ def main():
         if hasattr(scene, 'params') and 'track' in dir(scene):
             print(f"    ✓ Racing track object created")
         
-        # Check starting grid
+        # Check track/params
         if hasattr(scene, 'params'):
-            print(f"    ✓ Starting grid positions available")
+            print(f"    ✓ Scene params and track available")
         
         # Check car properties
         ego = scene.egoObject
@@ -93,13 +93,12 @@ def main():
         return 1
     
     print(f"\n[5] Setting up simulation in ModelDesk...")
-    print(f"    (This will configure ego and opponents on starting grid)")
+    print(f"    (This will configure ego and opponents on track)")
     try:
         simulation = simulator.simulate(scene, maxSteps=1)
         print(f"\n    ✓ SIMULATION SETUP COMPLETE!")
         print(f"\n    Check ModelDesk to see:")
-        print(f"      - Ego car at pole position (grid slot 1)")
-        print(f"      - {len(scene.objects) - 1} opponent cars on grid")
+        print(f"      - Ego car and opponents on main track")
         print(f"      - All cars aligned with track direction")
         print(f"      - Ready for race start!")
     except Exception as e:

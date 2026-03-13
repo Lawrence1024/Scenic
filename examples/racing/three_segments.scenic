@@ -33,7 +33,6 @@ Run with:
 param map = localPath('../../assets/maps/dSPACE/LagunaSeca.xodr')
 param use2DMap = True
 param trackDirection = 'counterclockwise'
-param generateStartingGrid = False
 
 model scenic.simulators.dspace.racing_model
 

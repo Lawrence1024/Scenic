@@ -20,7 +20,6 @@ Available TTL indices for Laguna Seca: 2, 3, 9, 15, 16, 17
 param map = localPath('../../assets/maps/dSPACE/LagunaSeca.xodr')
 param use2DMap = True
 param trackDirection = 'counterclockwise'
-param generateStartingGrid = False
 
 # Global TTL defaults - these apply to vehicles without specific TTL config
 param ttlNumber = 17        # Default TTL index (choose among: 2, 3, 9, 15, 16, 17)
