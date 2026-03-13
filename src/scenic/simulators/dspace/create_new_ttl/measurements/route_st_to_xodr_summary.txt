@@ -1,0 +1,13 @@
+dSPACE route geometry measurement summary
+============================================================
+Routes: R2, R1
+s range: 0.0 .. 3500.0 (step 1.0)
+t values: -4.000, 0.000, 4.000
+Batch size: 30
+Total results: 16563
+
+R2: 10503 samples
+R1: 6060 samples
+
+CSV: C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\create_new_ttl\measurements\route_st_to_xodr_measurements.csv
+Checkpoint: C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\create_new_ttl\measurements\route_st_to_xodr_checkpoint.json

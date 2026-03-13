@@ -2,11 +2,14 @@
 """
 Build an OpenDRIVE file from TTL centerline CSVs (main + pit) with fixed lane widths.
 
-Creates two roads connected by predecessor/successor links (no junction elements):
-- Road 1 (main): arc from pit entry to pit exit along main centerline, 6 m each side.
-- Road 2 (pit): full pit centerline, 3.25 m each side.
+Creates three roads connected by predecessor/successor links (no junction elements):
+- Road 1 (main arc A): pit entry → pit exit along main centerline (6 m each side).
+- Road 2 (pit): pit centerline trimmed in overlap so main dominates (3.25 m each side).
+- Road 3 (main arc B): pit exit → pit entry along main centerline (6 m each side).
 
-The main loop is: Main → Pit → Main → ...
+The full main loop (Andretti, Corkscrew, etc.) is road 1 + road 3. In overlap regions
+(Corkscrew, Andretti) pit points within OVERLAP_MAIN_WINS_M of main are trimmed so
+main track width applies.
 
 Run from Scenic repo root:
   python -m scenic.domains.racing.XODR_generation.build_ttl_xodr [options]
@@ -32,6 +35,9 @@ _DEFAULT_OUTPUT = _PKG_DIR / "generated" / "track_from_ttl.xodr"
 # Lane widths (meters each side of centerline)
 MAIN_LANE_WIDTH = 6.0
 PIT_LANE_WIDTH = 3.25
+
+# Where pit centerline is within this distance of main, trim pit so main dominates (same idea as track_regions).
+OVERLAP_MAIN_WINS_M = 5.0
 
 
 def load_ttl_csv(path: Path) -> List[Tuple[float, float]]:
@@ -62,6 +68,50 @@ def _closest_point_index(poly: List[Tuple[float, float]], point: Tuple[float, fl
             best_d2 = d2
             best_i = i
     return best_i
+
+
+def _distance_point_to_polyline(
+    point: Tuple[float, float],
+    poly: List[Tuple[float, float]],
+) -> float:
+    """Minimum distance from point to any segment of the polyline."""
+    px, py = point
+    best_d = float("inf")
+    for i in range(len(poly) - 1):
+        x0, y0 = poly[i]
+        x1, y1 = poly[i + 1]
+        # Vector along segment, and from segment start to point
+        dx, dy = x1 - x0, y1 - y0
+        qx, qy = px - x0, py - y0
+        seg_len_sq = dx * dx + dy * dy
+        if seg_len_sq < 1e-18:
+            d = math.hypot(qx, qy)
+        else:
+            t = max(0.0, min(1.0, (qx * dx + qy * dy) / seg_len_sq))
+            proj_x = x0 + t * dx
+            proj_y = y0 + t * dy
+            d = math.hypot(px - proj_x, py - proj_y)
+        if d < best_d:
+            best_d = d
+    return best_d
+
+
+def _trim_pit_overlap(
+    pit_pts: List[Tuple[float, float]],
+    main_pts: List[Tuple[float, float]],
+    threshold_m: float,
+) -> List[Tuple[float, float]]:
+    """Trim pit points that are within threshold_m of main centerline so main dominates in overlap."""
+    if not pit_pts or not main_pts or threshold_m <= 0:
+        return pit_pts
+    out = []
+    for p in pit_pts:
+        if _distance_point_to_polyline(p, main_pts) >= threshold_m:
+            out.append(p)
+    # Keep at least two points so the road is valid; if we trimmed everything, return original
+    if len(out) < 2:
+        return pit_pts
+    return out
 
 
 def _polyline_length(pts: List[Tuple[float, float]]) -> float:
@@ -177,13 +227,17 @@ def build_connected_ttl_xodr(
     output_path: Path,
     main_width: float = MAIN_LANE_WIDTH,
     pit_width: float = PIT_LANE_WIDTH,
+    overlap_main_wins_m: float = OVERLAP_MAIN_WINS_M,
 ) -> Path:
     """
-    Build an OpenDRIVE file with main and pit roads connected (no junctions).
+    Build an OpenDRIVE file with full main loop (two arcs) and pit road, connected (no junctions).
 
-    - Main road: arc from pit entry to pit exit along main centerline.
-    - Pit road: full pit centerline.
-    - Predecessor/successor link main end ↔ pit start, pit end ↔ main start.
+    - Road 1 (MainTrack arc A): pit entry → pit exit along main centerline (6 m).
+    - Road 2 (PitTrack): pit centerline trimmed where within overlap_main_wins_m of main (3.25 m).
+    - Road 3 (MainTrack arc B): pit exit → pit entry along main centerline (6 m).
+
+    So the full main loop (including Andretti Hairpin) is road 1 + road 3. In overlap
+    (e.g. Corkscrew) pit is trimmed so main track width dominates.
 
     Returns the path where the file was written.
     """
@@ -198,9 +252,16 @@ def build_connected_ttl_xodr(
     exit_idx = _closest_point_index(main_pts, pit_pts[0])
     entry_idx = _closest_point_index(main_pts, pit_pts[-1])
 
-    # Main road = arc from entry to exit (so we go R -> ... -> E along the loop)
-    # main_arc: [main[entry_idx], ..., main[-1], main[0], ..., main[exit_idx]]
-    main_arc = main_pts[entry_idx:] + main_pts[: exit_idx + 1]
+    # Main split into two arcs so we have two connection points (exit and entry) and full loop is present
+    # Arc A: entry → exit (main_pts[entry_idx:] + main_pts[:exit_idx+1])
+    # Arc B: exit → entry (main_pts[exit_idx:] + main_pts[:entry_idx+1])
+    main_arc_a = main_pts[entry_idx:] + main_pts[: exit_idx + 1]
+    main_arc_b = main_pts[exit_idx:] + main_pts[: entry_idx + 1]
+
+    # Trim pit where it overlaps main so main track width dominates
+    pit_trimmed = _trim_pit_overlap(pit_pts, main_pts, overlap_main_wins_m)
+    if len(pit_trimmed) < 2:
+        pit_trimmed = pit_pts  # fallback if trim removed too much
 
     root = ET.Element("OpenDRIVE")
     ET.SubElement(
@@ -209,28 +270,42 @@ def build_connected_ttl_xodr(
         north="0", south="0", east="0", west="0",
     )
 
-    # Road 1 = main (predecessor=pit end, successor=pit start)
+    # Cycle: road 1 (main arc A) → road 2 (pit) → road 3 (main arc B) → road 1
+    # Road 1: main arc entry→exit; pred=3, succ=2
     _build_road(
         root,
         road_id="1",
-        name="MainTrack",
-        points=main_arc,
+        name="MainTrack_A",
+        points=main_arc_a,
         width_left=main_width,
         width_right=main_width,
-        pred_road_id="2",
+        pred_road_id="3",
         pred_contact="end",
         succ_road_id="2",
         succ_contact="start",
     )
-    # Road 2 = pit (predecessor=main end, successor=main start)
+    # Road 2: pit (trimmed); pred=1, succ=3
     _build_road(
         root,
         road_id="2",
         name="PitTrack",
-        points=pit_pts,
+        points=pit_trimmed,
         width_left=pit_width,
         width_right=pit_width,
         pred_road_id="1",
+        pred_contact="end",
+        succ_road_id="3",
+        succ_contact="start",
+    )
+    # Road 3: main arc exit→entry (includes Andretti etc.); pred=2, succ=1
+    _build_road(
+        root,
+        road_id="3",
+        name="MainTrack_B",
+        points=main_arc_b,
+        width_left=main_width,
+        width_right=main_width,
+        pred_road_id="2",
         pred_contact="end",
         succ_road_id="1",
         succ_contact="start",
@@ -283,6 +358,12 @@ def main() -> int:
         default=PIT_LANE_WIDTH,
         help=f"Lane width each side for pit track in m (default: {PIT_LANE_WIDTH})",
     )
+    parser.add_argument(
+        "--overlap-main-wins",
+        type=float,
+        default=OVERLAP_MAIN_WINS_M,
+        help=f"Trim pit points within this distance (m) of main so main dominates (default: {OVERLAP_MAIN_WINS_M})",
+    )
     args = parser.parse_args()
 
     if not args.main.exists():
@@ -299,6 +380,7 @@ def main() -> int:
         args.output,
         main_width=args.main_width,
         pit_width=args.pit_width,
+        overlap_main_wins_m=args.overlap_main_wins,
     )
     print(f"Wrote: {out}")
     return 0

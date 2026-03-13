@@ -4,11 +4,13 @@ This folder contains scripts and utilities to generate OpenDRIVE (`.xodr`) files
 
 ## What is generated
 
-- **Two roads** built from TTL centerline CSVs:
-  - **Main track:** Arc from pit entry to pit exit along the main centerline (the part of the loop that does not use the pit).
-  - **Pit track:** Full pit lane centerline.
+- **Three roads** built from TTL centerline CSVs:
+  - **Road 1 (MainTrack_A):** Arc from pit entry to pit exit along the main centerline (6 m each side).
+  - **Road 2 (PitTrack):** Pit lane centerline, **trimmed** where it overlaps main (within 5 m) so main track width dominates (3.25 m each side).
+  - **Road 3 (MainTrack_B):** Arc from pit exit to pit entry along the main centerline (6 m each side) — includes Andretti Hairpin, Corkscrew, etc.
+- **Full main loop** = Road 1 + Road 3. In overlap regions (e.g. Corkscrew) pit points near main are removed so only main track width is used.
 - **Fixed lane widths:** 6 m each side for main, 3.25 m each side for pit (configurable).
-- **Connected topology:** Predecessor/successor links so the two roads form one closed loop (no junction elements). Driving order: Main → Pit → Main → …
+- **Connected topology:** Predecessor/successor links (no junction elements). Cycle: MainTrack_A → PitTrack → MainTrack_B → MainTrack_A.
 
 The output XODR can be used as `param map = localPath('...')` in Scenic racing scenarios so that the drivable region matches your TTL-based geometry and avoids “does not fit in container” issues from mismatched OpenDRIVE.
 
