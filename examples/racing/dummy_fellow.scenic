@@ -19,7 +19,8 @@ model scenic.simulators.dspace.racing_model
 # Werid Curve
 # ego = new RacingCar at (-110.956171,-151.841778,8.331000),\ 
 # Main Start
-ego = new RacingCar at (60.3811498,103.7450019), \
+# ego = new RacingCar at (60.3811498,103.7450019), \
+ego = new RacingCar on pitTrack, \
     with regionContainedIn everywhere, \
     with raceNumber 1, \
     # with ttlFileName 'ttl_main_road.csv', \

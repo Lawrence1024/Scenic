@@ -203,16 +203,6 @@ def read_ego_state(sim, obj):
             setattr(obj.dspaceActor, "rd_position", (rd_x, rd_y))  # for GPS round-trip and calibration
             scenic_x, scenic_y = apply_inverse_coordinate_transform(sim._coordinate_transform, (rd_x, rd_y))
             x, y = scenic_x, scenic_y
-            
-            # Compare with expected position on first read
-            if hasattr(obj, '_expected_rd') and not hasattr(obj, '_readback_shown'):
-                expected_rd = obj._expected_rd
-                error_rd = math.sqrt((rd_x - expected_rd[0])**2 + (rd_y - expected_rd[1])**2)
-                expected_xodr = obj._scenic_xodr
-                error_xodr = math.sqrt((scenic_x - expected_xodr[0])**2 + (scenic_y - expected_xodr[1])**2)
-                print(f"[Ego Readback] RD: ({rd_x:.6f}, {rd_y:.6f}) [expected: ({expected_rd[0]:.6f}, {expected_rd[1]:.6f}), error: {error_rd:.3f}m]")
-                print(f"[Ego Readback] XODR: ({scenic_x:.6f}, {scenic_y:.6f}) [expected: ({expected_xodr[0]:.6f}, {expected_xodr[1]:.6f}), error: {error_xodr:.3f}m]")
-                obj._readback_shown = True
 
         # yaw_deg, vx_kmh, vy_kmh already read above (get_vars or get_var)
         yaw_rad_raw = yaw_deg * (math.pi / 180.0)
@@ -313,17 +303,7 @@ def read_fellow_state(sim, obj, dutils):
             scenic_x, scenic_y = apply_inverse_coordinate_transform(sim._coordinate_transform, (rd_x, rd_y))
         else:
             scenic_x, scenic_y = float(x), float(y)
-        
-        # Compare with expected position on first read
-        if hasattr(obj, '_expected_rd') and not hasattr(obj, '_readback_shown'):
-            expected_rd = obj._expected_rd
-            error_rd = math.sqrt((rd_x - expected_rd[0])**2 + (rd_y - expected_rd[1])**2)
-            expected_xodr = obj._scenic_xodr
-            error_xodr = math.sqrt((scenic_x - expected_xodr[0])**2 + (scenic_y - expected_xodr[1])**2)
-            print(f"[{vehicle_name} Readback] RD: ({rd_x:.6f}, {rd_y:.6f}) [expected: ({expected_rd[0]:.6f}, {expected_rd[1]:.6f}), error: {error_rd:.3f}m]")
-            print(f"[{vehicle_name} Readback] XODR: ({scenic_x:.6f}, {scenic_y:.6f}) [expected: ({expected_xodr[0]:.6f}, {expected_xodr[1]:.6f}), error: {error_xodr:.3f}m]")
-            obj._readback_shown = True
-        
+
         obj.dspaceActor.position = Vector(scenic_x, scenic_y, float(z))
         
         # Convert heading from degrees to radians

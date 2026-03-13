@@ -147,14 +147,10 @@ def place_ego(sim, obj):
                 pass
 
         # 5) Configure ego vehicle position and properties
-        # Store transformation info for later comparison
         if getattr(obj, "position", None) is not None:
-            obj._scenic_xodr = (scenic_x, scenic_y)
-            obj._expected_rd = (work_x, work_y)
             obj._route_s_t = (s_val, t_val)
             obj._route = route_pref
-            print(f"[Ego] XODR: ({scenic_x:.6f}, {scenic_y:.6f}) -> RD: ({work_x:.6f}, {work_y:.6f}) -> Route {route_pref} (s={s_val:.2f}, t={t_val:.6f})")
-        
+
         # STRATEGY: Set StartPosition on Sequence AND Segments to force update
         seq.StartPosition = float(s_val)
         seq.InitialLongitudinalVelocity = float(base_v)
@@ -285,18 +281,11 @@ def place_fellow(sim, obj):
         else:
             s_val, t_val = dutils.project_world_to_st(sim._road_index, (work_x, work_y))
         
-        # Store transformation info for later comparison
-        obj._scenic_xodr = (scenic_x, scenic_y)
-        obj._expected_rd = (work_x, work_y)
         obj._route_s_t = (s_val, t_val)
         obj._route = route_pref
-        
-        # Log transformation chain
-        print(f"[{vehicle_name}] XODR: ({scenic_x:.6f}, {scenic_y:.6f}) -> RD: ({work_x:.6f}, {work_y:.6f}) -> Route {route_pref} (s={s_val:.2f}, t={t_val:.6f})")
     else:
         s_val, t_val = 0.0, 0.0
         route_pref = 'Lap'
-        print(f"[{vehicle_name}] Warning: No position available, using default (s=0, t=0)")
 
     # 3) Create Fellow
     F = sim.ts.Fellows.Add()
