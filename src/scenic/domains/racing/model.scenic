@@ -41,8 +41,8 @@ param pit_connecting_road_ids = None  # e.g. (25, 30)
 # Segment and track source: when ttlFolder is set, both segments and mainTrack/pitTrack use TTL centerlines
 # (ttl_main_road.csv, ttl_pitlane.csv). When ttlFolder is not set, both use OpenDRIVE.
 param ttlFolder = None  # e.g. localPath('../../assets/ttls/LS_ENU_TTL_CSV')
-param mainTrackBuffer = 5.0  # meters on each side of main segment centerline
-param pitTrackBuffer = 2.0   # meters on each side of pit segment centerline
+param mainTrackBuffer = 7.0   # meters on each side of main segment centerline
+param pitTrackBuffer = 3.25   # meters on each side of pit segment centerline
 
 ## Create racing track from the network
 
@@ -69,8 +69,8 @@ param mainRacingRoadIds = [str(r.id) for r in _track._mainRacingRoads] if _track
 ## Racing-specific regions (segment-based: mainTrack and pitTrack)
 
 ## mainTrack and pitTrack are built from segment centerlines (OpenDRIVE or TTL) with fixed buffer widths:
-## - mainTrack: 5 m on each side of main road centerline (includes Corkscrew, Andretti, junction links)
-## - pitTrack: 2 m on each side of pit lane centerline
+## - mainTrack: 7 m on each side of main road centerline (includes Corkscrew, Andretti, junction links)
+## - pitTrack: 3.25 m on each side of pit lane centerline
 ## Use: new RacingCar on mainTrack  or  new RacingCar on pitTrack
 
 _mainTrack, _pitTrack, _ = create_track_regions(

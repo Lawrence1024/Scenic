@@ -112,10 +112,9 @@ def project_world_to_st(index_or_map, pos: Tuple[float, float], xodr_file: str =
                 # Calculate normal vector for t-coordinate
                 nx_left, ny_left = -vy/seg_len, vx/seg_len  # left normal
                 
-                # Calculate t-coordinate using geometric projection with scaling
-                # Scale down t-coordinates to match expected road width (typically 3-4m lanes)
+                # Calculate t-coordinate: signed lateral offset from segment (meters)
                 raw_t = dx*nx_left + dy*ny_left
-                t_signed = raw_t * 0.3  # Scale factor to match calibration data
+                t_signed = raw_t
                 s_proj = s0 + u*(s1 - s0)
                 
                 # Get road ID and name

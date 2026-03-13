@@ -1,8 +1,8 @@
 """Build mainTrack and pitTrack regions from segment centerlines (OpenDRIVE or TTL).
 
 Track regions are buffered centerlines with width:
-- mainTrack: main road segments with 5m on each side of the centerline (default).
-- pitTrack: pit lane segments with 2m on each side of the centerline (default).
+- mainTrack: main road segments with 7m on each side of the centerline (default).
+- pitTrack: pit lane segments with 3.25m on each side of the centerline (default).
 
 Overlap rule (same as segment logic): where main and pit overlap (e.g. Corkscrew in
 pitlane CSV), main wins — pitTrack is defined as (buffered pit) minus mainTrack so
@@ -22,8 +22,8 @@ from typing import Any, List, Optional, Tuple
 from scenic.core.regions import PolygonalRegion, PolylineRegion, regionFromShapelyObject, nowhere
 
 # Default buffer: meters on each side of the segment centerline
-MAIN_TRACK_BUFFER_M = 5.0
-PIT_TRACK_BUFFER_M = 2.0
+MAIN_TRACK_BUFFER_M = 7.0
+PIT_TRACK_BUFFER_M = 3.25
 
 
 def _load_ttl_csv(folder: Path, filename: str) -> List[Tuple[float, float, float]]:
@@ -148,8 +148,8 @@ def build_track_regions_from_opendrive(
 
     Args:
         track: RacingTrack with _mainRacingRoads and _pitRoads (each road has lanes with centerlines).
-        main_buffer_m: Buffer in meters on each side of main segment centerlines (default 5).
-        pit_buffer_m: Buffer in meters on each side of pit segment centerlines (default 2).
+        main_buffer_m: Buffer in meters on each side of main segment centerlines (default 7).
+        pit_buffer_m: Buffer in meters on each side of pit segment centerlines (default 3.25).
 
     Returns:
         (mainTrack, pitTrack) as Scenic Regions (PolygonalRegion), or (None, None) if no geometry.
@@ -193,8 +193,8 @@ def build_track_regions_from_ttl(
         ttl_folder: Folder containing main_file and optionally pit_file.
         main_file: CSV filename for main road centerline (default ttl_main_road.csv).
         pit_file: CSV filename for pit lane centerline (default ttl_pitlane.csv).
-        main_buffer_m: Buffer in meters on each side of main centerline (default 5).
-        pit_buffer_m: Buffer in meters on each side of pit centerline (default 2).
+        main_buffer_m: Buffer in meters on each side of main centerline (default 7).
+        pit_buffer_m: Buffer in meters on each side of pit centerline (default 3.25).
 
     Returns:
         (mainTrack, pitTrack) as Scenic Regions. pitTrack is None if pit CSV missing or invalid.
@@ -240,8 +240,8 @@ def create_track_regions(
         map_file: Path to OpenDRIVE .xodr (required if track is None and ttl_folder is None).
         ttl_folder: Path to folder with ttl_main_road.csv and ttl_pitlane.csv. If set, TTL is used for track regions.
         track: Existing RacingTrack (optional). If None and not using TTL, one is created from map_file.
-        main_buffer_m: Buffer each side of main centerline in meters (default 5).
-        pit_buffer_m: Buffer each side of pit centerline in meters (default 2).
+        main_buffer_m: Buffer each side of main centerline in meters (default 7).
+        pit_buffer_m: Buffer each side of pit centerline in meters (default 3.25).
         **create_track_kw: Passed to createRacingTrack when creating track from map_file.
 
     Returns:
