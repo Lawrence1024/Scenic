@@ -283,9 +283,16 @@ def place_fellow(sim, obj):
         
         obj._route_s_t = (s_val, t_val)
         obj._route = route_pref
+        # Log fellow (s, t) decision for debugging (e.g. absurd t values)
+        modeldesk_route = 'R2' if route_pref == 'Lap' else 'R1'
+        print(
+            f"[Fellow s,t] {vehicle_name}: route={route_pref} ({modeldesk_route}), "
+            f"scenic_xy=({scenic_x:.4f}, {scenic_y:.4f}), work_xy(RD)=({work_x:.4f}, {work_y:.4f}) -> s={s_val:.4f}, t={t_val:.4f}"
+        )
     else:
         s_val, t_val = 0.0, 0.0
         route_pref = 'Lap'
+        print(f"[Fellow s,t] {vehicle_name}: no position -> s=0, t=0, route=Lap (default)")
 
     # 3) Create Fellow
     F = sim.ts.Fellows.Add()

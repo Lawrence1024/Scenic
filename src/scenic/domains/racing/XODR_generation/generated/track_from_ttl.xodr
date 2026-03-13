@@ -5255,15 +5255,15 @@
         <left>
           <lane id="1" type="driving" level="false">
             <roadMark sOffset="0" type="solid" weight="standard" color="standard" width="0.13" />
-            <width sOffset="0.000000" a="5.500" b="0" c="0" d="0" />
-            <width sOffset="1769.357072" a="5.500" b="0" c="0" d="0" />
+            <width sOffset="0.000000" a="7.000" b="0" c="0" d="0" />
+            <width sOffset="1769.357072" a="7.000" b="0" c="0" d="0" />
           </lane>
         </left>
         <right>
           <lane id="-1" type="driving" level="false">
             <roadMark sOffset="0" type="solid" weight="standard" color="standard" width="0.13" />
-            <width sOffset="0.000000" a="5.500" b="0" c="0" d="0" />
-            <width sOffset="1769.357072" a="5.500" b="0" c="0" d="0" />
+            <width sOffset="0.000000" a="7.000" b="0" c="0" d="0" />
+            <width sOffset="1769.357072" a="7.000" b="0" c="0" d="0" />
           </lane>
         </right>
       </laneSection>
@@ -7973,15 +7973,15 @@
         <left>
           <lane id="1" type="driving" level="false">
             <roadMark sOffset="0" type="solid" weight="standard" color="standard" width="0.13" />
-            <width sOffset="0.000000" a="3.000" b="0" c="0" d="0" />
-            <width sOffset="907.441063" a="3.000" b="0" c="0" d="0" />
+            <width sOffset="0.000000" a="3.500" b="0" c="0" d="0" />
+            <width sOffset="907.441063" a="3.500" b="0" c="0" d="0" />
           </lane>
         </left>
         <right>
           <lane id="-1" type="driving" level="false">
             <roadMark sOffset="0" type="solid" weight="standard" color="standard" width="0.13" />
-            <width sOffset="0.000000" a="3.000" b="0" c="0" d="0" />
-            <width sOffset="907.441063" a="3.000" b="0" c="0" d="0" />
+            <width sOffset="0.000000" a="3.500" b="0" c="0" d="0" />
+            <width sOffset="907.441063" a="3.500" b="0" c="0" d="0" />
           </lane>
         </right>
       </laneSection>
@@ -24317,15 +24317,15 @@
         <left>
           <lane id="1" type="driving" level="false">
             <roadMark sOffset="0" type="solid" weight="standard" color="standard" width="0.13" />
-            <width sOffset="0.000000" a="5.500" b="0" c="0" d="0" />
-            <width sOffset="5510.586040" a="5.500" b="0" c="0" d="0" />
+            <width sOffset="0.000000" a="7.000" b="0" c="0" d="0" />
+            <width sOffset="5510.586040" a="7.000" b="0" c="0" d="0" />
           </lane>
         </left>
         <right>
           <lane id="-1" type="driving" level="false">
             <roadMark sOffset="0" type="solid" weight="standard" color="standard" width="0.13" />
-            <width sOffset="0.000000" a="5.500" b="0" c="0" d="0" />
-            <width sOffset="5510.586040" a="5.500" b="0" c="0" d="0" />
+            <width sOffset="0.000000" a="7.000" b="0" c="0" d="0" />
+            <width sOffset="5510.586040" a="7.000" b="0" c="0" d="0" />
           </lane>
         </right>
       </laneSection>
