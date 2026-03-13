@@ -1,7 +1,7 @@
 """Racing track representation extending the driving domain's road network.
 
 This module extends the road network classes from :obj:`scenic.domains.driving.roads`
-with racing-specific concepts like pit lanes, sectors, racing lines, and track direction.
+with racing-specific concepts like pit lanes, racing lines, and track direction.
 """
 
 from __future__ import annotations
@@ -113,32 +113,6 @@ def _smoothness_conn_to_mains(
 
 
 @attr.s(auto_attribs=True, kw_only=True, eq=False)
-class Sector:
-    """A sector of a racing track for timing purposes.
-    
-    Racing tracks are typically divided into 2-3 sectors to measure
-    lap times and performance through different parts of the circuit.
-    
-    Attributes:
-        number: Sector number (1, 2, 3, etc.)
-        startDistance: Distance along track where sector starts (in meters)
-        endDistance: Distance along track where sector ends (in meters)
-        region: The geographic region covered by this sector
-        name: Optional name for the sector (e.g., "Corkscrew", "Hairpin")
-    """
-    number: int
-    startDistance: float
-    endDistance: float
-    region: PolygonalRegion
-    name: Optional[str] = None
-    
-    @property
-    def length(self) -> float:
-        """Length of the sector in meters."""
-        return self.endDistance - self.startDistance
-
-
-@attr.s(auto_attribs=True, kw_only=True, eq=False)
 class PitLane:
     """A pit lane on a racing track.
     
@@ -212,7 +186,6 @@ class RacingTrack:
     Extends the Network concept from the driving domain with racing-specific features:
     - Enforced track direction (one-way)
     - Pit lane identification
-    - Sector divisions
     - Racing line
     - Start/finish line
     - Starting grid positions
@@ -221,7 +194,6 @@ class RacingTrack:
         network: The underlying road Network
         direction: 'clockwise' or 'counterclockwise'
         pitLane: The pit lane, if any
-        sectors: List of track sectors
         racingLine: The optimal racing line
         startFinishLine: Position of the start/finish line
         trackLength: Total length of the racing circuit in meters
@@ -268,7 +240,6 @@ class RacingTrack:
 
         # Racing-specific features (to be populated)
         self.pitLane: Optional[PitLane] = None
-        self.sectors: List[Sector] = []
         self.racingLine: Optional[RacingLine] = None
         self.startFinishLine: Optional[Vector] = None
         self.startingGrid: List[Vector] = []
@@ -294,7 +265,7 @@ class RacingTrack:
         return max_length
     
     def _identifyRacingFeatures(self):
-        """Identify pit lanes, sectors, and other racing features from the network."""
+        """Identify pit lanes and other racing features from the network."""
         
         print(f"\n[RacingTrack] Identifying track features...")
         print(f"  Total roads in network: {len(self.network.roads)}")
@@ -310,20 +281,8 @@ class RacingTrack:
         else:
             print(f"  [INFO] No pit lane identified (will use all roads as racing line)")
         
-        # Step 3: Auto-generate sectors if not specified
-        # Common practice: divide track into 3 equal sectors
-        if not self.sectors and self.trackLength > 0:
-            sector_length = self.trackLength / 3.0
-            for i in range(3):
-                self.sectors.append(Sector(
-                    number=i + 1,
-                    startDistance=i * sector_length,
-                    endDistance=(i + 1) * sector_length,
-                    region=self.network.drivableRegion,  # Simplified
-                    name=f"Sector {i + 1}"
-                ))
-            print(f"  [OK] Generated {len(self.sectors)} sectors")
-    
+        # Step 3: (Sectors removed — were unused timing divisions; use segment_map for curve/straight analysis.)
+
     def _identifyRoadSegments(self):
         """Identify pit lane and main racing roads from the network.
         
@@ -862,39 +821,7 @@ class RacingTrack:
                         main_lane = lane
         
         return main_lane
-    
-    def distanceAlongTrack(self, position: Vector) -> Optional[float]:
-        """Calculate distance along the track from start/finish line.
-        
-        Args:
-            position: Position on track
-            
-        Returns:
-            Distance in meters from start/finish line, or None if not on track
-        """
-        # Project position onto main racing lane
-        main_lane = self._getMainRacingLane()
-        if main_lane is None:
-            return None
-        
-        # Find closest point on centerline
-        centerline = main_lane.centerline
-        # This would need the actual implementation of finding distance along a polyline
-        # For now, return a placeholder
-        return 0.0  # TODO: Implement proper distance calculation
-    
-    def getSectorAt(self, position: Vector) -> Optional[Sector]:
-        """Get the sector containing the given position."""
-        distance = self.distanceAlongTrack(position)
-        if distance is None:
-            return None
-        
-        for sector in self.sectors:
-            if sector.startDistance <= distance < sector.endDistance:
-                return sector
-        
-        return None
-    
+
     def isOnPitLane(self, position: Vector) -> bool:
         """Check if a position is on the pit lane."""
         if self.pitLane is None:

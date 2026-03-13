@@ -9,7 +9,6 @@ from scenic.domains.racing.segments.tracks import (
     createRacingTrack,
     PitLane,
     RacingLine,
-    Sector,
 )
 
 __all__ = [
@@ -17,5 +16,4 @@ __all__ = [
     "createRacingTrack",
     "PitLane",
     "RacingLine",
-    "Sector",
 ]

@@ -5,7 +5,6 @@ racing-specific features such as:
 
 * **Racing tracks** - Closed-loop circuits with defined direction
 * **Pit lanes** - Special lanes for pit stops, separate from racing lanes
-* **Sectors** - Track divisions for timing and performance analysis
 * **Racing lines** - Optimal paths through corners
 * **Starting grid** - Formation positions for race starts
 * **Track limits** - Boundaries that must not be exceeded

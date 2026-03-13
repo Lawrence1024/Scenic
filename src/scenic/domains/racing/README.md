@@ -8,8 +8,7 @@ The Scenic Racing Domain (`@racing/`) extends the Driving Domain (`@driving/`) w
 
 - **Closed-loop circuits** with defined direction (clockwise/counterclockwise)
 - **Pit lanes** separate from racing lanes with automatic detection
-- **Sectors** for timing and performance analysis (auto-divided into 3 sectors)
-- **Starting grids** for race starts
+- **Starting grids** for race starts (OpenDRIVE-based; see model comments for TTL vs OpenDRIVE)
 - **Racing controllers:** PID (driving domain) or **MPC** (MPCC lateral + longitudinal) via `getRacingControllers(agent, use_mpc=True)`
 - **Waypoint-based racing line** with segment maps and TTL loading (`segments/`, `mpc/`)
 - **Minimal but extensible API** that simulators can implement
@@ -114,8 +113,7 @@ def setTTL(self, ttl) -> None: ...  # ttl is a Region-like line with signedDista
 - `pitLaneRoad`: Optional Road object for pit lane
 - `mainRacingRoad`: Union of all non-pit roads
 - `racingLine`: Optional `RacingLine` object (defaults to `mainRacingRoad`)
-- `sectors`: List of track sectors (auto-generated, default 3)
-- `startingGrid`: List of starting grid positions
+- `startingGrid`: List of starting grid positions (when generateStartingGrid is True)
 - `trackLength`: Total track length in meters
 
 ---
@@ -366,24 +364,6 @@ The `racingLine` region defaults to `mainRacingRoad` if no explicit racing line 
 
 **Location**: `src/scenic/domains/racing/tracks.py`
 
-### `Sector`
-
-Represents track sectors for timing and analysis. Tracks are automatically divided into 3 equal sectors by default.
-
-```python
-@attr.s(auto_attribs=True, kw_only=True, eq=False)
-class Sector:
-    number: int
-    startDistance: float  # Distance along track in meters
-    endDistance: float
-    region: PolygonalRegion
-    name: Optional[str] = None
-    
-    @property
-    def length(self) -> float:
-        return self.endDistance - self.startDistance
-```
-
 ### `PitLane`
 
 Represents pit lane features with speed limits and pit boxes.
@@ -419,8 +399,6 @@ class RacingLine:
 Main track management class extending the driving domain's Network.
 
 **Key Methods**:
-- `distanceAlongTrack(position) → float` - Calculate distance from start/finish (TODO: currently placeholder)
-- `getSectorAt(position) → Sector` - Get sector containing position
 - `isOnPitLane(position) → bool` - Check if position is on pit lane
 - `enforceTrackDirection(heading, position) → bool` - Validate heading matches track direction
 - `generateStartingGrid(numPositions, spacing) → List[Lane]` - Generate grid positions
@@ -451,6 +429,8 @@ param generateStartingGrid = True
 param startingGridPositions = 20
 param startingGridSpacing = 8.0  # meters between grid positions
 ```
+
+**Starting grid vs TTL regions:** When `ttlFolder` is set, `mainTrack` and `pitTrack` are built from TTL centerlines (ttl_main_road.csv, ttl_pitlane.csv). The **starting grid** does not use those regions: it is built from the OpenDRIVE map via `_track.generateStartingGrid()` (main racing lane from the road network). So placement on track uses TTL when available (`new RacingCar on mainTrack`); formation/race-start positions use `startingGrid[i]` and require a valid OpenDRIVE map. For TTL-only or corrupted OpenDRIVE, set `generateStartingGrid = False` and place cars on `mainTrack`/`pitTrack` instead.
 
 ### Track Segment Identification (Optional)
 
@@ -483,7 +463,6 @@ Network (driving)
     ↓
 RacingTrack (racing)
     ├── PitLane
-    ├── Sector (multiple, auto-generated)
     └── RacingLine (optional, defaults to mainRacingRoad)
 
 Vehicle (driving)
@@ -584,7 +563,6 @@ chaser.behavior = OvertakingBehavior(leader, aggressive=True)
 - 5 racing behaviors: `FollowRacingLineBehavior`, **`FollowRacingLineMPCBehavior`** (MPC), `PitStopBehavior`, `OvertakingBehavior`, `DefensiveBehavior`
 - 5 racing actions (max speed, TTL, gear/clutch)
 - dSPACE integration (via `racing_model.scenic`)
-- Sector-based organization (auto-generated 3 sectors)
 - Pit lane identification (via road ID or name pattern)
 - Racing simulator interface (`RacingSimulator`, `RacingSimulation`)
 - Manual transmission protocol (`HasManualTransmission`)
@@ -603,10 +581,6 @@ chaser.behavior = OvertakingBehavior(leader, aggressive=True)
   These behaviors will work only if simulators provide these actions.
 
 - **Racing line**: Defaults to `mainRacingRoad` but explicit racing line calculation is not implemented.
-
-- **Track distance calculation**: `distanceAlongTrack()` method exists but returns placeholder (0.0).
-
-- **Utility functions**: `isOnRacingLine()` returns placeholder (always True).
 
 ### ❌ Not Implemented
 
@@ -631,8 +605,6 @@ These features are referenced in documentation or behaviors but are **not** in t
 ### Track Methods
 
 ```python
-track.distanceAlongTrack(position: Vector) -> Optional[float]  # TODO: Returns placeholder
-track.getSectorAt(position: Vector) -> Optional[Sector]
 track.isOnPitLane(position: Vector) -> bool
 track.enforceTrackDirection(heading: float, position: Vector) -> bool
 track.generateStartingGrid(numPositions: int, spacing: float, offset: float = 0.0) -> List[Lane]
@@ -642,9 +614,6 @@ track.generateStartingGrid(numPositions: int, spacing: float, offset: float = 0.
 
 ```python
 carsInFormation(positions: List) -> List[RacingCar]
-isOnRacingLine(car: RacingCar, tolerance: float = 2.0) -> bool  # Placeholder implementation
-distanceToSectorEnd(car: RacingCar) -> Optional[float]
-carsAheadInSector(car: RacingCar, sector: Optional[Sector] = None) -> List[RacingCar]
 ```
 
 ### Racing Car Properties
@@ -823,7 +792,7 @@ Single contract for steering (and throttle/brake) across behavior, MPC, and dSPA
 ```
 src/scenic/domains/racing/
 ├── __init__.py              # Domain documentation & initialization
-├── tracks.py                # RacingTrack, PitLane, Sector, RacingLine classes
+├── tracks.py                # RacingTrack, PitLane, RacingLine classes
 ├── model.scenic             # Racing objects, regions, utilities
 ├── behaviors.scenic         # Racing behaviors (incl. FollowRacingLineMPCBehavior)
 ├── actions.py               # Racing actions
@@ -866,7 +835,7 @@ The Racing Domain provides a **minimal but functional** foundation for racing sc
 - **5 Actions**: Max speed, TTL, gear, clutch (press/release)
 - **5 Behaviors**: Racing line following (PID), **racing line following with MPC**, pit stops, overtaking, defense
 - **3 Regions**: Main racing road, pit lane road, racing line
-- **Multiple Track Features**: Sectors, pit lanes, racing lines, starting grids
+- **Multiple Track Features**: Pit lanes, racing lines, starting grids
 - **MPC submodule**: MPCC lateral + longitudinal MPC, waypoint reference, speed profile, log analysis (`mpc/`, `segments/`)
 
 The implementation is intentionally lean, focusing on core racing functionality that simulators can build upon. The domain supports both PID and MPC-based racing line following; see `mpc/README.md` for MPC details.

@@ -101,10 +101,20 @@ racingLine: Region = _track.racingLine.region if hasattr(_track, 'racingLine') a
 # TODO: Create actual start/finish line region from track data
 
 ## Starting grid
+#
+# Starting grid is the list of positions for race starts (e.g. ego at startingGrid[0], opponents at [1], [2], ...).
+# It is built from the OpenDRIVE track only: _track.generateStartingGrid() uses the road network (main racing
+# lane from _getMainRacingLane()). It does NOT use TTL or the mainTrack/pitTrack regions.
+#
+# When you set ttlFolder, mainTrack and pitTrack are TTL-based regions (centerlines ± buffer from ttl_main_road
+# and ttl_pitlane). Starting grid does not inherit that: it still comes from the map/OpenDRIVE. So:
+# - For placement on track (anywhere on main/pit): use "new RacingCar on mainTrack" or "on pitTrack" (TTL when ttlFolder set).
+# - For formation/race start positions: use startingGrid[i] (OpenDRIVE-based; requires valid map/network).
+# If you use TTL-only (no OpenDRIVE or corrupted map), set generateStartingGrid = False and place cars on mainTrack/pitTrack.
 
 # Generate starting grid if requested
 if globalParameters.generateStartingGrid:
-    #: List of starting grid positions
+    #: List of starting grid positions (OpenDRIVE-based; each entry is the main racing lane region)
     startingGrid = _track.generateStartingGrid(
         numPositions=globalParameters.startingGridPositions,
         spacing=globalParameters.startingGridSpacing
@@ -192,76 +202,4 @@ def carsInFormation(positions):
         car = new RacingCar at pos, with raceNumber (i + 1)
         cars.append(car)
     return cars
-
-def isOnRacingLine(car, tolerance=2.0):
-    """Check if a car is on the optimal racing line.
-    
-    Args:
-        car: The car to check
-        tolerance: Distance tolerance in meters
-        
-    Returns:
-        Boolean indicating if car is within tolerance of racing line
-    """
-    if _track.racingLine is None:
-        return True  # No racing line defined, always on it
-    
-    # Check distance to racing line
-    # This would need proper implementation with the actual racing line
-    return True  # Placeholder
-
-def distanceToSectorEnd(car):
-    """Get distance from car's current position to the end of its current sector.
-    
-    Args:
-        car: The car
-        
-    Returns:
-        Distance in meters, or None if not in a sector
-    """
-    sector = _track.getSectorAt(car.position)
-    if sector is None:
-        return None
-
-    current_distance = _track.distanceAlongTrack(car.position)
-    if current_distance is None:
-        return None
-    
-    return sector.endDistance - current_distance
-
-def carsAheadInSector(car, sector=None):
-    """Get all cars ahead of the given car in the specified sector.
-    
-    Args:
-        car: The reference car
-        sector: The sector to check (default: car's current sector)
-        
-    Returns:
-        List of cars ahead in the sector
-    """
-    if sector is None:
-        sector = _track.getSectorAt(car.position)
-
-    if sector is None:
-        return []
-
-    current_distance = _track.distanceAlongTrack(car.position)
-    if current_distance is None:
-        return []
-    
-    ahead = []
-    for obj in simulation().objects:
-        if obj is car or not isinstance(obj, RacingCar):
-            continue
-        
-        obj_distance = _track.distanceAlongTrack(obj.position)
-        if obj_distance is None:
-            continue
-        
-        # Check if ahead in the same sector
-        if (obj_distance > current_distance and 
-            sector.startDistance <= obj_distance < sector.endDistance):
-            ahead.append(obj)
-    
-    return ahead
 

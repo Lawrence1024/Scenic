@@ -25,7 +25,6 @@ from scenic.domains.racing.segments.tracks import (
     createRacingTrack,
     PitLane,
     RacingLine,
-    Sector,
 )
 from scenic.domains.racing.segments.track_regions import (
     create_track_regions,
@@ -51,7 +50,6 @@ __all__ = [
     "createRacingTrack",
     "PitLane",
     "RacingLine",
-    "Sector",
     "create_track_regions",
     "build_track_regions_from_opendrive",
     "build_track_regions_from_ttl",
