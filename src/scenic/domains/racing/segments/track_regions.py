@@ -223,6 +223,38 @@ def build_track_regions_from_ttl(
     return (main_track, pit_track)
 
 
+def create_ttl_region_from_file(
+    ttl_folder: Optional[Any],
+    ttl_file_name: str,
+    buffer_m: float = MAIN_TRACK_BUFFER_M,
+) -> Optional[Any]:
+    """Build a single Region from one TTL centerline CSV (random point on that TTL).
+
+    Use for placement like: new RacingCar on ttl  (uses scene ttlFileName)
+    or with a specific file: new RacingCar on ttlRegion('ttl_optimal_xodr.csv')
+
+    Args:
+        ttl_folder: Folder containing the TTL CSV (Path or str). If None, returns None.
+        ttl_file_name: CSV filename (e.g. 'ttl_main_road.csv', 'ttl_optimal_xodr.csv').
+        buffer_m: Meters on each side of centerline (default 6.0).
+
+    Returns:
+        PolygonalRegion (buffered centerline) or None if folder/file invalid.
+    """
+    if ttl_folder is None or not str(ttl_folder).strip():
+        return None
+    folder = Path(ttl_folder)
+    if not folder.is_absolute():
+        folder = folder.resolve()
+    pts = _load_ttl_csv(folder, ttl_file_name)
+    if not pts or len(pts) < 2:
+        return None
+    poly = _polyline_from_waypoints(pts)
+    if poly is None:
+        return None
+    return _buffer_polyline_region(poly, buffer_m)
+
+
 def create_track_regions(
     map_file: Optional[str] = None,
     ttl_folder: Optional[str] = None,

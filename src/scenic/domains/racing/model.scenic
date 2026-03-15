@@ -20,7 +20,7 @@ from scenic.domains.racing.tracks import RacingTrack, createRacingTrack
 from scenic.domains.racing.behaviors import *
 from scenic.domains.racing.actions import *
 from scenic.core.regions import UnionRegion
-from scenic.domains.racing.segments.track_regions import create_track_regions
+from scenic.domains.racing.segments.track_regions import create_track_regions, create_ttl_region_from_file
 
 ## Racing-specific parameters
 
@@ -37,6 +37,7 @@ param pit_connecting_road_ids = None  # e.g. (25, 30)
 # Segment and track source: when ttlFolder is set, both segments and mainTrack/pitTrack use TTL centerlines
 # (ttl_main_road.csv, ttl_pitlane.csv). When ttlFolder is not set, both use OpenDRIVE.
 param ttlFolder = None  # e.g. localPath('../../assets/ttls/LS_ENU_TTL_CSV')
+param ttlFileName = None  # default TTL file for "on ttl" (e.g. 'ttl_main_road.csv' or 'ttl_optimal_xodr.csv')
 param mainTrackBuffer = 6.0   # meters on each side of main segment centerline
 param pitTrackBuffer = 3.25   # meters on each side of pit segment centerline
 
@@ -67,7 +68,9 @@ param mainRacingRoadIds = [str(r.id) for r in _track._mainRacingRoads] if _track
 ## mainTrack and pitTrack are built from segment centerlines (OpenDRIVE or TTL) with fixed buffer widths:
 ## - mainTrack: 6 m on each side of main road centerline (includes Corkscrew, Andretti, junction links)
 ## - pitTrack: 3.25 m on each side of pit lane centerline
-## Use: new RacingCar on mainTrack  or  new RacingCar on pitTrack
+## - ttl: one TTL centerline (ttlFileName param) with mainTrackBuffer; random point on that TTL
+## Use: new RacingCar on mainTrack  or  new RacingCar on pitTrack  or  new RacingCar on ttl
+## For a specific TTL file: new RacingCar on ttlRegion('ttl_optimal_xodr.csv')
 
 _mainTrack, _pitTrack, _ = create_track_regions(
     map_file=globalParameters.map,
@@ -85,6 +88,19 @@ _mainTrack, _pitTrack, _ = create_track_regions(
 )
 mainTrack: Region = _mainTrack
 pitTrack: Region = _pitTrack
+
+# ttl: region from param ttlFileName (random point on that TTL). Fallback to mainTrack if no ttlFolder/ttl.
+_ttl = create_ttl_region_from_file(
+    globalParameters.ttlFolder,
+    globalParameters.ttlFileName if globalParameters.ttlFileName else 'ttl_main_road.csv',
+    globalParameters.mainTrackBuffer
+) if globalParameters.ttlFolder else None
+ttl: Region = _ttl if _ttl else mainTrack
+
+# Helper for per-car TTL file: new RacingCar on ttlRegion('ttl_optimal_xodr.csv')
+def ttlRegion(ttlFileName): (create_ttl_region_from_file(
+    globalParameters.ttlFolder, ttlFileName, globalParameters.mainTrackBuffer
+) if globalParameters.ttlFolder else None) or mainTrack
 
 # Backward compatibility: mainRacingRoad and pitLaneRoad alias to mainTrack and pitTrack
 mainRacingRoad: Region = mainTrack

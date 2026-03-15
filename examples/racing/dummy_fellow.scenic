@@ -21,7 +21,7 @@ model scenic.simulators.dspace.racing_model
 # Main Start
 # Facing roadDirection aligns ego with the track so "ahead of ego by 20" / "right of ego by 5" give sensible (s,t).
 # ego = new RacingCar at (60.8199003,92.948660), \
-ego = new RacingCar on mainTrack, \
+ego = new RacingCar on ttl, \
     facing roadDirection, \
     with regionContainedIn everywhere, \
     with raceNumber 1, \
