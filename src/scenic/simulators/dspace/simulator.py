@@ -30,6 +30,7 @@ from .modeldesk.authoring import author_scenario, configure_fellow
 from .modeldesk.placement import (
     place_ego,
     place_fellow,
+    t_for_dspace_lateral,
     TTL_MAIN_ROAD_FILE,
     TTL_PITLANE_FILE,
     _road_direction_deg_at,
@@ -347,8 +348,15 @@ class DSpaceSimulation(RacingSimulation):
         else:
             print("[Map] No Scenic `map` param found; will fall back to (0,0).")
 
-        # 5) Let Scenic create objects (calls createObjectInSimulator)
-        super().setup()
+        # 5) Create objects: place ego first so fellows with _racing_st_offset use ego as reference (ego._route_s_t must be set)
+        self.agents = []
+        ego = getattr(self.scene, "egoObject", None)
+        for obj in self.scene.objects:
+            if obj is ego:
+                self._createObject(obj)
+        for obj in self.scene.objects:
+            if obj is not ego:
+                self._createObject(obj)
         sys.stdout.flush()  # Flush placement debug ([Ego debug], [Fellow s,t]) so it appears promptly
 
         # 6) Phase 1: Author scenario in ModelDesk (if dynamic control is needed)
@@ -1241,7 +1249,7 @@ class DSpaceSimulation(RacingSimulation):
                 d_arr.extend([0.0] * (need_len - len(d_arr)))
 
             s_arr[eff_index] = s_val
-            d_arr[eff_index] = t_val
+            d_arr[eff_index] = t_for_dspace_lateral(t_val)
             updated = True
 
         if not updated:

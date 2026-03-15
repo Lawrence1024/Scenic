@@ -11,16 +11,23 @@ ROUTE_SIMILAR_TOLERANCE_M = 2.0
 T_OUT_OF_BOUNDS_THRESHOLD_M = 15.0
 
 
+# Convention: positive t = left of centerline, negative t = right (road direction).
+# ModelDesk uses the same convention (positive = left, negative = right); pass through as-is.
+def t_for_dspace_lateral(t_val: float) -> float:
+    """Lateral offset sent to dSPACE ModelDesk/ControlDesk. Same convention: positive=left, negative=right."""
+    return float(t_val)
+
+
 def _racing_st_offset_to_deltas(offset):
-    """Convert _racing_st_offset to (delta_s, delta_t) in meters.
+    """Convert _racing_st_offset to (delta_s, delta_t) in meters relative to ego.
     offset can be:
-    - (delta_s, delta_t): used as-is (ahead = +s, behind = -s). For raw (0, dt): our projection uses t<0=right, but ModelDesk placement uses t>0=right; use keywords to get correct side.
+    - (delta_s, delta_t): used as-is. Convention: ahead = +s, behind = -s; left = +t, right = -t.
     - ('ahead', d) or ('behind', d) or ('left', d) or ('right', d): converted to (ds, dt).
     Returns None if offset is invalid.
 
-    Note: Our world->(s,t) projection uses t<0=right (left normal). ModelDesk/Additional lateral offset
-    empirically uses the opposite (positive t = right). So for 'right' we use +d and for 'left' we use -d
-    so the fellow appears on the correct side in the sim. Heading does not change this (t is road-relative).
+    All offsets are relative to ego: fellow (s,t) = ego (s,t) + (delta_s, delta_t).
+    E.g. ('right', 3) -> (0, -3) so fellow t = ego_t - 3 (3 m to the right of ego).
+    Convention: positive t = left of centerline, negative t = right.
     """
     if offset is None:
         return None
@@ -36,11 +43,11 @@ def _racing_st_offset_to_deltas(offset):
                     return (d, 0.0)
                 if kind == 'behind':
                     return (-d, 0.0)
-                # ModelDesk placement: positive t = right, negative t = left (opposite of our projection)
+                # positive t = left, negative t = right
                 if kind == 'left':
-                    return (0.0, -d)
-                if kind == 'right':
                     return (0.0, d)
+                if kind == 'right':
+                    return (0.0, -d)
     except (TypeError, ValueError):
         pass
     return None
@@ -192,10 +199,10 @@ def place_ego(sim, obj):
                 pass  # Fall back to XODR-based index
         road_index_for_projection = getattr(sim, '_road_index_ttl', None) or sim._road_index
 
-        # One-time note: t is lateral offset from projection centerline
+        # One-time note: t is lateral offset from projection centerline (positive = left, negative = right)
         if road_index_for_projection and not getattr(sim, '_placement_t_note_logged', False):
             src = "TTL centerline" if getattr(sim, '_road_index_ttl', None) else "XODR centerline"
-            print(f"[Placement] t = signed lateral offset from {src} (t<0 = right in road direction).")
+            print(f"[Placement] t = signed lateral offset from {src} (t>0 = left, t<0 = right in road direction).")
             sim._placement_t_note_logged = True
 
         # 3) Project RD → (s,t) using route-specific road index
@@ -272,20 +279,21 @@ def place_ego(sim, obj):
         seq.StartPosition = float(s_val)
         seq.InitialLongitudinalVelocity = float(base_v)
 
-        # Set lateral offset (t) on sequence - UI "Additional lateral offset"
+        # Set lateral offset (t) on sequence - UI "Additional lateral offset" (convert to dSPACE sign)
         ego_lat_set = False
+        t_dspace = t_for_dspace_lateral(t_val)
         for lat_prop in ('AdditionalLateralOffset', 'InitialLateralOffset', 'LateralOffset', 'AdditionalLateralPosition'):
             if hasattr(seq, lat_prop):
                 try:
-                    setattr(seq, lat_prop, float(t_val))
+                    setattr(seq, lat_prop, float(t_dspace))
                     ego_lat_set = True
                     if abs(t_val) > 0.01:
-                        print(f"[Ego] Set {lat_prop}={t_val:.3f} m (Additional lateral offset)")
+                        print(f"[Ego] Set {lat_prop}={t_dspace:.3f} m (Additional lateral offset)")
                     break
                 except Exception:
                     continue
         if not ego_lat_set and abs(t_val) > 0.01:
-            pass  # Fall back to segment lateral below
+            pass  # Fall back to segment lateral below (t_dspace used there)
 
         # Iterate through segments to ensure they don't override the start pos
         for i in range(seq.Segments.Count):
@@ -330,10 +338,10 @@ def place_ego(sim, obj):
                     for prop_name in ['Constant', 'Value', 'Offset', 'LateralOffset']:
                         try:
                             if hasattr(lat0.ActiveElement, prop_name):
-                                setattr(lat0.ActiveElement, prop_name, float(t_val))
+                                setattr(lat0.ActiveElement, prop_name, float(t_dspace))
                                 success_lat = True
                                 break
-                            dutils.set_activity_constant(lat0, t_val)
+                            dutils.set_activity_constant(lat0, t_dspace)
                             success_lat = True
                             break
                         except Exception:
@@ -393,10 +401,14 @@ def place_fellow(sim, obj):
                     ego_s, ego_t = float(ego_st[0]), float(ego_st[1])
                     delta_s, delta_t = deltas
                     s_val = ego_s + delta_s
-                    t_val = ego_t + delta_t
+                    t_val = ego_t + delta_t  # e.g. ("right", 3) -> delta_t=-3 -> fellow t = ego_t - 3 (right of ego)
                     route_pref = ego_route
                     use_racing_offset = True
                     print(f"[Placement] {vehicle_name}: racing (s,t) from ego + {st_offset} -> s={s_val:.2f}, t={t_val:.2f} (same route as ego)")
+                else:
+                    print(f"[Placement] {vehicle_name}: _racing_st_offset={st_offset} ignored (ego _route_s_t or _route not set yet; place ego first)")
+            else:
+                print(f"[Placement] {vehicle_name}: _racing_st_offset={st_offset} ignored (no ego in scene)")
 
         if not use_racing_offset:
             # Project RD → (s,t) using route-specific road index
@@ -526,12 +538,12 @@ def place_fellow(sim, obj):
     S1 = seqs.Add() if hasattr(seqs, "Add") else seqs.Item(0)
     segs = dutils.ensure_two_segments(S1)
 
-    # seg0 = ABSOLUTE pose: Position = s, Deviation(Absolute) = t
+    # seg0 = ABSOLUTE pose: Position = s, Deviation(Absolute) = t (convert to dSPACE lateral sign)
     # NOTE: Known limitation - dSPACE ModelDesk may ignore t-coordinate (lateral deviation)
     # for fellow vehicles. Testing shows vehicles are placed on centerline regardless of t value.
     # This is a dSPACE ModelDesk configuration issue, not a bug in our code.
     # See debug_ego_cord/README.md and debug_route_code/README.md for details.
-    dutils.configure_seg0_absolute_pose(segs, s=float(s_val), t=float(t_val))
+    dutils.configure_seg0_absolute_pose(segs, s=float(s_val), t=float(t_for_dspace_lateral(t_val)))
 
     # seg1 = Longitudinal Velocity (Extern), Lateral deviation (Extern)
     try:

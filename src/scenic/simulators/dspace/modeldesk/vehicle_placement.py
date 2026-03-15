@@ -8,6 +8,7 @@ from ..geometry import (
     clear_collection,
     ensure_two_segments,
 )
+from .placement import t_for_dspace_lateral
 
 
 def project_scenic_to_st(obj, road_index, coordinate_transform=None):
@@ -65,10 +66,10 @@ def create_fellow_vehicle(ts, obj, road_index, coordinate_transform, fellow_stor
     S1 = seqs.Add() if hasattr(seqs, "Add") else seqs.Item(0)
     segs = ensure_two_segments(S1)
     
-    configure_seg0_absolute_pose(segs, s=float(s_val), t=float(t_val))
-    
+    configure_seg0_absolute_pose(segs, s=float(s_val), t=float(t_for_dspace_lateral(t_val)))
+
     base_v = 0.0  # Force velocity to 0 for all vehicles
-    configure_seg1_motion(segs, v=float(base_v), t=float(t_val))
+    configure_seg1_motion(segs, v=float(base_v), t=float(t_for_dspace_lateral(t_val)))
     make_endless_transition(segs)
     
     # 4) Store reference
@@ -122,7 +123,7 @@ def create_ego_vehicle(ego_maneuver, obj, road_index, coordinate_transform):
     seq.VehicleOrientation = 0.0
     print(f"  Set orientation: 0.0 degrees (aligned with road)")
     
-    # Set lateral position if needed
+    # Set lateral position if needed (convert to dSPACE sign: positive = left in our convention)
     if abs(t_val) > 0.1:
         try:
             segments = seq.Segments
@@ -134,7 +135,7 @@ def create_ego_vehicle(ego_maneuver, obj, road_index, coordinate_transform):
                 dep = getattr(lat0.ActiveElement, "DependencyType", None)
                 if dep is not None:
                     activate_type(dep, "Absolute")
-                set_activity_constant(lat0, t_val)
+                set_activity_constant(lat0, t_for_dspace_lateral(t_val))
                 print(f"  Set lateral deviation: {t_val:.3f}m")
         except Exception as e:
             print(f"  Warning: Could not set lateral position: {e}")

@@ -40,6 +40,7 @@ from scenic.simulators.dspace.controldesk.readback import (
     FELLOW_GPS_BASE_ALT,
 )
 from scenic.simulators.dspace.utils import legacy as dutils
+from scenic.simulators.dspace.modeldesk.placement import t_for_dspace_lateral
 
 MAX_BATCH_SIZE = 30
 DEFAULT_ROUTES = ("R2", "R1")
@@ -252,7 +253,7 @@ def create_fellow_at_st(ts, fellow_name: str, s_val: float, t_val: float, route_
     seq = seqs.Add() if hasattr(seqs, "Add") else seqs.Item(0)
     segs = dutils.ensure_two_segments(seq)
 
-    dutils.configure_seg0_absolute_pose(segs, s=float(s_val), t=float(t_val))
+    dutils.configure_seg0_absolute_pose(segs, s=float(s_val), t=float(t_for_dspace_lateral(t_val)))
     try:
         configure_measurement_seg1(segs)
     except Exception as exc:

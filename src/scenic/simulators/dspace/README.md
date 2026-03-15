@@ -49,7 +49,7 @@ Placement flow:
 3. **Placement:** Set (s, t) and orientation in ModelDesk (orientation converted ENU → RD as above).
 4. **Readback:** Read actual position from ControlDesk and compare with expected.
 
-**Racing-library (s,t) semantics:** For fellows specified relative to ego (ahead/behind/left/right), you can set `_racing_st_offset` so (s,t) is computed from ego's (s,t) instead of projecting world position: **ahead/behind** → keep t, move s; **left/right** → keep s, move t. Use `with _racing_st_offset ('ahead', 5)` or `('right', 2)` or raw `(delta_s, delta_t)` e.g. `(5, 0)` or `(0, -2)` (t<0 = right). Same route as ego is used.
+**Racing-library (s,t) semantics:** For fellows specified relative to ego (ahead/behind/left/right), you can set `_racing_st_offset` so (s,t) is computed from ego's (s,t) instead of projecting world position: **ahead/behind** → keep t, move s; **left/right** → keep s, move t. Use `with _racing_st_offset ('ahead', 5)` or `('right', 2)` or raw `(delta_s, delta_t)` e.g. `(5, 0)` or `(0, -2)` (positive t = left, negative t = right). Same route as ego is used.
 
 **Out-of-bounds:** (s,t) are never clamped to track bounds. If a Scenic position projects to a large |t| (e.g. vehicle off the track), that (s,t) is sent to ModelDesk as-is so the car is placed out of bounds rather than estimated onto the track.
 

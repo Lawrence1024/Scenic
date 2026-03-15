@@ -5,6 +5,7 @@ dSPACE simulation environment, including both ego and fellow vehicles.
 """
 
 from ..vehicle.physics import VehiclePhysicsState
+from ..modeldesk.placement import t_for_dspace_lateral
 
 print(f"[PatchID] controller.py loaded from {__file__}")
 
@@ -366,7 +367,7 @@ class VehicleController:
             d_arr.extend([0.0] * (need_len - len(d_arr)))
 
         v_arr[eff_index] = v_value
-        d_arr[eff_index] = d_value
+        d_arr[eff_index] = t_for_dspace_lateral(d_value)
 
         self.cd.set_var(v_path_bulk, v_arr)
         self.cd.set_var(d_path_bulk, d_arr)
