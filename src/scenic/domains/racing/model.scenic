@@ -38,8 +38,8 @@ param pit_connecting_road_ids = None  # e.g. (25, 30)
 # (ttl_main_road.csv, ttl_pitlane.csv). When ttlFolder is not set, both use OpenDRIVE.
 param ttlFolder = None  # e.g. localPath('../../assets/ttls/LS_ENU_TTL_CSV')
 param ttlFileName = None  # default TTL file for "on ttl" (e.g. 'ttl_main_road.csv' or 'ttl_optimal_xodr.csv')
-param mainTrackBuffer = 6.0   # meters on each side of main segment centerline
-param pitTrackBuffer = 3.25   # meters on each side of pit segment centerline
+param mainTrackBuffer = 6.0   # meters on each side of main segment centerline (±6 m)
+param pitTrackBuffer = 1.5   # meters on each side of pit segment centerline (±1.5 m)
 
 ## Create racing track from the network
 
@@ -67,7 +67,7 @@ param mainRacingRoadIds = [str(r.id) for r in _track._mainRacingRoads] if _track
 
 ## mainTrack and pitTrack are built from segment centerlines (OpenDRIVE or TTL) with fixed buffer widths:
 ## - mainTrack: 6 m on each side of main road centerline (includes Corkscrew, Andretti, junction links)
-## - pitTrack: 3.25 m on each side of pit lane centerline
+## - pitTrack: 1.5 m on each side of pit lane centerline
 ## - ttl: one TTL centerline (ttlFileName param) with mainTrackBuffer; random point on that TTL
 ## Use: new RacingCar on mainTrack  or  new RacingCar on pitTrack  or  new RacingCar on ttl
 ## For a specific TTL file: new RacingCar on ttlRegion('ttl_optimal_xodr.csv')
