@@ -11,10 +11,12 @@ ROUTE_SIMILAR_TOLERANCE_M = 2.0
 T_OUT_OF_BOUNDS_THRESHOLD_M = 15.0
 
 
-# Convention: positive t = left of centerline, negative t = right (road direction).
-# ModelDesk uses the same convention (positive = left, negative = right); pass through as-is.
+# Lateral offset (t or d) convention for ego and fellow placement:
+#   positive = left of centerline (in road direction)
+#   negative = right of centerline
+# ModelDesk/ControlDesk use the same convention; we pass through as-is (no sign flip).
 def t_for_dspace_lateral(t_val: float) -> float:
-    """Lateral offset sent to dSPACE ModelDesk/ControlDesk. Same convention: positive=left, negative=right."""
+    """Lateral offset sent to dSPACE ModelDesk/ControlDesk. Convention: positive=left, negative=right."""
     return float(t_val)
 
 

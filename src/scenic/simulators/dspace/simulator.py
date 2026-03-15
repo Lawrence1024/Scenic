@@ -45,20 +45,8 @@ print(f"[PatchID] simulator.py loaded from {__file__}")
 # dSPACE path for simulated time (read on each control step and logged)
 SIMULATED_TIME_PATH = "Platform()://ASM_Traffic/Simulation and RTOS/Simulation/SimulationTime"
 
-# MAPort paths for ART reset workflow (manual off, Stop, Reset, Start)
+# MAPort teardown: manual_mode off before RTA start and maneuver stop
 MANUAL_MODE_PATH = "Platform()://RaceControl/Model Root/Parameters/manual_mode"
-MANEUVER_STOP_PATH = (
-    "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/"
-    "UserInterface/PAR_Plant/ManeuverControl/MANEUVER_STOP/MDLDCtrl_ManeuverStop"
-)
-MANEUVER_RESET_PATH = (
-    "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/"
-    "UserInterface/PAR_Plant/ManeuverControl/RESET/MDLDCtrl_Reset"
-)
-MANEUVER_START_PATH = (
-    "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/"
-    "UserInterface/PAR_Plant/ManeuverControl/MANEUVER_START/MDLDCtrl_ManeuverStart"
-)
 
 
 class DSpaceSimulator(RacingSimulator):
@@ -184,65 +172,19 @@ class DSpaceSimulation(RacingSimulation):
     def _get_scx_map_path(self):
         return get_map_path(getattr(self.scene, "params", {}) or {})
 
-    def _run_maport_reset_and_start(self):
-        """Reset workflow: manual off, then first set (RTA start + pulse STOP + pulse RESET), then ModelDesk COM Reset, then second start via ControlDesk API, then Pause."""
-        var = getattr(self, "_var_access", None) or getattr(self, "_cd", None)
-        if not var:
-            if self._cd:
-                cd_session.pause(self._cd)
-            return
-        try:
-            print("[Setup] ART reset workflow: manual off, then first set (RTA start, pulse STOP, pulse RESET)...")
-            var.set_var(MANUAL_MODE_PATH, 0.0)
-            time.sleep(0.3)
-            # First set: RTA start, pulse MANEUVER_STOP, pulse MANEUVER_RESET
-            if self._cd:
-                try:
-                    self._cd.start_simulation()
-                    time.sleep(0.5)
-                except Exception as e:
-                    print(f"[Setup] [WARN] First RTA start failed: {e}")
-            var.set_var(MANEUVER_STOP_PATH, 1.0)
-            time.sleep(0.5)
-            var.set_var(MANEUVER_STOP_PATH, 0.0)
-            time.sleep(1.0)
-            var.set_var(MANEUVER_RESET_PATH, 1.0)
-            time.sleep(0.5)
-            var.set_var(MANEUVER_RESET_PATH, 0.0)
-            time.sleep(1.5)
-            print("[Setup] ART reset workflow: first set done.")
-            # Then ModelDesk COM Reset
-            if getattr(self, "exp", None) is not None:
-                try:
-                    mc = self.exp.ManeuverControl
-                    mc.Reset()
-                    time.sleep(0.5)
-                    print("[Setup] ART reset workflow: ModelDesk COM Reset done.")
-                except Exception as e:
-                    print(f"[Setup] [WARN] ModelDesk COM Reset failed: {e}")
-            # Second start: ControlDesk COM API (ManeuverControl.Start), not variable pulse and not RTA
-            if self._cd:
-                try:
-                    self._cd.start_maneuver_via_com()
-                except Exception as e:
-                    print(f"[Setup] [WARN] ControlDesk COM Start failed: {e}; falling back to variable pulse.")
-                    cd_session.start_maneuver(self._cd)
-            else:
-                var.set_var(MANEUVER_START_PATH, 1.0)
-                time.sleep(0.5)
-                var.set_var(MANEUVER_START_PATH, 0.0)
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"[Setup] [WARN] Reset sequence failed: {e}")
-        if self._cd and cd_session.pause(self._cd):
-            print("[Setup] Simulation paused (idle time will not advance sim until warmup/step).")
-
     def _get_initial_ttl_for_art(self):
-        """Return 'pit' or 'race' for ART set_selected_ttl from ego initial position."""
+        """Return 'pit' or 'race' for ART set_selected_ttl. Must match ego route: R1 (Pit) -> 'pit', R2 (Lap) -> 'race'."""
         try:
             ego = getattr(self.scene, "egoObject", None)
             if ego is None:
                 return "race"
+            # Prefer ego's assigned route so ART TTL always matches dSPACE route (R1=Pit->pit, R2=Lap->race)
+            route = getattr(ego, "_route", None)
+            if route == "Pit":
+                return "pit"
+            if route == "Lap":
+                return "race"
+            # Fallback: derive from position (same logic as placement segment detection)
             pos = getattr(ego, "position", None)
             if pos is None:
                 return "race"
@@ -370,6 +312,13 @@ class DSpaceSimulation(RacingSimulation):
             self.ts.Download()  # Download all to simulator
         except Exception as e:
             print(f"[ModelDesk] Save/Download failed: {e}")
+        time.sleep(0.1)
+        if getattr(self, "exp", None) is not None:
+            try:
+                self.exp.ManeuverControl.Reset()
+                print("[ModelDesk] Reset after Download.")
+            except Exception as e:
+                print(f"[ModelDesk] Reset after Download failed: {e}")
 
         # 8) Connect ControlDesk and initialize VesiInterface (single connection before reset)
         self._cd = cd_session.connect_and_prepare(self)
@@ -431,9 +380,7 @@ class DSpaceSimulation(RacingSimulation):
             print("\nWithout ControlDesk, Fellow vehicles CANNOT move.")
             print("="*70 + "\n")
 
-        # 9) Reset workflow: manual off, first set (RTA start + pulse STOP + pulse RESET), ModelDesk COM Reset, second start via ControlDesk COM, then Pause
-        if self._cd:
-            self._run_maport_reset_and_start()
+        # 9) Skip the ControlDesk sequence as it is already done in the destroy method.
 
         # 10) Initialize fellow arrays and verify readback (all while paused; warmup uses SingleStep)
         print("[Setup] Initializing fellow arrays...")
@@ -456,10 +403,15 @@ class DSpaceSimulation(RacingSimulation):
         
         # 12) ART stack reset: wait for sim to settle, then reset VKS and set_selected_ttl (pit/race)
         print("[Setup] ART stack reset (reset_vks_state, set_selected_ttl)...")
-        time.sleep(3)
         self._call_art_stack_reset()
+        time.sleep(1)
         
-        # 13) Ensure simulation is paused for step-by-step control (already paused since step 9)
+        # 13) Start maneuver via ControlDesk (MANEUVER_START pulse), then pause for step-by-step control
+        if self._cd:
+            if cd_session.start_maneuver(self._cd):
+                print("[Setup] Maneuver started via ControlDesk (MANEUVER_START pulse).")
+            else:
+                print("[Setup] [WARN] ControlDesk start_maneuver failed or not connected")
         print("[Setup] Ensuring simulation paused for step-by-step control...")
         if self._cd and cd_session.pause(self._cd):
             print("[Setup] [OK] Simulation paused for step-by-step control")
@@ -475,7 +427,7 @@ class DSpaceSimulation(RacingSimulation):
                 for path, idx0_val in ((track_path, 1), (veh_path, 0)):
                     arr = list(var.get_var(path) or [])
                     if len(arr) < 1:
-                        arr = [0.0] * 1
+                        arr = [0.0]
                     arr[0] = idx0_val
                     var.set_var(path, arr)
                 var.set_var("Platform()://RaceControl/Model Root/Parameters/manual_mode", 1.0)
@@ -1451,8 +1403,25 @@ class DSpaceSimulation(RacingSimulation):
         return {k: vals[k] for k in properties if k in vals}
 
     def destroy(self):
-        """Print final timing summary and COM per-path timing."""
-        # Setup and total process time (from DSpaceSimulation __init__ to destroy)
+        """ControlDesk teardown first (RTA start, stop/reset pulses), then timing summary, then MAPort dispose.
+        NOTE: The 0.2s sleep before RTA Start is required so the simulation can fully settle before starting;
+        do not remove it or RTA Start may not take effect correctly.
+        """
+        # 1) ControlDesk actions first (before timing and port teardown)
+        if self._cd:
+            var = getattr(self, "_var_access", None) or getattr(self, "_cd", None)
+            if var:
+                try:
+                    # Required: wait for simulation to settle before RTA Start (do not remove)
+                    time.sleep(0.2)
+                    self._cd.start_simulation()  # ControlDesk RTA Start
+                    cd_session.stop(self._cd)  # stop_maneuver pulse
+                    self._cd.reset_maneuver()  # reset_maneuver pulse
+                    var.set_var(MANUAL_MODE_PATH, 0.0)
+                except Exception as e:
+                    print(f"[ControlDesk] Teardown: reset sequence failed: {e}")
+
+        # 2) Timing summary
         _now = time.perf_counter()
         _process_start = getattr(self, '_wall_process_start', None)
         if _process_start is not None:
@@ -1460,7 +1429,6 @@ class DSpaceSimulation(RacingSimulation):
             if getattr(self, '_wall_start', None) is not None:
                 setup_wall = self._wall_start - _process_start
                 print(f"[Timing] setup (init to first executeActions)={setup_wall:.2f}s  total process={total_process:.2f}s")
-        # Note: setup (before first step) and first steps (warm-up) are not included in per-step stats
         if self._timing_n > 0:
             n = self._timing_n
             s = self._timing_sums
@@ -1485,39 +1453,17 @@ class DSpaceSimulation(RacingSimulation):
             step_wall_total = s['step_time']
             ratio = step_wall_total / sim_time_total if sim_time_total > 0 else 0
             print(f"[Timing] wall/sim ratio (step_time only): {ratio:.2f}  (>1 = slower than real time)")
-            # Total wall from first step to now (excludes setup before first executeActions)
             if getattr(self, '_wall_start', None) is not None:
                 total_wall = _now - self._wall_start
                 ratio_total = total_wall / sim_time_total if sim_time_total > 0 else 0
                 print(f"[Timing] total wall (first step to destroy)={total_wall:.2f}s for {sim_time_total:.2f}s sim -> wall/sim={ratio_total:.2f}  (excludes setup before first step)")
-        # GPS/dSPACE calibration table write disabled (we no longer need this log; data already have been collected)
         if self._var_access and hasattr(self._var_access, 'print_timing_summary'):
             if self._maport is not None and self._var_access is self._maport:
                 print("[Timing] MAPort per-path timing (get_var/set_var) below:")
             self._var_access.print_timing_summary()
+
+        # 3) MAPort teardown
         if self._maport is not None:
-            # Restore manual_mode to 0 and run first-block sequence (RTA start, pulse STOP, pulse RESET) before releasing MAPort
-            var = getattr(self, "_var_access", None) or getattr(self, "_cd", None)
-            if var:
-                try:
-                    var.set_var(MANUAL_MODE_PATH, 0.0)
-                    time.sleep(0.3)
-                    if self._cd:
-                        try:
-                            self._cd.start_simulation()
-                            time.sleep(0.5)
-                        except Exception:
-                            pass
-                    var.set_var(MANEUVER_STOP_PATH, 1.0)
-                    time.sleep(0.5)
-                    var.set_var(MANEUVER_STOP_PATH, 0.0)
-                    time.sleep(1.0)
-                    var.set_var(MANEUVER_RESET_PATH, 1.0)
-                    time.sleep(0.5)
-                    var.set_var(MANEUVER_RESET_PATH, 0.0)
-                    time.sleep(0.5)
-                except Exception as e:
-                    print(f"[VarAccess] Teardown: reset sequence failed: {e}")
             print("[VarAccess] Teardown: disposing MAPort (variable backend was MAPort).")
             try:
                 self._maport.dispose()

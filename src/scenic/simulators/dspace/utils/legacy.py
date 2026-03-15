@@ -14,9 +14,7 @@ from ..geometry import (
     configure_seg1_motion,
     find_road_id_for_position,
     get_road_name_for_id,
-    build_xodr_sec_points,
     project_world_to_st,
-    MAIN_ROAD_NAMES,
 )
 
 __all__ = [
@@ -29,9 +27,7 @@ __all__ = [
     'configure_seg1_motion',
     'find_road_id_for_position',
     'get_road_name_for_id',
-    'build_xodr_sec_points',
     'project_world_to_st',
-    'MAIN_ROAD_NAMES',
 ]
 
 

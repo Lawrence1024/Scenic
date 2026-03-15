@@ -2,9 +2,8 @@
 """Measure dSPACE fellow route geometry for route-relative (s, t) samples.
 
 This tool places fellows in batches of at most 30 at requested (s, t) coordinates on
-the dSPACE routes, reads their actual RD positions from ControlDesk, transforms them
-back to XODR coordinates, and stores all outputs plus checkpoint state in a dedicated
-folder under `create_new_ttl/measurements`.
+the dSPACE routes, reads their actual RD positions and GPS from ControlDesk, and
+stores all outputs plus checkpoint state in a dedicated folder under `create_new_ttl/measurements`.
 
 Default sweep:
     - Route R2 (main loop road): s = 0..3500, step 1 m, t in {-4, 0, +4}
@@ -388,14 +387,10 @@ def measure_batch(batch_samples: list[dict], ts, exp, cd: ControlDeskApp, config
     measured_at = time.strftime("%Y-%m-%dT%H:%M:%S")
     batch_results = []
     for offset, (sample, position, gps_reading) in enumerate(zip(batch_samples, positions, gps_readings)):
-        # Map is RD-aligned; XODR columns = RD (same frame)
         result = {
             **sample,
             **position,
             **gps_reading,
-            "xodr_x_m": float(position["rd_x_m"]),
-            "xodr_y_m": float(position["rd_y_m"]),
-            "xodr_z_m": float(position["rd_z_m"]),
             "batch_index": batch_index,
             "fellow_index_in_batch": offset,
             "measured_at": measured_at,
@@ -404,7 +399,6 @@ def measure_batch(batch_samples: list[dict], ts, exp, cd: ControlDeskApp, config
         print(
             f"  [{sample['route']}] s={sample['s_input_m']:.1f}, t={sample['t_input_m']:.3f} -> "
             f"RD=({result['rd_x_m']:.6f}, {result['rd_y_m']:.6f}, {result['rd_z_m']:.6f}) "
-            f"XODR=({result['xodr_x_m']:.6f}, {result['xodr_y_m']:.6f}, {result['xodr_z_m']:.6f}) "
             f"GPS=({result['gps_longitude_deg']}, {result['gps_latitude_deg']}, {result['gps_heading_deg']})"
         )
     return batch_results
@@ -422,9 +416,6 @@ def save_results_csv(results: list[dict]) -> None:
         "gps_longitude_deg",
         "gps_latitude_deg",
         "gps_heading_deg",
-        "xodr_x_m",
-        "xodr_y_m",
-        "xodr_z_m",
         "batch_index",
         "fellow_index_in_batch",
         "measured_at",

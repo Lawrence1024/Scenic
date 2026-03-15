@@ -1,5 +1,5 @@
 param map = localPath('../../assets/maps/dSPACE/LagunaSeca.xodr')
-# param ttlFolder = localPath('../../assets/ttls/LS_ENU_TTL_CSV')
+param ttlFolder = localPath('../../assets/ttls/LS_ENU_TTL_CSV')
 param use2DMap = True
 param time_step = 0.01
 param control_period = 0.05
@@ -20,20 +20,18 @@ model scenic.simulators.dspace.racing_model
 # ego = new RacingCar at (-110.956171,-151.841778,8.331000),\ 
 # Main Start
 # Facing roadDirection aligns ego with the track so "ahead of ego by 20" / "right of ego by 5" give sensible (s,t).
-# ego = new RacingCar at (60.3811498,103.7450019), \
-
-
-
-ego = new RacingCar on mainTrack, \
+ego = new RacingCar at (60.8199003,92.948660), \
     facing roadDirection, \
     with regionContainedIn everywhere, \
     with raceNumber 1, \
     with ttlFileName 'ttl_optimal_xodr.csv', \
     with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV')
 
-ego.behavior = ARTStackControlBehavior()
-fellow1 = new RacingCar with regionContainedIn everywhere, with _racing_st_offset ('left', 3)
-fellow2 = new RacingCar with regionContainedIn everywhere, with _racing_st_offset ('behind', 20)
+# ego.behavior = ARTStackControlBehavior()
+
+
+# fellow1 = new RacingCar with regionContainedIn everywhere, with _racing_st_offset ('left', 3)
+# fellow2 = new RacingCar with regionContainedIn everywhere, with _racing_st_offset ('behind', 20)
 
 
 
@@ -45,25 +43,6 @@ fellow2 = new RacingCar with regionContainedIn everywhere, with _racing_st_offse
 
 # fellow3 = new RacingCar on mainTrack
 # fellow4 = new RacingCar on pitTrack
-
-
-# fellow5 = new RacingCar on mainTrack
-# fellow6 = new RacingCar on mainTrack
-# fellow7 = new RacingCar on mainTrack
-# fellow8 = new RacingCar on mainTrack
-# fellow9 = new RacingCar on mainTrack
-# fellow10 = new RacingCar on pitTrack
-# fellow11 = new RacingCar on pitTrack
-# fellow12 = new RacingCar on pitTrack
-# fellow13 = new RacingCar on pitTrack
-# fellow14 = new RacingCar on pitTrack
-# fellow15 = new RacingCar on pitTrack
-# fellow16 = new RacingCar on pitTrack
-# fellow17 = new RacingCar on pitTrack
-# fellow18 = new RacingCar on pitTrack
-# fellow19 = new RacingCar on pitTrack
-# fellow20 = new RacingCar on pitTrack
-# fellow21 = new RacingCar on pitTrack
 
 
 

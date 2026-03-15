@@ -83,6 +83,18 @@ def pause(cd):
         return False
 
 
+def stop(cd):
+    """Stop the active maneuver (pulse MANEUVER_STOP variable)."""
+    if not cd:
+        return False
+    try:
+        cd.stop_maneuver()
+        return True
+    except Exception as e:
+        print(f"[Maneuver] Failed to stop: {e}")
+        return False
+
+
 def step(cd, dt):
     if cd:
         try:

@@ -11,6 +11,8 @@ The COM application object is created similarly to ModelDesk automation.
 
 import time
 from typing import Any
+import pythoncom
+from win32com.client import Dispatch
 
 
 class ControlDeskApp:
@@ -32,8 +34,6 @@ class ControlDeskApp:
         self._timing_log = []
 
     def connect(self):
-        import pythoncom
-        from win32com.client import Dispatch
         pythoncom.CoInitialize()
         self.app = Dispatch(self._prog_id)
         return self
@@ -104,34 +104,38 @@ class ControlDeskApp:
         
         Pulses the MANEUVER_START variable: sets it to 1, waits briefly, then resets to 0.
         """
-        import time
         
         maneuver_start_path = (
             "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/"
             "UserInterface/PAR_Plant/ManeuverControl/MANEUVER_START/MDLDCtrl_ManeuverStart"
         )
         
+        print("[ControlDesk] Pulse: MANEUVER_START")
         self.set_var(maneuver_start_path, 1.0)
-        time.sleep(0.1)
+        time.sleep(0.5)
         self.set_var(maneuver_start_path, 0.0)
 
     def stop_maneuver(self):
-        """Stop the active experiment's maneuver."""
-        exp = self.app.ActiveExperiment
-        mc = exp.ManeuverControl
-        mc.Stop()
+        """Stop the active experiment's maneuver via variable pulse (MANEUVER_STOP)."""
+        maneuver_stop_path = (
+            "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/"
+            "UserInterface/PAR_Plant/ManeuverControl/MANEUVER_STOP/MDLDCtrl_ManeuverStop"
+        )
+        print("[ControlDesk] Pulse: MANEUVER_STOP")
+        self.set_var(maneuver_stop_path, 1.0)
+        time.sleep(0.5)
+        self.set_var(maneuver_stop_path, 0.0)
 
     def reset_maneuver(self):
-        """Reset the active experiment's maneuver."""
-        exp = self.app.ActiveExperiment
-        mc = exp.ManeuverControl
-        mc.Reset()
-
-    def start_maneuver_via_com(self):
-        """Start the active experiment's maneuver via ControlDesk COM (ManeuverControl.Start), not variable pulse or RTA."""
-        exp = self.app.ActiveExperiment
-        mc = exp.ManeuverControl
-        mc.Start(False)
+        """Reset the active experiment's maneuver via variable pulse (RESET)."""
+        maneuver_reset_path = (
+            "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/"
+            "UserInterface/PAR_Plant/ManeuverControl/RESET/MDLDCtrl_Reset"
+        )
+        print("[ControlDesk] Pulse: MANEUVER_RESET")
+        self.set_var(maneuver_reset_path, 1.0)
+        time.sleep(0.5)
+        self.set_var(maneuver_reset_path, 0.0)
 
     # Simulation control
     def _get_platform(self):
@@ -197,7 +201,7 @@ class ControlDeskApp:
             print(f"[ControlDesk] Error setting simulation step: {e}")
 
     def start_simulation(self):
-        """Start the real-time application so the simulation is running (time advances).
+        """Start the real-time application (RTA Start) so the simulation is running (time advances).
         Call this before pause_simulation() when using step-by-step control, so that
         SingleStep() advances SimulationTime. Without this, time may stay 0.
         """
@@ -206,11 +210,8 @@ class ControlDeskApp:
             if hasattr(rta, "Start"):
                 rta.Start()
                 print("[ControlDesk] start_simulation (RTA.Start) called")
-            elif hasattr(rta, "Run"):
-                rta.Run()
-                print("[ControlDesk] start_simulation (RTA.Run) called")
             else:
-                print("[ControlDesk] RTA has no Start/Run method; simulation may already be started or use different API")
+                print("[ControlDesk] RTA has no Start method; simulation may already be started or use different API")
         except Exception as e:
             print(f"[ControlDesk] start_simulation failed: {e}")
 

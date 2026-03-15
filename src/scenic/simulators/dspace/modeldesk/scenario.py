@@ -61,18 +61,10 @@ class ScenarioManager:
             pass
     
     def start_simulation(self):
-        """Save, download, reset, and start simulation."""
+        """Save and download scenario to simulator. Maneuver reset is done once in DSpaceSimulation setup (ModelDesk COM Reset)."""
         try:
             self.ts.Save()
             self.ts.Download()
-            
-            mc = self.exp.ManeuverControl
-            try: mc.Stop()
-            except Exception: pass
-            time.sleep(0.2)
-            mc.Reset()
-            time.sleep(0.2)
-            mc.Start(False)
         except Exception:
             pass
 

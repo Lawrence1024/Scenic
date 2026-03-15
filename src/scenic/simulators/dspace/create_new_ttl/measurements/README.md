@@ -9,14 +9,14 @@ This directory is the canonical home for dSPACE route calibration sweeps.
 
 ## Export centerlines (R2 → main, R1 → pit)
 
-From the measurements CSV you can export TTL centerline CSVs (x,y,z in XODR coordinates) for replacing `ttl_main_road.csv` and `ttl_pitlane.csv`:
+From the measurements CSV you can export TTL centerline CSVs (x,y,z in RD coordinates) for replacing `ttl_main_road.csv` and `ttl_pitlane.csv`:
 
 ```bash
 # From repo root
 python src/scenic/simulators/dspace/create_new_ttl/measurements_to_centerlines.py
 ```
 
-This reads `route_st_to_xodr_measurements.csv`, extracts centerline points (t=0) for R2 (main) and R1 (pit), and writes:
+This reads `route_st_to_xodr_measurements.csv`, extracts centerline points (t=0) for R2 (main) and R1 (pit) using RD coordinates, and writes:
 
 - `create_new_ttl/ttl_main_road_from_measurements.csv`
 - `create_new_ttl/ttl_pitlane_from_measurements.csv`
