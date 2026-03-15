@@ -380,9 +380,18 @@ class DSpaceSimulation(RacingSimulation):
             print("\nWithout ControlDesk, Fellow vehicles CANNOT move.")
             print("="*70 + "\n")
 
-        # 9) Skip the ControlDesk sequence as it is already done in the destroy method.
+        # 9) Start maneuver (MANEUVER_START pulse) then pause for step-by-step control; warmup runs next.
+        if self._cd:
+            if cd_session.start_maneuver(self._cd):
+                print("[Setup] Maneuver started via ControlDesk (MANEUVER_START pulse).")
+            else:
+                print("[Setup] [WARN] ControlDesk start_maneuver failed or not connected")
+            if cd_session.pause(self._cd):
+                print("[Setup] [OK] Simulation paused for step-by-step control")
+            else:
+                print("[Setup] [WARN] Could not pause simulation")
 
-        # 10) Initialize fellow arrays and verify readback (all while paused; warmup uses SingleStep)
+        # 10) Initialize fellow arrays and verify readback (warmup runs 3 s sim time via SingleStep)
         print("[Setup] Initializing fellow arrays...")
         ensure_fellow_arrays_initialized(self)
 
@@ -404,21 +413,30 @@ class DSpaceSimulation(RacingSimulation):
         # 12) ART stack reset: wait for sim to settle, then reset VKS and set_selected_ttl (pit/race)
         print("[Setup] ART stack reset (reset_vks_state, set_selected_ttl)...")
         self._call_art_stack_reset()
-        time.sleep(1)
-        
-        # 13) Start maneuver via ControlDesk (MANEUVER_START pulse), then pause for step-by-step control
-        if self._cd:
-            if cd_session.start_maneuver(self._cd):
-                print("[Setup] Maneuver started via ControlDesk (MANEUVER_START pulse).")
-            else:
-                print("[Setup] [WARN] ControlDesk start_maneuver failed or not connected")
-        print("[Setup] Ensuring simulation paused for step-by-step control...")
-        if self._cd and cd_session.pause(self._cd):
-            print("[Setup] [OK] Simulation paused for step-by-step control")
-        else:
-            print("[Setup] [WARN] Could not pause simulation")
-        
-        # 14) Apply race "Go" signals (manual_mode, track_flag, vehicle_flag) so cars are allowed to start moving. Done after pause so all warmups complete first.
+
+        # 13) Block until brake values (front/rear) are close to 0 before applying race go
+        var = getattr(self, "_var_access", None) or getattr(self, "_cd", None)
+        if var:
+            _brake_tol = 1.0   # brake command scale can be 0–10000; 1.0 is effectively zero
+            _brake_timeout = 15.0
+            _brake_start = time.perf_counter()
+            try:
+                while (time.perf_counter() - _brake_start) < _brake_timeout:
+                    vf = var.get_var(VehicleController.KEY_BRAKE_FRONT)
+                    vr = var.get_var(VehicleController.KEY_BRAKE_REAR)
+                    bf = float(vf) if vf is not None else 0.0
+                    br = float(vr) if vr is not None else 0.0
+                    if abs(bf) <= _brake_tol and abs(br) <= _brake_tol:
+                        print("[Setup] Brake values near zero (front={:.4f}, rear={:.4f}). Proceeding to race go.".format(bf, br))
+                        break
+                    time.sleep(0.05)
+                else:
+                    print("[Setup] [WARN] Brake wait timed out after {:.1f}s (front={:.4f}, rear={:.4f}). Proceeding anyway.".format(
+                        _brake_timeout, bf, br))
+            except Exception as e:
+                print("[Setup] [WARN] Brake read failed: {}. Proceeding to race go.".format(e))
+
+        # 14) Apply race "Go" signals (manual_mode, track_flag, vehicle_flag) so cars are allowed to start moving.
         var = getattr(self, "_var_access", None) or getattr(self, "_cd", None)
         if var:
             try:

@@ -4,7 +4,7 @@ import time
 _SIMULATED_TIME_PATH = "Platform()://ASM_Traffic/Simulation and RTOS/Simulation/SimulationTime"
 
 # Fixed warmup duration in simulated time (seconds) for deterministic runs
-WARMUP_SIM_DURATION = 3.0
+WARMUP_SIM_DURATION = 3
 
 
 def _advance_one_step(sim):

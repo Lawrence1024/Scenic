@@ -20,14 +20,15 @@ model scenic.simulators.dspace.racing_model
 # ego = new RacingCar at (-110.956171,-151.841778,8.331000),\ 
 # Main Start
 # Facing roadDirection aligns ego with the track so "ahead of ego by 20" / "right of ego by 5" give sensible (s,t).
-ego = new RacingCar at (60.8199003,92.948660), \
+# ego = new RacingCar at (60.8199003,92.948660), \
+ego = new RacingCar on mainTrack, \
     facing roadDirection, \
     with regionContainedIn everywhere, \
     with raceNumber 1, \
     with ttlFileName 'ttl_optimal_xodr.csv', \
     with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV')
 
-# ego.behavior = ARTStackControlBehavior()
+ego.behavior = ARTStackControlBehavior()
 
 
 # fellow1 = new RacingCar with regionContainedIn everywhere, with _racing_st_offset ('left', 3)

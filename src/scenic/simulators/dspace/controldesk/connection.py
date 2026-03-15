@@ -302,8 +302,8 @@ class ControlDeskApp:
             KEY_CLUTCH = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Pos_ClutchPedal[%]/Value"
             
             self.set_var(KEY_THROTTLE, 0.0)
-            self.set_var(KEY_BRAKE_FRONT, 0.1)
-            self.set_var(KEY_BRAKE_REAR, 0.1)
+            self.set_var(KEY_BRAKE_FRONT, 0.0)
+            self.set_var(KEY_BRAKE_REAR, 0.0)
             self.set_var(KEY_STEERING, 0)
             self.set_var(KEY_GEAR, 0.0)
             self.set_var(KEY_CLUTCH, 0.0)
