@@ -70,7 +70,7 @@ A **GPS ↔ dSPACE local** transform is available for converting between GNSS (l
   ```bash
   python src/scenic/simulators/dspace/converters/fit_gps_dspace_calibration.py
   ```
-  Default: reads `gps_dspace_table.csv` from repo root, writes `src/scenic/simulators/dspace/geometry/gps_dspace_calibration.json`.
+  Default: reads `gps_dspace_table.csv` from `src/scenic/simulators/dspace/converters/`, writes `src/scenic/simulators/dspace/geometry/gps_dspace_calibration.json`.
 
 - **Usage in code:** The GNSS ↔ Scenic local transform lives in the **racing library** so that the read-in contract is GNSS and conversion is centralized there:
   ```python

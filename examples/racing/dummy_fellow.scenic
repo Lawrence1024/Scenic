@@ -8,20 +8,13 @@ model scenic.simulators.dspace.racing_model
 
 # --- Ego car with MPC behavior ---
 # Using main racing road centerline TTL (excluding pitlane)
-# Pitlane Start
-# ego = new RacingCar at (79.766382000,97.055717000), \
-# Pitlane End
-# ego = new RacingCar at (196.952588000,9.974341000), \
-# Main End
-# ego = new RacingCar at (134.131413,125.953041),\  
-# Weird Curve
-# ego = new RacingCar at (614.659946,-302.782016),\  
-# Werid Curve
-# ego = new RacingCar at (-110.956171,-151.841778,8.331000),\ 
-# Main Start
-# Facing roadDirection aligns ego with the track so "ahead of ego by 20" / "right of ego by 5" give sensible (s,t).
-# ego = new RacingCar at (60.8199003,92.948660), \
-ego = new RacingCar on pitTrack, \
+# PitTrack Start
+# ego = new RacingCar at (-40.77355326377025,-79.02085385354275), \
+# MainTrack Start
+# ego = new RacingCar at (61.96155539333135,94.59380989753669), \
+# MidPit
+ego = new RacingCar at (-120.04546962222386,-218.69212142577055), \
+# ego = new RacingCar on ttl, \
     facing roadDirection, \
     with regionContainedIn everywhere, \
     with raceNumber 1, \

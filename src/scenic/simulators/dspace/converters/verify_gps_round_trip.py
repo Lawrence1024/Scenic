@@ -6,7 +6,7 @@ and optionally (x_rd, y_rd) = dSPACE RD. Compares final Scenic to initial.
 
 Run from repo root:
   python src/scenic/simulators/dspace/converters/verify_gps_round_trip.py
-  python src/scenic/simulators/dspace/converters/verify_gps_round_trip.py --csv gps_dspace_table.csv --samples 50
+  python src/scenic/simulators/dspace/converters/verify_gps_round_trip.py --csv src/scenic/simulators/dspace/converters/gps_dspace_table.csv --samples 50
 """
 
 import argparse
@@ -34,7 +34,7 @@ def _dist(a, b):
 
 def main():
     ap = argparse.ArgumentParser(description="Verify GPS <-> dSPACE <-> Scenic round trip")
-    ap.add_argument("--csv", type=Path, default=_REPO_ROOT / "gps_dspace_table.csv", help="Table CSV")
+    ap.add_argument("--csv", type=Path, default=_CONVERTERS / "gps_dspace_table.csv", help="Table CSV")
     ap.add_argument("--samples", type=int, default=100, help="Number of sample rows to verify")
     ap.add_argument("--cal-xodr", type=Path, default=_DSPACE / "geometry" / "gps_dspace_calibration.json", help="GPS->XODR (or position) calibration")
     ap.add_argument("--cal-rd", type=Path, default=_DSPACE / "geometry" / "gps_rd_calibration.json", help="GPS->RD calibration (when table has x_rd, y_rd)")

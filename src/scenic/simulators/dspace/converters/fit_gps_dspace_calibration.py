@@ -4,7 +4,7 @@ Fit GPS <-> dSPACE transform from gps_dspace_table.csv and save calibration.
 
 Run from repo root after a run that produced gps_dspace_table.csv:
   python src/scenic/simulators/dspace/converters/fit_gps_dspace_calibration.py
-  python src/scenic/simulators/dspace/converters/fit_gps_dspace_calibration.py --csv gps_dspace_table.csv --output src/scenic/simulators/dspace/geometry/gps_dspace_calibration.json
+  python src/scenic/simulators/dspace/converters/fit_gps_dspace_calibration.py --csv src/scenic/simulators/dspace/converters/gps_dspace_table.csv --output src/scenic/simulators/dspace/geometry/gps_dspace_calibration.json
 """
 
 import argparse
@@ -30,7 +30,7 @@ from scenic.domains.racing.gnss_transform import (
 
 def main():
     ap = argparse.ArgumentParser(description="Fit GPS<->dSPACE transform from table CSV and save calibration")
-    ap.add_argument("--csv", type=Path, default=_REPO_ROOT / "gps_dspace_table.csv", help="Input CSV (sim_time, x_dspace, y_dspace, ..., longitude_deg, latitude_deg, ...)")
+    ap.add_argument("--csv", type=Path, default=_CONVERTERS / "gps_dspace_table.csv", help="Input CSV (sim_time, x_dspace, y_dspace, ..., longitude_deg, latitude_deg, ...)")
     ap.add_argument("--output", "-o", type=Path, default=None, help="Output JSON path (default: gps_dspace_calibration.json or gps_rd_calibration.json when --rd)")
     ap.add_argument("--rd", action="store_true", help="Fit to x_rd, y_rd (dSPACE RD) when present; output gps_rd_calibration.json for full round-trip verify")
     args = ap.parse_args()
