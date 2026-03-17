@@ -1,8 +1,12 @@
-"""Vehicle physics model for kinematic control.
+"""Vehicle physics model for fellow (v, d) control.
 
-This module provides a simple physics simulation that converts control inputs
-(throttle, brake, steering) into motion outputs (velocity, lateral deviation).
-Used primarily for fellow vehicle control in external signal mode.
+Converts racing library control inputs into the v and d values written to
+dSPACE External_Signals:
+- Throttle and brake -> longitudinal acceleration -> velocity v (m/s).
+- Steering -> lateral velocity -> lateral deviation d (m from centerline).
+
+Used when fellow_dummy_centerline is False: behavior supplies throttle/brake/steering
+via _control_state; we integrate one step and write estimated v and d to dSPACE.
 """
 
 

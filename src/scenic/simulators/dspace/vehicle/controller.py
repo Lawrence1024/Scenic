@@ -381,13 +381,18 @@ class VehicleController:
             )
 
     def apply_fellow_control(self, obj):
-        """Apply control for fellow vehicle.
+        """Apply control for fellow vehicle via v and d only.
 
-        When fellow_dummy_centerline is True: write constant velocity and lateral deviation
-        from placement to External_Signals (Velocity/Lateral deviation Extern in dSPACE).
-        Otherwise
-        use kinematic model: throttle/brake/steering → physics → velocity/deviation
-        written to ControlDesk External_Signals.
+        Fellows are controlled only by (v, d) written to dSPACE External_Signals.
+        - v (velocity): from racing library throttle and brake commands, integrated
+          via a kinematic model and written to Const_v_Fellows_External[km|h]/Value.
+        - d (lateral deviation): from racing library steering command, integrated
+          via the same model and written to Const_d_Fellows_External[m]/Value.
+
+        When fellow_dummy_centerline is True: write constant v and d from placement
+        (no behavior, no physics). Otherwise: read throttle/brake/steering from
+        _control_state (set by behavior actions), sync physics state from dSPACE
+        readback, integrate one step, write estimated v and d to External_Signals.
         """
         # Ensure fellow arrays are initialized before attempting to write
         from ..controldesk.arrays import ensure_fellow_arrays_initialized
@@ -492,7 +497,7 @@ class VehicleController:
                 new_velocity = actual_speed
                 new_deviation = actor.physics.deviation
             else:
-                # Sync deviation with actual position before update
+                # Sync deviation with actual position (route-relative t) before update
                 try:
                     plant_base = (
                         "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/"
@@ -503,23 +508,35 @@ class VehicleController:
                     x_rd = x_arr[eff_index] if isinstance(x_arr, (list, tuple)) and eff_index < len(x_arr) else None
                     y_rd = y_arr[eff_index] if isinstance(y_arr, (list, tuple)) and eff_index < len(y_arr) else None
 
-                    if x_rd is not None and y_rd is not None and self.simulation._road_index:
-                        from ..utils.legacy import project_world_to_st
-
-                        _, t_actual = project_world_to_st(
-                            self.simulation._road_index,
-                            (float(x_rd), float(y_rd)),
-                        )
-                        actor.physics.deviation = float(t_actual)
+                    if x_rd is not None and y_rd is not None:
+                        road_index = getattr(self.simulation, "_road_index_ttl", None) or self.simulation._road_index
+                        if road_index:
+                            route_pref = getattr(obj, "_route", None)
+                            if route_pref:
+                                from ..geometry.route_projection import project_world_to_st_route_specific
+                                _, t_actual = project_world_to_st_route_specific(
+                                    road_index,
+                                    (float(x_rd), float(y_rd)),
+                                    route_preference=route_pref,
+                                )
+                            else:
+                                from ..utils.legacy import project_world_to_st
+                                _, t_actual = project_world_to_st(
+                                    road_index,
+                                    (float(x_rd), float(y_rd)),
+                                )
+                            actor.physics.deviation = float(t_actual)
                 except Exception:
                     pass
 
-                # Physics Update
+                # Physics update: throttle/brake -> v, steering -> d (one control period)
+                control_interval = getattr(self.simulation, "_control_interval", 1)
+                dt = float(self.simulation.timestep) * max(1, control_interval)
                 new_velocity, new_deviation = actor.physics.update(
                     throttle=throttle,
                     brake=brake,
                     steering=steering,
-                    dt=self.simulation.timestep,
+                    dt=dt,
                 )
 
             # --- WRITE TO EXTERNAL SIGNALS ---
