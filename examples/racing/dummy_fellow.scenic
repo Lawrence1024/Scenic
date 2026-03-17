@@ -13,13 +13,13 @@ model scenic.simulators.dspace.racing_model
 # MainTrack Start
 # ego = new RacingCar at (61.96155539333135,94.59380989753669), \
 # MidPit
-ego = new RacingCar at (-120.04546962222386,-218.69212142577055), \
-# ego = new RacingCar on ttl, \
+# ego = new RacingCar at (-120.04546962222386,-218.69212142577055), \
+ego = new RacingCar on ttl, \
     facing roadDirection, \
     with regionContainedIn everywhere, \
     with raceNumber 1, \
-    # with ttlFileName 'ttl_optimal_xodr.csv', \
-    with ttlFileName 'ttl_pit_xodr.csv', \
+    with ttlFileName 'ttl_optimal_xodr.csv', \
+    # with ttlFileName 'ttl_pit_xodr.csv', \
     with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV')
 
 ego.behavior = ARTStackControlBehavior()
