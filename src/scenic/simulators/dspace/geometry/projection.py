@@ -1,5 +1,6 @@
 """Projection utilities for world-to-road coordinate conversion."""
 
+import math
 from typing import Tuple
 
 
@@ -145,4 +146,78 @@ def project_world_to_st(index_or_map, pos: Tuple[float, float], xodr_file: str =
     # DIRECT APPROACH: Use OpenDRIVE s directly for full track coverage
     # This provides the full 0-2484.6m range without calibration capping
     return raw_s, t_val
+
+
+def _signed_vertex_curvature_rad_per_m(pts, j: int) -> float:
+    """Signed curvature (rad/m) at polyline vertex j using adjacent segments."""
+    if j <= 0 or j >= len(pts) - 1:
+        return 0.0
+    ax = float(pts[j][0]) - float(pts[j - 1][0])
+    ay = float(pts[j][1]) - float(pts[j - 1][1])
+    bx = float(pts[j + 1][0]) - float(pts[j][0])
+    by = float(pts[j + 1][1]) - float(pts[j][1])
+    la = math.hypot(ax, ay)
+    lb = math.hypot(bx, by)
+    if la < 1e-9 or lb < 1e-9:
+        return 0.0
+    ang_a = math.atan2(ay, ax)
+    ang_b = math.atan2(by, bx)
+    turn = ang_b - ang_a
+    while turn > math.pi:
+        turn -= 2 * math.pi
+    while turn < -math.pi:
+        turn += 2 * math.pi
+    ds = 0.5 * (la + lb)
+    if ds < 1e-9:
+        return 0.0
+    return turn / ds
+
+
+def path_curvature_signed_at_world_pos(index_or_map, pos: Tuple[float, float]) -> float:
+    """Signed path curvature in rad/m at the closest projection onto the road polyline.
+
+    Used by fellow kinematic physics: psi_e_dot = r - v*kappa. Must use the same
+    road index / filtering as ``project_world_to_st`` (e.g. route-specific TTL).
+    """
+    px, py = float(pos[0]), float(pos[1])
+    roads_obj = None
+    if isinstance(index_or_map, dict) and "roads" in index_or_map:
+        roads_obj = index_or_map["roads"]
+    else:
+        roads_obj = getattr(index_or_map, "roads", None)
+    if not roads_obj:
+        return 0.0
+
+    best = None  # (dist2, seg_i, u, pts)
+    it = roads_obj.values() if isinstance(roads_obj, dict) else roads_obj
+    for road in it:
+        sec_list = road.get("sec_points") if isinstance(road, dict) else getattr(road, "sec_points", [])
+        if not sec_list:
+            continue
+        for pts in sec_list:
+            if not pts or len(pts) < 2:
+                continue
+            for i in range(len(pts) - 1):
+                x0, y0, s0 = pts[i]
+                x1, y1, s1 = pts[i + 1]
+                vx, vy = x1 - x0, y1 - y0
+                seg_len2 = vx * vx + vy * vy
+                if seg_len2 <= 1e-12:
+                    continue
+                wx, wy = px - x0, py - y0
+                u = (wx * vx + wy * vy) / seg_len2
+                u = 0.0 if u < 0.0 else (1.0 if u > 1.0 else u)
+                qx = x0 + u * vx
+                qy = y0 + u * vy
+                dx, dy = px - qx, py - qy
+                dist2 = dx * dx + dy * dy
+                if best is None or dist2 < best[0]:
+                    best = (dist2, i, u, pts)
+    if best is None:
+        return 0.0
+    _, seg_i, u, pts = best
+    # Vertex nearer to projection along the segment
+    j = seg_i if u < 0.5 else seg_i + 1
+    j = max(1, min(j, len(pts) - 2))
+    return _signed_vertex_curvature_rad_per_m(pts, j)
 

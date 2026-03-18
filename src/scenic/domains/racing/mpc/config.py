@@ -90,6 +90,10 @@ class MPCConfig:
         self.curv_deadzone_max = config_dict.get('curv_deadzone_max', 0.04)  # (1/m) max curv_ahead_max to allow deadzone; never deadzone in moderate curvature (e.g. 0.03-0.05)
         self.cte_multiplier_max = config_dict.get('cte_multiplier_max', 1.5)  # cap on tracking-weight multiplier when off-track (avoid over-aggressive recovery)
         
+        # QP numerics: floor speed in lateral dynamics so rows stay well-conditioned at v~0
+        self.mpc_min_speed_for_qp_mps = config_dict.get('mpc_min_speed_for_qp_mps', 2.5)
+        self.qp_hessian_reg = config_dict.get('qp_hessian_reg', 1e-5)
+
         # Safety thresholds
         self.admissible_position_error = config_dict.get('admissible_position_error', 30.0)  # Default 30.0m for sparse waypoints
         # Reduced from 1.57 rad (90 deg) to 2.36 rad (135 deg) to allow MPC to run more often

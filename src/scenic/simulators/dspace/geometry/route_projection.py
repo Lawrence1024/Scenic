@@ -352,3 +352,19 @@ def project_world_to_st_route_specific(
     else:
         # Fallback: use road-relative s
         return (s_road, t_val)
+
+
+def path_curvature_at_pos_route_aware(
+    road_index: Dict[str, Any],
+    pos: Tuple[float, float],
+    route_preference: Optional[str] = None,
+) -> float:
+    """Signed curvature (rad/m) at ``pos`` using the same polyline set as route-specific (s,t)."""
+    from .projection import path_curvature_signed_at_world_pos
+
+    index_for_projection = road_index
+    if route_preference and route_preference in ROUTE_NAME_MAP:
+        filtered = build_route_specific_road_index(road_index, route_preference)
+        if filtered is not None and filtered.get("roads"):
+            index_for_projection = filtered
+    return path_curvature_signed_at_world_pos(index_for_projection, pos)

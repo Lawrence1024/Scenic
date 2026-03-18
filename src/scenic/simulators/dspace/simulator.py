@@ -1527,7 +1527,19 @@ class DSpaceSimulation(RacingSimulation):
                 # Create both MPC controllers
                 lon_controller = MPCLongitudinalController(config, timestep=dt)
                 lat_controller = MPCLateralController(config, timestep=dt)
-                
+                scene = getattr(self, "scene", None)
+                ego = getattr(scene, "egoObject", None) if scene else None
+                if agent is ego:
+                    _mpc_veh = "ego"
+                else:
+                    rn = getattr(agent, "raceNumber", None)
+                    _mpc_veh = f"fellow#{rn}" if rn is not None else "fellow"
+                lat_controller._mpc_log_tag = f"[MPC {_mpc_veh}]"
+                # Fellow-only: QP fixes for v~0 horizon (OSQP non-convex); ego keeps original dynamics
+                lat_controller._mpc_fellow_qp_robustness = agent is not ego
+                agent._follow_mpc_log_prefix = f"[FollowRacingLineMPC {_mpc_veh}]"
+                agent._follow_mpc_behavior_log_prefix = f"[FollowRacingLineMPCBehavior {_mpc_veh}]"
+
                 # Steering contract: MPC path uses road wheel angle in radians (see racing README control contract)
                 agent._racing_steer_units = 'rad'
                 

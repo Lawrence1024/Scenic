@@ -460,7 +460,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
 
     # Get Controllers: Longitudinal MPC + Lateral MPC
     _lon_controller, _lat_controller = simulation().getRacingControllers(self, use_mpc=True, mpc_config_path=mpc_config_path)
-    
+    _fbhv = getattr(self, '_follow_mpc_behavior_log_prefix', '[FollowRacingLineMPCBehavior]')
+
     # Gear thresholds (m/s)
     gear_up_thresholds = [0.0, 12.0, 22.0, 32.0, 42.0, 52.0]
     gear_down_thresholds = [0.0, 9.0, 18.0, 28.0, 38.0, 48.0]
@@ -498,7 +499,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 except:
                     pass
             if car_heading is None:
-                print("[FollowRacingLineMPCBehavior] Warning: heading unavailable at init; dot-product ahead search disabled")
+                print(f"{_fbhv} Warning: heading unavailable at init; dot-product ahead search disabled")
             
             # Step 1: Find the nearest waypoint (by distance)
             nearest_idx = 0
@@ -532,19 +533,19 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     if dot_product > 0:  # Waypoint is ahead
                         wp_last_idx = i
                         wp_dist = (to_wp_x*to_wp_x + to_wp_y*to_wp_y) ** 0.5
-                        print(f"[FollowRacingLineMPCBehavior] Initialized: starting at ({px:.2f}, {py:.2f}), heading={car_heading*180/math.pi:.1f}deg (src={car_heading_src})")
+                        print(f"{_fbhv} Initialized: starting at ({px:.2f}, {py:.2f}), heading={car_heading*180/math.pi:.1f}deg (src={car_heading_src})")
                         print(f"  Found first waypoint AHEAD: index={wp_last_idx} at ({wx:.2f}, {wy:.2f}), distance={wp_dist:.2f}m")
                         print(f"  Dot product={dot_product:.2f} (positive means ahead)")
                         break
                 else:
                     wp_last_idx = nearest_idx
-                    print(f"[FollowRacingLineMPCBehavior] Warning: No waypoint ahead found in search window, using nearest waypoint {nearest_idx}")
+                    print(f"{_fbhv} Warning: No waypoint ahead found in search window, using nearest waypoint {nearest_idx}")
             else:
                 # No heading available, use nearest waypoint
                 wp_last_idx = nearest_idx
-                print(f"[FollowRacingLineMPCBehavior] Initialized (no heading): nearest waypoint index={nearest_idx}, distance={best_d2**0.5:.2f}m")
+                print(f"{_fbhv} Initialized (no heading): nearest waypoint index={nearest_idx}, distance={best_d2**0.5:.2f}m")
         except Exception as e:
-            print(f"[FollowRacingLineMPCBehavior] Warning: Could not initialize waypoint index: {e}, starting from index 0")
+            print(f"{_fbhv} Warning: Could not initialize waypoint index: {e}, starting from index 0")
             wp_last_idx = 0
         
         # Initialize waypoint progress tracking
@@ -552,6 +553,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             self._waypoints_passed = 0
 
     while True:
+        _fl_mpc = getattr(self, '_follow_mpc_log_prefix', '[FollowRacingLineMPC]')
         # Calculate Control Signals
         current_speed = (self.speed if self.speed is not None else 0)
 
@@ -562,7 +564,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _fc = getattr(self, '_full_control_ticks', 0)
             _fp = getattr(self, '_fastpath_ticks', 0)
             if (_fc + _fp) % 100 == 0 and (_fc + _fp) > 0:
-                print(f"[FollowRacingLineMPC] full_control_ticks={_fc} fastpath_ticks={_fp}")
+                print(f"{_fl_mpc} full_control_ticks={_fc} fastpath_ticks={_fp}")
             final_steer = getattr(self, '_last_final_steer', 0.0)
             final_throttle = getattr(self, '_last_final_throttle', 0.0)
             final_brake = getattr(self, '_last_final_brake', 0.0)
@@ -644,7 +646,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                             self._last_valid_segment_id = None
                             self._last_valid_segment_name = ""
                             num_seg = len(set(seg_id for seg_id, _ in self._waypoint_segment_map)) if self._waypoint_segment_map else 0
-                            print(f"[FollowRacingLineMPCBehavior] Segment map built from TTL waypoints ({num_seg} segments, main+pit, overlap=main); ring-strict segment filtering active")
+                            print(f"{_fbhv} Segment map built from TTL waypoints ({num_seg} segments, main+pit, overlap=main); ring-strict segment filtering active")
                         else:
                             track = params.get('track') or getattr(scene, 'track', None)
                             if track is not None:
@@ -652,13 +654,13 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                                 self._last_valid_segment_id = None
                                 self._last_valid_segment_name = ""
                                 num_seg = len(set(seg_id for seg_id, _ in self._waypoint_segment_map)) if self._waypoint_segment_map else 0
-                                print(f"[FollowRacingLineMPCBehavior] Segment map built from OpenDRIVE ({num_seg} segments, main+pit); ring-strict segment filtering active")
+                                print(f"{_fbhv} Segment map built from OpenDRIVE ({num_seg} segments, main+pit); ring-strict segment filtering active")
                             else:
                                 self._waypoint_segment_map = None
-                                print(f"[FollowRacingLineMPCBehavior] Segment map not built (no track and no TTL waypoints); log will show segment ?")
+                                print(f"{_fbhv} Segment map not built (no track and no TTL waypoints); log will show segment ?")
                     except Exception as e:
                         self._waypoint_segment_map = None
-                        print(f"[FollowRacingLineMPCBehavior] Segment map not built: {e}; log will show segment ?")
+                        print(f"{_fbhv} Segment map not built: {e}; log will show segment ?")
                 try:
                     # Initialize progress tracking if needed
                     if not hasattr(self, '_waypoint_progress'):
@@ -788,11 +790,11 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                             self._last_valid_segment_id = _eid
                             self._last_valid_segment_name = _ename or ""
                             seg_str = f" {get_segment_label(_eid, _ename)}" if (_eid is not None or _ename) else " segment ?"
-                            print(f"[FollowRacingLineMPCBehavior] t={t_wp:.2f}s WAYPOINT HIT: index {old_wp_idx} -> {wp_last_idx} at ({current_wp_x:.2f}, {current_wp_y:.2f}), distance={current_wp_dist:.2f}m{seg_str}")
-                            print(f"[FollowRacingLineMPCBehavior] t={t_wp:.2f}s Progress: {self._waypoints_passed} waypoints passed ({progress_pct:.1f}% of {len(wp_list)} total waypoints)")
+                            print(f"{_fbhv} t={t_wp:.2f}s WAYPOINT HIT: index {old_wp_idx} -> {wp_last_idx} at ({current_wp_x:.2f}, {current_wp_y:.2f}), distance={current_wp_dist:.2f}m{seg_str}")
+                            print(f"{_fbhv} t={t_wp:.2f}s Progress: {self._waypoints_passed} waypoints passed ({progress_pct:.1f}% of {len(wp_list)} total waypoints)")
 
                 except Exception as e:
-                    print(f"[FollowRacingLineMPCBehavior] Warning: Waypoint finder error: {e}")
+                    print(f"{_fbhv} Warning: Waypoint finder error: {e}")
                 if _bt is not None:
                     _bt.end_section('path_progress')
             
@@ -1229,7 +1231,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 throttle_mpc = float(throttle_mpc)
                 brake_mpc = float(brake_mpc)
             except Exception as ex:
-                print(f"[FollowRacingLineMPCBehavior] MPC longitudinal error: {ex}, using fallback")
+                print(f"{_fbhv} MPC longitudinal error: {ex}, using fallback")
                 # Fallback: simple proportional control
                 speed_error = effective_target_speed - current_speed
                 if speed_error > 0:
@@ -1250,10 +1252,19 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             if not hasattr(self, '_was_cte_large'):
                 self._was_cte_large = False
     
-            # Enter large-CTE mode at 4.5m, exit at 3.5m (earlier intervention, generic)
-            if cte_mag_for_speed >= 4.5:
+            _sim_cte = simulation()
+            _is_non_ego_fellow = (
+                getattr(_sim_cte.scene, 'egoObject', None) is not None
+                and self is not _sim_cte.scene.egoObject
+            )
+            # Fellows (v,d plant): heavy CTE brake kills speed -> weak bicycle yaw -> lateral MPC cannot recover
+            _cte_enter_large = 7.5 if _is_non_ego_fellow else 4.5
+            _cte_exit_large = 6.5 if _is_non_ego_fellow else 3.5
+            _cte_very_large_m = 14.0 if _is_non_ego_fellow else 10.0
+    
+            if cte_mag_for_speed >= _cte_enter_large:
                 self._was_cte_large = True
-            elif cte_mag_for_speed < 3.5:
+            elif cte_mag_for_speed < _cte_exit_large:
                 self._was_cte_large = False
     
             SPEED_THRESHOLD_FOR_BRAKE = 2.0
@@ -1268,12 +1279,22 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             cte_brake = 0.0
             throttle_override = None
     
-            very_large = (cte_mag_for_speed >= 10.0)
-            large = (self._was_cte_large or cte_mag_for_speed >= 4.5)
+            very_large = (cte_mag_for_speed >= _cte_very_large_m)
+            large = (self._was_cte_large or cte_mag_for_speed >= _cte_enter_large)
     
             if very_large:
                 # Far off-track: strong brake so we don't maintain speed (generic fix for run-off)
-                if current_speed > 4.0:
+                if _is_non_ego_fellow:
+                    if current_speed > 4.0:
+                        throttle_override = 0.0
+                        cte_brake = 0.28
+                    elif current_speed > SPEED_THRESHOLD_FOR_BRAKE:
+                        throttle_override = 0.0
+                        cte_brake = 0.18
+                    else:
+                        throttle_override = MIN_THROTTLE_WHEN_STOPPED
+                        cte_brake = 0.0
+                elif current_speed > 4.0:
                     throttle_override = 0.0
                     cte_brake = 0.50
                 elif current_speed > SPEED_THRESHOLD_FOR_BRAKE:
@@ -1283,8 +1304,21 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     throttle_override = MIN_THROTTLE_WHEN_STOPPED
                     cte_brake = 0.0
             elif large:
-                # 4.5-10m CTE: meaningful brake at higher speed so speed comes down (was too light)
-                if current_speed > 8.0:
+                # 4.5-10m CTE (ego): meaningful brake at higher speed. Fellow: lighter so MPC keeps authority.
+                if _is_non_ego_fellow:
+                    if current_speed > 8.0:
+                        throttle_override = None
+                        cte_brake = 0.06
+                    elif current_speed > 5.0:
+                        throttle_override = None
+                        cte_brake = 0.04
+                    elif current_speed > 3.0:
+                        throttle_override = None
+                        cte_brake = 0.02
+                    else:
+                        throttle_override = None
+                        cte_brake = 0.0
+                elif current_speed > 8.0:
                     throttle_override = 0.0
                     cte_brake = 0.25
                 elif current_speed > 5.0:
@@ -1345,6 +1379,16 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             final_brake = max(0.0, min(1.0, raw_brake))
     
             # --- Lateral Control (MPC) ---
+            sim = simulation()
+            is_fellow_mpc_virt = (
+                getattr(sim.scene, "egoObject", None) is not None
+                and self is not sim.scene.egoObject
+                and getattr(sim, "mpc_config", None) is not None
+            )
+            _ctrl_dt_virt = getattr(sim, "control_dt", None)
+            if _ctrl_dt_virt is None or _ctrl_dt_virt <= 0:
+                _ctrl_dt_virt = float(sim.timestep) * max(1, getattr(sim, "_control_interval", 1))
+
             # Build vehicle state for MPC (assembly + read_state_from_controldesk)
             vehicle_state = {
                 'x': px,
@@ -1352,23 +1396,35 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 'yaw': car_heading if car_heading is not None else 0.0,
                 'speed': current_speed,
             }
+
+            # Scenic: bare names / importlib -> self.* ; use builtin __import__ only.
+            if is_fellow_mpc_virt:
+                __import__(
+                    "scenic.domains.racing.mpc.fellow_virtual_mpc_state",
+                    fromlist=["fellow_virt_prepare_for_scenic"],
+                ).fellow_virt_prepare_for_scenic(
+                    self,
+                    vehicle_state,
+                    wp_list,
+                    use_waypoints,
+                    wp_last_idx,
+                    car_heading,
+                )
     
             # Add gear information for MPC (check before gear change logic)
             if manage_gears and hasattr(self, 'setGear'):
                 current_gear = getattr(self, 'gear', 0)
                 vehicle_state['gear'] = current_gear
     
-            # Add optional yaw_rate if available
-            if hasattr(self, 'angularVelocity') and self.angularVelocity is not None:
+            # Add optional yaw_rate if available (fellow: plant rate often not meaningful for MPC)
+            if not is_fellow_mpc_virt and hasattr(self, 'angularVelocity') and self.angularVelocity is not None:
                 try:
                     vehicle_state['yaw_rate'] = float(self.angularVelocity.z) if hasattr(self.angularVelocity, 'z') else 0.0
                 except Exception:
                     pass
     
-            # Try to read steering feedback from ControlDesk
-            # This provides actual steering angle (delta) for MPC state
-            sim = simulation()
-            if hasattr(sim, 'mpc_config') and sim.mpc_config:
+            # Ego: steering feedback from ControlDesk. Fellow: virtual steer (no Vesi steer path).
+            if not is_fellow_mpc_virt and hasattr(sim, 'mpc_config') and sim.mpc_config:
                 from scenic.domains.racing.mpc.io_adapter import read_state_from_controldesk
                 try:
                     cd_state = read_state_from_controldesk(sim, self)
@@ -1420,8 +1476,21 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 steer_mpc = float(steer_mpc)
     
             except Exception as e:
-                print(f"[FollowRacingLineMPCBehavior] MPC error: {e}, using fallback")
+                print(f"{_fbhv} MPC error: {e}, using fallback")
                 steer_mpc = 0.0
+            if is_fellow_mpc_virt:
+                __import__(
+                    "scenic.domains.racing.mpc.fellow_virtual_mpc_state",
+                    fromlist=["fellow_virt_step_for_scenic"],
+                ).fellow_virt_step_for_scenic(
+                    self,
+                    float(steer_mpc),
+                    current_speed,
+                    getattr(_lat_controller, "_log_kappa_ref_at_proj", None),
+                    float(_ctrl_dt_virt),
+                    float(sim.mpc_config.wheel_base),
+                    float(sim.mpc_config.steer_tau),
+                )
             if _bt is not None:
                 _bt.start_section('cmd_post')
             # Keep waypoint-based CTE (e_y_mpc) for mismatch fallback (used when behavior CTE disagrees)
@@ -1460,13 +1529,13 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _slpf_s = f"{_slpf:.3f}" if _slpf is not None else "?"
             _log_step = getattr(self, '_behavior_step_count', 0) + 1
             if _log_step % 50 == 0:
-                print(f"[FollowRacingLineMPC] ff_log segment_id={_seg_s} v={_v_s} kappa_ref_at_proj={_kap_s} delta_ff={_dff_s} delta_fb={_dfb_s} delta_total={_dtot_s} delta_cmd_rad={_dcmd_s} current_delta_max={_dmax_s} u_norm_mpc={_sraw_s} u_norm_lpf={_slpf_s}")
+                print(f"{_fl_mpc} ff_log segment_id={_seg_s} v={_v_s} kappa_ref_at_proj={_kap_s} delta_ff={_dff_s} delta_fb={_dfb_s} delta_total={_dtot_s} delta_cmd_rad={_dcmd_s} current_delta_max={_dmax_s} u_norm_mpc={_sraw_s} u_norm_lpf={_slpf_s}")
                 # Task 1: signed curvature sanity log (every 50 steps)
                 _kappa_ahead = getattr(_lc_ff, '_log_kappa_ref_ahead_signed', None)
                 _s_ref = getattr(_lc_ff, '_log_s_ref', None)
                 _kappa_ahead_s = f"{_kappa_ahead:.4f}" if _kappa_ahead is not None else "?"
                 _s_ref_s = f"{_s_ref:.3f}" if _s_ref is not None else "?"
-                print(f"[FollowRacingLineMPC] CURV_SANITY kappa_ref_at_proj={_kap_s} kappa_ref_ahead_signed={_kappa_ahead_s} segment_id={_seg_s} s_ref={_s_ref_s}")
+                print(f"{_fl_mpc} CURV_SANITY kappa_ref_at_proj={_kap_s} kappa_ref_ahead_signed={_kappa_ahead_s} segment_id={_seg_s} s_ref={_s_ref_s}")
             # Heading diff for steering conditioning (segment direction vs vehicle heading, wrapped to [-pi, pi])
             heading_diff = 0.0
             if car_heading is not None and use_waypoints and wp_list and len(wp_list) >= 2:
@@ -1727,7 +1796,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _eid_log = getattr(self, '_last_valid_segment_id', None)
             _ename_log = getattr(self, '_last_valid_segment_name', "") or ""
             segment_str = f" {get_segment_label(_eid_log, _ename_log)}" if (_eid_log is not None or _ename_log) else " segment ?"
-            print(f"[FollowRacingLineMPC] t={t_log:.2f}s Step {self._behavior_step_count}: pos=({px:.2f},{py:.2f}) speed={current_speed:.2f}m/s CTE={cte:.3f}m steer={final_steer:.3f} throttle={final_throttle:.3f} brake={final_brake:.3f} gear={gear_val} curv_ahead={curvature_ahead_max:.3f}{segment_str}")
+            print(f"{_fl_mpc} t={t_log:.2f}s Step {self._behavior_step_count}: pos=({px:.2f},{py:.2f}) speed={current_speed:.2f}m/s CTE={cte:.3f}m steer={final_steer:.3f} throttle={final_throttle:.3f} brake={final_brake:.3f} gear={gear_val} curv_ahead={curvature_ahead_max:.3f}{segment_str}")
             # Ref continuity / gate logging (todo1: match_dist, gate ACCEPT/REJECT, s_ref/dS_ref/s_jump_flag, segment_prev->new, stick_blocked, e_y_mpc vs cte_behavior)
             _lc = _lat_controller
             _md = getattr(_lc, '_log_match_dist_m', None)
@@ -1748,32 +1817,32 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _ey_s = f"{_ey:.3f}" if _ey is not None else "?"
             cte_b = float(cte) if cte is not None else 0.0
             _legacy_s = f"{getattr(self, '_legacy_cte_this_tick', 0):.3f}" if getattr(self, '_legacy_cte_this_tick', None) is not None else "?"
-            print(f"[FollowRacingLineMPC] ref_log match_dist_m={_md_s} gate={_gs}{_gr_s} s_ref={_sr_s} dS_ref={_ds_s} s_jump_flag={1 if _sj else 0} seg={_seg_s} stick={1 if _st else 0} e_y_mpc={_ey_s} cte_behavior={cte_b:.3f} legacy_cte={_legacy_s}")
+            print(f"{_fl_mpc} ref_log match_dist_m={_md_s} gate={_gs}{_gr_s} s_ref={_sr_s} dS_ref={_ds_s} s_jump_flag={1 if _sj else 0} seg={_seg_s} stick={1 if _st else 0} e_y_mpc={_ey_s} cte_behavior={cte_b:.3f} legacy_cte={_legacy_s}")
             # Task 4: Quick projection check — match_dist_m, proj_xy, ego_xy, segment_id progression (stuck = segment_id stops advancing or match_dist spikes at left-right transition)
             _rp = getattr(_lc, '_log_ref_point', None)
             _ego = getattr(_lc, '_log_ego', None)
             _proj_s = f"({_rp[0]:.3f},{_rp[1]:.3f})" if _rp is not None and len(_rp) >= 2 else "?"
             _ego_xy_s = f"({_ego[0]:.3f},{_ego[1]:.3f})" if _ego is not None and len(_ego) >= 2 else "?"
-            print(f"[FollowRacingLineMPC] projection_check match_dist_m={_md_s} proj_xy={_proj_s} ego_xy={_ego_xy_s} segment_id={_seg_s}")
+            print(f"{_fl_mpc} projection_check match_dist_m={_md_s} proj_xy={_proj_s} veh_xy={_ego_xy_s} segment_id={_seg_s}")
             # Task 1: projection continuity — s_ref, segment_id, proj_xy, match_dist; ensure s doesn't jump and projection doesn't hop
             _s_ok = 1 if getattr(_lc, '_log_s_ref_continuous', True) else 0
             _hop_ok = 1 if not getattr(_lc, '_log_proj_hop', False) else 0
             _cont_ok = 1 if getattr(_lc, '_log_projection_continuity_ok', True) else 0
-            print(f"[FollowRacingLineMPC] projection_continuity s_ref={_sr_s} segment_id={_seg_s} proj_xy={_proj_s} match_dist_m={_md_s} s_ok={_s_ok} proj_hop_ok={_hop_ok} continuity_ok={_cont_ok}")
+            print(f"{_fl_mpc} projection_continuity s_ref={_sr_s} segment_id={_seg_s} proj_xy={_proj_s} match_dist_m={_md_s} s_ok={_s_ok} proj_hop_ok={_hop_ok} continuity_ok={_cont_ok}")
             _stuck_hint = False
             if _md is not None and _md > 5.0:
                 _stuck_hint = True  # match_dist spike
             if _sp is not None and _sn is not None and _sp == _sn and _ds is not None and abs(_ds) < 0.01 and _md is not None and _md > 2.0:
                 _stuck_hint = True  # segment not advancing with significant match_dist
             if _stuck_hint:
-                print(f"[FollowRacingLineMPC] projection_check STUCK? (segment_id not advancing or match_dist spike)")
+                print(f"{_fl_mpc} projection_check STUCK? (segment_id not advancing or match_dist spike)")
             # CTE cross-check log: cte_to_waypoints = e_y_mpc (single source); cte_behavior is same when MPC ran
             _rp = getattr(_lc, '_log_ref_point', None)
             _ego = getattr(_lc, '_log_ego', None)
             _cte_wp_s = _ey_s
             _rp_s = f"({_rp[0]:.3f},{_rp[1]:.3f})" if _rp is not None and len(_rp) >= 2 else "?"
             _ego_s = f"({_ego[0]:.3f},{_ego[1]:.3f})" if _ego is not None and len(_ego) >= 2 else "?"
-            print(f"[FollowRacingLineMPC] ct_crosscheck cte_to_waypoints={_cte_wp_s} cte_behavior={cte_b:.3f} ref_point={_rp_s} ego={_ego_s}")
+            print(f"{_fl_mpc} ct_crosscheck cte_to_waypoints={_cte_wp_s} cte_behavior={cte_b:.3f} ref_point={_rp_s} vehicle={_ego_s}")
             if _ey is not None:
                 self._last_waypoint_cte_for_speed = abs(_ey)
             # To-Do C: Polyline identity (behavior CTE, MPCC waypoints, segment map) — n_pts, first/last, total length, id
@@ -1808,7 +1877,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 _sm_s = f"segment_map: id={id(_smap)} n={len(_smap)} first_seg=({_seg_first[0]},{_seg_first[1]}) last_seg=({_seg_last[0]},{_seg_last[1]})"
             else:
                 _sm_s = "segment_map: (none)"
-            print(f"[FollowRacingLineMPC] polyline_check {_pw} | {_pm} | {_sm_s}")
+            print(f"{_fl_mpc} polyline_check {_pw} | {_pm} | {_sm_s}")
             # ff_log is printed every MPC tick (see above) with segment_id, v, kappa_ref_at_proj, delta_ff, delta_fb, delta_total, steer_mpc_raw, steer_after_lpf
 
         # Supplement log (Todo2): deadzone decision, association, curvature, steering — every 10 ticks or when deadzone state changes
@@ -1842,7 +1911,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _s_caps_s = f"{_s_caps:.3f}" if _s_caps is not None else "?"
             _s_lpf_s = f"{_s_lpf:.3f}" if _s_lpf is not None else "?"
             _s_rate_s = f"{_s_rate:.3f}" if _s_rate is not None else "?"
-            print(f"[FollowRacingLineMPC] deadzone_log deadzone_applied={_dz_app} dz_cte_m={_dz_m_s} cte_used_for_control={_cte_used_s} cte_raw={_cte_raw_s} deadzone_reason={_reason} match_dist_m={_match_s} gate_accept={_gate_ok} segment_id={_seg_id} curv_ahead_max={_curv_ahd_s} curv_regime={_creg} kappa_ref_at_proj={_kappa_s} steer_mpc_raw={_s_raw_s} steer_after_caps={_s_caps_s} steer_after_lpf={_s_lpf_s} steer_rate={_s_rate_s}")
+            print(f"{_fl_mpc} deadzone_log deadzone_applied={_dz_app} dz_cte_m={_dz_m_s} cte_used_for_control={_cte_used_s} cte_raw={_cte_raw_s} deadzone_reason={_reason} match_dist_m={_match_s} gate_accept={_gate_ok} segment_id={_seg_id} curv_ahead_max={_curv_ahd_s} curv_regime={_creg} kappa_ref_at_proj={_kappa_s} steer_mpc_raw={_s_raw_s} steer_after_caps={_s_caps_s} steer_after_lpf={_s_lpf_s} steer_rate={_s_rate_s}")
 
         if _bt is not None:
             _bt.end_section('cmd_post')

@@ -14,7 +14,7 @@ ego = new RacingCar on ttl, \
     with ttlFileName 'ttl_optimal_xodr.csv', \
     with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV')
 
-fellow1 = new RacingCar at (-35.604956505245326,-47.341711793119714), \
+fellow1 = new RacingCar at (-73.49710545241894,-103.91194317950539), \
     facing roadDirection, \
     with regionContainedIn everywhere, \
     with raceNumber 2, \

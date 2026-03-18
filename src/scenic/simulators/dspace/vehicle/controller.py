@@ -4,7 +4,12 @@ This module handles the application of control commands to vehicles in the
 dSPACE simulation environment, including both ego and fellow vehicles.
 """
 
+import logging
+import math
+
 from ..vehicle.physics import VehiclePhysicsState
+
+logger = logging.getLogger(__name__)
 from ..modeldesk.placement import t_for_dspace_lateral
 
 print(f"[PatchID] controller.py loaded from {__file__}")
@@ -170,7 +175,7 @@ class VehicleController:
         """Apply VesiInterface control for ego vehicle.
 
         Ego uses physics-based control:
-            throttle/brake/steering → VesiInterface → physics engine.
+            throttle/brake/steering -> VesiInterface -> physics engine.
 
         Control inputs are written to VesiInterface manual control paths which
         feed into the VEOS vehicle dynamics model.
@@ -282,7 +287,7 @@ class VehicleController:
                 brake_scenic_f = self._safe_float(brake_scenic, 0.0)
 
                 print(
-                    f"[EgoControl] t_ctrl={t_ctrl:.2f}s sim_t={t_sim:.2f}s "
+                    f"[VesiPlant ego] t_ctrl={t_ctrl:.2f}s sim_t={t_sim:.2f}s "
                     f"step={sim_step_idx} #{obj._ego_control_count} Writing: "
                     f"throttle={throttle_scenic_f:.3f}->{throttle_scenic_f*100:.1f}, "
                     f"brake={brake_scenic_f:.3f}->{brake_scenic_f*100:.1f}, "
@@ -294,7 +299,7 @@ class VehicleController:
                     self._print_dedup_stats()
 
         except Exception as e:
-            print(f"[VehicleController:EgoControl] Error: {e}")
+            print(f"[VehicleController:VesiPlant ego] Error: {e}")
             import traceback
             traceback.print_exc()
 
@@ -308,13 +313,13 @@ class VehicleController:
                         gear_int = max(0, min(6, int(value)))
                         if self._maybe_write_cd(self.KEY_GEAR, gear_int, 0.0):
                             if obj._ego_control_count <= 5 or obj._ego_control_count % 50 == 0:
-                                print(f"[EgoControl] Setting gear to {gear_int}")
+                                print(f"[VesiPlant ego] Setting gear to {gear_int}")
                     elif action_type == "clutch":
                         clutch_pct = float(value * 100.0)
                         if self._maybe_write_cd(self.KEY_CLUTCH, clutch_pct, 1e-6):
-                            print(f"[EgoControl] Setting clutch to {clutch_pct}%")
+                            print(f"[VesiPlant ego] Setting clutch to {clutch_pct}%")
                 except Exception as e:
-                    print(f"[VehicleController:EgoControl] {action_type} error: {e}")
+                    print(f"[VehicleController:VesiPlant ego] {action_type} error: {e}")
                     import traceback
                     traceback.print_exc()
             obj._oneshot_actions.clear()
@@ -383,16 +388,17 @@ class VehicleController:
     def apply_fellow_control(self, obj):
         """Apply control for fellow vehicle via v and d only.
 
-        Fellows are controlled only by (v, d) written to dSPACE External_Signals.
-        - v (velocity): from racing library throttle and brake commands, integrated
-          via a kinematic model and written to Const_v_Fellows_External[km|h]/Value.
-        - d (lateral deviation): from racing library steering command, integrated
-          via the same model and written to Const_d_Fellows_External[m]/Value.
+        Fellows are controlled by (v, d) on External_Signals. Longitudinal v
+        follows throttle/brake integration (same as before).
 
-        When fellow_dummy_centerline is True: write constant v and d from placement
-        (no behavior, no physics). Otherwise: read throttle/brake/steering from
-        _control_state (set by behavior actions), sync physics state from dSPACE
-        readback, integrate one step, write estimated v and d to External_Signals.
+        **Lateral (Lap + optimal TTL)**: d commands the racing line expressed in
+        centerline coordinates: δ(s) from the optimal polyline vs main
+        centerline, plus feedback so the plant converges to that offset—aligned
+        with MPC's reference. Legacy bicycle-from-steering is used for Pit route
+        or when the delta table cannot be built; set
+        ``obj._fellow_force_bicycle_lateral = True`` to force bicycle on Lap.
+
+        Dummy centerline mode: constant v and d from placement.
         """
         # Ensure fellow arrays are initialized before attempting to write
         from ..controldesk.arrays import ensure_fellow_arrays_initialized
@@ -424,11 +430,13 @@ class VehicleController:
         brake = float(control.get("braking", 0.0))
         steering = float(control.get("steering", 0.0))
 
-        # Fellow physics expects steering in [-1, 1]. Convert from rad if MPC path.
+        # When MPC path supplies steering in rad, pass it to physics for bicycle model.
+        steering_rad = None
         if getattr(obj, "_racing_steer_units", None) == "rad":
             from scenic.domains.racing.constants import DELTA_MAX_RAD
 
-            steering = max(-1.0, min(1.0, steering / DELTA_MAX_RAD))
+            steering_rad = steering  # behavior already in rad
+            steering = max(-1.0, min(1.0, steering / DELTA_MAX_RAD))  # normalized for legacy
 
         # CRITICAL: Get the actual CTE (cross-track error) from the behavior
         _ = getattr(obj, "_current_cte", None)  # retained for debugging / future use
@@ -470,7 +478,7 @@ class VehicleController:
             if obj._fellow_control_count <= 3:
                 print(
                     f"[Fellow {fellow_index} Physics] Synced velocity: "
-                    f"{old_physics_velocity:.2f} → {actual_speed:.2f} m/s"
+                    f"{old_physics_velocity:.2f} -> {actual_speed:.2f} m/s"
                 )
 
             # Initialize deviation on first step to maintain continuity
@@ -492,52 +500,142 @@ class VehicleController:
 
                 actor.physics.deviation = initial_deviation
 
+            control_interval = getattr(self.simulation, "_control_interval", 1)
+            dt = float(self.simulation.timestep) * max(1, control_interval)
             if obj._fellow_control_count == 1:
                 # First step: maintain current deviation
                 new_velocity = actual_speed
                 new_deviation = actor.physics.deviation
             else:
-                # Sync deviation with actual position (route-relative t) before update
+                actor.physics.path_curvature = 0.0
+                new_velocity = actual_speed
+                new_deviation = actor.physics.deviation
+                used_racing_servo = False
+                plant_base = (
+                    "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/"
+                    "FellowMovement/FELLOW_POS_VEL/FellowTrailer"
+                )
                 try:
-                    plant_base = (
-                        "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/"
-                        "FellowMovement/FELLOW_POS_VEL/FellowTrailer"
-                    )
                     x_arr = self.cd.get_var(f"{plant_base}/x")
                     y_arr = self.cd.get_var(f"{plant_base}/y")
                     x_rd = x_arr[eff_index] if isinstance(x_arr, (list, tuple)) and eff_index < len(x_arr) else None
                     y_rd = y_arr[eff_index] if isinstance(y_arr, (list, tuple)) and eff_index < len(y_arr) else None
 
-                    if x_rd is not None and y_rd is not None:
+                    if x_rd is None or y_rd is None:
+                        actor.physics.update_longitudinal_only(throttle, brake, dt)
+                        new_velocity = actor.physics.velocity
+                    else:
+                        pos_xy = (float(x_rd), float(y_rd))
                         road_index = getattr(self.simulation, "_road_index_ttl", None) or self.simulation._road_index
-                        if road_index:
-                            route_pref = getattr(obj, "_route", None)
+                        route_pref = getattr(obj, "_route", None)
+                        scene = getattr(self.simulation, "scene", None)
+                        scene_params = getattr(scene, "params", None) or {}
+                        ttl_folder = getattr(obj, "ttlFolder", None) or scene_params.get("ttlFolder")
+                        optimal_csv = getattr(obj, "ttlFileName", None) or scene_params.get("ttlFileName")
+
+                        # Racing-line servo: Const_d is centerline lateral; MPC tracks optimal line.
+                        # Command d toward delta(s) on centerline that matches the racing line.
+                        if (
+                            road_index
+                            and route_pref == "Lap"
+                            and ttl_folder
+                            and optimal_csv
+                            and not getattr(obj, "_fellow_force_bicycle_lateral", False)
+                        ):
+                            from .fellow_racing_line_lateral import (
+                                _road_index_main_track_only,
+                                get_or_build_delta_table,
+                                lookup_delta,
+                            )
+
+                            tbl = get_or_build_delta_table(
+                                self.simulation,
+                                str(ttl_folder),
+                                str(optimal_csv),
+                                road_index,
+                            )
+                            idx_main = _road_index_main_track_only(road_index)
+                            if tbl is not None and idx_main is not None:
+                                from ..utils.legacy import project_world_to_st
+
+                                s_meas, t_meas = project_world_to_st(idx_main, pos_xy)
+                                s_filt = getattr(obj, "_fellow_s_meas_filtered", None)
+                                if s_filt is None:
+                                    s_use = float(s_meas)
+                                else:
+                                    s_use = 0.42 * float(s_meas) + 0.58 * float(s_filt)
+                                obj._fellow_s_meas_filtered = s_use
+                                s_arr, d_arr, track_len = tbl
+                                d_cmd, delta_ref, e_lat = lookup_delta(
+                                    s_use, t_meas, s_arr, d_arr, track_len
+                                )
+                                prev_d = getattr(obj, "_fellow_d_cmd_prev", None)
+                                max_slew = 0.32 * max(1.0, dt / 0.05)
+                                if prev_d is not None:
+                                    d_cmd = max(
+                                        prev_d - max_slew,
+                                        min(prev_d + max_slew, d_cmd),
+                                    )
+                                obj._fellow_d_cmd_prev = float(d_cmd)
+                                actor.physics.update_longitudinal_only(throttle, brake, dt)
+                                new_velocity = actor.physics.velocity
+                                new_deviation = d_cmd
+                                actor.physics.deviation = d_cmd
+                                used_racing_servo = True
+                                if obj._fellow_control_count <= 5 or obj._fellow_control_count % 50 == 0:
+                                    logger.info(
+                                        "[Fellow %s] racing_servo s=%.1f t=%.3f d_ref=%.3f e=%.3f -> d_cmd=%.3f",
+                                        fellow_index,
+                                        s_meas,
+                                        t_meas,
+                                        delta_ref,
+                                        e_lat,
+                                        d_cmd,
+                                    )
+
+                        if not used_racing_servo and road_index:
+                            from ..geometry.route_projection import (
+                                path_curvature_at_pos_route_aware,
+                                project_world_to_st_route_specific,
+                            )
+
+                            actor.physics.path_curvature = path_curvature_at_pos_route_aware(
+                                road_index, pos_xy, route_pref
+                            )
                             if route_pref:
-                                from ..geometry.route_projection import project_world_to_st_route_specific
                                 _, t_actual = project_world_to_st_route_specific(
                                     road_index,
-                                    (float(x_rd), float(y_rd)),
+                                    pos_xy,
                                     route_preference=route_pref,
                                 )
                             else:
                                 from ..utils.legacy import project_world_to_st
+
                                 _, t_actual = project_world_to_st(
                                     road_index,
-                                    (float(x_rd), float(y_rd)),
+                                    pos_xy,
                                 )
                             actor.physics.deviation = float(t_actual)
+                            new_velocity, new_deviation = actor.physics.update(
+                                throttle=throttle,
+                                brake=brake,
+                                steering=steering,
+                                dt=dt,
+                                steering_rad=steering_rad,
+                            )
                 except Exception:
-                    pass
-
-                # Physics update: throttle/brake -> v, steering -> d (one control period)
-                control_interval = getattr(self.simulation, "_control_interval", 1)
-                dt = float(self.simulation.timestep) * max(1, control_interval)
-                new_velocity, new_deviation = actor.physics.update(
-                    throttle=throttle,
-                    brake=brake,
-                    steering=steering,
-                    dt=dt,
-                )
+                    if not used_racing_servo:
+                        try:
+                            new_velocity, new_deviation = actor.physics.update(
+                                throttle=throttle,
+                                brake=brake,
+                                steering=steering,
+                                dt=dt,
+                                steering_rad=steering_rad,
+                            )
+                        except Exception:
+                            actor.physics.update_longitudinal_only(throttle, brake, dt)
+                            new_velocity = actor.physics.velocity
 
             # --- WRITE TO EXTERNAL SIGNALS ---
             base_ext = (
@@ -574,11 +672,35 @@ class VehicleController:
             self.cd.set_var(v_path_bulk, v_arr)
             self.cd.set_var(d_path_bulk, d_arr)
 
-            # Debug log
-            if obj._fellow_control_count % 50 == 0:
-                print(f"[Fellow {fellow_index}] Step {obj._fellow_control_count}")
-                print(f"  Physics: v={v_value:.1f} km/h, d={d_value:.2f} m")
-                print("  Written to: ...External_Signals/Const_v... and .../Const_d...")
+            # Diagnostic logs: first 5 steps (startup) and every 50 steps (periodic)
+            step = obj._fellow_control_count
+            log_this_step = step <= 5 or step % 50 == 0
+            if log_this_step:
+                psi_e_rad = getattr(actor.physics, "heading_error", 0.0)
+                psi_e_deg = math.degrees(psi_e_rad)
+                delta_rad = getattr(actor.physics, "_last_delta_rad", None)
+                yaw_rate = getattr(actor.physics, "_last_yaw_rate", None)
+                d_dot = getattr(actor.physics, "_last_d_dot", None)
+                acc = getattr(actor.physics, "_last_acceleration", None)
+                steer_rad_str = f"{steering_rad:.3f} rad" if steering_rad is not None else "norm"
+                logger.info(
+                    "[Fellow %s] step=%s | controls: throttle=%.2f brake=%.2f steering=%s dt=%.3f",
+                    fellow_index, step, throttle, brake, steer_rad_str, dt,
+                )
+                logger.info(
+                    "[Fellow %s] step=%s | state: v=%.2f m/s (%.1f km/h) d=%.3f m psi_e=%.2f deg",
+                    fellow_index, step, new_velocity, v_value, new_deviation, psi_e_deg,
+                )
+                if delta_rad is not None and yaw_rate is not None and d_dot is not None:
+                    logger.info(
+                        "[Fellow %s] step=%s | bicycle: delta=%.3f rad r=%.3f rad/s d_dot=%.3f m/s a=%.2f",
+                        fellow_index, step, delta_rad, yaw_rate, d_dot, acc or 0.0,
+                    )
+                if step <= 3:
+                    print(
+                        f"[Fellow {fellow_index}] Physics step {step}: v={new_velocity:.2f} m/s, d={new_deviation:.3f} m, "
+                        f"psi_e={psi_e_deg:.1f} deg, d_dot={d_dot or 0:.3f} m/s"
+                    )
 
         except Exception as e:
             error_msg = str(e)

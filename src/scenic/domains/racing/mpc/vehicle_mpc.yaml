@@ -69,6 +69,10 @@
     deadzone_dist_ok_m: 1.0 # (m) max match_dist to allow deadzone; above = BLOCKED_MATCH_BAD (Todo2 conditional deadzone)
     curv_deadzone_max: 0.04 # (1/m) max curv_ahead_max to allow deadzone; never deadzone in moderate curvature (e.g. 0.03-0.05)
     cte_multiplier_max: 1.5 # cap on off-track tracking-weight multiplier (was 3x; 1.5 avoids overshoot)
+
+    # Fellow-only (dSPACE): QP numerics when v~0 in horizon (OSQP non-convex). Ego ignores these.
+    mpc_min_speed_for_qp_mps: 2.5
+    qp_hessian_reg: 1.0e-5
     
     # Safety thresholds
     admissible_position_error: 30.0  # Stop MPC if position error > this (meters) - increased to 30.0m for sparse waypoints (~25m apart)

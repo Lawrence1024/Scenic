@@ -90,7 +90,14 @@ class MPCLateralController:
         self._solver_initialized = False
         # To-Do 4.1: saturation counter (increment when |steer_mpc_raw| > 0.98)
         self._saturation_count = 0
-    
+        # Per-vehicle log tag, e.g. [MPC fellow#2] (set by DSpaceSimulation.getRacingControllers)
+        self._mpc_log_tag = "[MPC]"
+        # Set True only for non-ego fellows (dSPACE): QP v-floor + Hessian reg + low-speed skip
+        self._mpc_fellow_qp_robustness = False
+
+    def _mpc_log_prefix(self) -> str:
+        return getattr(self, "_mpc_log_tag", "[MPC]")
+
     def _initialize_solver(self, horizon: int):
         """Initialize OSQP solver for QP problem.
         
@@ -216,7 +223,14 @@ class MPCLateralController:
             u_k_idx = x_k_idx + n_x
             x_kp1_idx = (k + 1) * (n_x + n_u)
             
-            v_k = v_ref[k]
+            v_raw = float(v_ref[k])
+            if getattr(self, "_mpc_fellow_qp_robustness", False):
+                v_k = max(
+                    v_raw,
+                    float(getattr(self.config, "mpc_min_speed_for_qp_mps", 2.5)),
+                )
+            else:
+                v_k = v_raw
             kappa_k = kappa_ref[k]
             psi_ref_k = psi_ref[k]
             # Todo 4: curvature feedforward — u_k is delta_fb; steering = delta_ff_k + u_k
@@ -386,7 +400,12 @@ class MPCLateralController:
         # Phase 2: progress reward -Q_progress * (s_N - s_0) => linear term in q for s_N
         if Q_progress != 0:
             q[x_N_idx + 3] -= Q_progress  # minimize -Q_progress*s_N => reward progress
-        
+
+        if getattr(self, "_mpc_fellow_qp_robustness", False):
+            reg = float(getattr(self.config, "qp_hessian_reg", 1e-5))
+            if reg > 0:
+                np.fill_diagonal(P, np.diag(P) + reg)
+
         # Convert to sparse
         P_sparse = csc_matrix(P)
         A_sparse = csc_matrix(A)
@@ -490,17 +509,17 @@ class MPCLateralController:
             # grade_ref is computed but not used by lateral MPC (used by longitudinal MPC)
             # Debug: verify arrays right after build_reference returns
             if len(psi_ref) != self.config.mpc_prediction_horizon:
-                raise ValueError(f"[MPC] CRITICAL: build_reference returned psi_ref with wrong length: expected {self.config.mpc_prediction_horizon}, got {len(psi_ref)}. Shape: {psi_ref.shape}, dtype: {psi_ref.dtype}")
+                raise ValueError(f"{self._mpc_log_prefix()} CRITICAL: build_reference returned psi_ref with wrong length: expected {self.config.mpc_prediction_horizon}, got {len(psi_ref)}. Shape: {psi_ref.shape}, dtype: {psi_ref.dtype}")
             if len(kappa_ref) != self.config.mpc_prediction_horizon:
-                raise ValueError(f"[MPC] CRITICAL: build_reference returned kappa_ref with wrong length: expected {self.config.mpc_prediction_horizon}, got {len(kappa_ref)}. Shape: {kappa_ref.shape}, dtype: {kappa_ref.dtype}")
+                raise ValueError(f"{self._mpc_log_prefix()} CRITICAL: build_reference returned kappa_ref with wrong length: expected {self.config.mpc_prediction_horizon}, got {len(kappa_ref)}. Shape: {kappa_ref.shape}, dtype: {kappa_ref.dtype}")
             if len(v_ref) != self.config.mpc_prediction_horizon:
-                raise ValueError(f"[MPC] CRITICAL: build_reference returned v_ref with wrong length: expected {self.config.mpc_prediction_horizon}, got {len(v_ref)}. Shape: {v_ref.shape}, dtype: {v_ref.dtype}")
+                raise ValueError(f"{self._mpc_log_prefix()} CRITICAL: build_reference returned v_ref with wrong length: expected {self.config.mpc_prediction_horizon}, got {len(v_ref)}. Shape: {v_ref.shape}, dtype: {v_ref.dtype}")
             # Cap reference curvature to kinematic limit: |kappa| <= kappa_max = tan(delta_max)/L
             # So the reference is feasible for the kinematic bicycle (no unreachable curvature)
             kappa_max = math.tan(self.config.max_steer_angle) / self.config.wheel_base
             kappa_ref = np.clip(kappa_ref, -kappa_max, kappa_max)
         except Exception as e:
-            print(f"[MPC] Error building reference: {e}")
+            print(f"{self._mpc_log_prefix()} Error building reference: {e}")
             # Try to compute errors for proportional fallback, but don't fail if it doesn't work
             try:
                 e_y, e_psi, _ = self._compute_errors(
@@ -566,12 +585,12 @@ class MPCLateralController:
         self._log_s_ref_for_dz = getattr(self, '_log_s_ref', None)
         # Tripwire: deadzone must never apply when |cte_raw|>0.5 or match_dist_m>1.5
         if deadzone_applied and (abs(cte_raw) > 0.5 or (match_dist_m is not None and match_dist_m > 1.5)):
-            print(f"[MPC] *** DEADZONE TRIPWIRE: deadzone_applied=True but |cte_raw|={abs(cte_raw):.3f}m or match_dist_m={match_dist_m} — Todo2 miswired / unsafe")
+            print(f"{self._mpc_log_prefix()} *** DEADZONE TRIPWIRE: deadzone_applied=True but |cte_raw|={abs(cte_raw):.3f}m or match_dist_m={match_dist_m} — Todo2 miswired / unsafe")
         
         # Safety check: disable MPC if errors too large
         # Use proportional fallback to prevent catch-22 (large error → no steering → larger error)
         if abs(e_y) > self.config.admissible_position_error:
-            print(f"[MPC] Position error too large: {e_y:.2f}m > {self.config.admissible_position_error}m")
+            print(f"{self._mpc_log_prefix()} Position error too large: {e_y:.2f}m > {self.config.admissible_position_error}m")
             _mpc_timing.record_lateral_mpc_ms((time.perf_counter() - t0) * 1000)
             return self._fallback_steering(e_y=e_y, e_psi=e_psi)
         
@@ -581,11 +600,11 @@ class MPCLateralController:
             yaw_error_deg = e_psi * 180.0 / np.pi
             if psi_ref_logging is not None:
                 ref_heading_deg = psi_ref_logging * 180.0 / np.pi
-                print(f"[MPC] Yaw error too large: {e_psi:.2f}rad ({yaw_error_deg:.1f}deg) > {self.config.admissible_yaw_error_rad:.2f}rad")
-                print(f"[MPC] Orientation details: vehicle_heading={vehicle_heading_deg:.1f}deg, reference_heading={ref_heading_deg:.1f}deg, error={yaw_error_deg:.1f}deg")
+                print(f"{self._mpc_log_prefix()} Yaw error too large: {e_psi:.2f}rad ({yaw_error_deg:.1f}deg) > {self.config.admissible_yaw_error_rad:.2f}rad")
+                print(f"{self._mpc_log_prefix()} Orientation details: vehicle_heading={vehicle_heading_deg:.1f}deg, reference_heading={ref_heading_deg:.1f}deg, error={yaw_error_deg:.1f}deg")
             else:
-                print(f"[MPC] Yaw error too large: {e_psi:.2f}rad ({yaw_error_deg:.1f}deg) > {self.config.admissible_yaw_error_rad:.2f}rad")
-                print(f"[MPC] Orientation details: vehicle_heading={vehicle_heading_deg:.1f}deg, reference_heading=N/A, error={yaw_error_deg:.1f}deg")
+                print(f"{self._mpc_log_prefix()} Yaw error too large: {e_psi:.2f}rad ({yaw_error_deg:.1f}deg) > {self.config.admissible_yaw_error_rad:.2f}rad")
+                print(f"{self._mpc_log_prefix()} Orientation details: vehicle_heading={vehicle_heading_deg:.1f}deg, reference_heading=N/A, error={yaw_error_deg:.1f}deg")
             _mpc_timing.record_lateral_mpc_ms((time.perf_counter() - t0) * 1000)
             return self._fallback_steering(e_y=e_y, e_psi=e_psi)
         
@@ -598,6 +617,15 @@ class MPCLateralController:
         
         # State [e_y, e_psi, delta, s_0] for Phase 2 (progress s used in lag/progress cost)
         self.state = np.array([e_y, e_psi, delta, s_0], dtype=np.float64)
+
+        # Fellow only: at v~0 + large CTE skip QP (ego unchanged)
+        if (
+            getattr(self, "_mpc_fellow_qp_robustness", False)
+            and abs(float(speed)) < 1.5
+            and abs(float(e_y)) > 3.5
+        ):
+            _mpc_timing.record_lateral_mpc_ms((time.perf_counter() - t0) * 1000)
+            return self._fallback_steering(e_y=e_y, e_psi=e_psi)
         
         # Build QP matrices (Phase 2: pass s_0 and s_horizon for lag/progress cost)
         cte_mag_for_mpc = abs(e_y) if e_y is not None else (cte_magnitude if cte_magnitude is not None else 0.0)
@@ -625,14 +653,18 @@ class MPCLateralController:
             
             # Accept "solved" and "solved inaccurate" (solution meets relaxed tolerances, usable for control)
             if result.info.status not in ('solved', 'solved inaccurate'):
-                print(f"[MPC] Solver failed: {result.info.status}")
+                print(f"{self._mpc_log_prefix()} Solver failed: {result.info.status}")
                 _mpc_timing.record_lateral_mpc_ms((time.perf_counter() - t0) * 1000)
+                if getattr(self, "_mpc_fellow_qp_robustness", False):
+                    return self._fallback_steering(
+                        e_y=float(self.state[0]), e_psi=float(self.state[1])
+                    )
                 return self._fallback_steering()
             if result.info.status == 'solved inaccurate':
                 # Log occasionally (first time, then every 500 occurrences)
                 step = getattr(self, '_inaccurate_log_count', 0)
                 if step % 500 == 0:
-                    print(f"[MPC] Solver returned solved inaccurate (using solution); residual norm may be elevated")
+                    print(f"{self._mpc_log_prefix()} Solver returned solved inaccurate (using solution); residual norm may be elevated")
                 self._inaccurate_log_count = step + 1
             
             # Extract first control input (MPC outputs feedback part; we add curvature feedforward)
@@ -707,9 +739,9 @@ class MPCLateralController:
             _eps = 0.01  # rad
             _k_min = 0.005  # 1/m, avoid noise when curvature near zero
             if abs(delta_ff_rad) > abs(delta_cmd_rad_raw) + _eps:
-                print(f"[MPC] *** FF TRIPWIRE 1: abs(delta_ff)={abs(delta_ff_rad):.4f} > abs(delta_total)+eps={abs(delta_cmd_rad_raw) + _eps:.4f} — suspicious (ff dominating unexpectedly)")
+                print(f"{self._mpc_log_prefix()} *** FF TRIPWIRE 1: abs(delta_ff)={abs(delta_ff_rad):.4f} > abs(delta_total)+eps={abs(delta_cmd_rad_raw) + _eps:.4f} — suspicious (ff dominating unexpectedly)")
             if abs(kappa_at_proj) > _k_min and ((delta_ff_rad > 0) != (kappa_at_proj > 0)):
-                print(f"[MPC] *** FF TRIPWIRE 2: sign(delta_ff) != sign(kappa_ref_at_proj) with |kappa_ref|={abs(kappa_at_proj):.4f} > {_k_min} — likely sign/axis mismatch")
+                print(f"{self._mpc_log_prefix()} *** FF TRIPWIRE 2: sign(delta_ff) != sign(kappa_ref_at_proj) with |kappa_ref|={abs(kappa_at_proj):.4f} > {_k_min} — likely sign/axis mismatch")
             
             # Recommendation D: STEER_SIGN_SANITY — compare sign(delta_cmd) vs sign(yaw_rate/v) (curvature from motion)
             kappa_pred = kappa_at_proj_0
@@ -720,12 +752,12 @@ class MPCLateralController:
                 kappa_meas = kappa_at_proj  # fallback to path curvature when yaw_rate/v unavailable
             sign_delta = 1 if delta_cmd_rad > 0 else (-1 if delta_cmd_rad < 0 else 0)
             sign_kappa = 1 if kappa_meas > 0 else (-1 if kappa_meas < 0 else 0)
-            print(f"[MPC] STEER_SIGN_SANITY delta_cmd_rad={delta_cmd_rad:.4f} kappa_pred={kappa_pred:.4f} kappa_meas={kappa_meas:.4f} (yaw_rate/v) sign_delta_cmd={sign_delta} sign_kappa_meas={sign_kappa}")
+            print(f"{self._mpc_log_prefix()} STEER_SIGN_SANITY delta_cmd_rad={delta_cmd_rad:.4f} kappa_pred={kappa_pred:.4f} kappa_meas={kappa_meas:.4f} (yaw_rate/v) sign_delta_cmd={sign_delta} sign_kappa_meas={sign_kappa}")
             _steer_sanity_count = getattr(self, '_steer_sanity_mismatch_count', 0)
             if abs(delta_cmd_rad) > 0.05 and abs(kappa_meas) > 0.02 and delta_cmd_rad * kappa_meas < 0:
                 _steer_sanity_count += 1
                 self._steer_sanity_mismatch_count = _steer_sanity_count
-                print(f"[MPC] STEER_SIGN_SANITY MISMATCH #{_steer_sanity_count} (delta_cmd and yaw_rate/v opposite signs — actuation sign inversion)")
+                print(f"{self._mpc_log_prefix()} STEER_SIGN_SANITY MISMATCH #{_steer_sanity_count} (delta_cmd and yaw_rate/v opposite signs — actuation sign inversion)")
             
             # Plan: output is road wheel angle (rad). Normalized only for debug logs.
             steer_norm_debug = float(np.clip(delta_cmd_rad / current_delta_max, -1.0, 1.0))
@@ -758,10 +790,11 @@ class MPCLateralController:
                 _seg = getattr(self, '_log_segment_id', None)
                 _cte = getattr(self, '_log_cte_raw', None)
                 _cte_s = f"{_cte:.3f}" if _cte is not None else "?"
-                print(f"[MPC] SATURATION #{self._saturation_count} delta_max_used={current_delta_max:.4f} segment_id={_seg} v={self._log_v:.3f} kappa_ref_at_proj={kappa_at_proj:.4f} cte_raw={_cte_s} delta_total={delta_cmd_rad_raw:.4f} delta_ff={delta_ff_rad:.4f} delta_fb={delta_fb_rad:.4f}")
+                print(f"{self._mpc_log_prefix()} SATURATION #{self._saturation_count} delta_max_used={current_delta_max:.4f} segment_id={_seg} v={self._log_v:.3f} kappa_ref_at_proj={kappa_at_proj:.4f} cte_raw={_cte_s} delta_total={delta_cmd_rad_raw:.4f} delta_ff={delta_ff_rad:.4f} delta_fb={delta_fb_rad:.4f}")
 
             # Reset invalid count on success
             self.invalid_count = 0
+            self._qp_setup_fail_count = 0
             self.last_valid_steering = delta_cmd_rad  # now in rad
             
             # Plan Step 1: controller returns steer_road_rad (rad), not normalized
@@ -769,8 +802,16 @@ class MPCLateralController:
             return float(delta_cmd_rad)
             
         except Exception as e:
-            print(f"[MPC] Error solving QP: {e}")
+            nfail = getattr(self, "_qp_setup_fail_count", 0) + 1
+            self._qp_setup_fail_count = nfail
+            if nfail <= 5 or nfail % 250 == 0:
+                print(f"{self._mpc_log_prefix()} Error solving QP ({nfail}x): {e}")
             _mpc_timing.record_lateral_mpc_ms((time.perf_counter() - t0) * 1000)
+            if getattr(self, "_mpc_fellow_qp_robustness", False):
+                return self._fallback_steering(
+                    e_y=float(self.state[0]) if self.state is not None and len(self.state) > 0 else None,
+                    e_psi=float(self.state[1]) if self.state is not None and len(self.state) > 1 else None,
+                )
             return self._fallback_steering()
     
     def _is_3d_waypoint(self, waypoint) -> bool:
@@ -1185,7 +1226,7 @@ class MPCLateralController:
                 steer_rad = steer_proportional_rad
             steer_rad = max(-delta_max, min(delta_max, steer_rad))
             self._delta_prev_output_rad = steer_rad
-            print(f"[MPC Fallback] Using proportional steering: {steer_rad:.4f} rad (e_y={e_y:.2f}m, e_psi={e_psi:.2f}rad if available)")
+            print(f"{self._mpc_log_prefix()} Fallback] Using proportional steering: {steer_rad:.4f} rad (e_y={e_y:.2f}m, e_psi={e_psi:.2f}rad if available)")
             return float(steer_rad)
         
         # Fallback to old behavior if no error information available

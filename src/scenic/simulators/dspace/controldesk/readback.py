@@ -314,16 +314,9 @@ def read_fellow_state(sim, obj, dutils):
         scenic_x, scenic_y = float(x), float(y)
         obj.dspaceActor.position = Vector(scenic_x, scenic_y, float(z))
         
-        # Convert heading from degrees to radians
-        yaw_rad = float(yaw_deg) * (math.pi / 180.0)
-        
-        # CRITICAL: ModelDesk orients vehicles BACKWARD along track (toward decreasing s)
-        # Flip by 180° to get forward direction (toward increasing s)
-        # This aligns vehicle heading with the direction of travel along the racing line
-        yaw_rad = yaw_rad + math.pi
-        
-        # Normalize to [-pi, pi]
-        yaw_rad = math.atan2(math.sin(yaw_rad), math.cos(yaw_rad))
+        # Convert heading from degrees to radians (same convention as ego plant yaw; no +pi)
+        yaw_rad_raw = float(yaw_deg) * (math.pi / 180.0)
+        yaw_rad = math.atan2(math.sin(yaw_rad_raw), math.cos(yaw_rad_raw))
         
         obj.dspaceActor.heading = yaw_rad
         obj.dspaceActor.linvel = Vector(
