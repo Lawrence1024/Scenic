@@ -1291,7 +1291,7 @@ class DSpaceSimulation(RacingSimulation):
         if t_before is not None and self._var_access:
             deadline = t_before + self.timestep * 0.9
             poll_timeout_wall = min(10.0 * self.timestep, 0.01)
-            max_retries = 10
+            max_retries = 100
             for attempt in range(max_retries):
                 attempt_start = time.perf_counter()
                 if self._cd:
