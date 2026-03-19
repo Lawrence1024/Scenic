@@ -1,0 +1,24 @@
+{
+    "Type": "DsVeosCoSimExtensionNg",
+    "Name": "DsVeosCoSimNgExample",
+    "StepSize": 0.01,
+    "IsClientOptional": false,
+    "Network": {
+        "CAN": {
+            "test": {}
+        }
+    },
+    "CoSimClient": {
+        "Executable": "python.exe",
+        "Arguments": [
+            "heartbeat.py",
+            "DsVeosCoSimNgExample"
+        ]
+    },
+    "Resources": [
+        "heartbeat.py",
+        "../src/Bindings.py",
+        "../src/CoSimClient.py",
+        "../src/DsVeosCoSim.dll"
+    ]
+}

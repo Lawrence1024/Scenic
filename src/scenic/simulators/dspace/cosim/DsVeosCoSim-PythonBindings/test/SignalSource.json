@@ -1,0 +1,254 @@
+{
+    "Type": "DsVeosCoSim",
+    "Name": "SignalSource",
+    "StepSize": 0.001,
+    "IsClientOptional": true,
+    "Network": {
+        "CAN": {
+            "can0": {
+                "ClusterName": "can_cluster0"
+            },
+            "can1": {
+                "ClusterName": "can_cluster1"
+            }
+        },
+        "ETH": {
+            "eth0": {
+                "ClusterName": "eth_cluster0"
+            },
+            "eth1": {
+                "ClusterName": "eth_cluster1"
+            }
+        },
+        "LIN": {
+            "lin0": {
+                "ClusterName": "lin_cluster0",
+                "IsCommander": true
+            },
+            "lin1": {
+                "ClusterName": "lin_cluster1",
+                "IsCommander": false
+            }
+        }
+    },
+    "IOSignals": {
+        "Outgoing": [
+            {
+                "Name": "Signal1",
+                "DataType": "float64",
+                "PortName": "Port1"
+            },
+            {
+                "Name": "Signal2",
+                "DataType": "float64",
+                "PortName": "Port2",
+                "Length": 5
+            },
+            {
+                "Name": "Signal3",
+                "DataType": "float64",
+                "PortName": "Port3",
+                "IsVariableSized": true,
+                "Length": 1000
+            },
+            {
+                "Name": "Signal4",
+                "DataType": "float32",
+                "PortName": "Port4"
+            },
+            {
+                "Name": "Signal5",
+                "DataType": "float32",
+                "PortName": "Port5",
+                "Length": 5
+            },
+            {
+                "Name": "Signal6",
+                "DataType": "float32",
+                "PortName": "Port6",
+                "IsVariableSized": true,
+                "Length": 1000
+            },
+            {
+                "Name": "Signal7",
+                "DataType": "int16",
+                "PortName": "Port7"
+            },
+            {
+                "Name": "Signal8",
+                "DataType": "int16",
+                "PortName": "Port8",
+                "Length": 5
+            },
+            {
+                "Name": "Signal9",
+                "DataType": "int16",
+                "PortName": "Port9",
+                "IsVariableSized": true,
+                "Length": 1000
+            },
+            {
+                "Name": "Signal10",
+                "DataType": "int32",
+                "PortName": "Port10"
+            },
+            {
+                "Name": "Signal11",
+                "DataType": "int32",
+                "PortName": "Port11",
+                "Length": 5
+            },
+            {
+                "Name": "Signal12",
+                "DataType": "int32",
+                "PortName": "Port12",
+                "IsVariableSized": true,
+                "Length": 1000
+            },
+            {
+                "Name": "Signal13",
+                "DataType": "int64",
+                "PortName": "Port13"
+            },
+            {
+                "Name": "Signal14",
+                "DataType": "int64",
+                "PortName": "Port14",
+                "Length": 5
+            },
+            {
+                "Name": "Signal15",
+                "DataType": "int64",
+                "PortName": "Port15",
+                "IsVariableSized": true,
+                "Length": 1000
+            },
+            {
+                "Name": "Signal16",
+                "DataType": "int8",
+                "PortName": "Port16"
+            },
+            {
+                "Name": "Signal17",
+                "DataType": "int8",
+                "PortName": "Port17",
+                "Length": 5
+            },
+            {
+                "Name": "Signal18",
+                "DataType": "int8",
+                "PortName": "Port18",
+                "IsVariableSized": true,
+                "Length": 1000
+            },
+            {
+                "Name": "Signal19",
+                "DataType": "uint16",
+                "PortName": "Port19"
+            },
+            {
+                "Name": "Signal20",
+                "DataType": "uint16",
+                "PortName": "Port20",
+                "Length": 5
+            },
+            {
+                "Name": "Signal21",
+                "DataType": "uint16",
+                "PortName": "Port21",
+                "IsVariableSized": true,
+                "Length": 1000
+            },
+            {
+                "Name": "Signal22",
+                "DataType": "uint8",
+                "PortName": "Port22"
+            },
+            {
+                "Name": "Signal23",
+                "DataType": "uint8",
+                "PortName": "Port23",
+                "Length": 5
+            },
+            {
+                "Name": "Signal24",
+                "DataType": "uint8",
+                "PortName": "Port24",
+                "IsVariableSized": true,
+                "Length": 1000
+            },
+            {
+                "Name": "Signal25",
+                "DataType": "uint32",
+                "PortName": "Port25"
+            },
+            {
+                "Name": "Signal26",
+                "DataType": "uint32",
+                "PortName": "Port26",
+                "Length": 5
+            },
+            {
+                "Name": "Signal27",
+                "DataType": "uint32",
+                "PortName": "Port27",
+                "IsVariableSized": true,
+                "Length": 1000
+            },
+            {
+                "Name": "Signal28",
+                "DataType": "int64",
+                "PortName": "Port28"
+            },
+            {
+                "Name": "Signal29",
+                "DataType": "int64",
+                "PortName": "Port29",
+                "Length": 5
+            },
+            {
+                "Name": "Signal30",
+                "DataType": "int64",
+                "PortName": "Port30",
+                "IsVariableSized": true,
+                "Length": 1000
+            },
+            {
+                "Name": "Signal31",
+                "DataType": "bool",
+                "PortName": "Port31"
+            },
+            {
+                "Name": "Signal32",
+                "DataType": "bool",
+                "PortName": "Port32",
+                "Length": 5
+            },
+            {
+                "Name": "Signal33",
+                "DataType": "bool",
+                "PortName": "Port33",
+                "IsVariableSized": true,
+                "Length": 1000
+            },
+            {
+                "Name": "Signal34",
+                "DataType": "binary",
+                "PortName": "Port34"
+            },
+            {
+                "Name": "Signal35",
+                "DataType": "binary",
+                "PortName": "Port35",
+                "Length": 5
+            },
+            {
+                "Name": "Signal36",
+                "DataType": "binary",
+                "PortName": "Port36",
+                "IsVariableSized": true,
+                "Length": 1000
+            }
+        ]
+    }
+}

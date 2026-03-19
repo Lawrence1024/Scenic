@@ -1,0 +1,11 @@
+{
+    "Type": "DsVeosCoSim",
+    "Name": "DsVeosCoSimNgExample",
+    "StepSize": 0.01,
+    "IsClientOptional": false,
+    "Network": {
+        "CAN": {
+            "test": {}
+        }
+    }
+}
