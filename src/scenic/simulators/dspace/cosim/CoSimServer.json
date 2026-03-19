@@ -1,0 +1,24 @@
+{
+    "$schema": "file:///DsVeosCoSim.schema.json",
+    "Type": "DsVeosCoSim",
+    "Name": "DsVeosCoSimNgExample",
+    "StepSize": 0.01,
+    "Network": {
+        "CAN": {
+            "CanController": {
+                "ClusterName": "HighSpeedCanCluster",
+                "BitsPerSecond": 500000,
+                "FlexibleDataRateBitsPerSecond": 2000000
+            }
+        }
+    },
+    "IOSignals": {
+        "Outgoing": [
+            {
+                "Name": "Signal1",
+                "DataType": "float64",
+                "PortName": "Port1"
+            }
+        ]
+    }
+}

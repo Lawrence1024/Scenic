@@ -629,9 +629,10 @@ def register_library(absolute_path: Path) -> CDLL:
     _DLL_VeosCoSim_ReceiveCanMessage.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_ReceiveCanMessageContainer(DsVeosCoSim_Handle handle, DsVeosCoSim_CanMessageContainer* messageContainer);
-    _DLL_VeosCoSim_ReceiveCanMessageContainer = _dll.DsVeosCoSim_ReceiveCanMessageContainer
-    _DLL_VeosCoSim_ReceiveCanMessageContainer.argtypes = [_DLL_CoSimHandle, POINTER(CanMessageContainer)]
-    _DLL_VeosCoSim_ReceiveCanMessageContainer.restype = _DLL_VeosCoSim_Result
+    _DLL_VeosCoSim_ReceiveCanMessageContainer = getattr(_dll, "DsVeosCoSim_ReceiveCanMessageContainer", None)
+    if _DLL_VeosCoSim_ReceiveCanMessageContainer is not None:
+        _DLL_VeosCoSim_ReceiveCanMessageContainer.argtypes = [_DLL_CoSimHandle, POINTER(CanMessageContainer)]
+        _DLL_VeosCoSim_ReceiveCanMessageContainer.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_TransmitCanMessage(DsVeosCoSim_Handle handle, const DsVeosCoSim_CanMessage* message);
     _DLL_VeosCoSim_TransmitCanMessage = _dll.DsVeosCoSim_TransmitCanMessage
@@ -639,9 +640,10 @@ def register_library(absolute_path: Path) -> CDLL:
     _DLL_VeosCoSim_TransmitCanMessage.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_TransmitCanMessageContainer(DsVeosCoSim_Handle handle, const DsVeosCoSim_CanMessageContainer* messageContainer);
-    _DLL_VeosCoSim_TransmitCanMessageContainer = _dll.DsVeosCoSim_TransmitCanMessageContainer
-    _DLL_VeosCoSim_TransmitCanMessageContainer.argtypes = [_DLL_CoSimHandle, POINTER(CanMessageContainer)]
-    _DLL_VeosCoSim_TransmitCanMessageContainer.restype = _DLL_VeosCoSim_Result
+    _DLL_VeosCoSim_TransmitCanMessageContainer = getattr(_dll, "DsVeosCoSim_TransmitCanMessageContainer", None)
+    if _DLL_VeosCoSim_TransmitCanMessageContainer is not None:
+        _DLL_VeosCoSim_TransmitCanMessageContainer.argtypes = [_DLL_CoSimHandle, POINTER(CanMessageContainer)]
+        _DLL_VeosCoSim_TransmitCanMessageContainer.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_GetEthControllers(DsVeosCoSim_Handle handle, uint32_t* ethControllersCount, const DsVeosCoSim_EthController** ethControllers);
     _DLL_VeosCoSim_GetEthControllers = _dll.DsVeosCoSim_GetEthControllers
@@ -658,9 +660,10 @@ def register_library(absolute_path: Path) -> CDLL:
     _DLL_VeosCoSim_ReceiveEthMessage.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_ReceiveEthMessageContainer(DsVeosCoSim_Handle handle, DsVeosCoSim_EthMessageContainer* messageContainer);
-    _DLL_VeosCoSim_ReceiveEthMessageContainer = _dll.DsVeosCoSim_ReceiveEthMessageContainer
-    _DLL_VeosCoSim_ReceiveEthMessageContainer.argtypes = [_DLL_CoSimHandle, POINTER(EthMessageContainer)]
-    _DLL_VeosCoSim_ReceiveEthMessageContainer.restype = _DLL_VeosCoSim_Result
+    _DLL_VeosCoSim_ReceiveEthMessageContainer = getattr(_dll, "DsVeosCoSim_ReceiveEthMessageContainer", None)
+    if _DLL_VeosCoSim_ReceiveEthMessageContainer is not None:
+        _DLL_VeosCoSim_ReceiveEthMessageContainer.argtypes = [_DLL_CoSimHandle, POINTER(EthMessageContainer)]
+        _DLL_VeosCoSim_ReceiveEthMessageContainer.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_TransmitEthMessage(DsVeosCoSim_Handle handle, const DsVeosCoSim_EthMessage* message);
     _DLL_VeosCoSim_TransmitEthMessage = _dll.DsVeosCoSim_TransmitEthMessage
@@ -668,9 +671,10 @@ def register_library(absolute_path: Path) -> CDLL:
     _DLL_VeosCoSim_TransmitEthMessage.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_TransmitEthMessageContainer(DsVeosCoSim_Handle handle, const DsVeosCoSim_EthMessageContainer* messageContainer);
-    _DLL_VeosCoSim_TransmitEthMessageContainer = _dll.DsVeosCoSim_TransmitEthMessageContainer
-    _DLL_VeosCoSim_TransmitEthMessageContainer.argtypes = [_DLL_CoSimHandle, POINTER(EthMessageContainer)]
-    _DLL_VeosCoSim_TransmitEthMessageContainer.restype = _DLL_VeosCoSim_Result
+    _DLL_VeosCoSim_TransmitEthMessageContainer = getattr(_dll, "DsVeosCoSim_TransmitEthMessageContainer", None)
+    if _DLL_VeosCoSim_TransmitEthMessageContainer is not None:
+        _DLL_VeosCoSim_TransmitEthMessageContainer.argtypes = [_DLL_CoSimHandle, POINTER(EthMessageContainer)]
+        _DLL_VeosCoSim_TransmitEthMessageContainer.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_GetLinControllers(DsVeosCoSim_Handle handle, uint32_t* linControllersCount, const DsVeosCoSim_LinController** linControllers);
     _DLL_VeosCoSim_GetLinControllers = _dll.DsVeosCoSim_GetLinControllers
@@ -687,9 +691,10 @@ def register_library(absolute_path: Path) -> CDLL:
     _DLL_VeosCoSim_ReceiveLinMessage.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_ReceiveLinMessageContainer(DsVeosCoSim_Handle handle, DsVeosCoSim_LinMessageContainer* messageContainer);
-    _DLL_VeosCoSim_ReceiveLinMessageContainer = _dll.DsVeosCoSim_ReceiveLinMessageContainer
-    _DLL_VeosCoSim_ReceiveLinMessageContainer.argtypes = [_DLL_CoSimHandle, POINTER(LinMessageContainer)]
-    _DLL_VeosCoSim_ReceiveLinMessageContainer.restype = _DLL_VeosCoSim_Result
+    _DLL_VeosCoSim_ReceiveLinMessageContainer = getattr(_dll, "DsVeosCoSim_ReceiveLinMessageContainer", None)
+    if _DLL_VeosCoSim_ReceiveLinMessageContainer is not None:
+        _DLL_VeosCoSim_ReceiveLinMessageContainer.argtypes = [_DLL_CoSimHandle, POINTER(LinMessageContainer)]
+        _DLL_VeosCoSim_ReceiveLinMessageContainer.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_TransmitLinMessage(DsVeosCoSim_Handle handle, const DsVeosCoSim_LinMessage* message);
     _DLL_VeosCoSim_TransmitLinMessage = _dll.DsVeosCoSim_TransmitLinMessage
@@ -697,38 +702,44 @@ def register_library(absolute_path: Path) -> CDLL:
     _DLL_VeosCoSim_TransmitLinMessage.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_TransmitLinMessageContainer(DsVeosCoSim_Handle handle, const DsVeosCoSim_LinMessageContainer* messageContainer);
-    _DLL_VeosCoSim_TransmitLinMessageContainer = _dll.DsVeosCoSim_TransmitLinMessageContainer
-    _DLL_VeosCoSim_TransmitLinMessageContainer.argtypes = [_DLL_CoSimHandle, POINTER(LinMessageContainer)]
-    _DLL_VeosCoSim_TransmitLinMessageContainer.restype = _DLL_VeosCoSim_Result
+    _DLL_VeosCoSim_TransmitLinMessageContainer = getattr(_dll, "DsVeosCoSim_TransmitLinMessageContainer", None)
+    if _DLL_VeosCoSim_TransmitLinMessageContainer is not None:
+        _DLL_VeosCoSim_TransmitLinMessageContainer.argtypes = [_DLL_CoSimHandle, POINTER(LinMessageContainer)]
+        _DLL_VeosCoSim_TransmitLinMessageContainer.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_GetFrControllers(DsVeosCoSim_Handle handle, uint32_t* frControllersCount, const DsVeosCoSim_FrController** frControllers);
-    _DLL_VeosCoSim_GetFrControllers = _dll.DsVeosCoSim_GetFrControllers
-    _DLL_VeosCoSim_GetFrControllers.argtypes = [
-        _DLL_CoSimHandle,
-        POINTER(c_uint32),
-        POINTER(POINTER(FrController)),
-    ]
-    _DLL_VeosCoSim_GetFrControllers.restype = _DLL_VeosCoSim_Result
+    _DLL_VeosCoSim_GetFrControllers = getattr(_dll, "DsVeosCoSim_GetFrControllers", None)
+    if _DLL_VeosCoSim_GetFrControllers is not None:
+        _DLL_VeosCoSim_GetFrControllers.argtypes = [
+            _DLL_CoSimHandle,
+            POINTER(c_uint32),
+            POINTER(POINTER(FrController)),
+        ]
+        _DLL_VeosCoSim_GetFrControllers.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_ReceiveFrMessage(DsVeosCoSim_Handle handle, DsVeosCoSim_FrMessage* message);
-    _DLL_VeosCoSim_ReceiveFrMessage = _dll.DsVeosCoSim_ReceiveFrMessage
-    _DLL_VeosCoSim_ReceiveFrMessage.argtypes = [_DLL_CoSimHandle, POINTER(FrMessage)]
-    _DLL_VeosCoSim_ReceiveFrMessage.restype = _DLL_VeosCoSim_Result
+    _DLL_VeosCoSim_ReceiveFrMessage = getattr(_dll, "DsVeosCoSim_ReceiveFrMessage", None)
+    if _DLL_VeosCoSim_ReceiveFrMessage is not None:
+        _DLL_VeosCoSim_ReceiveFrMessage.argtypes = [_DLL_CoSimHandle, POINTER(FrMessage)]
+        _DLL_VeosCoSim_ReceiveFrMessage.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_ReceiveFrMessageContainer(DsVeosCoSim_Handle handle, DsVeosCoSim_FrMessageContainer* messageContainer);
-    _DLL_VeosCoSim_ReceiveFrMessageContainer = _dll.DsVeosCoSim_ReceiveFrMessageContainer
-    _DLL_VeosCoSim_ReceiveFrMessageContainer.argtypes = [_DLL_CoSimHandle, POINTER(FrMessageContainer)]
-    _DLL_VeosCoSim_ReceiveFrMessageContainer.restype = _DLL_VeosCoSim_Result
+    _DLL_VeosCoSim_ReceiveFrMessageContainer = getattr(_dll, "DsVeosCoSim_ReceiveFrMessageContainer", None)
+    if _DLL_VeosCoSim_ReceiveFrMessageContainer is not None:
+        _DLL_VeosCoSim_ReceiveFrMessageContainer.argtypes = [_DLL_CoSimHandle, POINTER(FrMessageContainer)]
+        _DLL_VeosCoSim_ReceiveFrMessageContainer.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_TransmitFrMessage(DsVeosCoSim_Handle handle, const DsVeosCoSim_FrMessage* message);
-    _DLL_VeosCoSim_TransmitFrMessage = _dll.DsVeosCoSim_TransmitFrMessage
-    _DLL_VeosCoSim_TransmitFrMessage.argtypes = [_DLL_CoSimHandle, POINTER(FrMessage)]
-    _DLL_VeosCoSim_TransmitFrMessage.restype = _DLL_VeosCoSim_Result
+    _DLL_VeosCoSim_TransmitFrMessage = getattr(_dll, "DsVeosCoSim_TransmitFrMessage", None)
+    if _DLL_VeosCoSim_TransmitFrMessage is not None:
+        _DLL_VeosCoSim_TransmitFrMessage.argtypes = [_DLL_CoSimHandle, POINTER(FrMessage)]
+        _DLL_VeosCoSim_TransmitFrMessage.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_TransmitFrMessageContainer(DsVeosCoSim_Handle handle, const DsVeosCoSim_FrMessageContainer* messageContainer);
-    _DLL_VeosCoSim_TransmitFrMessageContainer = _dll.DsVeosCoSim_TransmitFrMessageContainer
-    _DLL_VeosCoSim_TransmitFrMessageContainer.argtypes = [_DLL_CoSimHandle, POINTER(FrMessageContainer)]
-    _DLL_VeosCoSim_TransmitFrMessageContainer.restype = _DLL_VeosCoSim_Result
+    _DLL_VeosCoSim_TransmitFrMessageContainer = getattr(_dll, "DsVeosCoSim_TransmitFrMessageContainer", None)
+    if _DLL_VeosCoSim_TransmitFrMessageContainer is not None:
+        _DLL_VeosCoSim_TransmitFrMessageContainer.argtypes = [_DLL_CoSimHandle, POINTER(FrMessageContainer)]
+        _DLL_VeosCoSim_TransmitFrMessageContainer.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_StartSimulation(DsVeosCoSim_Handle handle);
     _DLL_VeosCoSim_StartSimulation = _dll.DsVeosCoSim_StartSimulation
@@ -759,22 +770,25 @@ def register_library(absolute_path: Path) -> CDLL:
     _DLL_VeosCoSim_TerminateSimulation.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_GetCurrentSimulationTime(DsVeosCoSim_Handle handle, DsVeosCoSim_SimulationTime* simulationTime);
-    _DLL_VeosCoSim_GetCurrentSimulationTime = _dll.DsVeosCoSim_GetCurrentSimulationTime
-    _DLL_VeosCoSim_GetCurrentSimulationTime.argtypes = [
-        _DLL_CoSimHandle,
-        POINTER(_DLL_CoSim_SimulationTime),
-    ]
-    _DLL_VeosCoSim_GetCurrentSimulationTime.restype = _DLL_VeosCoSim_Result
+    _DLL_VeosCoSim_GetCurrentSimulationTime = getattr(_dll, "DsVeosCoSim_GetCurrentSimulationTime", None)
+    if _DLL_VeosCoSim_GetCurrentSimulationTime is not None:
+        _DLL_VeosCoSim_GetCurrentSimulationTime.argtypes = [
+            _DLL_CoSimHandle,
+            POINTER(_DLL_CoSim_SimulationTime),
+        ]
+        _DLL_VeosCoSim_GetCurrentSimulationTime.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_GetSimulationState(DsVeosCoSim_Handle handle, DsVeosCoSim_SimulationState* simulationState);
-    _DLL_VeosCoSim_GetSimulationState = _dll.DsVeosCoSim_GetSimulationState
-    _DLL_VeosCoSim_GetSimulationState.argtypes = [_DLL_CoSimHandle, POINTER(c_int32)]
-    _DLL_VeosCoSim_GetSimulationState.restype = _DLL_VeosCoSim_Result
+    _DLL_VeosCoSim_GetSimulationState = getattr(_dll, "DsVeosCoSim_GetSimulationState", None)
+    if _DLL_VeosCoSim_GetSimulationState is not None:
+        _DLL_VeosCoSim_GetSimulationState.argtypes = [_DLL_CoSimHandle, POINTER(c_int32)]
+        _DLL_VeosCoSim_GetSimulationState.restype = _DLL_VeosCoSim_Result
 
     # DSVEOSCOSIM_DECL DsVeosCoSim_Result DsVeosCoSim_GetRoundTripTime(DsVeosCoSim_Handle handle, int64_t* roundTripTimeInNanoseconds);
-    _DLL_VeosCoSim_GetRoundTripTime = _dll.DsVeosCoSim_GetRoundTripTime
-    _DLL_VeosCoSim_GetRoundTripTime.argtypes = [_DLL_CoSimHandle, POINTER(c_int64)]
-    _DLL_VeosCoSim_GetRoundTripTime.restype = _DLL_VeosCoSim_Result
+    _DLL_VeosCoSim_GetRoundTripTime = getattr(_dll, "DsVeosCoSim_GetRoundTripTime", None)
+    if _DLL_VeosCoSim_GetRoundTripTime is not None:
+        _DLL_VeosCoSim_GetRoundTripTime.argtypes = [_DLL_CoSimHandle, POINTER(c_int64)]
+        _DLL_VeosCoSim_GetRoundTripTime.restype = _DLL_VeosCoSim_Result
 
     return _dll
 

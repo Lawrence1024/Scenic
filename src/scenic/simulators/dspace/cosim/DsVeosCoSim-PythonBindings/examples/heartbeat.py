@@ -1,3 +1,6 @@
+"""Heartbeat example: connect to CoSim server and send CAN messages on each step.
+Usage: python heartbeat.py [SERVER_NAME] [PORT_MAPPER_PORT]
+SERVER_NAME must match CoSimServer.json 'Name'; PORT_MAPPER_PORT is host port for mapper (e.g. 11111)."""
 from datetime import datetime
 from pathlib import Path
 import sys
@@ -19,10 +22,22 @@ def handle_command(session: CoSimSession, simulation_time: int, command: Command
 
 def main():
     service_name = "DsVeosCoSimNgExample"
+    port_mapper_port = None
     if len(sys.argv) > 1:
         service_name = sys.argv[1]
+    if len(sys.argv) > 2:
+        port_mapper_port = int(sys.argv[2])
 
-    with CoSimClient().Connect(ConnectConfig(serverName=service_name)) as connection:
+    if port_mapper_port is not None:
+        config = ConnectConfig(
+            remoteIpAddress="127.0.0.1",
+            serverName=service_name,
+            remotePort=port_mapper_port,
+        )
+    else:
+        config = ConnectConfig(serverName=service_name)
+
+    with CoSimClient().Connect(config) as connection:
         connection.AttachToSimulation(handle_command)
 
 
