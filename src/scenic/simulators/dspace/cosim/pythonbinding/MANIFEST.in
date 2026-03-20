@@ -1,2 +1,0 @@
-include README.md pyproject.toml setup.py
-recursive-include src *.cpp
