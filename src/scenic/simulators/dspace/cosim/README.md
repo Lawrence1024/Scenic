@@ -2,67 +2,91 @@
 
 This folder is the top-level home for the VEOS CoSimulation integration used by Scenic.
 
+This README is for:
+
+```text
+src/scenic/simulators/dspace/cosim/README.md
+```
+
 The important subfolders are:
 
 - `VeosCoSim_Client/`
   - the vendor CoSim SDK and example client sources
 - `veos_cosim_ipc_bridge/`
-  - the custom bridge that lets Python observe VEOS events without opening a second CoSim connection
+  - the custom bridge used to synchronize VEOS stepping with Scenic over localhost IPC
 
 ---
 
-## Important clarification: where is the “Python binding”?
+## Important clarification: what is the “Python API” here?
 
-In the current working setup, there is **no direct Python binding to VEOS**.
+In the current working setup, there is **not** a direct Python SDK binding that talks to VEOS on its own.
 
-Instead, the Python-facing piece is the **IPC listener script**:
+Instead, the Python-facing control path is now split into two layers:
+
+### 1. Scenic-hosted sync bridge
+Inside Scenic, the Python-side step gate lives in:
+
+```text
+veos_cosim_ipc_bridge/python_listener/sync_step_bridge.py
+```
+
+Scenic imports this file and runs it internally.
+
+### 2. Optional standalone Python listener
+For debugging / inspection, there is also:
 
 ```text
 veos_cosim_ipc_bridge/python_listener/print_time_callbacks.py
 ```
 
-That script runs in **Terminal 1**.
+That script is useful for manual testing, but it is **not** the primary stepping path anymore.
 
-So:
+So for actual Scenic synchronization:
 
-- **Terminal 1** = Python listener
-- **Terminal 2** = C++ VEOS client with IPC enabled
-
-This means Python does **not** call `VeosCoSim_ConnectMI()` directly.  
-Only the IPC-enabled C++ client connects to VEOS.
-
-That design is intentional, because earlier attempts to connect from Python as a separate CoSim client could interfere with the existing VEOS session.
+- there is no separate “Terminal 1 Python listener” anymore
+- Scenic itself becomes the Python side of the handshake
+- Terminal 2 remains the VEOS-connected C++ client
 
 ---
 
 ## High-level architecture
 
-The runtime data flow is:
+### Current synchronous Scenic ↔ VEOS design
 
 ```text
+Scenic process
+  └─ SyncStepBridge (Python)
+        ⇅ localhost TCP
+VeosCoSimTestClientIpc.exe (C++)
+        ⇅ CoSim
 VEOS Server
-    ⇅
-VeosCoSimTestClientIpc.exe   (C++ client)
-    ⇅ localhost TCP
-print_time_callbacks.py      (Python listener)
 ```
 
-### Why this architecture was chosen
+This means:
 
-We originally explored the idea of building a direct Python wrapper around the VEOS client library. In practice, that caused two problems:
-
-1. The Python wrapper still had to create its own logical CoSim connection.
-2. In your environment, a second CoSim connection could disrupt or terminate the active session.
-
-So the safer design is:
-
-- only **one** VEOS client connects to the VEOS server
-- that client is written in C++
-- Python only listens locally for forwarded events
+- only the IPC-enabled C++ client talks to VEOS
+- Scenic does not create its own CoSim client connection
+- Scenic releases exactly one VEOS step at a time
 
 ---
 
-## What each folder is for
+## Why this architecture was chosen
+
+Earlier attempts tried to create a direct Python wrapper around the VEOS client API. In practice, that caused problems:
+
+1. the Python wrapper still created a separate logical CoSim client connection
+2. in your environment, opening another CoSim connection could interfere with the active VEOS session
+
+So the safer architecture is:
+
+- one VEOS-connected client only
+- that client is written in C++
+- Scenic communicates with that client locally over IPC
+- the step boundary is controlled from Python without creating another CoSim session
+
+---
+
+## What each subfolder is for
 
 ### `VeosCoSim_Client/`
 This is the vendor side.
@@ -71,9 +95,9 @@ It contains:
 - `client/x64/Release/include/VeosCoSim.h`
 - `client/x64/Release/lib/VeosCoSimApplStatic.lib`
 - `examples/client/VeosCoSimTestClient.cpp`
-- helper files used by the example client
+- vendor helper files
 
-You should treat this folder as the authoritative SDK / reference implementation.
+This folder is the authoritative SDK / reference implementation.
 
 ### `veos_cosim_ipc_bridge/`
 This is the custom layer built on top of the vendor SDK.
@@ -81,9 +105,9 @@ This is the custom layer built on top of the vendor SDK.
 It contains:
 - a modified client executable source
 - a small TCP sender used by that client
-- a Python listener that receives and prints callback events
+- the Python-side synchronization / debug listener code
 
-This folder is the place to extend if you want Python-facing behavior.
+This folder is the main place to extend if you want new Scenic-visible CoSim behavior.
 
 ---
 
@@ -127,35 +151,23 @@ veos_cosim_ipc_bridge\client\build\VeosCoSimTestClientIpc.exe
 
 ---
 
-## Run instructions
+## Current runtime model
 
-### Terminal 1 — Python listener
+### Scenic synchronous stepping path
 
-```powershell
-cd C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\cosim\veos_cosim_ipc_bridge\python_listener
-py print_time_callbacks.py --host 127.0.0.1 --port 50555
-```
+#### Scenic side
+Scenic starts `SyncStepBridge` internally and listens on localhost.
 
-What this terminal does:
-- binds a local TCP server at `127.0.0.1:50555`
-- waits for the IPC-enabled VEOS client to connect
-- prints JSON events it receives
-
-Expected early output:
+Scenic should log something like:
 
 ```text
-Starting local IPC listener on 127.0.0.1:50555 ...
-Waiting for IPC bridge client to connect...
+[CoSimSync] SyncStepBridge listening on 127.0.0.1:50555
 ```
 
-After terminal 2 starts successfully, you should see:
+That means Scenic is ready for the VEOS IPC client.
 
-```text
-IPC bridge connected from 127.0.0.1:xxxxx
-[HELLO] {'event': 'HELLO', 'message': 'ipc connected'}
-```
-
-### Terminal 2 — IPC-enabled VEOS client
+#### VEOS side
+Then launch the IPC-enabled client:
 
 ```powershell
 cd C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\cosim\veos_cosim_ipc_bridge\client\build
@@ -163,9 +175,9 @@ cd C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\cosim\veo
 ```
 
 What this terminal does:
-- connects to the local Python listener first
-- then connects to the VEOS server at `192.168.100.101`
-- forwards logs and callback/command events to Terminal 1
+- connects to Scenic’s localhost sync bridge
+- then connects to the VEOS CoSim server at `192.168.100.101`
+- waits on each `TIME_TRIGGER` until Scenic releases the next step
 
 ---
 
@@ -185,9 +197,7 @@ Only one VEOS client should be connected to the VEOS server at a time.
 - `examples/client/VeosCoSimTestClient.cpp`
   - original example client main program
 - `examples/client/ClientServerTestHelper.cpp`
-  - helper utilities from vendor example
 - `examples/client/Generator.cpp`
-  - vendor example support file
 - `client/x64/Release/include/VeosCoSim.h`
   - core SDK header
 - `client/x64/Release/lib/VeosCoSimApplStatic.lib`
@@ -200,77 +210,83 @@ Only one VEOS client should be connected to the VEOS server at a time.
   - main C++ file for the IPC-enabled client
 - `client/TcpEventClient.h`
 - `client/TcpEventClient.cpp`
-  - local TCP sender used to forward events to Python
+  - local TCP sender / reply receiver used for step gating
+- `python_listener/sync_step_bridge.py`
+  - Scenic-hosted synchronization gate
 - `python_listener/print_time_callbacks.py`
-  - Python receiver / observer
+  - standalone debug listener
 
 ---
 
 ## How to interface with the important files
 
-### If you want to change what Python sees
+### If you want to change how VEOS stepping is synchronized with Scenic
 Edit:
 
 ```text
+veos_cosim_ipc_bridge/python_listener/sync_step_bridge.py
 veos_cosim_ipc_bridge/client/VeosCoSimTestClientIpc.cpp
 ```
 
-This is where:
-- VEOS callbacks are registered
-- VEOS commands are polled
-- JSON events are sent to Python
+This pair implements the actual step handshake.
 
-### If you want to change how Python prints or processes events
+### If you want to change what the IPC client sends or waits for
 Edit:
+
+```text
+veos_cosim_ipc_bridge/client/TcpEventClient.h
+veos_cosim_ipc_bridge/client/TcpEventClient.cpp
+veos_cosim_ipc_bridge/client/VeosCoSimTestClientIpc.cpp
+```
+
+### If you want to debug messages manually without Scenic
+Use:
 
 ```text
 veos_cosim_ipc_bridge/python_listener/print_time_callbacks.py
 ```
 
-This is the Python entry point used in Terminal 1.
-
-### If you want to inspect or compare against the vendor client
+### If you want to compare against the vendor client
 Read:
 
 ```text
 VeosCoSim_Client/examples/client/VeosCoSimTestClient.cpp
 ```
 
-That is the baseline implementation for the vendor client.
-
 ---
 
 ## Troubleshooting
 
-### Terminal 1 says “Waiting for IPC bridge client to connect...” forever
-That means terminal 2 did not connect to the listener.
+### Scenic prints `CoSimSync`, but the IPC client cannot connect to VEOS
+That means:
+- Scenic-side listener is ready
+- localhost IPC is probably fine
+- but VEOS / ModelDesk / `.osa` is not yet ready for CoSim
 
 Check:
-- are you running `VeosCoSimTestClientIpc.exe`, not the original EXE?
-- did you pass `--ipc-host 127.0.0.1 --ipc-port 50555`?
-- did the IPC client print `[ipc] Connected to listener.`?
+- ModelDesk successfully downloaded the scenario to VEOS
+- VEOS successfully loaded the expected application
+- the chosen `.osa` supports the intended ModelDesk / CoSim workflow
 
-### Terminal 2 connects to IPC, but no timer events appear
-That means:
-- VEOS connection succeeded
-- Python IPC succeeded
-- but no `TIME_TRIGGER` events are being forwarded yet
+### The IPC client says `Failed to connect to listener`
+That means Scenic has not started listening yet, or is not using the updated sync path.
 
-In that case inspect:
-- `OnTimeTriggerCallback`
-- the `GetNextCommandMI` loop in `VeosCoSimTestClientIpc.cpp`
+Check:
+- Scenic is actually running the updated `simulator.py`
+- Scenic printed the `CoSimSync` line
+- localhost port `50555` is open
 
-### VEOS session stops unexpectedly
-That usually means multiple clients touched the same server/session.  
-Make sure only the IPC-enabled client is active for the test.
+### The IPC client connects to Scenic, but no steps happen
+Then inspect:
+- `SyncStepBridge.step()`
+- the `TIME_TRIGGER` command branch in `VeosCoSimTestClientIpc.cpp`
 
 ---
 
 ## Summary
 
-The most important thing to remember is:
+The most important thing to remember now is:
 
-- **Terminal 1 is the Python-facing side**
-- **Terminal 2 is the VEOS-connected side**
-- Python is currently **not** a direct VEOS binding
-- Python receives events through local IPC from the C++ client
+- Scenic itself hosts the Python synchronization gate
+- the external IPC-enabled C++ client is the only VEOS-connected process
+- synchronous stepping is implemented by blocking VEOS at `TIME_TRIGGER` until Scenic releases one step

@@ -4,6 +4,7 @@ import argparse
 import json
 import socket
 import sys
+import time
 from typing import Optional
 
 
@@ -45,23 +46,30 @@ def main() -> int:
                             continue
 
                         text = line.decode("utf-8", errors="replace")
+
                         try:
                             obj = json.loads(text)
                         except json.JSONDecodeError:
                             print(f"[RAW] {text}", flush=True)
+                            conn.sendall(b"ACK\n")
                             continue
 
                         event = obj.get("event", "UNKNOWN")
                         sim_time: Optional[int] = obj.get("sim_time")
                         count = obj.get("count")
+                        source = obj.get("source")
 
                         if event == "TIME_TRIGGER":
-                            if count is not None:
-                                print(f"[TIME_TRIGGER] count={count} sim_time={sim_time}", flush=True)
-                            else:
-                                print(f"[TIME_TRIGGER] sim_time={sim_time}", flush=True)
+                            print(
+                                f"[TIME_TRIGGER] source={source} count={count} sim_time={sim_time} -> sleeping 3 seconds",
+                                flush=True,
+                            )
+                            time.sleep(3)
+                            print("[TIME_TRIGGER] sending ACK", flush=True)
+                            conn.sendall(b"ACK\n")
                         else:
                             print(f"[{event}] {obj}", flush=True)
+                            conn.sendall(b"ACK\n")
 
         return 0
 

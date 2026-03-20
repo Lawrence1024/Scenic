@@ -40,6 +40,7 @@ from .modeldesk.routes import set_route as routes_set_route
 from .controldesk import session as cd_session
 from .geometry.params import get_map_path
 from .steer_io import road_rad_to_dspace_value, log_startup_once, DELTA_MAX_RAD, THETA_SW_MAX_DEG, R
+from .cosim.veos_cosim_ipc_bridge.python_listener.sync_step_bridge import SyncStepBridge
 print(f"[PatchID] simulator.py loaded from {__file__}")
 
 # dSPACE path for simulated time (read on each control step and logged)
@@ -77,6 +78,8 @@ class DSpaceSimulation(RacingSimulation):
         self._road_index = None   # parsed from XODR or RD
         self._coordinate_transform = None  # Unused; map is single source (RD-aligned)
         self._ego_created = False  # Track if ego vehicle was created
+        self._sync_bridge = None
+        self._sync_bridge_connected_once = False
         
         # dSPACE two-phase architecture
         self._modeldesk_app = None  # ModelDesk COM application
@@ -319,6 +322,12 @@ class DSpaceSimulation(RacingSimulation):
                 print("[ModelDesk] Reset after Download.")
             except Exception as e:
                 print(f"[ModelDesk] Reset after Download failed: {e}")
+
+        # 8) Initialize SyncStepBridge for VEOS CoSim synchronization
+        self._sync_bridge = SyncStepBridge(host="127.0.0.1", port=50555)
+        self._sync_bridge.start()
+        print("[CoSimSync] SyncStepBridge listening on 127.0.0.1:50555")
+        print("[CoSimSync] Waiting for VEOS IPC client will happen on first Scenic step.")
 
         # 8) Connect ControlDesk and initialize VesiInterface (single connection before reset)
         self._cd = cd_session.connect_and_prepare(self)
@@ -1280,6 +1289,32 @@ class DSpaceSimulation(RacingSimulation):
         """Execute one simulation step: call RTA step, poll until simulated time has advanced; retry up to max_retries if the advance does not register in the poll window (no explicit wait for dSPACE readiness)."""
         _t0 = time.perf_counter()
 
+        # New synchronous VEOS path
+        if self._sync_bridge is not None:
+            try:
+                # First step: wait for the external VEOS IPC client to connect.
+                if not self._sync_bridge_connected_once:
+                    wait_t0 = time.perf_counter()
+                    self._sync_bridge.wait_connected(timeout=30.0)
+                    self._sync_bridge_connected_once = True
+                    print("[CoSimSync] VEOS IPC client connected; switching Scenic to synchronous stepping.")
+                    self._timing_last['step_time_waiting_ready'] = time.perf_counter() - wait_t0
+                else:
+                    self._timing_last['step_time_waiting_ready'] = 0.0
+
+                # One Scenic step == release one blocked VEOS TIME_TRIGGER, then wait until VEOS
+                # blocks again at the next TIME_TRIGGER.
+                step_t0 = time.perf_counter()
+                self._sync_bridge.step(timeout=max(10.0, 5.0 * float(self.timestep)))
+                self._timing_last['step_time_ready_until_call'] = 0.0
+                self._timing_last['step_time_call_until_advance'] = time.perf_counter() - step_t0
+                self._timing_last['step_time'] = time.perf_counter() - _t0
+                return
+            except Exception as e:
+                print(f"[Step] Sync bridge step failed: {e}")
+                raise
+        
+        # Fallback old path
         t_before = None
         if self._var_access:
             try:
@@ -1480,7 +1515,15 @@ class DSpaceSimulation(RacingSimulation):
                 print("[Timing] MAPort per-path timing (get_var/set_var) below:")
             self._var_access.print_timing_summary()
 
-        # 3) MAPort teardown
+        # 3) SyncStepBridge teardown
+        if self._sync_bridge is not None:
+            try:
+                self._sync_bridge.close()
+            finally:
+                self._sync_bridge = None
+                self._sync_bridge_connected_once = False
+
+        # 4) MAPort teardown
         if self._maport is not None:
             print("[VarAccess] Teardown: disposing MAPort (variable backend was MAPort).")
             try:
@@ -1488,6 +1531,7 @@ class DSpaceSimulation(RacingSimulation):
             except Exception:
                 pass
             self._maport = None
+
         super().destroy()
 
     def getRacingControllers(self, agent, use_mpc=False, mpc_config_path=None):

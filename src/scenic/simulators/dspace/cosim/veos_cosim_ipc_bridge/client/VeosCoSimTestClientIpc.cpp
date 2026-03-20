@@ -12,7 +12,6 @@
 #include <windows.h>
 
 namespace {
-std::atomic<uint64_t> g_timeTriggerCount{0};
 std::atomic<uint64_t> g_timeTriggerCmdCount{0};
 
 TcpEventClient g_ipc;
@@ -35,26 +34,32 @@ const char* SeverityToString(VeosCoSim_Severity severity) {
     }
 }
 
+std::string EscapeJson(const std::string& s) {
+    std::ostringstream oss;
+    for (char c : s) {
+        switch (c) {
+            case '\\': oss << "\\\\";
+                break;
+            case '"': oss << "\\\"";
+                break;
+            case '\n': oss << "\\n";
+                break;
+            case '\r': oss << "\\r";
+                break;
+            case '\t': oss << "\\t";
+                break;
+            default: oss << c;
+                break;
+        }
+    }
+    return oss.str();
+}
+
 bool SendJsonLine(const std::string& json) {
     if (!g_ipcEnabled || !g_ipc.IsConnected()) {
         return false;
     }
     return g_ipc.SendLine(json + "\n");
-}
-
-std::string EscapeJson(const std::string& s) {
-    std::ostringstream oss;
-    for (char c : s) {
-        switch (c) {
-            case '\\': oss << "\\\\"; break;
-            case '"':  oss << "\\\""; break;
-            case '\n': oss << "\\n"; break;
-            case '\r': oss << "\\r"; break;
-            case '\t': oss << "\\t"; break;
-            default:   oss << c; break;
-        }
-    }
-    return oss.str();
 }
 
 void SendHello() {
@@ -79,38 +84,26 @@ void LogCallback(VeosCoSim_Severity severity, const char* message) {
 }
 
 void OnStartCallback(VeosCoSim_Time simTime, void*) {
-    std::cout << "[ipc] START callback sim_time=" << simTime << std::endl;
-
     std::ostringstream oss;
     oss << "{\"event\":\"START\",\"sim_time\":" << simTime << "}";
     SendJsonLine(oss.str());
 }
 
 void OnStopCallback(VeosCoSim_Time simTime, void*) {
-    std::cout << "[ipc] STOP callback sim_time=" << simTime << std::endl;
-
     std::ostringstream oss;
     oss << "{\"event\":\"STOP\",\"sim_time\":" << simTime << "}";
     SendJsonLine(oss.str());
 }
 
 void OnTerminateCallback(VeosCoSim_Time simTime, void*) {
-    std::cout << "[ipc] TERMINATE callback sim_time=" << simTime << std::endl;
-
     std::ostringstream oss;
     oss << "{\"event\":\"TERMINATE\",\"sim_time\":" << simTime << "}";
     SendJsonLine(oss.str());
 }
 
 void OnTimeTriggerCallback(VeosCoSim_Time simTime, void*) {
-    const auto count = ++g_timeTriggerCount;
-
-    std::cout << "[ipc] TIME_TRIGGER callback count=" << count
-              << " sim_time=" << simTime << std::endl;
-
     std::ostringstream oss;
-    oss << "{\"event\":\"TIME_TRIGGER\",\"source\":\"callback\",\"sim_time\":" << simTime
-        << ",\"count\":" << count << "}";
+    oss << "{\"event\":\"TIME_TRIGGER_CALLBACK\",\"sim_time\":" << simTime << "}";
     SendJsonLine(oss.str());
 }
 
@@ -211,7 +204,28 @@ int main(int argc, char** argv) {
             break;
         }
 
-        if (command == VeosCoSim_Command_Start) {
+        if (command == VeosCoSim_Command_TimeTrigger) {
+            const auto cmdCount = ++g_timeTriggerCmdCount;
+
+            std::cout << "[ipc] Command TIME_TRIGGER count=" << cmdCount
+                      << " sim_time=" << simTime
+                      << " -> waiting for Scenic STEP before FinishCommandMI"
+                      << std::endl;
+
+            std::ostringstream oss;
+            oss << "{\"event\":\"TIME_TRIGGER\",\"source\":\"command\",\"sim_time\":" << simTime
+                << ",\"count\":" << cmdCount << "}";
+
+            bool ok = g_ipc.SendAndWaitLine(oss.str(), "STEP");
+
+            if (ok) {
+                std::cout << "[ipc] Scenic STEP received for TIME_TRIGGER count="
+                          << cmdCount << std::endl;
+            } else {
+                std::cout << "[ipc] Scenic STEP FAILED for TIME_TRIGGER count="
+                          << cmdCount << std::endl;
+            }
+        } else if (command == VeosCoSim_Command_Start) {
             std::cout << "[ipc] Command START sim_time=" << simTime << std::endl;
             std::ostringstream oss;
             oss << "{\"event\":\"START_CMD\",\"sim_time\":" << simTime << "}";
@@ -226,23 +240,9 @@ int main(int argc, char** argv) {
             std::ostringstream oss;
             oss << "{\"event\":\"TERMINATE_CMD\",\"sim_time\":" << simTime << "}";
             SendJsonLine(oss.str());
-        } else if (command == VeosCoSim_Command_TimeTrigger) {
-            const auto cmdCount = ++g_timeTriggerCmdCount;
-
-            std::cout << "[ipc] Command TIME_TRIGGER count=" << cmdCount
-                      << " sim_time=" << simTime << std::endl;
-
-            std::ostringstream oss;
-            oss << "{\"event\":\"TIME_TRIGGER\",\"source\":\"command\",\"sim_time\":" << simTime
-                << ",\"count\":" << cmdCount << "}";
-            SendJsonLine(oss.str());
         } else {
             std::cout << "[ipc] Command OTHER value=" << static_cast<int>(command)
                       << " sim_time=" << simTime << std::endl;
-            std::ostringstream oss;
-            oss << "{\"event\":\"OTHER_CMD\",\"command\":" << static_cast<int>(command)
-                << ",\"sim_time\":" << simTime << "}";
-            SendJsonLine(oss.str());
         }
 
         VeosCoSim_Result finishResult = VeosCoSim_FinishCommandMI(handle);

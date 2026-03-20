@@ -15,6 +15,8 @@ public:
     bool IsConnected() const;
 
     bool SendLine(const std::string& line);
+    bool ReceiveLine(std::string& outLine);
+    bool SendAndWaitLine(const std::string& line, const std::string& expectedReply);
 
 private:
     SOCKET sock_;

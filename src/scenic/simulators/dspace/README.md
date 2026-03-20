@@ -1,211 +1,291 @@
 # dSPACE Simulator Integration
 
-This folder contains the **dSPACE simulator integration** for Scenic: how the racing domain connects to dSPACE ModelDesk/ControlDesk, including vehicle placement, coordinate transformation, control application (ego and fellow), and steering IO. The integration follows the [racing control contract](../../domains/racing/README.md#control-contract) so that steering units and constants are consistent with the racing library.
+This folder contains the Scenic-side integration for dSPACE, including:
 
----
+- the main `DSpaceSimulation` implementation
+- ModelDesk / ControlDesk integration
+- coordinate and route projection helpers
+- steering and vehicle-control IO
+- the CoSim synchronization hook used to make VEOS step in lock-step with Scenic
 
-## Overview
+This README is for:
 
-The dSPACE backend provides:
-
-- **Racing simulation:** `DSpaceSimulation` extends `RacingSimulation`; overrides `getRacingControllers(agent, use_mpc=..., mpc_config_path=...)` and sets `agent._racing_steer_units` so the write path knows whether steering is in radians (MPC) or normalized [-1, 1] (PID).
-- **Vehicle placement:** XODR → RD coordinate transform, route detection (Pit/Lap), projection to (s,t), placement in ModelDesk, readback comparison.
-- **Control application:** Ego: throttle/brake/steering from `_control_state` → VesiInterface (throttle %, brake, steering wheel deg). Fellow: throttle/brake/steering → physics model → velocity and deviation written to External_Signals.
-- **Steering IO:** Single place for rad → steering wheel deg: `steer_io.road_rad_to_dspace_value()`. Constants from `scenic.domains.racing.constants`.
-
----
-
-## Racing integration
-
-### Control contract
-
-- **Steering units:** PID path outputs normalized [-1, 1]; MPC path outputs road wheel angle in **radians**. The simulator interprets `_control_state['steering']` using `agent._racing_steer_units` (`'rad'` or `'normalized'`), set by `getRacingControllers` when controllers are created.
-- **Ego:** If `_racing_steer_units == 'rad'`, treat value as rad and pass to `road_rad_to_dspace_value(delta_rad)`. Otherwise treat as [-1, 1] and convert: `delta_rad = steer * DELTA_MAX_RAD`, then `road_rad_to_dspace_value(delta_rad)`.
-- **Fellow:** Physics model expects steering in [-1, 1]. When `_racing_steer_units == 'rad'`, convert rad → normalized before calling physics.
-- **Constants:** `DELTA_MAX_RAD`, `THETA_SW_MAX_DEG`, `R` are defined in `scenic.domains.racing.constants`; `steer_io` imports them. Do not hardcode 0.2816 or 240 elsewhere.
-
-See [racing README – Control contract](../../domains/racing/README.md#control-contract).
-
-### Steering IO (single conversion point)
-
-Ego steering is always in **road wheel angle (radians)** by the time it is written. The **only** place that converts rad → steering wheel deg (e.g. ±240°) is **`steer_io.py`** via `road_rad_to_dspace_value()`. Do not add scaling or 240 elsewhere.
-
-- **PID path:** Behavior outputs [-1, 1]; `vehicle/controller.py` converts to rad with `steer * DELTA_MAX_RAD`, then calls `road_rad_to_dspace_value(delta_rad)`.
-- **MPC path:** Behavior outputs rad; controller passes rad through to `road_rad_to_dspace_value(delta_rad)`.
-
-**Key files:** `steer_io.py`, `vehicle/controller.py` (apply_ego_control, apply_fellow_control).
-
----
-
-## Coordinate transformation and placement
-
-**Scenic vs dSPACE frames:**
-- **Position:** The map is RD-aligned, so Scenic (x, y) and the road index (and dSPACE placement) share the same Cartesian frame. No position transform is applied.
-- **Orientation:** Scenic uses **ENU** (North = 0°, yaw from North). dSPACE ModelDesk uses **RD** (East = 0°). When writing vehicle orientation to ModelDesk we convert: `dspace_yaw = scenic_yaw - π/2`. Readback may apply a 180° flip (see `controldesk/readback.py`) because ModelDesk orients vehicles backward along the track.
-
-Placement flow:
-1. **Route detection:** Determine if vehicle is on pitLane or mainRacing road.
-2. **World → (s,t):** Project Scenic (x, y) to route-relative (s, t) using the map’s road index.
-3. **Placement:** Set (s, t) and orientation in ModelDesk (orientation converted ENU → RD as above).
-4. **Readback:** Read actual position from ControlDesk and compare with expected.
-
-**Racing-library (s,t) semantics:** For fellows specified relative to ego (ahead/behind/left/right), you can set `_racing_st_offset` so (s,t) is computed from ego's (s,t) instead of projecting world position: **ahead/behind** → keep t, move s; **left/right** → keep s, move t. Use `with _racing_st_offset ('ahead', 5)` or `('right', 2)` or raw `(delta_s, delta_t)` e.g. `(5, 0)` or `(0, -2)` (positive t = left, negative t = right). Same route as ego is used.
-
-**Out-of-bounds:** (s,t) are never clamped to track bounds. If a Scenic position projects to a large |t| (e.g. vehicle off the track), that (s,t) is sent to ModelDesk as-is so the car is placed out of bounds rather than estimated onto the track.
-
-**TTL vs XODR:** TTL centerlines are used for projection only when the scenario sets `param ttlFolder`. Otherwise the XODR-based road index is used so (s,t) matches the track (avoids large |t| when mainTrack is from XODR). **Route-filtered projection:** For a given route (Lap vs Pit), (s,t) is computed on the road that belongs to that route (e.g. Lap → main road only), so vehicles are never projected onto the wrong road.
-
-**Key files:**
-- `geometry/coordinate_transform.py` – XODR ↔ RD transformation
-- `geometry/route_projection.py` – RD → route-specific (s,t) projection
-- `geometry/route_mapping.py` – Route detection (pitLane vs mainRacing)
-- `modeldesk/placement.py` – Vehicle placement in ModelDesk
-- `controldesk/readback.py` – Position readback from ControlDesk
-
-### GPS ↔ dSPACE local (and to Scenic XODR)
-
-A **GPS ↔ dSPACE local** transform is available for converting between GNSS (lon, lat) and dSPACE Cartesian (x, y). It is calibrated from a run that produced `gps_dspace_table.csv` (ego x, y, z, heading plus GNSS Longitude_deg, Latitude_deg, Heading_deg from GPS_CALC).
-
-- **Calibration:** After a run, fit and save calibration (from repo root):
-  ```bash
-  python src/scenic/simulators/dspace/converters/fit_gps_dspace_calibration.py
-  ```
-  Default: reads `gps_dspace_table.csv` from `src/scenic/simulators/dspace/converters/`, writes `src/scenic/simulators/dspace/geometry/gps_dspace_calibration.json`.
-
-- **Usage in code:** The GNSS ↔ Scenic local transform lives in the **racing library** so that the read-in contract is GNSS and conversion is centralized there:
-  ```python
-  from scenic.domains.racing.gnss_transform import load_calibration, GNSSLocalTransform
-
-  cal = load_calibration(Path(".../geometry/gps_dspace_calibration.json"))
-  x_local, y_local = cal.gnss_to_local(longitude_deg, latitude_deg)
-  lon_deg, lat_deg = cal.local_to_gnss(x_local, y_local)
-  ```
-  The map is the single geometry source (RD-aligned); dSPACE (x, y) are in the same frame as Scenic positions.
-
-- **Racing library:** GNSS ↔ Scenic local transform lives in `scenic.domains.racing.gnss_transform` so the racing library enforces that read-in can be GNSS; conversion to Scenic local is done there. When **use_gnss_readback** is enabled (scene param), dSPACE reads GNSS and uses the racing transform to get (x, y, heading) in Scenic frame; z and velocity are still read from dSPACE. Set `param use_gnss_readback = True` and optionally `param gnss_calibration_path = localPath('...')` (default: `dspace/geometry/gps_dspace_calibration.json`). **Ego** uses `Environment/Road/PlantModel/GPS_POSITION/GPS_CALC`; **Fellows** use `VesiInterface/VehicleSensors/ground_truth/GPS_POSITION/GPS_CALC` with indexed signals `Longitude_deg[i]`, `Latitude_deg[i]`, `Heading_deg[i]` (see `controldesk/readback.py`).
-
-- **Round-trip verify:** Ensures Scenic → (place) → read GPS → GPS→dSPACE → dSPACE→Scenic matches the initial Scenic position:
-  ```bash
-  python src/scenic/simulators/dspace/converters/verify_gps_round_trip.py
-  ```
-  With the current table (no `x_rd`/`y_rd`), this checks GPS ↔ Scenic (x_dspace, y_dspace) only. After a run that collects raw dSPACE RD, the CSV will include `x_rd`, `y_rd`; then run `fit_gps_dspace_calibration.py --rd` to produce `gps_rd_calibration.json`, and the verify script will run the full chain (Scenic → RD → GPS → RD → Scenic).
-
-**Key files:** Racing library `scenic.domains.racing.gnss_transform`; calibration JSON (e.g. `dspace/geometry/gps_dspace_calibration.json`); `converters/fit_gps_dspace_calibration.py`, `converters/verify_gps_round_trip.py`.
-
-### Segment map: OpenDRIVE (default) vs centerline TTLs
-
-By default, the segment map (curve/straight, main/pit) is built from the **OpenDRIVE track**. When the OpenDRIVE file is flawed (e.g. does not match the dSPACE visualization), you can switch to building segments from the **two centerline TTLs** only (no map), so logging and ring-strict logic still work.
-
-- **Param:** `param ttlFolder = localPath('../../assets/ttls/LS_ENU_TTL_CSV')`  
-  When set, both the segment map and mainTrack/pitTrack regions use TTL centerlines (`ttl_main_road.csv`, `ttl_pitlane.csv`). When not set, both use OpenDRIVE. Same segment structure and parsing downstream.
-
----
-
-## Logging and debugging
-
-### Transformation chain logs
-
-During placement, each vehicle logs:
-```
-[VehicleName] XODR: (x, y) → RD: (x, y) → Route RouteName (s=s_val, t=t_val)
-```
-**Location:** `modeldesk/placement.py` – `place_ego()`, `place_fellow()`.
-
-### Readback comparison logs
-
-On first readback:
-```
-[VehicleName Readback] RD: (actual_rd) [expected: (expected_rd), error: X.XXXm]
-[VehicleName Readback] XODR: (actual_xodr) [expected: (expected_xodr), error: X.XXXm]
-```
-**Location:** `controldesk/readback.py` – `read_ego_state()`, `read_fellow_state()`.
-
-### Removed / reduced logs
-
-Verbose messages (e.g. “Creating EGO/FELLOW vehicle”, step-by-step ControlDesk connection) have been removed or reduced to keep logs focused.
-
----
-
-## ControlDesk variable access and step polling
-
-When the simulator waits for simulated time to reach the step deadline, it polls `get_var(SIMULATED_TIME_PATH)` in a loop. This has implications for timeout tuning:
-
-- **`get_var` latency:** Each call to `get_var` (ControlDesk/COM) takes approximately **2–3 ms** per read. This dominates the polling loop cost (in addition to the 1 ms `sleep(0.001)` per iteration).
-- **Sleep counter vs. wall timeout:** With `poll_timeout_wall = 10 × timestep` and `timestep = 0.01` s (so 0.1 s timeout), each iteration is ~3.5 ms (get_var + sleep). The loop therefore runs about **28–29 iterations** before the wall timeout. When a retry is logged (deadline not reached in time), the last printed `sleep_counter` is typically **26–29**. If you see a much lower sleep_counter, something else (e.g. an exception or early exit) is occurring; if you see a much higher one, get_var may be faster than 2–3 ms in your setup.
-
-Use these numbers when choosing `poll_timeout_wall`: allow enough wall time for the sim to advance one timestep, given that each poll iteration costs ~2–3 ms plus the 1 ms sleep.
-
-- **No explicit wait for dSPACE readiness:** The simulator does **not** wait for dSPACE to be "ready" before or after a step. It calls `advance_simulation_step()`, then polls until simulated time has advanced (or the poll window times out). If the effect is seen during the poll, the step is done. If not, the advance is assumed not to have been accepted (dSPACE not ready), and the simulator retries: it calls `advance_simulation_step()` again and polls again, up to **max_retries** (default 10). Timing breakdown uses **step_time_waiting_ready** (time on failed attempts) and **step_time_ready_until_advance** (time from start of the winning attempt’s poll until the deadline is seen).
-
-- **COM (ControlDesk) timing:** Per-path timing for the ControlDesk/COM backend is not printed at teardown. COM is used mainly for **setup** (e.g. maneuver start, activation flags); the heavy per-step variable traffic uses MAPort. COM timing is negligible in the long run, so it is omitted from the default timing summary.
-
----
-
-## Known limitations
-
-- **T-coordinate (lateral deviation):** ModelDesk may ignore lateral deviation settings for ego and fellows (centerline placement). This is a dSPACE ModelDesk configuration issue. See `debug_ego_cord/README.md`, `debug_route_code/README.md`.
-- **Simulation control:** The simulator pauses the dSPACE run immediately after starting the maneuver (step 10b) so that variable setup time (COM/MAPort, readback, warmup) does not advance simulated time. Warmup and the main loop use step-by-step advance (SingleStep). This keeps `t_start` and initial state consistent across runs regardless of how long dSPACE takes to connect.
-
----
-
-## Running a scenario
-
-1. Activate virtual environment (e.g. `venv/Scripts/Activate.ps1`).
-2. Run Scenic with the dSPACE racing model, e.g.:
-   ```powershell
-   scenic examples/racing/fellow_fixed_placing.scenic --2d --model scenic.simulators.dspace.racing_model --simulate --time 10
-   ```
-3. Check logs for transformation chain, readback errors, and (if applicable) steering/control.
-
----
-
-## File structure
-
-```
-src/scenic/simulators/dspace/
-├── README.md                    # This file
-├── simulator.py                 # DSpaceSimulation, getRacingControllers override, executeActions
-├── steer_io.py                  # road_rad_to_dspace_value; only place for rad → steering wheel deg
-├── actions.py                   # SetVehicleControl (dSPACE-specific); steer doc per racing README control contract
-├── vehicle/
-│   ├── controller.py            # apply_ego_control (throttle/brake/steer by _racing_steer_units), apply_fellow_control
-│   └── physics.py               # Fellow kinematic model (steering in [-1, 1])
-├── geometry/
-│   ├── coordinate_transform.py  # XODR ↔ RD
-│   ├── route_projection.py      # RD → (s,t)
-│   └── route_mapping.py         # Route detection
-├── modeldesk/
-│   └── placement.py            # place_ego, place_fellow (with transformation logs)
-├── controldesk/
-│   └── readback.py             # read_ego_state, read_fellow_state (with readback logs)
-└── create_new_ttl/             # TTL tooling: generate/close/visualize racing and pitlane TTLs
-    ├── README.md                # Full usage and script index
-    ├── combine_and_compare_ttl.py
-    ├── find_xodr_for_st_coordinates.py
-    ├── generate_racing_line.py
-    ├── close_ttl_loop.py
-    └── ...                      # See create_new_ttl/README.md
+```text
+src/scenic/simulators/dspace/README.md
 ```
 
 ---
 
-## TTL tooling
+## What this folder is responsible for
 
-Scripts for generating and validating target trajectory lines (TTLs) live in **`create_new_ttl/`**. Run them from the **Scenic repository root**, e.g.:
+At a high level, the dSPACE backend is responsible for four things:
 
-```bash
-python src/scenic/simulators/dspace/create_new_ttl/combine_and_compare_ttl.py
-python src/scenic/simulators/dspace/create_new_ttl/visualize_combined_ttl.py --overlap
-```
+1. **Simulator lifecycle**
+   - creating and destroying the dSPACE-backed simulation
+   - coordinating ModelDesk / ControlDesk / MAPort setup
+   - managing step execution
 
-See **`create_new_ttl/README.md`** for the full script index and usage.
+2. **Vehicle placement**
+   - projecting Scenic world positions into route-relative `(s, t)`
+   - placing ego and fellow vehicles in ModelDesk
+   - comparing expected placement with ControlDesk readback
+
+3. **Control application**
+   - applying ego throttle / brake / steering
+   - applying fellow control through the physics model
+   - converting steering units consistently
+
+4. **CoSim synchronization**
+   - hosting the Python-side step gate used by VEOS CoSim
+   - allowing Scenic to become the pacing master for simulation stepping
 
 ---
 
-## Related documentation
+## Important folders and files
 
-- [Racing README – Control contract](../../domains/racing/README.md#control-contract) – Steering units, constants, simulator contract.
-- [Racing domain README](../../domains/racing/README.md) – Full racing reference (objects, actions, behaviors, simulator implementation).
-- [MPC README](../../domains/racing/mpc/README.md) – MPC formulation, config, wiring; MPC output in rad.
-- [Segments README](../../domains/racing/segments/README.md) – Racing library structure and segment map.
-- `debug_cord_code/README.md`, `debug_ego_cord/README.md`, `debug_route_code/README.md` – Route and coordinate debugging.
+### Main simulation entry point
+
+- `simulator.py`
+  - contains `DSpaceSimulation`
+  - this is the most important file on the Scenic side
+  - if stepping behavior changes, this is usually the first file to inspect
+
+### Steering conversion
+
+- `steer_io.py`
+  - the single conversion point for road-wheel radians → dSPACE steering value
+
+### Vehicle control
+
+- `vehicle/controller.py`
+  - ego control application
+  - fellow control application
+- `vehicle/physics.py`
+  - fellow kinematic model
+
+### Coordinate and route logic
+
+- `geometry/coordinate_transform.py`
+- `geometry/route_projection.py`
+- `geometry/route_mapping.py`
+
+### Placement / readback
+
+- `modeldesk/placement.py`
+- `controldesk/readback.py`
+
+### CoSim integration
+
+- `cosim/`
+  - contains the VEOS CoSim SDK-side material and the IPC bridge
+
+---
+
+## Current stepping model
+
+There are now **two conceptual stepping modes**:
+
+### 1. Legacy / non-blocking step mode
+This is the older approach, where Scenic performs a step and then polls simulated time until the step has advanced.
+
+This mode is still useful for:
+- non-CoSim usage
+- older dSPACE-only workflows
+- debugging ControlDesk timing
+
+### 2. CoSim synchronous step mode
+This is the newer approach used for Scenic ↔ VEOS synchronization.
+
+In this mode:
+
+- Scenic hosts a Python-side synchronization bridge
+- the external IPC-enabled VEOS client connects back to Scenic
+- VEOS blocks on each `TIME_TRIGGER`
+- Scenic explicitly releases exactly one VEOS step
+- VEOS advances one step and blocks again
+- Scenic returns from `step()` only after VEOS is ready for the next step
+
+This is the mode to use when the goal is:
+
+> one Scenic step == one VEOS CoSim step
+
+---
+
+## Where the Scenic-side sync hook lives
+
+The Scenic-side synchronization object is:
+
+```text
+cosim/veos_cosim_ipc_bridge/python_listener/sync_step_bridge.py
+```
+
+This file is not a direct VEOS SDK binding.  
+Instead, it is a **Python coordination layer** that:
+
+- listens for the IPC-enabled CoSim client
+- receives `TIME_TRIGGER` notifications
+- blocks until Scenic releases the next step
+- sends `"STEP"` back to the VEOS-side client
+
+`simulator.py` imports and uses this bridge.
+
+---
+
+## How synchronous stepping works now
+
+### Scenic side
+In `simulator.py`, `DSpaceSimulation` starts `SyncStepBridge`.
+
+When `step()` is called in synchronous mode:
+
+1. Scenic waits until VEOS is blocked at a `TIME_TRIGGER`
+2. Scenic releases exactly one blocked step
+3. VEOS advances
+4. VEOS blocks again at the next `TIME_TRIGGER`
+5. Scenic `step()` returns
+
+### VEOS side
+The external C++ CoSim client:
+- receives `VeosCoSim_Command_TimeTrigger`
+- sends a JSON message over localhost
+- waits for `"STEP"`
+- only then calls `VeosCoSim_FinishCommandMI()`
+
+This makes Scenic the pacing master.
+
+---
+
+## Build / run overview for CoSim sync
+
+The dSPACE simulator folder itself is not where the VEOS client is built.  
+Instead, the VEOS pieces live under:
+
+```text
+src/scenic/simulators/dspace/cosim/
+```
+
+See:
+- `cosim/README.md`
+- `cosim/VeosCoSim_Client/README.md`
+- `cosim/veos_cosim_ipc_bridge/README.md`
+
+---
+
+## Important runtime rule for CoSim sync
+
+When using the synchronous VEOS stepping path:
+
+- Scenic should start first
+- Scenic must open the sync bridge before the IPC client connects
+- then the IPC-enabled VEOS client should be launched
+- only one VEOS client should be connected at a time
+
+Do **not** run both:
+- `VeosCoSimTestClient.exe`
+- `VeosCoSimTestClientIpc.exe`
+
+against the same VEOS server simultaneously.
+
+---
+
+## Practical startup order for Scenic + CoSim sync
+
+### Step 1 — start Scenic
+Launch Scenic normally.
+
+During setup, Scenic should print something like:
+
+```text
+[CoSimSync] SyncStepBridge listening on 127.0.0.1:50555
+```
+
+This means Scenic is ready to accept the IPC client connection.
+
+### Step 2 — start the IPC-enabled CoSim client
+From the IPC bridge build folder, run:
+
+```powershell
+.\VeosCoSimTestClientIpc.exe --host 192.168.100.101 --name CoSimServerScenic --ipc-host 127.0.0.1 --ipc-port 50555
+```
+
+### Step 3 — verify VEOS-side connection
+The IPC client should:
+- connect to Scenic’s sync bridge
+- then connect to the VEOS CoSim server
+- then begin participating in step-by-step synchronization
+
+If VEOS is not ready yet, the client may fail to connect even though Scenic is already listening. In that case, the issue is on the VEOS startup side, not the Python-side sync bridge.
+
+---
+
+## ModelDesk / VEOS notes
+
+In practice, the CoSim workflow also depends on the VEOS application / `.osa` used by ModelDesk.
+
+If ModelDesk fails to download the scenario to VEOS or cannot load the correct application / `.sdf`, the VEOS CoSim server may never become reachable even though Scenic’s sync bridge is running correctly.
+
+So if Scenic shows `CoSimSync` readiness but the IPC client cannot connect to VEOS, check:
+
+- ModelDesk download success
+- VEOS preload / unload logs
+- the selected `.osa`
+- whether the `.osa` supports the intended ModelDesk API / CoSim mode
+
+---
+
+## If you want to modify stepping behavior
+
+The most important files are:
+
+### Scenic-side step orchestration
+- `simulator.py`
+
+### Scenic-side VEOS sync gate
+- `cosim/veos_cosim_ipc_bridge/python_listener/sync_step_bridge.py`
+
+### VEOS-side gate release logic
+- `cosim/veos_cosim_ipc_bridge/client/VeosCoSimTestClientIpc.cpp`
+
+If the system is not stepping synchronously, inspect those three files first.
+
+---
+
+## If you want to modify placement / controls instead
+
+Use these files first:
+
+### placement
+- `modeldesk/placement.py`
+
+### readback
+- `controldesk/readback.py`
+
+### ego / fellow control
+- `vehicle/controller.py`
+
+### steering conversion
+- `steer_io.py`
+
+---
+
+## Running Scenic with the dSPACE backend
+
+Typical command:
+
+```powershell
+scenic examples/racing/fellow_fixed_placing.scenic --2d --model scenic.simulators.dspace.racing_model --simulate --time 10
+```
+
+The exact model / scenario can differ, but the general backend entry point remains the same.
+
+---
+
+## Summary
+
+This folder is the Scenic-side control center for dSPACE.
+
+If you are debugging:
+- **placement** → inspect `modeldesk/placement.py`
+- **readback** → inspect `controldesk/readback.py`
+- **control application** → inspect `vehicle/controller.py`
+- **synchronous CoSim stepping** → inspect `simulator.py` and `cosim/veos_cosim_ipc_bridge/`

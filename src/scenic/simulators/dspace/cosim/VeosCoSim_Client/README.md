@@ -2,6 +2,12 @@
 
 This folder contains the vendor VEOS CoSimulation SDK and example client code.
 
+This README is for:
+
+```text
+src/scenic/simulators/dspace/cosim/VeosCoSim_Client/README.md
+```
+
 It is the reference point for:
 - headers
 - static libraries
@@ -51,7 +57,7 @@ These are the reference sources used to build the standard example client.
 
 ## How this folder is used by the rest of the project
 
-The IPC bridge in `veos_cosim_ipc_bridge/` depends on this folder for:
+The IPC bridge in `../veos_cosim_ipc_bridge/` depends on this folder for:
 - SDK includes
 - static library linking
 - example code reference
@@ -96,6 +102,9 @@ This is useful for verifying:
 - the VEOS server is reachable
 - the server name is correct
 - the host is correct
+
+If this EXE cannot connect, the issue is usually not with Scenic’s sync bridge.  
+It usually means the VEOS / ModelDesk side is not ready yet.
 
 ---
 
@@ -152,7 +161,7 @@ Rebuild and run `VeosCoSimTestClient.exe`.
 ### When you want to build a custom client
 Use the same include/lib structure and static library as the working example build.
 
-### When you want Python visibility
+### When you want Python / Scenic visibility
 Do not modify this folder directly.  
 Instead, use the custom code in:
 
@@ -160,7 +169,19 @@ Instead, use the custom code in:
 ..\veos_cosim_ipc_bridge
 ```
 
-That folder wraps the same VEOS client logic with local IPC to Python.
+That folder wraps the same VEOS client logic with local IPC / step synchronization for Scenic.
+
+---
+
+## Relationship to the Scenic sync workflow
+
+In the current Scenic-synchronized setup:
+
+- this folder remains the vendor SDK reference
+- the actual CoSim process used with Scenic is:
+  - `veos_cosim_ipc_bridge/client/build/VeosCoSimTestClientIpc.exe`
+
+The vendor example client is still important because it is the quickest way to verify whether the VEOS CoSim server itself is reachable.
 
 ---
 

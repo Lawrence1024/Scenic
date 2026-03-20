@@ -55,13 +55,50 @@ bool TcpEventClient::IsConnected() const {
 
 bool TcpEventClient::SendLine(const std::string& line) {
     if (sock_ == INVALID_SOCKET) return false;
+
     const char* data = line.c_str();
     int remaining = static_cast<int>(line.size());
+
     while (remaining > 0) {
         int sent = send(sock_, data, remaining, 0);
         if (sent == SOCKET_ERROR || sent == 0) return false;
         data += sent;
         remaining -= sent;
     }
+
     return true;
+}
+
+bool TcpEventClient::ReceiveLine(std::string& outLine) {
+    outLine.clear();
+    if (sock_ == INVALID_SOCKET) return false;
+
+    char ch = 0;
+    while (true) {
+        int received = recv(sock_, &ch, 1, 0);
+        if (received == SOCKET_ERROR || received == 0) {
+            return false;
+        }
+
+        if (ch == '\n') {
+            return true;
+        }
+
+        if (ch != '\r') {
+            outLine.push_back(ch);
+        }
+    }
+}
+
+bool TcpEventClient::SendAndWaitLine(const std::string& line, const std::string& expectedReply) {
+    if (!SendLine(line + "\n")) {
+        return false;
+    }
+
+    std::string reply;
+    if (!ReceiveLine(reply)) {
+        return false;
+    }
+
+    return reply == expectedReply;
 }
