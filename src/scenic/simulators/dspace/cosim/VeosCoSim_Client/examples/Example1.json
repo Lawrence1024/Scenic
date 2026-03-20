@@ -1,0 +1,25 @@
+{
+  "TargetName": "Example1",
+  "SampleTime": 0.001,
+  "NoLoopBackMessages": true,
+  "TcpPort": 27072,
+  "IoInputSignals": [
+    {
+      "Name": "velocity",
+      "DataType": "uint8"
+    },
+    {
+      "Name": "time",
+      "DataType": "uint32",
+      "Length": 5,
+      "IsVariableSized": true
+    }
+  ],
+  "IoOutputSignals": [
+    {
+      "Name": "distance",
+      "DataType": "uint64",
+      "Length": 5
+    }
+  ]
+}

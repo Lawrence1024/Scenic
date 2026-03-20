@@ -1,0 +1,2054 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>VeosCoSim.md</title>
+<meta http-equiv="Content-type" content="text/html;charset=UTF-8">
+
+<style>
+/* https://github.com/microsoft/vscode/blob/master/extensions/markdown-language-features/media/markdown.css */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+body {
+	font-family: var(--vscode-markdown-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif);
+	font-size: var(--vscode-markdown-font-size, 14px);
+	padding: 0 26px;
+	line-height: var(--vscode-markdown-line-height, 22px);
+	word-wrap: break-word;
+}
+
+#code-csp-warning {
+	position: fixed;
+	top: 0;
+	right: 0;
+	color: white;
+	margin: 16px;
+	text-align: center;
+	font-size: 12px;
+	font-family: sans-serif;
+	background-color:#444444;
+	cursor: pointer;
+	padding: 6px;
+	box-shadow: 1px 1px 1px rgba(0,0,0,.25);
+}
+
+#code-csp-warning:hover {
+	text-decoration: none;
+	background-color:#007acc;
+	box-shadow: 2px 2px 2px rgba(0,0,0,.25);
+}
+
+body.scrollBeyondLastLine {
+	margin-bottom: calc(100vh - 22px);
+}
+
+body.showEditorSelection .code-line {
+	position: relative;
+}
+
+body.showEditorSelection .code-active-line:before,
+body.showEditorSelection .code-line:hover:before {
+	content: "";
+	display: block;
+	position: absolute;
+	top: 0;
+	left: -12px;
+	height: 100%;
+}
+
+body.showEditorSelection li.code-active-line:before,
+body.showEditorSelection li.code-line:hover:before {
+	left: -30px;
+}
+
+.vscode-light.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.15);
+}
+
+.vscode-light.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.40);
+}
+
+.vscode-light.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-dark.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.4);
+}
+
+.vscode-dark.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.60);
+}
+
+.vscode-dark.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-high-contrast.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 160, 0, 0.7);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 160, 0, 1);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+img {
+	max-width: 100%;
+	max-height: 100%;
+}
+
+a {
+	text-decoration: none;
+}
+
+a:hover {
+	text-decoration: underline;
+}
+
+a:focus,
+input:focus,
+select:focus,
+textarea:focus {
+	outline: 1px solid -webkit-focus-ring-color;
+	outline-offset: -1px;
+}
+
+hr {
+	border: 0;
+	height: 2px;
+	border-bottom: 2px solid;
+}
+
+h1 {
+	padding-bottom: 0.3em;
+	line-height: 1.2;
+	border-bottom-width: 1px;
+	border-bottom-style: solid;
+}
+
+h1, h2, h3 {
+	font-weight: normal;
+}
+
+table {
+	border-collapse: collapse;
+}
+
+table > thead > tr > th {
+	text-align: left;
+	border-bottom: 1px solid;
+}
+
+table > thead > tr > th,
+table > thead > tr > td,
+table > tbody > tr > th,
+table > tbody > tr > td {
+	padding: 5px 10px;
+}
+
+table > tbody > tr + tr > td {
+	border-top: 1px solid;
+}
+
+blockquote {
+	margin: 0 7px 0 5px;
+	padding: 0 16px 0 10px;
+	border-left-width: 5px;
+	border-left-style: solid;
+}
+
+code {
+	font-family: Menlo, Monaco, Consolas, "Droid Sans Mono", "Courier New", monospace, "Droid Sans Fallback";
+	font-size: 1em;
+	line-height: 1.357em;
+}
+
+body.wordWrap pre {
+	white-space: pre-wrap;
+}
+
+pre:not(.hljs),
+pre.hljs code > div {
+	padding: 16px;
+	border-radius: 3px;
+	overflow: auto;
+}
+
+pre code {
+	color: var(--vscode-editor-foreground);
+	tab-size: 4;
+}
+
+/** Theming */
+
+.vscode-light pre {
+	background-color: rgba(220, 220, 220, 0.4);
+}
+
+.vscode-dark pre {
+	background-color: rgba(10, 10, 10, 0.4);
+}
+
+.vscode-high-contrast pre {
+	background-color: rgb(0, 0, 0);
+}
+
+.vscode-high-contrast h1 {
+	border-color: rgb(0, 0, 0);
+}
+
+.vscode-light table > thead > tr > th {
+	border-color: rgba(0, 0, 0, 0.69);
+}
+
+.vscode-dark table > thead > tr > th {
+	border-color: rgba(255, 255, 255, 0.69);
+}
+
+.vscode-light h1,
+.vscode-light hr,
+.vscode-light table > tbody > tr + tr > td {
+	border-color: rgba(0, 0, 0, 0.18);
+}
+
+.vscode-dark h1,
+.vscode-dark hr,
+.vscode-dark table > tbody > tr + tr > td {
+	border-color: rgba(255, 255, 255, 0.18);
+}
+
+</style>
+
+<style>
+/* Tomorrow Theme */
+/* http://jmblog.github.com/color-themes-for-google-code-highlightjs */
+/* Original theme - https://github.com/chriskempson/tomorrow-theme */
+
+/* Tomorrow Comment */
+.hljs-comment,
+.hljs-quote {
+	color: #8e908c;
+}
+
+/* Tomorrow Red */
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-regexp,
+.hljs-deletion {
+	color: #c82829;
+}
+
+/* Tomorrow Orange */
+.hljs-number,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-literal,
+.hljs-type,
+.hljs-params,
+.hljs-meta,
+.hljs-link {
+	color: #f5871f;
+}
+
+/* Tomorrow Yellow */
+.hljs-attribute {
+	color: #eab700;
+}
+
+/* Tomorrow Green */
+.hljs-string,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+	color: #718c00;
+}
+
+/* Tomorrow Blue */
+.hljs-title,
+.hljs-section {
+	color: #4271ae;
+}
+
+/* Tomorrow Purple */
+.hljs-keyword,
+.hljs-selector-tag {
+	color: #8959a8;
+}
+
+.hljs {
+	display: block;
+	overflow-x: auto;
+	color: #4d4d4c;
+	padding: 0.5em;
+}
+
+.hljs-emphasis {
+	font-style: italic;
+}
+
+.hljs-strong {
+	font-weight: bold;
+}
+</style>
+
+<style>
+/*
+ * Markdown PDF CSS
+ */
+
+ body {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif, "Meiryo";
+	padding: 0 12px;
+}
+
+pre {
+	background-color: #f8f8f8;
+	border: 1px solid #cccccc;
+	border-radius: 3px;
+	overflow-x: auto;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+}
+
+pre:not(.hljs) {
+	padding: 23px;
+	line-height: 19px;
+}
+
+blockquote {
+	background: rgba(127, 127, 127, 0.1);
+	border-color: rgba(0, 122, 204, 0.5);
+}
+
+.emoji {
+	height: 1.4em;
+}
+
+code {
+	font-size: 14px;
+	line-height: 19px;
+}
+
+/* for inline code */
+:not(pre):not(.hljs) > code {
+	color: #C9AE75; /* Change the old color so it seems less like an error */
+	font-size: inherit;
+}
+
+/* Page Break : use <div class="page"/> to insert page break
+-------------------------------------------------------- */
+.page {
+	page-break-after: always;
+}
+
+</style>
+
+<script src="https://unpkg.com/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: document.body.classList.contains('vscode-dark') || document.body.classList.contains('vscode-high-contrast')
+          ? 'dark'
+          : 'default'
+    });
+  </script>
+<h1 id="about-this-document">About this document</h1>
+<p>This document shows you how to connect third-party simulators to VEOS 5.4 patch 1 (Release 2022-A) and later to implement co-simulations.</p>
+<h1 id="table-of-contents">Table of Contents</h1>
+<h2 id="introduction"><a href="#Introduction">Introduction</a></h2>
+<h2 id="veoscosim-json-description-file"><a href="#VeosCoSim-JSON-Description-File">VeosCoSim JSON Description File</a></h2>
+<h2 id="veoscosim-server"><a href="#VeosCoSim-Server">VeosCoSim Server</a></h2>
+<h2 id="veoscosim-client"><a href="#VeosCoSim-Client">VeosCoSim Client</a></h2>
+<h2 id="example"><a href="#Example">Example</a></h2>
+<h2 id="tcp-ports"><a href="#TCP-Ports">TCP Ports</a></h2>
+<h2 id="performance-measurement"><a href="#Performance-Measurement">Performance Measurement</a></h2>
+<h2 id="extended-trace-logging"><a href="#ExtendedTraceLogging">Extended Trace Logging</a></h2>
+<h2 id="veoscosim-client-api-reference"><a href="#VeosCoSim-Client-API-Reference">VeosCoSim Client API Reference</a></h2>
+<div id="Introduction" />
+<h1 id="introduction">Introduction</h1>
+<p>Offline simulations running on VEOS can be coupled with third-party simulators, such as Simulink®, or instruction set simulators.</p>
+<p><img src="./images/abstract.drawio.svg" alt="abstract.drawio.svg"></p>
+<h2 id="overall-simulation-time">Overall Simulation Time</h2>
+<p>In a co-simulation scenario, the VEOS Simulator provides the overall simulation time, including the current simulation state, to the connected third-party simulators - the co-simulation participants.
+As a consequence, the participants have to react to the simulation time and state provided by the VEOS Simulator. They cannot influence or drive the simulation state.</p>
+<h2 id="communication">Communication</h2>
+<p>The communication between the VEOS Simulator and the co-simulation participants is based on TCP.</p>
+<h2 id="veoscosim">VeosCoSim</h2>
+<p>VEOS provides the VeosCoSim co-simulation interface that is based on a client-server architecture:</p>
+<ul>
+<li>Each participant contains a VeosCoSim client.</li>
+<li>The VEOS Simulator provides one VeosCoSim server for each VeosCoSim client.</li>
+</ul>
+<p><img src="./images/concrete.drawio.svg" alt="concrete.drawio.svg"></p>
+<h2 id="integrating-the-veoscosim-client">Integrating the VeosCoSim Client</h2>
+<p>The VeosCoSim client is distributed as a plain C API and a pre-compiled static library. To integrate the client into the simulation, you have to compile and link the header file and the pre-compiled lib to a binary that connects the VeosCoSim client to the third-party simulator's API.</p>
+<p><img src="./images/client-build.drawio.svg" alt="client-build.drawio.svg"></p>
+<h2 id="integrating-the-veoscosim-server">Integrating the VeosCoSim Server</h2>
+<p>To integrate the VeosCoSim server into the VEOS Simulator, you have to create and configure a VeosCoSim JSON description file, and generate a BSC file from it by using the <strong>VeosCoSimBscGenerator</strong>.
+The <a href="#VeosCoSim-Server">VeosCoSimBscGenerator</a> is a command line utility that generates a VeosCoSim BSC containing a VeosCoSim server from a VeosCoSim JSON file.</p>
+<p><img src="./images/server-build.drawio.svg" alt="server-build.drawio.svg"></p>
+<div id="VeosCoSim-JSON-Description-File" />
+<h2 id="remarks">Remarks</h2>
+<p>VeosCoSim requires at least VEOS 5.4 patch 1 (Release 2022-A).</p>
+<h1 id="veoscosim-json-description-file">VeosCoSim JSON Description File</h1>
+<p>To configure the VeosCoSim server for a specific co-simulation participant, the co-simulation interface must be described in a participant-specific VeosCoSim JSON description file.
+You have to specify:</p>
+<ul>
+<li>General information.</li>
+<li>Bus-type-specific information.</li>
+<li>I/O signal-specific information.</li>
+</ul>
+<p>Below is an annotated example:</p>
+<pre class="hljs"><code><div>{
+  <span class="hljs-comment">// The name of the generated BSC.</span>
+  <span class="hljs-comment">// Must be unique in an OSA.</span>
+  <span class="hljs-comment">// This parameter is mandatory.</span>
+  <span class="hljs-attr">"TargetName"</span>: <span class="hljs-string">"Generic_Bridge"</span>,
+
+  <span class="hljs-comment">// The synchronization time between VEOS and the participant in seconds.</span>
+  <span class="hljs-comment">// This parameter is mandatory.</span>
+  <span class="hljs-comment">// Every &lt;SampleTime&gt; seconds of the virtual simulation time,</span>
+  <span class="hljs-comment">// bus messages and I/O signals will be exchanged between</span>
+  <span class="hljs-comment">// VEOS and the participant.</span>
+  <span class="hljs-comment">// Increasing this time interval will speed up the simulation,</span>
+  <span class="hljs-comment">// but bus messages and I/O signals will be exchanged later.</span>
+  <span class="hljs-comment">// Decreasing this time interval will slow down the simulation,</span>
+  <span class="hljs-comment">// but bus messages and I/O signals will be exchanged sooner.</span>
+  <span class="hljs-attr">"SampleTime"</span>: <span class="hljs-number">0.001</span>,
+
+  <span class="hljs-comment">// A value indicating whether bus messages transmitted to VEOS can be received</span>
+  <span class="hljs-comment">// at the next step.</span>
+  <span class="hljs-comment">// This parameter is optional.</span>
+  <span class="hljs-attr">"NoLoopBackMessages"</span>: <span class="hljs-literal">true</span>,
+
+  <span class="hljs-comment">// The TCP port of the VeosCoSim server.</span>
+  <span class="hljs-comment">// This parameter is optional.</span>
+  <span class="hljs-comment">// Specify 0 for a dynamic port.</span>
+  <span class="hljs-attr">"Port"</span>: <span class="hljs-number">0</span>,
+
+  <span class="hljs-comment">// The CAN controllers of the participant.</span>
+  <span class="hljs-comment">// This list is optional.</span>
+  <span class="hljs-attr">"CanControllers"</span>: [
+    {
+      <span class="hljs-comment">// The name of the CAN controller.</span>
+      <span class="hljs-comment">// This parameter is mandatory.</span>
+      <span class="hljs-attr">"Name"</span>: <span class="hljs-string">"CanController1"</span>,
+
+      <span class="hljs-comment">// The baud rate of the CAN controller.</span>
+      <span class="hljs-comment">// Must be positive.</span>
+      <span class="hljs-comment">// This parameter is mandatory.</span>
+      <span class="hljs-comment">// The unit is bits per second.</span>
+      <span class="hljs-attr">"BaudRate"</span>: <span class="hljs-number">500000</span>,
+
+      <span class="hljs-comment">// The data phase baud rate of the CAN controller for CAN FD.</span>
+      <span class="hljs-comment">// Must be positive.</span>
+      <span class="hljs-comment">// This parameter is mandatory.</span>
+      <span class="hljs-comment">// The unit is bits per second.</span>
+      <span class="hljs-attr">"DataPhaseBaudRate"</span>: <span class="hljs-number">2000000</span>,
+
+      <span class="hljs-comment">// The name of the connected CAN channel.</span>
+      <span class="hljs-comment">// This parameter is optional.</span>
+      <span class="hljs-comment">// If it is set, the controller will be connected automatically</span>
+      <span class="hljs-comment">// to other CAN controllers with the same channel name during the</span>
+      <span class="hljs-comment">// import using the VEOS Player.</span>
+      <span class="hljs-attr">"ChannelName"</span>: <span class="hljs-string">"CanChannel1"</span>
+    },
+
+    <span class="hljs-comment">// Further CAN controllers.</span>
+    {
+      <span class="hljs-attr">"Name"</span>: <span class="hljs-string">"CanController2"</span>,
+      <span class="hljs-attr">"BaudRate"</span>: <span class="hljs-number">500000</span>,
+      <span class="hljs-attr">"DataPhaseBaudRate"</span>: <span class="hljs-number">2000000</span>,
+      <span class="hljs-attr">"ChannelName"</span>: <span class="hljs-string">"CanChannel2"</span>
+    }
+  ],
+
+  <span class="hljs-comment">// The LIN controllers of the participant.</span>
+  <span class="hljs-comment">// This list is optional.</span>
+  <span class="hljs-attr">"LinControllers"</span>: [
+    {
+      <span class="hljs-comment">// The name of the LIN controller.</span>
+      <span class="hljs-comment">// This parameter is mandatory.</span>
+      <span class="hljs-attr">"Name"</span>: <span class="hljs-string">"LinController1"</span>,
+
+      <span class="hljs-comment">// The baud rate of the LIN controller.</span>
+      <span class="hljs-comment">// Must be positive.</span>
+      <span class="hljs-comment">// This parameter is mandatory.</span>
+      <span class="hljs-comment">// The unit is bits per second.</span>
+      <span class="hljs-attr">"BaudRate"</span>: <span class="hljs-number">19200</span>,
+
+      <span class="hljs-comment">// The name of the connected LIN channel.</span>
+      <span class="hljs-comment">// This parameter is optional.</span>
+      <span class="hljs-comment">// If it is set, the controller will be connected automatically</span>
+      <span class="hljs-comment">// to other LIN controllers with the same channel name during the</span>
+      <span class="hljs-comment">// import using the VEOS Player.</span>
+      <span class="hljs-attr">"ChannelName"</span>: <span class="hljs-string">"LinChannel1"</span>,
+
+      <span class="hljs-comment">// A value indicating whether the LIN controller is a LIN commander or LIN responder.</span>
+      <span class="hljs-comment">// This parameter is optional.</span>
+      <span class="hljs-comment">// Changing this value will only affect the icon shown in the VEOS Player.</span>
+      <span class="hljs-attr">"IsCommander"</span>: <span class="hljs-literal">true</span>
+    },
+
+    <span class="hljs-comment">// Further LIN controllers.</span>
+    {
+      <span class="hljs-attr">"Name"</span>: <span class="hljs-string">"LinController2"</span>,
+      <span class="hljs-attr">"BaudRate"</span>: <span class="hljs-number">19200</span>,
+      <span class="hljs-attr">"ChannelName"</span>: <span class="hljs-string">"LinChannel2"</span>,
+      <span class="hljs-attr">"IsCommander"</span>: <span class="hljs-literal">false</span>
+    }
+  ],
+
+  <span class="hljs-comment">// The ETH controllers for the participant.</span>
+  <span class="hljs-comment">// This list is optional.</span>
+  <span class="hljs-attr">"EthControllers"</span>: [
+    {
+      <span class="hljs-comment">// The name of the ETH controller.</span>
+      <span class="hljs-comment">// This parameter is mandatory.</span>
+      <span class="hljs-attr">"Name"</span>: <span class="hljs-string">"EthController1"</span>,
+
+      <span class="hljs-comment">// The speed of the ETH controller.</span>
+      <span class="hljs-comment">// Must be positive.</span>
+      <span class="hljs-comment">// This parameter is mandatory.</span>
+      <span class="hljs-comment">// The unit is megabits per second.</span>
+      <span class="hljs-attr">"Speed"</span>: <span class="hljs-number">1000</span>,
+
+      <span class="hljs-comment">// The name of the connected ETH channel.</span>
+      <span class="hljs-comment">// This parameter is optional.</span>
+      <span class="hljs-comment">// If it is set, the controller will be connected automatically</span>
+      <span class="hljs-comment">// to other ETH controllers with the same channel name during the import using the VEOS Player.</span>
+      <span class="hljs-attr">"ChannelName"</span>: <span class="hljs-string">"EthChannel1"</span>
+    },
+
+    <span class="hljs-comment">// Further ETH controllers.</span>
+    {
+      <span class="hljs-attr">"Name"</span>: <span class="hljs-string">"EthController2"</span>,
+      <span class="hljs-attr">"Speed"</span>: <span class="hljs-number">10000</span>,
+      <span class="hljs-attr">"ChannelName"</span>: <span class="hljs-string">"EthChannel2"</span>
+    }
+  ],
+
+  <span class="hljs-comment">// The input signals of the participant.</span>
+  <span class="hljs-comment">// This list is optional.</span>
+  <span class="hljs-attr">"IoInputSignals"</span>: [
+    {
+      <span class="hljs-comment">// The name of the input signal.</span>
+      <span class="hljs-comment">// This parameter is mandatory.</span>
+      <span class="hljs-attr">"Name"</span>: <span class="hljs-string">"MyInput1"</span>,
+
+      <span class="hljs-comment">// The data type of the input signal.</span>
+      <span class="hljs-comment">// This parameter is mandatory.</span>
+      <span class="hljs-comment">// The following values are valid:</span>
+      <span class="hljs-comment">// bool, int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64.</span>
+      <span class="hljs-attr">"DataType"</span>: <span class="hljs-string">"uint32"</span>,
+
+      <span class="hljs-comment">// The name of the input signal group for this signal.</span>
+      <span class="hljs-comment">// This parameter is optional.</span>
+      <span class="hljs-comment">// However, every input signal must have an I/O signal group.</span>
+      <span class="hljs-comment">// If the group name is not specified, it will be set to the name of the VeosCoSim BSC.</span>
+      <span class="hljs-comment">// If Groups is specified, this parameter is discarded.</span>
+      <span class="hljs-attr">"GroupName"</span>: <span class="hljs-string">"MyInputs"</span>,
+
+      <span class="hljs-comment">// The group hierarchy in which the signal shall be placed.</span>
+      <span class="hljs-comment">// This parameter is optional.</span>
+      <span class="hljs-comment">// If it is specified, it will be used and GroupName is discarded.</span>
+      <span class="hljs-attr">"Groups"</span>: [
+        <span class="hljs-string">"SuperGroup"</span>,
+        <span class="hljs-string">"Subgroup"</span>,
+        <span class="hljs-string">"SubSubgroup"</span>
+      ]
+    },
+
+    <span class="hljs-comment">// Further input signals.</span>
+    {
+      <span class="hljs-attr">"Name"</span>: <span class="hljs-string">"MyInput2"</span>,
+      <span class="hljs-attr">"DataType"</span>: <span class="hljs-string">"bool"</span>,
+      <span class="hljs-attr">"GroupName"</span>: <span class="hljs-string">"MyOtherInputs"</span>
+    }
+  ],
+
+  <span class="hljs-comment">// The output signals of the participant.</span>
+  <span class="hljs-comment">// This list is optional.</span>
+  <span class="hljs-attr">"IoOutputSignals"</span>: [
+    {
+      <span class="hljs-comment">// The name of the output signal.</span>
+      <span class="hljs-comment">// This parameter is mandatory.</span>
+      <span class="hljs-attr">"Name"</span>: <span class="hljs-string">"MyOutput1"</span>,
+
+      <span class="hljs-comment">// The data type of the output signal.</span>
+      <span class="hljs-comment">// This parameter is mandatory.</span>
+      <span class="hljs-comment">// The following values are valid:</span>
+      <span class="hljs-comment">// bool, int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64.</span>
+      <span class="hljs-attr">"DataType"</span>: <span class="hljs-string">"uint32"</span>,
+
+      <span class="hljs-comment">// The name of the output signal group for this signal.</span>
+      <span class="hljs-comment">// This parameter is optional.</span>
+      <span class="hljs-comment">// However, every output signal must have a signal group.</span>
+      <span class="hljs-comment">// If the group name is not specified, it will be set to the name of the VeosCoSim BSC.</span>
+      <span class="hljs-comment">// If Groups is specified, this parameter is discarded.</span>
+      <span class="hljs-attr">"GroupName"</span>: <span class="hljs-string">"MyOutputs"</span>,
+
+      <span class="hljs-comment">// The group hierarchy in which the signal shall be placed.</span>
+      <span class="hljs-comment">// This parameter is optional.</span>
+      <span class="hljs-comment">// If it is specified, it will be used and GroupName is discarded.</span>
+      <span class="hljs-attr">"Groups"</span>: [
+        <span class="hljs-string">"SuperGroup"</span>,
+        <span class="hljs-string">"Subgroup"</span>,
+        <span class="hljs-string">"SubSubgroup"</span>
+      ]
+    },
+
+    <span class="hljs-comment">// Further output signals.</span>
+    {
+      <span class="hljs-attr">"Name"</span>: <span class="hljs-string">"MyOutput2"</span>,
+      <span class="hljs-attr">"DataType"</span>: <span class="hljs-string">"bool"</span>,
+      <span class="hljs-attr">"GroupName"</span>: <span class="hljs-string">"MyOtherOutputs"</span>
+    }
+  ]
+}
+</div></code></pre>
+<div id="VeosCoSim-Server" />
+<h1 id="veoscosim-server">VeosCoSim Server</h1>
+<p>To create a VeosCoSim server for a specific participant, you have to generate an intermediate VeosCoSim BSC file
+from the related VeosCoSim JSON description file. You have to use the VeosCoSimBscGenerator for this.</p>
+<p>The generated VeosCoSim BSC is 64-bit only. You can build it for Windows and Linux.</p>
+<h2 id="generating-a-veoscosim-bsc">Generating a VeosCoSim BSC</h2>
+<p>To generate a VeosCoSim BSC, use the following command in the root directory of the extracted VeosCoSim zip:</p>
+<pre class="hljs"><code><div>.\servergenerator\bin\VeosCoSimBscGenerator.exe --input "&lt;VeosCoSim JSON file path&gt;" --output "&lt;VeosCoSim BSC file path&gt;"
+</div></code></pre>
+<h2 id="importing-a-veoscosim-bsc">Importing a VeosCoSim BSC</h2>
+<p>The VeosCoSim BSC can be imported into any OSA file using the VEOS Player or the command line utility veos-build.</p>
+<p>Use the VEOS Player or the command line utility veos-model to connect the I/O signals and the bus controllers of the VeosCoSim BSC
+to other models in the same OSA.</p>
+<p>The utilities VEOS Player and veos-build are only available on Windows, the utility veos-model is available on Windows and Linux.</p>
+<h2 id="starting-a-simulation">Starting a Simulation</h2>
+<p>After loading the OSA file to the simulator, VeosCoSim clients can connect to the VeosCoSim servers.
+Each VeosCoSim server must have exactly one connected VeosCoSim client. Each VeosCoSim client can connect to only one VeosCoSim server.
+If the VEOS simulation was started, the VEOS simulator stays at the virtual simulation time 0 until all VeosCoSim clients are connected.</p>
+<p>If the connection to a VeosCoSim client is closed, the simulation terminates with an error.</p>
+<div id="VeosCoSim-Client" />
+<h1 id="veoscosim-client">VeosCoSim Client</h1>
+<p>You must use the VeosCoSim client to properly connect the co-simulator to the VeosCoSim server.
+To use the VeosCoSim client, include the following C header file:</p>
+<ul>
+<li>.\client\include\VeosCoSim.h</li>
+</ul>
+<p>Also, link one of the following static libraries:</p>
+<ul>
+<li>.\client\x64\Release\lib\VeosCoSimApplStatic.lib (for a 64-bit release executable on Windows)</li>
+<li>.\client\x64\Debug\lib\VeosCoSimApplStatic.lib (for a 64-bit debug executable on Windows)</li>
+<li>.\client\x86\Release\lib\VeosCoSimApplStatic.lib (for a 32-bit release executable on Windows)</li>
+<li>.\client\x86\Debug\lib\VeosCoSimApplStatic.lib (for a 32-bit debug executable on Windows)</li>
+<li>.\client\x64\Release\lib\libVeosCoSimApplStatic.a (for a 64-bit release executable on Ubuntu 18.04)</li>
+<li>.\client\x64\Debug\lib\libVeosCoSimApplStatic.a (for a 64-bit debug executable on Ubuntu 18.04)</li>
+</ul>
+<p>Or one of the following dynamic libraries:</p>
+<ul>
+<li>.\client\x64\Release\lib\VeosCoSimAppl.lib (for a 64-bit release executable on Windows)</li>
+<li>.\client\x64\Debug\lib\VeosCoSimAppl.lib (for a 64-bit debug executable on Windows)</li>
+<li>.\client\x86\Release\lib\VeosCoSimAppl.lib (for a 32-bit release executable on Windows)</li>
+<li>.\client\x86\Debug\lib\VeosCoSimAppl.lib (for a 32-bit debug executable on Windows)</li>
+<li>.\client\x64\Release\lib\libVeosCoSimAppl.so (for a 64-bit release executable on Ubuntu 18.04)</li>
+<li>.\client\x64\Debug\lib\libVeosCoSimAppl.so (for a 64-bit debug executable on Ubuntu 18.04)</li>
+</ul>
+<p><strong>VeosCoSim</strong> provides a simple <a href="#Example">VeosCoSim client example executable</a> that can be used to connect to any VeosCoSim server.
+However, this executable is only intended for demonstrative purposes.</p>
+<h2 id="creating-and-destroying-a-veoscosim-handle">Creating and Destroying a VeosCoSim Handle</h2>
+<p>Before using any other VeosCoSim function, a VeosCoSim handle has to be created by calling the <a href="#VeosCoSim_CreateMI">VeosCoSim_CreateMI</a> function:</p>
+<pre class="hljs"><code><div>VeosCoSim_Handle handle = VeosCoSim_CreateMI();
+</div></code></pre>
+<p>After using VeosCoSim, the handle has to be destroyed by calling the <a href="#VeosCoSim_DestroyMI">VeosCoSim_DestroyMI</a> function:</p>
+<pre class="hljs"><code><div>VeosCoSim_DestroyMI(handle);
+</div></code></pre>
+<h2 id="error-handling">Error Handling</h2>
+<p>Despite <a href="#VeosCoSim_CreateMI">VeosCoSim_CreateMI</a> and <a href="#VeosCoSim_DestroyMI">VeosCoSim_DestroyMI</a> all functions return a value of the <a href="#VeosCoSim_Result">VeosCoSim_Result</a> enumeration.
+The following values are possible:</p>
+<p><strong>VeosCoSim_Result_OK</strong>: The function call was successful.
+<strong>VeosCoSim_Result_Argument</strong>: At least one of the arguments passed to the function was invalid. In this case, the log callback passed to the <a href="#VeosCoSim_ConnectMI">VeosCoSim_ConnectMI</a> function will be called with a specific error message.
+<strong>VeosCoSim_Result_Error</strong>: A serious error occurred with no recovery. After receiving this result, the connection should be closed and the handle should be destroyed.
+<strong>VeosCoSim_Result_Empty</strong>: No more bus message available. This result will only be returned by the bus-related receive functions.
+<strong>VeosCoSim_Result_Full</strong>: No more space left for a new bus message. This result will only be returned by the bus-related transmit functions.</p>
+<h2 id="establishing-and-closing-a-connection">Establishing and Closing a Connection</h2>
+<p>To establish the connection to the VeosCoSim server, call the <a href="#VeosCoSim_ConnectMI">VeosCoSim_ConnectMI</a> function:</p>
+<pre class="hljs"><code><div><span class="hljs-function"><span class="hljs-keyword">void</span> <span class="hljs-title">OnLogCallback</span><span class="hljs-params">(VeosCoSim_Severity severity, <span class="hljs-keyword">const</span> <span class="hljs-keyword">char</span>* <span class="hljs-built_in">text</span>)</span> </span>{
+    <span class="hljs-built_in">printf</span>(<span class="hljs-string">"%s\n"</span>, <span class="hljs-built_in">text</span>);
+}
+
+VeosCoSim_ConnectMI(handle, <span class="hljs-string">"127.0.0.1"</span>, <span class="hljs-string">"Example.VeosCoSim"</span>, OnLogCallback);
+</div></code></pre>
+<p>To log VeosCoSim API call errors, it is recommended to specify the log callback.</p>
+<p>Note: To specify the TCP port refer to <a href="#TCP-Ports">TCP Ports</a>.</p>
+<p>To close the connection to the VeosCoSim server, call the <a href="#VeosCoSim_DisconnectMI">VeosCoSim_DisconnectMI</a> function:</p>
+<pre class="hljs"><code><div>VeosCoSim_DisconnectMI(handle);
+</div></code></pre>
+<p>Note: If the connection is closed during a running simulation, the simulation will terminate with an error.</p>
+<h2 id="running-a-non-blocking-co-simulation">Running a non-blocking Co-Simulation</h2>
+<p>To run the co-simulation, first, it has to be started by calling the <a href="#VeosCoSim_StartNonBlockingMI">VeosCoSim_StartNonBlockingMI</a> function.
+After that, the co-simulation will run by calling the <a href="#VeosCoSim_GetNextCommandMI">VeosCoSim_GetNextCommandMI</a> function and <a href="#VeosCoSim_FinishCommandMI">VeosCoSim_FinishCommandMI</a> function alternately in a loop.</p>
+<pre class="hljs"><code><div>VeosCoSim_RuntimeConfiguration <span class="hljs-built_in">config</span> = {<span class="hljs-number">0</span>};
+
+VeosCoSim_StartNonBlockingMI(handle, <span class="hljs-built_in">config</span>);
+
+<span class="hljs-keyword">while</span> (<span class="hljs-number">1</span>) {
+    VeosCoSim_Time simulationTime = <span class="hljs-number">0</span>;
+    VeosCoSim_Command command = VeosCoSim_Command_None;
+    VeosCoSim_Result result = VeosCoSim_GetNextCommandMI(handle, &amp;simulationTime, &amp;command);
+    <span class="hljs-keyword">if</span> (result == VeosCoSim_Result_Error) {
+        <span class="hljs-comment">// Simulation was unloaded in VEOS or another kind of error occurred.</span>
+        <span class="hljs-comment">// Note: Due to a limitation in VEOS, there is currently no official "end of co-simulation" result.</span>
+        <span class="hljs-keyword">break</span>;
+    }
+
+    <span class="hljs-keyword">switch</span> (command) {
+        <span class="hljs-keyword">case</span> VeosCoSim_Command_Start:
+            <span class="hljs-comment">// Simulation was started in VEOS</span>
+            <span class="hljs-keyword">break</span>;
+        <span class="hljs-keyword">case</span> VeosCoSim_Command_Stop:
+            <span class="hljs-comment">// Simulation was stopped in VEOS</span>
+            <span class="hljs-keyword">break</span>;
+        <span class="hljs-keyword">case</span> VeosCoSim_Command_TimeTrigger:
+            <span class="hljs-comment">// Next simulation time step triggered by VEOS</span>
+            <span class="hljs-keyword">break</span>;
+        <span class="hljs-keyword">default</span>:
+            <span class="hljs-comment">// This should not happen</span>
+            <span class="hljs-keyword">break</span>;
+    }
+
+    VeosCoSim_FinishCommandMI(handle);
+}
+</div></code></pre>
+<h2 id="running-a-blocking-co-simulation">Running a blocking Co-Simulation</h2>
+<p>The co-simulation is handled with callbacks that are passed to the <a href="#VeosCoSim_RunMI">VeosCoSim_RunMI</a> function:</p>
+<pre class="hljs"><code><div><span class="hljs-function"><span class="hljs-keyword">void</span> <span class="hljs-title">OnSimulationStartedCallback</span><span class="hljs-params">(<span class="hljs-keyword">const</span> VeosCoSim_Time time, <span class="hljs-keyword">void</span>* userData)</span> </span>{
+    <span class="hljs-comment">// Will be called when the simulation was started in VEOS</span>
+}
+
+<span class="hljs-function"><span class="hljs-keyword">void</span> <span class="hljs-title">OnSimulationStoppedCallback</span><span class="hljs-params">(<span class="hljs-keyword">const</span> VeosCoSim_Time time, <span class="hljs-keyword">void</span>* userData)</span> </span>{
+    <span class="hljs-comment">// Will be called when the simulation was stopped in VEOS</span>
+}
+
+<span class="hljs-function"><span class="hljs-keyword">void</span> <span class="hljs-title">OnSimulationStepCallback</span><span class="hljs-params">(<span class="hljs-keyword">const</span> VeosCoSim_Time time, <span class="hljs-keyword">void</span>* userData)</span> </span>{
+    <span class="hljs-comment">// Next simulation time step triggered by VEOS</span>
+}
+
+VeosCoSim_RuntimeConfiguration <span class="hljs-built_in">config</span> = {<span class="hljs-number">0</span>};
+<span class="hljs-built_in">config</span>.startSimulationCallback = OnSimulationStartedCallback;
+<span class="hljs-built_in">config</span>.stopSimulationCallback = OnSimulationStoppedCallback;
+<span class="hljs-built_in">config</span>.timeTriggerCallback = OnSimulationStepCallback;
+
+VeosCoSim_RunMI(handle, <span class="hljs-built_in">config</span>);
+</div></code></pre>
+<p>The function will not return until the simulation is unloaded in VEOS or until <a href="#VeosCoSim_DisconnectMI">VeosCoSim_DisconnectMI</a> is called.
+Note:</p>
+<ul>
+<li>Due to a current limitation in VEOS, the <a href="#VeosCoSim_RunMI">VeosCoSim_RunMI</a> function always returns <a href="#VeosCoSim_Result">VeosCoSim_Result_Error</a>.</li>
+<li>All callbacks are optional, however, it does not make sense not to register callbacks.</li>
+</ul>
+<h2 id="state-change-callbacks">State Change Callbacks</h2>
+<p>The state change callbacks are called each time the VEOS simulator changes its state.</p>
+<ul>
+<li>The <strong>startSimulationCallback</strong> callback always has the virtual simulation time 0.</li>
+<li>The <strong>stopSimulationCallback</strong> callback has the exact time of the state change.</li>
+</ul>
+<h2 id="simulation-callbacks">Simulation Callbacks</h2>
+<p>The simulation callbacks are called at virtual simulation times that are dividable by the step time specified in the VeosCoSim JSON file.</p>
+<ul>
+<li>The <strong>timeTriggerCallback</strong> callback is called cyclically for each step time. It is always the last callback for each virtual simulation time step.</li>
+<li>The <strong>canMessageReceivedCallback</strong>, <strong>linMessageReceivedCallback</strong>, <strong>ethMessageReceivedCallback</strong> and <strong>ioReadCallback</strong> callbacks are only called
+if the according action occurred in the VEOS simulator since the last step.</li>
+<li>Currently, the order is: I/O, CAN, LIN, ETH, but it might be changed in the future, so that the bus message callbacks are called in the order
+the bus messages arrive.</li>
+</ul>
+<h2 id="io-signals">I/O Signals</h2>
+<p>To read input signals, either register the <strong>ioReadCallback</strong> callback, call the <a href="#VeosCoSim_IoReadMI">VeosCoSim_IoReadMI</a> function, or both:</p>
+<pre class="hljs"><code><div><span class="hljs-function"><span class="hljs-keyword">void</span> <span class="hljs-title">OnInputSignalChanged</span><span class="hljs-params">(<span class="hljs-keyword">const</span> VeosCoSim_Time simulationTime, VeosCoSim_IoSignalId id, <span class="hljs-keyword">const</span> <span class="hljs-keyword">void</span>* value1, <span class="hljs-keyword">void</span>* userData)</span> </span>{
+    <span class="hljs-comment">// Will only be called if the input signal identified by the **id** changed since the last time trigger</span>
+}
+
+VeosCoSim_RuntimeConfiguration <span class="hljs-built_in">config</span> = {<span class="hljs-number">0</span>};
+<span class="hljs-built_in">config</span>.ioReadCallback = OnInputSignalChanged;
+
+VeosCoSim_StartNonBlockingMI(handle, <span class="hljs-built_in">config</span>);
+
+<span class="hljs-keyword">while</span> (<span class="hljs-number">1</span>) {
+    VeosCoSim_Time simulationTime = <span class="hljs-number">0</span>;
+    VeosCoSim_Command command = VeosCoSim_Command_None;
+    VeosCoSim_Result result = VeosCoSim_GetNextCommandMI(handle, &amp;simulationTime, &amp;command);
+    <span class="hljs-keyword">if</span> (result == VeosCoSim_Result_Error) {
+        <span class="hljs-keyword">break</span>;
+    }
+
+    <span class="hljs-keyword">switch</span> (command) {
+        <span class="hljs-keyword">case</span> VeosCoSim_Command_TimeTrigger:
+            <span class="hljs-keyword">uint32_t</span> length;
+            <span class="hljs-keyword">double</span> value2;
+            VeosCoSim_IoReadMI(handle, <span class="hljs-number">1</span>, &amp;length, &amp;value2); <span class="hljs-comment">// Gets the latest value for input signal with the id 1</span>
+            <span class="hljs-keyword">break</span>;
+    }
+
+    VeosCoSim_FinishCommandMI(handle);
+}
+</div></code></pre>
+<p>Note: The input signal changed callback will be fired by the <a href="#VeosCoSim_GetNextCommandMI">VeosCoSim_GetNextCommandMI</a> function.</p>
+<h2 id="bus-messages">Bus Messages</h2>
+<p>To receive bus messages, either register the bus message received callback (<strong>canMessageReceivedCallback</strong>, <strong>linMessageReceivedCallback</strong>
+or <strong>ethMessageReceivedCallback</strong>), or call the bus message receive function (<a href="#VeosCoSim_CanReceiveMessageMI">VeosCoSim_CanReceiveMessageMI</a>,
+<a href="#VeosCoSim_LinReceiveMessageMI">VeosCoSim_LinReceiveMessageMI</a> or <a href="#VeosCoSim_EthReceiveMessageMI">VeosCoSim_EthReceiveMessageMI</a>).</p>
+<p>Below is an example showing the usage of a callback:</p>
+<pre class="hljs"><code><div><span class="hljs-function"><span class="hljs-keyword">void</span> <span class="hljs-title">OnCanMessageReceivedCallback</span><span class="hljs-params">(<span class="hljs-keyword">const</span> VeosCoSim_Time simulationTime, <span class="hljs-keyword">const</span> VeosCoSim_CanMessage* message, <span class="hljs-keyword">void</span>*)</span> </span>{
+    <span class="hljs-comment">// Will be called if a new CAN message was received</span>
+}
+
+VeosCoSim_RuntimeConfiguration <span class="hljs-built_in">config</span> = {<span class="hljs-number">0</span>};
+<span class="hljs-built_in">config</span>.canMessageReceivedCallback = OnCanMessageReceivedCallback;
+
+VeosCoSim_StartNonBlockingMI(handle, <span class="hljs-built_in">config</span>);
+
+<span class="hljs-keyword">while</span> (<span class="hljs-number">1</span>) {
+    VeosCoSim_Time simulationTime = <span class="hljs-number">0</span>;
+    VeosCoSim_Command command = VeosCoSim_Command_None;
+    VeosCoSim_Result result = VeosCoSim_GetNextCommandMI(handle, &amp;simulationTime, &amp;command);
+    <span class="hljs-keyword">if</span> (result == VeosCoSim_Result_Error) {
+        <span class="hljs-keyword">break</span>;
+    }
+
+    VeosCoSim_FinishCommandMI(handle);
+}
+</div></code></pre>
+<p>Below is an example showing the usage of a receive function:</p>
+<pre class="hljs"><code><div>VeosCoSim_RuntimeConfiguration <span class="hljs-built_in">config</span> = {<span class="hljs-number">0</span>};
+
+VeosCoSim_StartNonBlockingMI(handle, <span class="hljs-built_in">config</span>);
+
+<span class="hljs-keyword">while</span> (<span class="hljs-number">1</span>) {
+    VeosCoSim_Time simulationTime = <span class="hljs-number">0</span>;
+    VeosCoSim_Command command = VeosCoSim_Command_None;
+    VeosCoSim_Result result = VeosCoSim_GetNextCommandMI(handle, &amp;simulationTime, &amp;command);
+    <span class="hljs-keyword">if</span> (result == VeosCoSim_Result_Error) {
+        <span class="hljs-keyword">break</span>;
+    }
+
+    <span class="hljs-keyword">switch</span> (command) {
+        <span class="hljs-keyword">case</span> VeosCoSim_Command_TimeTrigger:
+            <span class="hljs-keyword">while</span> (<span class="hljs-literal">true</span>) {
+                VeosCoSim_CanMessage message = {<span class="hljs-number">0</span>};
+                <span class="hljs-keyword">if</span> (VeosCoSim_CanReceiveMessageMI(handle, &amp;message) == VeosCoSim_Result_Empty) {
+                    <span class="hljs-keyword">break</span>;
+                }
+
+                <span class="hljs-comment">// Handle message</span>
+            }
+
+            <span class="hljs-keyword">break</span>;
+    }
+
+    VeosCoSim_FinishCommandMI(handle);
+}
+</div></code></pre>
+<blockquote>
+<p>Note:</p>
+<ul>
+<li>If a bus message received callback for a specific protocol is registered, it is not possible to receive bus messages using the corresponding receive function.</li>
+<li>To receive all bus messages of a protocol, call the respective bus message receive function until it returns VeosCoSim_Result_Empty.</li>
+<li>Do not call the bus message receive function in a callback handler other than the simulation post step callback.
+Otherwise, it is not guaranteed that the function returns the most recent bus message.</li>
+<li>If a bus message received callback for a specific protocol is <strong>not</strong> registered, a received bus message will be buffered.
+Currently, the buffer size is 512 bus messages for each protocol. If the buffer is full, the oldest messages are overwritten.</li>
+<li>The timestamp property of a received bus message contains the virtual simulation time, at which the bus message arrived at the VeosCoSim server.</li>
+</ul>
+</blockquote>
+<p>The bus message transmit functions can be called in any callback handler. The timestamp property of transmission bus messages will be ignored.
+The VeosCoSim client has only a limited buffer for bus messages. Currently, the VeosCoSim client can't buffer more than 512 bus messages for each bus protocol.
+If the buffer is full, the transmit function returns <a href="#VeosCoSim_Result">VeosCoSim_Result_Full</a>.</p>
+<div id="Example" />
+<h1 id="example">Example</h1>
+<p>VeosCoSim provides an example in the <code>.\examples\Example</code> subfolder.</p>
+<p>Open the <code>.\examples\Example.json</code> file for an example VeosCoSim JSON description file that contains the interface for several bus controllers
+and I/O signals.</p>
+<p>Run <code>.\examples\GenerateVeosCoSimBscs.bat</code> to generate a VeosCoSim BSC from each VeosCoSim JSON file in the same directory.</p>
+<p>Import the VeosCoSim BSC files manually into an OSA file using the VEOS Player or veos-build.</p>
+<p>Connect the I/O signals and bus controllers of the VeosCoSim servers to other models in the OSA and start the simulation.</p>
+<p>Start <code>.\examples\client\VeosCoSimTestClient.exe</code> on Windows or <code>./examples/client/VeosCoSimTestClient</code> on Linux to start a simple co-simulation.
+Note: The example VeosCoSim test client can be used for any VeosCoSim server and on any computer. The VeosCoSim server is identified by the name
+you have to pass using the command line. A VeosCoSim test client on Linux can connect to a VeosCoSim server running on Windows and vice versa.</p>
+<p>Use the following syntax to call the VeosCoSim test client:</p>
+<pre class="hljs"><code><div>&lt;path to VeosCoSimTestClient&gt; --host 10.20.30.40 --name Test
+</div></code></pre>
+<p>If the host parameter is not specified, &quot;127.0.0.1&quot; is used. If the name is not specified, &quot;Example&quot; is used.</p>
+<div id="TCP-Ports" />
+<h1 id="tcp-port-mapping">TCP Port Mapping</h1>
+<p>Ensuring the unique mapping of TCP ports can be a difficult task. Therefore, VeosCoSim provides a VeosCoSim port mapper
+so that you do not have to specify TCP ports manually. The first VeosCoSim BSC in an OSA file also starts the VeosCoSim port mapper.
+Each VeosCoSim server starts its own TCP server at the specified TCP port (see VeosCoSim JSON file) or 0 for a dynamic TCP port
+and registers the TCP port with the VeosCoSim port mapper.</p>
+<p>The VeosCoSim client asks the VeosCoSim port mapper for the actual TCP port of the VeosCoSim server and then it connects to this port.</p>
+<p>The default TCP port of the VeosCoSim port mapper is 27072.
+It can be reconfigured using the VEOSCOSIM_PORTMAPPER_PORT environment variable.</p>
+<p>Note: The environment variable has to be specified for the VeosCoSim servers and the VeosCoSim clients.
+For the VeosCoSim servers, it has to be specified before starting the VeosKernel.exe:</p>
+<pre class="hljs"><code><div>set VEOSCOSIM_PORTMAPPER_PORT=1234
+"C:\Program Files\dSPACE VEOS 5.4\Bin\VeosKernel.exe"
+</div></code></pre>
+<p>For the VeosCoSim clients, it has to be specified before starting each VeosCoSim client:</p>
+<pre class="hljs"><code><div>set VEOSCOSIM_PORTMAPPER_PORT=1234
+VeosCoSimStubClient.exe
+</div></code></pre>
+<p>Alternatively, the environment variable has to be specified globally before starting any VEOS process or VeosCoSim client.</p>
+<div id="Performance-Measurement" />
+<h1 id="performance-measurement">Performance Measurement</h1>
+<p>The VeosCoSim client can measure, how long each trigger-, IO-, CAN-, LIN- and ethernet-callback takes.
+This feature can be enabled using the environment variable VEOSCOSIM_TRACEEVENTS:</p>
+<pre class="hljs"><code><div>set VEOSCOSIM_TRACEEVENTS=C:\Temp\MyTraceEvents.csv
+ExampleVeosCoSimClient.exe
+</div></code></pre>
+<p>The variable content must be a valid file path. The file may or may not exist, but the directory must exist.</p>
+<p>If the environment variable is set and the file is writable, then the VeosCoSim client adds up all measured time for each callback for each simulation time.
+If a callback is not executed for a specific simulation time an empty entry will be written.</p>
+<p>The result file may look like this:</p>
+<pre class="hljs"><code><div>SimulationTime,Step,IO,CAN,LIN,ETH
+0.000000000,0.000015400,0.000591200,,,
+0.001000000,0.000000800,,,,
+0.002000000,0.001400400,0.071920082,,0.514203998,
+0.003000000,0.000000300,,,,
+</div></code></pre>
+<ul>
+<li>The column 'SimulationTime' contains the virtual simulation time.</li>
+<li>The column 'Step' contains the measured time for each call of the callback <a href="#VeosCoSim_RuntimeConfiguration">timeTriggerCallback callback</a>.</li>
+<li>The column 'IO' contains the added up measured time for each call of the callback <a href="#VeosCoSim_RuntimeConfiguration">ioReadCallback callback</a>.</li>
+<li>The column 'CAN' contains the added up measured time for each call of the callback <a href="#VeosCoSim_RuntimeConfiguration">canMessageReceivedCallback callback</a>.</li>
+<li>The column 'LIN' contains the added up measured time for each call of the callback <a href="#VeosCoSim_RuntimeConfiguration">linMessageReceivedCallback callback</a>.</li>
+<li>The column 'ETH' contains the added up measured time for each call of the callback <a href="#VeosCoSim_RuntimeConfiguration">ethMessageReceivedCallback callback</a>.</li>
+</ul>
+<div id="ExtendedTraceLogging" />
+<h1 id="extended-trace-logging">Extended Trace Logging</h1>
+<p>The VeosCoSim client provides an optional extended trace logging.
+If enabled, almost every function call to the VeosCoSim client including the passed parameters will be logged to STDOUT.
+Also, all other log messages of the VeosCoSim client will be logged to STDOUT.</p>
+<p>To enable this extended trace logging, set the environment variable VEOSCOSIM_EXTENDED_TRACELOGGING to a value != 0.
+The output will look like this:</p>
+<pre class="hljs"><code><div>INFO [37664] VeosCoSim client (protocol version: 10, build id: 0) initialized.
+INFO [37664] Connecting to VeosCoSim server 'Example_Bridge' at 127.0.0.1 ...
+INFO [37664] Connected to VeosCoSim server 'Example_Bridge' at 127.0.0.1:58624.
+TRACE [37664] VeosCoSim_GetAvailableChannelsMI(0x3750b7c0, 0x37b97e8, 0x37b97f0)
+TRACE [37664] VeosCoSim_IoGetAvailableSignalsMI(0x3750b7c0, 0x37b97ec, 0x37b97f8)
+TRACE [37664] VeosCoSim_RunMI(0x3750b7c0, [0x378bb10, 0x378bb80, 0x0, 0x378bbf0, 0x378b670, 0x378af50, 0x378b830, 0x378b210, 0x0])
+</div></code></pre>
+<div id="VeosCoSim-Client-API-Reference" />
+<h1 id="veoscosim-client-api-reference">VeosCoSim Client API Reference</h1>
+<p>This chapter contains the description of all functions and types of the VeosCoSim client API.</p>
+<ul>
+<li><a href="#VeosCoSim_BusChannelInfo">VeosCoSim_BusChannelInfo structure</a></li>
+<li><a href="#VeosCoSim_BusProtocol">VeosCoSim_BusProtocol enumeration</a></li>
+<li><a href="#VeosCoSim_CanMessage">VeosCoSim_CanMessage structure</a></li>
+<li><a href="#VeosCoSim_CanReceiveMessageMI">VeosCoSim_CanReceiveMessageMI function</a></li>
+<li><a href="#VeosCoSim_CanTransmitMessageMI">VeosCoSim_CanTransmitMessageMI function</a></li>
+<li><a href="#VeosCoSim_Command">VeosCoSim_Command enumeration</a></li>
+<li><a href="#VeosCoSim_ConnectConfiguration">VeosCoSim_ConnectConfiguration structure</a></li>
+<li><a href="#VeosCoSim_ConnectionState">VeosCoSim_ConnectionState enumeration</a></li>
+<li><a href="#VeosCoSim_ConnectMI">VeosCoSim_ConnectMI function</a></li>
+<li><a href="#VeosCoSim_Connect2MI">VeosCoSim_Connect2MI function</a></li>
+<li><a href="#VeosCoSim_CreateMI">VeosCoSim_CreateMI function</a></li>
+<li><a href="#VeosCoSim_DataType">VeosCoSim_DataType enumeration</a></li>
+<li><a href="#VeosCoSim_DestroyMI">VeosCoSim_DestroyMI function</a></li>
+<li><a href="#VeosCoSim_Direction">VeosCoSim_Direction enumeration</a></li>
+<li><a href="#VeosCoSim_DisconnectMI">VeosCoSim_DisconnectMI function</a></li>
+<li><a href="#VeosCoSim_EthMessage">VeosCoSim_EthMessage structure</a></li>
+<li><a href="#VeosCoSim_EthReceiveMessageMI">VeosCoSim_EthReceiveMessageMI function</a></li>
+<li><a href="#VeosCoSim_EthTransmitMessageMI">VeosCoSim_EthTransmitMessageMI function</a></li>
+<li><a href="#VeosCoSim_FinishCommandMI">VeosCoSim_FinishCommandMI function</a></li>
+<li><a href="#VeosCoSim_GeneralInfo">VeosCoSim_GeneralInfo structure</a></li>
+<li><a href="#VeosCoSim_GetAvailableChannelsMI">VeosCoSim_GetAvailableChannelsMI function</a></li>
+<li><a href="#VeosCoSim_GetConnectionStateMI">VeosCoSim_GetConnectionStateMI function</a></li>
+<li><a href="#VeosCoSim_GetGeneralInfoMI">VeosCoSim_GetGeneralInfoMI function</a></li>
+<li><a href="#VeosCoSim_GetLastTimeMI">VeosCoSim_GetLastTimeMI function</a></li>
+<li><a href="#VeosCoSim_GetNextCommandMI">VeosCoSim_GetNextCommandMI function</a></li>
+<li><a href="#VeosCoSim_Handle">VeosCoSim_Handle typedef</a></li>
+<li><a href="#VeosCoSim_IoGetAvailableSignalsMI">VeosCoSim_IoGetAvailableSignalsMI function</a></li>
+<li><a href="#VeosCoSim_IoReadMI">VeosCoSim_IoReadMI function</a></li>
+<li><a href="#VeosCoSim_IoWriteMI">VeosCoSim_IoWriteMI function</a></li>
+<li><a href="#VeosCoSim_IoSignalInfo">VeosCoSim_IoSignalInfo structure</a></li>
+<li><a href="#VeosCoSim_LinMessage">VeosCoSim_LinMessage</a></li>
+<li><a href="#VeosCoSim_LinReceiveMessageMI">VeosCoSim_LinReceiveMessageMI function</a></li>
+<li><a href="#VeosCoSim_LinTransmitMessageMI">VeosCoSim_LinTransmitMessageMI function</a></li>
+<li><a href="#VeosCoSim_Result">VeosCoSim_Result enumeration</a></li>
+<li><a href="#VeosCoSim_RunMI">VeosCoSim_RunMI function</a></li>
+<li><a href="#VeosCoSim_RuntimeConfiguration">VeosCoSim_RuntimeConfiguration structure</a></li>
+<li><a href="#VeosCoSim_Severity">VeosCoSim_Severity enumeration</a></li>
+<li><a href="#VeosCoSim_StartNonBlockingMI">VeosCoSim_StartNonBlockingMI function</a></li>
+<li><a href="#VeosCoSim_Time">VeosCoSim_Time typedef</a></li>
+</ul>
+<blockquote>
+<p><strong>Note:</strong>
+For each *MI function except <a href="#VeosCoSim_CreateMI">VeosCoSim_CreateMI</a> and <a href="#VeosCoSim_DestroyMI">VeosCoSim_DestroyMI</a>
+there is also a function without the MI postfix and without the handle parameter.
+These functions use a hidden handle.
+If only a connection to a single VeosCoSim server is needed, the functions without the MI postfix can be used.
+If connections to multiple VeosCoSim server are needed, the MI-functions with unique handles must be used.</p>
+</blockquote>
+<div id="VeosCoSim_BusChannelInfo" />
+<h2 id="veoscosimbuschannelinfo-structure">VeosCoSim_BusChannelInfo structure</h2>
+<p>The <strong>VeosCoSim_BusChannelInfo</strong> structure contains all information of a bus controller.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_MAX_NAME_LENGTH 1024</span>
+
+<span class="hljs-keyword">typedef</span> <span class="hljs-keyword">uint32_t</span> VeosCoSim_ChannelId;
+
+<span class="hljs-keyword">typedef</span> <span class="hljs-class"><span class="hljs-keyword">struct</span> <span class="hljs-title">VeosCoSim_BusChannelInfo</span> {</span>
+    VeosCoSim_ChannelId   id;
+    VeosCoSim_BusProtocol busProtocol;
+    <span class="hljs-keyword">char</span>                  controllerName[VEOSCOSIM_MAX_NAME_LENGTH];
+} VeosCoSim_BusChannelInfo;
+</div></code></pre>
+<h3 id="members">Members</h3>
+<p><code>id</code></p>
+<p>The unique identifier of the bus controller.</p>
+<p><code>busProtocol</code></p>
+<p>The <a href="#VeosCoSim_BusProtocol">VeosCoSim_BusProtocol</a> of the bus controller.</p>
+<p><code>controllerName</code></p>
+<p>The name of the controller.</p>
+<div id="VeosCoSim_BusProtocol" />
+<h2 id="veoscosimbusprotocol-enumeration">VeosCoSim_BusProtocol enumeration</h2>
+<p>The <strong>VeosCoSim_BusProtocol</strong> enumeration contains the bus protocol type of a bus.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-keyword">typedef</span> <span class="hljs-keyword">uint32_t</span> VeosCoSim_BusProtocol;
+
+<span class="hljs-keyword">enum</span> {
+    VeosCoSim_BusProtocol_CAN = <span class="hljs-number">1</span>,
+    VeosCoSim_BusProtocol_LIN,
+    VeosCoSim_BusProtocol_ETH
+};
+</div></code></pre>
+<h3 id="constants">Constants</h3>
+<p><code>VeosCoSim_BusProtocol_CAN</code></p>
+<p>The bus protocol is of type CAN.</p>
+<p><code>VeosCoSim_BusProtocol_LIN</code></p>
+<p>The bus protocol is of type LIN.</p>
+<p><code>VeosCoSim_BusProtocol_ETH</code></p>
+<p>The bus protocol is of type ETH.</p>
+<h3 id="remarks">Remarks</h3>
+<p>The reason, <strong>VeosCoSim_BusProtocol</strong> is a typedef and an unnamed enumeration, is, because it's used inside of structs.
+This approach forces the compiler to always use 4 byte for the storage.</p>
+<div id="VeosCoSim_CanMessage" />
+<h2 id="veoscosimcanmessage-structure">VeosCoSim_CanMessage structure</h2>
+<p>The <strong>VeosCoSim_CanMessage</strong> structure contains the information of a CAN message.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_CAN_MESSAGE_MAX_LENGTH 64</span>
+
+<span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_CAN_MESSAGE_FLAG_EXT   1</span>
+<span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_CAN_MESSAGE_FLAG_BRS   2</span>
+<span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_CAN_MESSAGE_FLAG_FD    4</span>
+<span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_CAN_MESSAGE_FLAG_TX    8</span>
+<span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_CAN_MESSAGE_FLAG_ERR  16</span>
+<span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_CAN_MESSAGE_FLAG_DROP 32</span>
+
+<span class="hljs-keyword">typedef</span> <span class="hljs-class"><span class="hljs-keyword">struct</span> <span class="hljs-title">VeosCoSim_CanMessage</span> {</span>
+    VeosCoSim_Time      timestamp;
+    VeosCoSim_ChannelId channelId;
+    <span class="hljs-keyword">uint32_t</span>            identifier;
+    <span class="hljs-keyword">uint32_t</span>            flags;
+    <span class="hljs-keyword">uint32_t</span>            length;
+    <span class="hljs-keyword">uint8_t</span>             data[VEOSCOSIM_CAN_MESSAGE_MAX_LENGTH];
+} VeosCoSim_CanMessage;
+</div></code></pre>
+<h3 id="members">Members</h3>
+<p><code>timestamp</code></p>
+<p>The <a href="#VeosCoSim_Time">VeosCoSim_Time</a> containing the simulation time when the CAN message was received at the VeosCoSim server.</p>
+<p><code>channelId</code></p>
+<p>The <a href="#VeosCoSim_BusChannelInfo">VeosCoSim_ChannelId</a> of the bus controller sending or receiving the CAN message.</p>
+<p><code>identifier</code></p>
+<p>The id of the CAN message.</p>
+<p><code>flags</code></p>
+<p>The flags of the CAN message. Can be one of the following:</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Direction</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VEOSCOSIM_CAN_MESSAGE_FLAG_EXT</td>
+<td>Transmit / Receive</td>
+<td>Extended identifier</td>
+</tr>
+<tr>
+<td>VEOSCOSIM_CAN_MESSAGE_FLAG_BRS</td>
+<td>Transmit / Receive</td>
+<td>Bit rate switch</td>
+</tr>
+<tr>
+<td>VEOSCOSIM_CAN_MESSAGE_FLAG_FD</td>
+<td>Transmit / Receive</td>
+<td>Flexible data rate format</td>
+</tr>
+<tr>
+<td>VEOSCOSIM_CAN_MESSAGE_FLAG_TX</td>
+<td>Receive only</td>
+<td>Transmit direction</td>
+</tr>
+<tr>
+<td>VEOSCOSIM_CAN_MESSAGE_FLAG_ERR</td>
+<td>Receive only</td>
+<td>Error indicator</td>
+</tr>
+<tr>
+<td>VEOSCOSIM_CAN_MESSAGE_FLAG_DROP</td>
+<td>Receive only</td>
+<td>Queue drop</td>
+</tr>
+</tbody>
+</table>
+<p><code>length</code></p>
+<p>The length of the CAN message data.</p>
+<p><code>data</code></p>
+<p>The CAN message data.</p>
+<div id="VeosCoSim_CanReceiveMessageMI" />
+<h2 id="veoscosimcanreceivemessagemi-function">VeosCoSim_CanReceiveMessageMI function</h2>
+<p>The <strong>VeosCoSim_CanReceiveMessageMI</strong> function receives a new CAN message from the VeosCoSim server.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_CanReceiveMessageMI</span><span class="hljs-params">(
+    [in]  VeosCoSim_Handle      handle,
+    [out] VeosCoSim_CanMessage* message
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[out] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<p><code>[out] message</code></p>
+<p>A pointer to <a href="#VeosCoSim_CanMessage">VeosCoSim_CanMessage</a> instance or NULL, if there is no CAN message available.</p>
+<h3 id="return-values">Return values</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if a CAN message was received.</li>
+<li><strong>VeosCoSim_Result_Empty</strong>, if no CAN message can be received.</li>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred.</li>
+</ul>
+<h3 id="remarks">Remarks</h3>
+<p>If the <a href="#VeosCoSim_RuntimeConfiguration">canMessageReceivedCallback</a> is registered,
+the CAN message can't be received by calling <strong>VeosCoSim_CanReceiveMessageMI</strong>.</p>
+<div id="VeosCoSim_CanTransmitMessageMI" />
+<h2 id="veoscosimcantransmitmessagemi-function">VeosCoSim_CanTransmitMessageMI function</h2>
+<p>The <strong>VeosCoSim_CanTransmitMessageMI</strong> function transmits a CAN message to the VeosCoSim server.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_CanTransmitMessageMI</span><span class="hljs-params">(
+    [in] VeosCoSim_Handle            handle,
+    [in] <span class="hljs-keyword">const</span> VeosCoSim_CanMessage* message
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[in] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<p><code>[in] message</code></p>
+<p>A pointer to a <a href="#VeosCoSim_CanMessage">VeosCoSim_CanMessage</a> that will be transmitted.</p>
+<h3 id="return-values">Return values</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if the CAN message was transmitted.</li>
+<li><strong>VeosCoSim_Result_Full</strong>, if there was no space for the CAN message in the internal buffer.</li>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred.</li>
+</ul>
+<div id="VeosCoSim_Command" />
+<h2 id="veoscosimcommand-enumeration">VeosCoSim_Command enumeration</h2>
+<p>The <strong>VeosCoSim_Command</strong> enumeration contains the possible commands that can be returned by the <a href="#VeosCoSim_GetNextCommandMI">VeosCoSim_GetNextCommandMI</a>
+function.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-keyword">typedef</span> <span class="hljs-keyword">enum</span> VeosCoSim_Command {
+    VeosCoSim_Command_None,
+    VeosCoSim_Command_Start,
+    VeosCoSim_Command_Stop,
+    VeosCoSim_Command_Terminate,
+    VeosCoSim_Command_TimeTrigger
+} VeosCoSim_Command;
+</div></code></pre>
+<h3 id="constants">Constants</h3>
+<p><code>VeosCoSim_Command_None</code></p>
+<p>No command.</p>
+<p><code>VeosCoSim_Command_Start</code></p>
+<p>Start simulation command.</p>
+<p><code>VeosCoSim_Command_Stop</code></p>
+<p>Stop simulation command.</p>
+<p><code>VeosCoSim_Command_Terminate</code></p>
+<p>Terminate simulation command.</p>
+<p><code>VeosCoSim_Command_TimeTrigger</code></p>
+<p>Time trigger (step) simulation command.</p>
+<div id="VeosCoSim_ConnectConfiguration" />
+<h2 id="veoscosimconnectconfiguration-structure">VeosCoSim_ConnectConfiguration structure</h2>
+<p>The <strong>VeosCoSim_ConnectConfiguration</strong> contains the configuration that is required to connect to the VeosCoSim server.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-keyword">typedef</span> <span class="hljs-class"><span class="hljs-keyword">struct</span> <span class="hljs-title">VeosCoSim_ConnectConfiguration</span> {</span>
+    <span class="hljs-keyword">const</span> <span class="hljs-keyword">char</span>* remoteIpAddress;
+    <span class="hljs-keyword">const</span> <span class="hljs-keyword">char</span>* name;
+    VeosCoSim_LogCallback logCallback;
+    <span class="hljs-keyword">uint16_t</span> <span class="hljs-built_in">remotePort</span>;
+    <span class="hljs-keyword">uint16_t</span> localPort;
+} VeosCoSim_ConnectConfiguration;
+</div></code></pre>
+<h3 id="members">Members</h3>
+<p><code>remoteIpAddress</code></p>
+<p>The remote IP address of the computer running the VeosCoSim server. This value must be set.</p>
+<p><code>name</code></p>
+<p>The name of the VeosCoSim server. Either this name or the <strong>remotePort</strong> must be set.
+If only the name is set, the port mapper is used to determine the remote port.
+If both, the name and the <strong>remotePort</strong> are set, only the <strong>remotePort</strong> will be used to establish the connection.</p>
+<p><code>logCallback</code></p>
+<p>An optional <strong>VeosCoSim_LogCallback</strong> which will be called every time the VeosCoSim client logs a message.</p>
+<p><code>remotePort</code></p>
+<p>The remote port of the VeosCoSim server. Either this port or the <strong>name</strong> must be set.
+If the remote port is set, it will be used to establish the connection.</p>
+<p><code>localPort</code></p>
+<p>The local port of the VeosCoSim client. This value should only be changed, if the communication to the VeosCoSim server shall be tunneled.
+Refer to the documentation of the used tunneling software how to configure the local port correctly.</p>
+<div id="VeosCoSim_ConnectionState" />
+<h2 id="veoscosimconnectionstate-enumeration">VeosCoSim_ConnectionState enumeration</h2>
+<p>The <strong>VeosCoSim_ConnectionState</strong> enumeration contains the possible connection states.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-keyword">typedef</span> <span class="hljs-keyword">enum</span> VeosCoSim_ConnectionState {
+    VeosCoSim_ConnectionState_Disconnected,
+    VeosCoSim_ConnectionState_Connected,
+} VeosCoSim_ConnectionState;
+</div></code></pre>
+<h3 id="constants">Constants</h3>
+<p><code>VeosCoSim_ConnectionState_Disconnected</code></p>
+<p>Disconnected from VeosCoSim server.</p>
+<p><code>VeosCoSim_ConnectionState_Connected</code></p>
+<p>Connected to VeosCoSim server.</p>
+<div id="VeosCoSim_ConnectMI" />
+<h2 id="veoscosimconnectmi-function">VeosCoSim_ConnectMI function</h2>
+<p>The <strong>VeosCoSim_ConnectMI</strong> function connects the VeosCoSim client to the VeosCoSim server.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function"><span class="hljs-keyword">typedef</span> <span class="hljs-title">void</span> <span class="hljs-params">(*VeosCoSim_LogCallback)</span><span class="hljs-params">(
+    [out] VeosCoSim_Severity severity,
+    [out] <span class="hljs-keyword">const</span> <span class="hljs-keyword">char</span>*        logMessage
+)</span></span>;
+
+<span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_ConnectMI</span><span class="hljs-params">(
+    [in]           VeosCoSim_Handle      handle,
+    [in]           <span class="hljs-keyword">const</span> <span class="hljs-keyword">char</span>*           ipAddress,
+    [in]           <span class="hljs-keyword">const</span> <span class="hljs-keyword">char</span>*           name,
+    [in, optional] VeosCoSim_LogCallback logCallback
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[in] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<p><code>[in] ipAddress</code></p>
+<p>The IP address of the VeosCoSim server as string.</p>
+<p><code>[in] name</code></p>
+<p>The case sensitive name of the VeosCoSim server (aka the name of the VeosCoSim BSC) to connect to as string.</p>
+<p><code>[in, optional] logCallback</code></p>
+<p>An optional <strong>VeosCoSim_LogCallback</strong> which will be called every time the VeosCoSim client logs a message.
+The <a href="#VeosCoSim_Severity">VeosCoSim_Severity</a> parameter contains the severity.
+The <strong>logMessage</strong> parameter is the string containing the error.</p>
+<h3 id="return-value">Return value</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if the connect was successful.</li>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred.</li>
+</ul>
+<h3 id="remarks">Remarks</h3>
+<p>The TCP port cannot be specified here. See chapter <a href="#TCP-Ports">TCP Ports</a>.</p>
+<div id="VeosCoSim_Connect2MI" />
+<h2 id="veoscosimconnect2mi-function">VeosCoSim_Connect2MI function</h2>
+<p>The <strong>VeosCoSim_Connect2MI</strong> function connects the VeosCoSim client to the VeosCoSim server.
+This function extends the <strong>VeosCoSim_ConnectMI</strong> function with the opportunity to pass a local TCP port.
+Setting a specific local TCP port is only required, if the communication of VeosCoSim shall be tunneled.
+In all other cases, the local TCP port should not be set.
+Also, it is possible to set the remote port. In this case, the port mapper is bypassed.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_Connect2MI</span><span class="hljs-params">(
+    [in] VeosCoSim_Handle               handle,
+    [in] VeosCoSim_ConnectConfiguration <span class="hljs-built_in">config</span>
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[in] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<p><code>[in] config</code></p>
+<p>The <a href="#VeosCoSim_ConnectConfiguration">VeosCoSim_ConnectConfiguration</a>.</p>
+<h3 id="return-value">Return value</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if the connect was successful.</li>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred.</li>
+</ul>
+<div id="VeosCoSim_CreateMI" />
+<h2 id="veoscosimcreatemi-function">VeosCoSim_CreateMI function</h2>
+<p>The <strong>VeosCoSim_CreateMI</strong> function creates a <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Handle <span class="hljs-title">VeosCoSim_CreateMI</span><span class="hljs-params">(<span class="hljs-keyword">void</span>)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p>-/-</p>
+<h3 id="return-value">Return value</h3>
+<p>A <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a> if the function succeeded, or NULL in case of an error.</p>
+<div id="VeosCoSim_DataType" />
+<h2 id="veoscosimdatatype-enumeration">VeosCoSim_DataType enumeration</h2>
+<p>The <strong>VeosCoSim_DataType</strong> enumeration contains all data types for IO signals.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-keyword">typedef</span> <span class="hljs-keyword">uint32_t</span> VeosCoSim_DataType;
+
+<span class="hljs-keyword">enum</span> {
+    VeosCoSim_DataType_Bool = <span class="hljs-number">1</span>,
+    VeosCoSim_DataType_Int8,
+    VeosCoSim_DataType_Int16,
+    VeosCoSim_DataType_Int32,
+    VeosCoSim_DataType_Int64,
+    VeosCoSim_DataType_UInt8,
+    VeosCoSim_DataType_UInt16,
+    VeosCoSim_DataType_UInt32,
+    VeosCoSim_DataType_UInt64,
+    VeosCoSim_DataType_Float32,
+    VeosCoSim_DataType_Float64
+};
+</div></code></pre>
+<h3 id="constants">Constants</h3>
+<p><code>VeosCoSim_DataType_Bool</code></p>
+<p>The data type is boolean (bool_t).</p>
+<p><code>VeosCoSim_DataType_Int8</code></p>
+<p>The data type is signed 8 bit integer (int8_t).</p>
+<p><code>VeosCoSim_DataType_Int16</code></p>
+<p>The data type is signed 16 bit integer (int16_t).</p>
+<p><code>VeosCoSim_DataType_Int32</code></p>
+<p>The data type is signed 32 bit integer (int32_t).</p>
+<p><code>VeosCoSim_DataType_Int64</code></p>
+<p>The data type is signed 64 bit integer (int64_t).</p>
+<p><code>VeosCoSim_DataType_UInt8</code></p>
+<p>The data type is unsigned 8 bit integer (uint8_t).</p>
+<p><code>VeosCoSim_DataType_UInt16</code></p>
+<p>The data type is unsigned 16 bit integer (uint16_t).</p>
+<p><code>VeosCoSim_DataType_UInt32</code></p>
+<p>The data type is unsigned 32 bit integer (uint32_t).</p>
+<p><code>VeosCoSim_DataType_UInt64</code></p>
+<p>The data type is unsigned 64 bit integer (uint64_t).</p>
+<p><code>VeosCoSim_DataType_Float32</code></p>
+<p>The data type is 32 bit float (float).</p>
+<p><code>VeosCoSim_DataType_Float64</code></p>
+<p>The data type is 64 bit float (double).</p>
+<h3 id="remarks">Remarks</h3>
+<p>The reason, <strong>VeosCoSim_DataType</strong> is a typedef and an unnamed enumeration, is, because it's used inside of structs.
+This approach forces the compiler to always use 4 bytes for the storage.</p>
+<div id="VeosCoSim_DestroyMI" />
+<h2 id="veoscosimdestroymi-function">VeosCoSim_DestroyMI function</h2>
+<p>The <strong>VeosCoSim_DestroyMI</strong> function destroys a <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function"><span class="hljs-keyword">void</span> <span class="hljs-title">VeosCoSim_DestroyMI</span><span class="hljs-params">(
+    [in] VeosCoSim_Handle handle
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[in] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<h3 id="return-value">Return value</h3>
+<p>-/-</p>
+<div id="VeosCoSim_Direction" />
+<h2 id="veoscosimdirection-enumeration">VeosCoSim_Direction enumeration</h2>
+<p>The <strong>VeosCoSim_Direction</strong> enumeration contains the directions of I/O signals.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-keyword">typedef</span> <span class="hljs-keyword">uint32_t</span> VeosCoSim_Direction;
+
+<span class="hljs-keyword">enum</span> {
+    VeosCoSim_Direction_Read = <span class="hljs-number">1</span>,
+    VeosCoSim_Direction_Write
+};
+</div></code></pre>
+<h3 id="constants">Constants</h3>
+<p><code>VeosCoSim_Direction_Read</code></p>
+<p>The direction is read (-&gt; VPU inport in the VeosCoSim BSC).</p>
+<p><code>VeosCoSim_Direction_Write</code></p>
+<p>The direction is write (-&gt; VPU outport in the VeosCoSim BSC).</p>
+<h3 id="remarks">Remarks</h3>
+<p>The reason, <strong>VeosCoSim_Direction</strong> is a typedef and an unnamed enumeration, is, because it's used inside of structs.
+This approach forces the compiler to always use 4 byte for the storage.</p>
+<div id="VeosCoSim_DisconnectMI" />
+<h2 id="veoscosimdisconnectmi-function">VeosCoSim_DisconnectMI function</h2>
+<p>The <strong>VeosCoSim_DisconnectMI</strong> function disconnects from VeosCoSim server.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_DisconnectMI</span><span class="hljs-params">(
+    [in] VeosCoSim_Handle handle
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[in] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<h3 id="return-values">Return values</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if the disconnect was successful.</li>
+</ul>
+<h3 id="remarks">Remarks</h3>
+<p>The <strong>VeosCoSim_DisconnectMI</strong> function is not supposed to fail.
+If there is no connection to VeosCoSim server, the <strong>VeosCoSim_DisconnectMI</strong> function will do nothing.</p>
+<div id="VeosCoSim_EthMessage" />
+<h2 id="veoscosimethmessage-structure">VeosCoSim_EthMessage structure</h2>
+<p>The <strong>VeosCoSim_EthMessage</strong> structure contains the information of a ETH message.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_ETH_MESSAGE_MAX_LENGTH 1518</span>
+
+<span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_ETH_MESSAGE_FLAG_TX   1</span>
+<span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_ETH_MESSAGE_FLAG_DROP 2</span>
+
+<span class="hljs-keyword">typedef</span> <span class="hljs-class"><span class="hljs-keyword">struct</span> <span class="hljs-title">VeosCoSim_EthMessage</span>
+{</span>
+    VeosCoSim_Time      timestamp;
+    VeosCoSim_ChannelId channelId;
+    <span class="hljs-keyword">uint32_t</span>            flags;
+    <span class="hljs-keyword">uint32_t</span>            length;
+    <span class="hljs-keyword">uint8_t</span>             data[VEOSCOSIM_ETH_MESSAGE_MAX_LENGTH];
+} VeosCoSim_EthMessage;
+</div></code></pre>
+<h3 id="members">Members</h3>
+<p><code>timestamp</code></p>
+<p>The <a href="#VeosCoSim_Time">VeosCoSim_Time</a> containing the simulation time when the ETH message was received at the VeosCoSim server.</p>
+<p><code>channelId</code></p>
+<p>The <a href="#VeosCoSim_BusChannelInfo">VeosCoSim_ChannelId</a> of the bus controller sending or receiving the ETH message.</p>
+<p><code>flags</code></p>
+<p>The flags of the ETH message. Can be one of the following:</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Direction</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VEOSCOSIM_ETH_MESSAGE_FLAG_TX</td>
+<td>Receive only</td>
+<td>Transmit direction</td>
+</tr>
+<tr>
+<td>VEOSCOSIM_ETH_MESSAGE_FLAG_DROP</td>
+<td>Receive only</td>
+<td>Queue drop</td>
+</tr>
+</tbody>
+</table>
+<p><code>length</code></p>
+<p>The length of the ETH message data.</p>
+<p><code>data</code></p>
+<p>The ETH message data.</p>
+<div id="VeosCoSim_EthReceiveMessageMI" />
+<h2 id="veoscosimethreceivemessagemi-function">VeosCoSim_EthReceiveMessageMI function</h2>
+<p>The <strong>VeosCoSim_EthReceiveMessageMI</strong> function receives a new ETH message from the VeosCoSim server.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_EthReceiveMessageMI</span><span class="hljs-params">(
+    [in]  VeosCoSim_Handle             handle,
+    [out] <span class="hljs-keyword">uint32_t</span>*                    count,
+    [out] <span class="hljs-keyword">const</span> VeosCoSim_EthMessage** messages
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[in] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<p><code>[out] count</code></p>
+<p>The count of available <a href="#VeosCoSim_EthMessage">VeosCoSim_EthMessage</a> instances.</p>
+<p><code>[out] messages</code></p>
+<p>A pointer to a list of <a href="#VeosCoSim_EthMessage">VeosCoSim_EthMessage</a> instances or NULL, if there is no ETH message available.</p>
+<h3 id="return-values">Return values</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if an ETH message was received.</li>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred.</li>
+</ul>
+<h3 id="remarks">Remarks</h3>
+<p>If the <a href="#VeosCoSim_RuntimeConfiguration">ethMessageReceivedCallback</a> is registered,
+the ETH message can't be received by calling <strong>VeosCoSim_EthReceiveMessageMI</strong>.</p>
+<div id="VeosCoSim_EthTransmitMessageMI" />
+<h2 id="veoscosimethtransmitmessagemi-function">VeosCoSim_EthTransmitMessageMI function</h2>
+<p>The <strong>VeosCoSim_EthTransmitMessageMI</strong> function transmits an ETH message to the VeosCoSim server.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_EthTransmitMessageMI</span><span class="hljs-params">(
+    [in] VeosCoSim_Handle            handle,
+    [in] <span class="hljs-keyword">const</span> VeosCoSim_EthMessage* message
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[in] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<p><code>[in] message</code></p>
+<p>A pointer to a <a href="#VeosCoSim_EthMessage">VeosCoSim_EthMessage</a> that will be transmitted.</p>
+<h3 id="return-values">Return values</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if the ETH message was transmitted.</li>
+<li><strong>VeosCoSim_Result_Full</strong>, if there was no space for the ETH message in the internal buffer.</li>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred.</li>
+</ul>
+<div id="VeosCoSim_Handle" />
+<h2 id="veoscosimhandle-typedef">VeosCoSim_Handle typedef</h2>
+<p>The <strong>VeosCoSim_Handle</strong> typedef representing a unique handle.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-keyword">typedef</span> VeosCoSim_Handle <span class="hljs-keyword">void</span>*;
+</div></code></pre>
+<div id="VeosCoSim_FinishCommandMI" />
+<h2 id="veoscosimfinishcommandmi-function">VeosCoSim_FinishCommandMI function</h2>
+<p>The <strong>VeosCoSim_FinishCommandMI</strong> function finishes the current command.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_FinishCommandMI</span><span class="hljs-params">(
+    [in] VeosCoSim_Handle handle
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[out] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<h3 id="return-values">Return values</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if finishing the current command was successful.</li>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred.</li>
+</ul>
+<div id="VeosCoSim_GeneralInfo" />
+<h2 id="veoscosimgeneralinfo-structure">VeosCoSim_GeneralInfo structure</h2>
+<p>The <strong>VeosCoSim_GeneralInfo</strong> structure contains general information about the connected VeosCoSim server.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-keyword">typedef</span> <span class="hljs-class"><span class="hljs-keyword">struct</span> <span class="hljs-title">VeosCoSim_GeneralInfo</span> {</span>
+    VeosCoSim_Time sampleTime;
+} VeosCoSim_GeneralInfo;
+</div></code></pre>
+<h3 id="members">Members</h3>
+<p><code>sampleTime</code></p>
+<p>The <a href="#VeosCoSim_Time">VeosCoSim_Time</a> describing the sample time of the VeosCoSim server.</p>
+<div id="VeosCoSim_GetAvailableChannelsMI" />
+<h2 id="veoscosimgetavailablechannelsmi-function">VeosCoSim_GetAvailableChannelsMI function</h2>
+<p>The <strong>VeosCoSim_GetAvailableChannelsMI</strong> function gets all available bus controllers from the VeosCoSim server.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_GetAvailableChannelsMI</span><span class="hljs-params">(
+    [in]  VeosCoSim_Handle                 handle,
+    [out] <span class="hljs-keyword">uint32_t</span>*                        busControllersCount,
+    [out] <span class="hljs-keyword">const</span> VeosCoSim_BusChannelInfo** controllers
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[out] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<p><code>[out] busControllersCount</code></p>
+<p>A pointer to the count of bus controllers.</p>
+<p><code>[out] controllers</code></p>
+<p>A pointer to the array of <a href="#VeosCoSim_BusChannelInfo">VeosCoSim_BusChannelInfo</a> elements.</p>
+<h3 id="return-values">Return values</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if getting all bus controllers was successful.</li>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred.</li>
+</ul>
+<div id="VeosCoSim_GetConnectionStateMI" />
+<h2 id="veoscosimgetconnectionstatemi-function">VeosCoSim_GetConnectionStateMI function</h2>
+<p>The <strong>VeosCoSim_GetConnectionStateMI</strong> function gets the connection state about the connection to the VeosCoSim server.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_GetConnectionStateMI</span><span class="hljs-params">(
+    [in]  VeosCoSim_Handle           handle,
+    [out] VeosCoSim_ConnectionState* connectionState
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[out] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<p><code>[out] connectionState</code></p>
+<p>A pointer to the <a href="#VeosCoSim_ConnectionState">VeosCoSim_ConnectionState</a>. This pointer must not be null.</p>
+<h3 id="return-values">Return values</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if getting the connection state was successful.</li>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred.</li>
+</ul>
+<div id="VeosCoSim_GetGeneralInfoMI" />
+<h2 id="veoscosimgetgeneralinfomi-function">VeosCoSim_GetGeneralInfoMI function</h2>
+<p>The <strong>VeosCoSim_GetGeneralInfoMI</strong> function gets general information about the VeosCoSim server.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_GetGeneralInfo</span><span class="hljs-params">(
+    [in]  VeosCoSim_Handle       handle,
+    [out] VeosCoSim_GeneralInfo* generalInfo
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[out] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<p><code>[out] generalInfo</code></p>
+<p>A pointer to the <a href="#VeosCoSim_GeneralInfo">VeosCoSim_GeneralInfo</a>. This pointer must not be null.</p>
+<h3 id="return-values">Return values</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if getting the general information was successful.</li>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred.</li>
+</ul>
+<h3 id="remarks">Remarks</h3>
+<p>This function is not implemented yet. The general information are not set to the correct values.</p>
+<div id="VeosCoSim_GetLastTimeMI" />
+<h2 id="veoscosimgetlasttimemi-function">VeosCoSim_GetLastTimeMI function</h2>
+<p>The <strong>VeosCoSim_GetLastTimeMI</strong> function gets the current simulation time.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_GetLastTimeMI</span><span class="hljs-params">(
+    [in]  VeosCoSim_Handle handle,
+    [out] VeosCoSim_Time*  lastTime
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[out] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<p><code>[out] lastTime</code></p>
+<p>A pointer to the current time. This pointer must not be null.</p>
+<h3 id="return-values">Return values</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if getting the current simulation time was successful.</li>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred.</li>
+</ul>
+<div id="VeosCoSim_GetNextCommandMI" />
+<h2 id="veoscosimgetnextcommandmi-function">VeosCoSim_GetNextCommandMI function</h2>
+<p>The <strong>VeosCoSim_GetNextCommandMI</strong> function asks the VeosCoSim server for the next command.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_GetNextCommandMI</span><span class="hljs-params">(
+    [in]  VeosCoSim_Handle   handle,
+    [out] VeosCoSim_Time*    simulationTime,
+    [out] VeosCoSim_Command* nextCommand
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[out] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<p><code>[out] simulationTime</code></p>
+<p>A pointer to the current simulation time.</p>
+<p><code>[out] nextCommand</code></p>
+<p>A pointer to the <a href="#VeosCoSim_Command">VeosCoSim_Command</a>.</p>
+<h3 id="return-values">Return values</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if getting the next command was successful.</li>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred.</li>
+</ul>
+<div id="VeosCoSim_IoGetAvailableSignalsMI" />
+<h2 id="veoscosimiogetavailablesignalsmi-function">VeosCoSim_IoGetAvailableSignalsMI function</h2>
+<p>The <strong>VeosCoSim_IoGetAvailableSignalsMI</strong> function gets all IO signal information from the VeosCoSim server.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_IoGetAvailableSignalsMI</span><span class="hljs-params">(
+    [in]  VeosCoSim_Handle               handle,
+    [out] <span class="hljs-keyword">uint32_t</span>*                      ioSignalsCount,
+    [out] <span class="hljs-keyword">const</span> VeosCoSim_IoSignalInfo** ioSignalInfos
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[in] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<p><code>[out] ioSignalsCount</code></p>
+<p>A pointer to the count of IO signals.</p>
+<p><code>[out] ioSignalInfos</code></p>
+<p>A pointer to the array of <a href="#VeosCoSim_IoSignalInfo">VeosCoSim_IoSignalInfo</a> elements.</p>
+<h3 id="return-values">Return values</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if getting all IO signals was successful.</li>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred.</li>
+</ul>
+<div id="VeosCoSim_IoReadMI" />
+<h2 id="veoscosimioreadmi-function">VeosCoSim_IoReadMI function</h2>
+<p>The <strong>VeosCoSim_IoReadMI</strong> function gets the current value of an IO read signal.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_IoReadMI</span><span class="hljs-params">(
+    [in]  VeosCoSim_Handle     handle,
+    [in]  VeosCoSim_IoSignalId id,
+    [out] <span class="hljs-keyword">uint32_t</span>*            length,
+    [out] <span class="hljs-keyword">void</span>*                value
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[in] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<p><code>[in] id</code></p>
+<p>The <a href="#VeosCoSim_IoSignalInfo">VeosCoSim_IoSignalId</a> identifying the IO read signal.</p>
+<p><code>[out] length</code></p>
+<p>The length of the value in count of items.</p>
+<p><code>[out] value</code></p>
+<p>A pointer to the current value.</p>
+<h3 id="return-values">Return values</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if getting the current value of the IO signal was successful.</li>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred.</li>
+</ul>
+<h3 id="remarks">Remarks</h3>
+<p>The length of the value depends on the <a href="#VeosCoSim_DataType">VeosCoSim_DataType</a> and length of the <a href="#VeosCoSim_IoSignalInfo">VeosCoSim_IoSignalInfo</a>.
+This information can and should be obtained by calling <a href="#VeosCoSim_IoGetAvailableSignalsMI">VeosCoSim_IoGetAvailableSignalsMI</a> after the connection
+to the VeosCoSim server was established.</p>
+<div id="VeosCoSim_IoWriteMI" />
+<h2 id="veoscosimiowritemi-function">VeosCoSim_IoWriteMI function</h2>
+<p>The <strong>VeosCoSim_IoWriteMI</strong> function sets a new value for an IO write signal.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_IoWriteMI</span><span class="hljs-params">(
+    [in] VeosCoSim_Handle     handle,
+    [in] VeosCoSim_IoSignalId id,
+    [in] <span class="hljs-keyword">uint32_t</span>             length,
+    [in] <span class="hljs-keyword">const</span> <span class="hljs-keyword">void</span>*          value
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[in] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<p><code>[in] id</code></p>
+<p>The <a href="#VeosCoSim_IoSignalInfo">VeosCoSim_IoSignalId</a> identifying the IO write signal.</p>
+<p><code>[in] length</code></p>
+<p>A length of the value in count of items.</p>
+<p><code>[in] value</code></p>
+<p>A pointer to the new value.</p>
+<h3 id="return-values">Return values</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if setting the new value of the IO write signal was successful.</li>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred.</li>
+</ul>
+<h3 id="remarks">Remarks</h3>
+<p>The length of the value depends on the <a href="#VeosCoSim_DataType">VeosCoSim_DataType</a> and length of the <a href="#VeosCoSim_IoSignalInfo">VeosCoSim_IoSignalInfo</a>.
+This information can and should be obtained by calling <a href="#VeosCoSim_IoGetAvailableSignalsMI">VeosCoSim_IoGetAvailableSignalsMI</a> after the connection to
+the VeosCoSim server was established.</p>
+<div id="VeosCoSim_IoSignalInfo" />
+<h2 id="veoscosimiosignalinfo-structure">VeosCoSim_IoSignalInfo structure</h2>
+<p>The <strong>VeosCoSim_IoSignalInfo</strong> contains all information of an IO signal.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_MAX_NAME_LENGTH 1024</span>
+
+<span class="hljs-keyword">typedef</span> <span class="hljs-keyword">uint32_t</span> VeosCoSim_IoSignalId;
+
+<span class="hljs-keyword">typedef</span> <span class="hljs-class"><span class="hljs-keyword">struct</span> <span class="hljs-title">VeosCoSim_IoSignalInfo</span> {</span>
+    VeosCoSim_IoSignalId id;
+    <span class="hljs-keyword">uint32_t</span>             length;
+    VeosCoSim_DataType   dataType;
+    VeosCoSim_Direction  direction;
+    <span class="hljs-keyword">char</span>                 name[VEOSCOSIM_MAX_NAME_LENGTH];
+} VeosCoSim_IoSignalInfo;
+</div></code></pre>
+<h3 id="members">Members</h3>
+<p><code>id</code></p>
+<p>The unique identifier of the IO signal.</p>
+<p><code>length</code></p>
+<p>The array length of the IO signal, or 1, if it's a scalar.</p>
+<p><code>dataType</code></p>
+<p>The <a href="#VeosCoSim_DataType">VeosCoSim_DataType</a> of the IO signal.</p>
+<p><code>direction</code></p>
+<p>The <a href="#VeosCoSim_Direction">VeosCoSim_Direction</a> of the IO signal.</p>
+<p><code>name</code></p>
+<p>The name of the IO signal.</p>
+<div id="VeosCoSim_LinMessage" />
+<h2 id="veoscosimlinmessage-structure">VeosCoSim_LinMessage structure</h2>
+<p>The <strong>VeosCoSim_LinMessage</strong> contains the information of a LIN message.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_LIN_MESSAGE_MAX_LENGTH 8</span>
+
+<span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_LIN_MESSAGE_FLAG_HEADER     1</span>
+<span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_LIN_MESSAGE_FLAG_RESPONSE   2</span>
+<span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_LIN_MESSAGE_FLAG_TX         8</span>
+<span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_LIN_MESSAGE_FLAG_ERR       16</span>
+<span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_LIN_MESSAGE_FLAG_DROP      32</span>
+<span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_LIN_MESSAGE_FLAG_SNR       64</span>
+<span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_LIN_MESSAGE_FLAG_WAKE     128</span>
+<span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_LIN_MESSAGE_FLAG_SLEEP    256</span>
+
+<span class="hljs-keyword">typedef</span> <span class="hljs-class"><span class="hljs-keyword">struct</span> <span class="hljs-title">VeosCoSim_LinMessage</span> {</span>
+    VeosCoSim_Time      timestamp;
+    VeosCoSim_ChannelId channelId;
+    <span class="hljs-keyword">uint32_t</span>            identifier;
+    <span class="hljs-keyword">uint32_t</span>            flags;
+    <span class="hljs-keyword">uint32_t</span>            length;
+    <span class="hljs-keyword">uint8_t</span>             data[VEOSCOSIM_LIN_MESSAGE_MAX_LENGTH];
+} VeosCoSim_LinMessage;
+</div></code></pre>
+<h3 id="members">Members</h3>
+<p><code>timestamp</code></p>
+<p>The <a href="#VeosCoSim_Time">VeosCoSim_Time</a> containing the simulation time when the LIN message was received at the VeosCoSim server.</p>
+<p><code>channelId</code></p>
+<p>The <a href="#VeosCoSim_BusChannelInfo">VeosCoSim_ChannelId</a> of the bus controller sending or receiving the LIN message.</p>
+<p><code>identifier</code></p>
+<p>The id of the LIN message.</p>
+<p><code>flags</code></p>
+<p>The flags of the LIN message. Can be one of the following:</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Direction</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VEOSCOSIM_LIN_MESSAGE_FLAG_HEADER</td>
+<td>Transmit / Receive</td>
+<td>Header event</td>
+</tr>
+<tr>
+<td>VEOSCOSIM_LIN_MESSAGE_FLAG_RESPONSE</td>
+<td>Transmit / Receive</td>
+<td>Response data event</td>
+</tr>
+<tr>
+<td>VEOSCOSIM_LIN_MESSAGE_FLAG_TX</td>
+<td>Receive only</td>
+<td>Transmit direction</td>
+</tr>
+<tr>
+<td>VEOSCOSIM_LIN_MESSAGE_FLAG_ERR</td>
+<td>Receive only</td>
+<td>Error indicator</td>
+</tr>
+<tr>
+<td>VEOSCOSIM_LIN_MESSAGE_FLAG_DROP</td>
+<td>Receive only</td>
+<td>Queue drop</td>
+</tr>
+<tr>
+<td>VEOSCOSIM_LIN_MESSAGE_FLAG_SNR</td>
+<td>Receive only</td>
+<td>Slave not responding</td>
+</tr>
+<tr>
+<td>VEOSCOSIM_LIN_MESSAGE_FLAG_WAKE</td>
+<td>Receive only</td>
+<td>Wake event</td>
+</tr>
+<tr>
+<td>VEOSCOSIM_LIN_MESSAGE_FLAG_SLEEP</td>
+<td>Receive only</td>
+<td>Sleep event</td>
+</tr>
+</tbody>
+</table>
+<p><code>length</code></p>
+<p>The length of the LIN message data.</p>
+<p><code>data</code></p>
+<p>The LIN message data.</p>
+<div id="VeosCoSim_LinReceiveMessageMI" />
+<h2 id="veoscosimlinreceivemessagemi-function">VeosCoSim_LinReceiveMessageMI function</h2>
+<p>The <strong>VeosCoSim_LinReceiveMessageMI</strong> function receives a new LIN message from the VeosCoSim server.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_LinReceiveMessageMI</span><span class="hljs-params">(
+    [in]  VeosCoSim_Handle             handle,
+    [out] <span class="hljs-keyword">uint32_t</span>*                    count,
+    [out] <span class="hljs-keyword">const</span> VeosCoSim_LinMessage** messages
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[in] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<p><code>[out] count</code></p>
+<p>The count of available <a href="#VeosCoSim_LinMessage">VeosCoSim_LinMessage</a> instances.</p>
+<p><code>[out] messages</code></p>
+<p>A pointer to a list of <a href="#VeosCoSim_LinMessage">VeosCoSim_LinMessage</a> instances or NULL, if there is no LIN message available.</p>
+<h3 id="return-values">Return values</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if a LIN message was received.</li>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred.</li>
+</ul>
+<h3 id="remarks">Remarks</h3>
+<p>If the <a href="#VeosCoSim_RuntimeConfiguration">linMessageReceivedCallback</a> is registered,
+the LIN message can't be received by calling <strong>VeosCoSim_LinReceiveMessageMI</strong>.</p>
+<div id="VeosCoSim_LinTransmitMessageMI" />
+<h2 id="veoscosimlintransmitmessagemi-function">VeosCoSim_LinTransmitMessageMI function</h2>
+<p>The <strong>VeosCoSim_LinTransmitMessageMI</strong> function transmits a LIN message to the VeosCoSim server.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_LinTransmitMessageMI</span><span class="hljs-params">(
+    [in] VeosCoSim_Handle            handle,
+    [in] <span class="hljs-keyword">const</span> VeosCoSim_LinMessage* message
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[in] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<p><code>[in] message</code></p>
+<p>A pointer to a <a href="#VeosCoSim_LinMessage">VeosCoSim_LinMessage</a> that will be transmitted.</p>
+<h3 id="return-values">Return values</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if the LIN message was transmitted.</li>
+<li><strong>VeosCoSim_Result_Full</strong>, if there was no space for the LIN message in the internal buffer.</li>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred.</li>
+</ul>
+<div id="VeosCoSim_Result" />
+<h2 id="veoscosimresult-enumeration">VeosCoSim_Result enumeration</h2>
+<p>The <strong>VeosCoSim_Result</strong> contains all return values of all VeosCoSim client functions.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-keyword">typedef</span> <span class="hljs-keyword">enum</span> VeosCoSim_Result {
+    VeosCoSim_Result_OK,
+    VeosCoSim_Result_Error,
+    VeosCoSim_Result_Full
+} VeosCoSim_Result;
+</div></code></pre>
+<h3 id="constants">Constants</h3>
+<p><code>VeosCoSim_Result_OK</code></p>
+<p>The function call was successful.</p>
+<p><code>VeosCoSim_Result_Error</code></p>
+<p>The function call failed with an error. In this case a log message was sent via the <a href="#VeosCoSim_ConnectMI">VeosCoSim_LogCallback</a>.</p>
+<p><code>VeosCoSim_Result_Full</code></p>
+<p>Only for transmit bus message functions. No space left for new bus message.</p>
+<div id="VeosCoSim_RunMI" />
+<h2 id="veoscosimrunmi-function">VeosCoSim_RunMI function</h2>
+<p>The <strong>VeosCoSim_RunMI</strong> function starts the co-simulation.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_RunMI</span><span class="hljs-params">(
+    [in] VeosCoSim_Handle               handle,
+    [in] VeosCoSim_RuntimeConfiguration <span class="hljs-built_in">config</span>
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[in] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<p><code>[in] config</code></p>
+<p>The <a href="#VeosCoSim_RuntimeConfiguration">VeosCoSim_RuntimeConfiguration</a> containing the callbacks, the VeosCoSim client will call during the co-simulation.</p>
+<h3 id="return-values">Return values</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred or the co-simulation finished.</li>
+</ul>
+<h3 id="remarks">Remarks</h3>
+<p>The call to <strong>VeosCoSim_RunMI</strong> is blocking. The co-simulation will be done by callbacks provided by the config parameter.
+The fact, that <strong>VeosCoSim_RunMI</strong> always returns <strong>VeosCoSim_Result_Error</strong> is due to a current limitation in VEOS.</p>
+<div id="VeosCoSim_RuntimeConfiguration" />
+<h2 id="veoscosimruntimeconfiguration-structure">VeosCoSim_RuntimeConfiguration structure</h2>
+<p>The <strong>VeosCoSim_RuntimeConfiguration</strong> structure contains the callbacks to register
+and the user data for the co-simulation run passed to <a href="#VeosCoSim_RunMI">VeosCoSim_RunMI</a>.
+All callbacks are optional.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function"><span class="hljs-keyword">typedef</span> <span class="hljs-title">void</span> <span class="hljs-params">(*VeosCoSim_Callback)</span><span class="hljs-params">(
+    [out] VeosCoSim_Time  simulationTime,
+    [out] <span class="hljs-keyword">void</span>*           userData
+)</span></span>;
+
+<span class="hljs-function"><span class="hljs-keyword">typedef</span> <span class="hljs-title">void</span> <span class="hljs-params">(*VeosCoSim_IoReadCallback)</span><span class="hljs-params">(
+    [out] VeosCoSim_Time        simulationTime,
+    [out] VeosCoSim_IoSignalId  id,
+    [out] <span class="hljs-keyword">const</span> <span class="hljs-keyword">void</span>*           value,
+    [out] <span class="hljs-keyword">uint32_t</span>              length,
+    [out] <span class="hljs-keyword">void</span>*                 userData
+)</span></span>;
+
+<span class="hljs-function"><span class="hljs-keyword">typedef</span> <span class="hljs-title">void</span> <span class="hljs-params">(*VeosCoSim_CanMessageReceivedCallback)</span><span class="hljs-params">(
+    [out] VeosCoSim_Time              simulationTime,
+    [out] <span class="hljs-keyword">const</span> VeosCoSim_CanMessage* message,
+    [out] <span class="hljs-keyword">void</span>*                       userData
+)</span></span>;
+
+<span class="hljs-function"><span class="hljs-keyword">typedef</span> <span class="hljs-title">void</span> <span class="hljs-params">(*VeosCoSim_LinMessageReceivedCallback)</span><span class="hljs-params">(
+    [out] VeosCoSim_Time              simulationTime,
+    [out] <span class="hljs-keyword">const</span> VeosCoSim_LinMessage* message,
+    [out] <span class="hljs-keyword">void</span>*                       userData
+)</span></span>;
+
+<span class="hljs-keyword">typedef</span> <span class="hljs-class"><span class="hljs-keyword">struct</span> <span class="hljs-title">VeosCoSim_RuntimeConfiguration</span> {</span>
+    VeosCoSim_Callback                   startSimulationCallback;
+    VeosCoSim_Callback                   stopSimulationCallback;
+    VeosCoSim_Callback                   terminateSimulationCallback;
+    VeosCoSim_Callback                   timeTriggerCallback;
+    VeosCoSim_IoReadCallback             ioReadCallback;
+    VeosCoSim_CanMessageReceivedCallback canMessageReceivedCallback;
+    VeosCoSim_LinMessageReceivedCallback linMessageReceivedCallback;
+    VeosCoSim_EthMessageReceivedCallback ethMessageReceivedCallback;
+    <span class="hljs-keyword">void</span>*                                userData;
+} VeosCoSim_RuntimeConfiguration;
+</div></code></pre>
+<h3 id="members">Members</h3>
+<p><code>startSimulationCallback</code></p>
+<p>The <strong>VeosCoSim_Callback</strong> callback, that will be called, when the simulation started. Can be NULL.
+The given <strong>simulationTime</strong> is the virtual simulation time when the callback occurred.
+The given <strong>userData</strong> is the same object that was set in the <strong>VeosCoSim_RuntimeConfiguration</strong> object.</p>
+<p><code>stopSimulationCallback</code></p>
+<p>The <strong>VeosCoSim_Callback</strong> callback, that will be called, when the simulation stopped. Can be NULL.
+The given <strong>simulationTime</strong> is the virtual simulation time when the callback occurred.
+The given <strong>userData</strong> is the same object that was set in the <strong>VeosCoSim_RuntimeConfiguration</strong> object.</p>
+<p><code>terminateSimulationCallback</code></p>
+<p>This callback is currently unused.</p>
+<p><code>timeTriggerCallback</code></p>
+<p>The <strong>VeosCoSim_Callback</strong> callback, that will be called at the end of a simulation step triggered by VEOS. Can be NULL.
+The given <strong>simulationTime</strong> is the virtual simulation time when the callback occurred.
+The given <strong>userData</strong> is the same object that was set in the <strong>VeosCoSim_RuntimeConfiguration</strong> object.</p>
+<p><code>ioReadCallback</code></p>
+<p>The <strong>VeosCoSim_IoReadCallback</strong> callback, that will be called, when an input signal changed its value. Can be NULL.
+The given <strong>simulationTime</strong> is the virtual simulation time when the callback occurred.
+The given <strong>id</strong> is the signal id of the signal that changed its value.
+The given <strong>length</strong> is the length of the signal in count of items.
+The given <strong>value</strong> is the new value of the signal.
+The given <strong>userData</strong> is the same object that was set in the <strong>VeosCoSim_RuntimeConfiguration</strong> object.</p>
+<p><code>canMessageReceivedCallback</code></p>
+<p>The <strong>VeosCoSim_CanMessageReceivedCallback</strong> callback, that will be called, when a new CAN message was received. Can be NULL.
+The given <strong>simulationTime</strong> is the virtual simulation time when the callback occurred.
+The given <strong>message</strong> is a pointer to the received message.
+The given <strong>userData</strong> is the same object that was set in the <strong>VeosCoSim_RuntimeConfiguration</strong> object.</p>
+<p><code>linMessageReceivedCallback</code></p>
+<p>The <strong>VeosCoSim_LinMessageReceivedCallback</strong> callback, that will be called, when a new LIN message was received. Can be NULL.
+The given <strong>simulationTime</strong> is the virtual simulation time when the callback occurred.
+The given <strong>message</strong> is a pointer to the received message.
+The given <strong>userData</strong> is the same object that was set in the <strong>VeosCoSim_RuntimeConfiguration</strong> object.</p>
+<p><code>ethMessageReceivedCallback</code></p>
+<p>The <strong>VeosCoSim_EthMessageReceivedCallback</strong> callback, that will be called, when a new ETH message was received. Can be NULL.
+The given <strong>simulationTime</strong> is the virtual simulation time when the callback occurred.
+The given <strong>message</strong> is a pointer to the received message.
+The given <strong>userData</strong> is the same object that was set in the <strong>VeosCoSim_RuntimeConfiguration</strong> object.</p>
+<p><code>userData</code></p>
+<p>The user data that will be passed to each callback handler. Can be NULL.</p>
+<div id="VeosCoSim_Severity" />
+<h2 id="veoscosimseverity-enumeration">VeosCoSim_Severity enumeration</h2>
+<p>The <strong>VeosCoSim_Severity</strong> contains all severity values than can be passed as an argument by the <a href="#VeosCoSim_ConnectMI">VeosCoSim_LogCallback</a>.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-keyword">typedef</span> <span class="hljs-keyword">enum</span> VeosCoSim_Severity {
+    VeosCoSim_Severity_Info,
+    VeosCoSim_Severity_Warning,
+    VeosCoSim_Severity_Error,
+    VeosCoSim_Severity_Trace
+} VeosCoSim_Severity;
+</div></code></pre>
+<h3 id="constants">Constants</h3>
+<p><code>VeosCoSim_Severity_Error</code></p>
+<p>The severity is of type error.</p>
+<p><code>VeosCoSim_Severity_Warning</code></p>
+<p>The severity is of type warning.</p>
+<p><code>VeosCoSim_Severity_Info</code></p>
+<p>The severity is of type information.</p>
+<p><code>VeosCoSim_Severity_Trace</code></p>
+<p>The severity is of type trace.</p>
+<div id="VeosCoSim_StartNonBlockingMI" />
+<h2 id="veoscosimstartnonblockingmi-function">VeosCoSim_StartNonBlockingMI function</h2>
+<p>The <strong>VeosCoSim_StartNonBlockingMI</strong> starts a non-blocking co-simulation. Contrary to <a href="#VeosCoSim_RunMI">VeosCoSim_RunMI</a> this function returns after preparing the
+co-simulation.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-function">VeosCoSim_Result <span class="hljs-title">VeosCoSim_StartNonBlockingMI</span><span class="hljs-params">(
+    [in] VeosCoSim_Handle               handle,
+    [in] VeosCoSim_RuntimeConfiguration <span class="hljs-built_in">config</span>
+)</span></span>;
+</div></code></pre>
+<h3 id="parameters">Parameters</h3>
+<p><code>[in] handle</code></p>
+<p>The <a href="#VeosCoSim_Handle">VeosCoSim_Handle</a>.</p>
+<p><code>[in] config</code></p>
+<p>The <a href="#VeosCoSim_RuntimeConfiguration">VeosCoSim_RuntimeConfiguration</a> containing the callbacks, the VeosCoSim client will call during the co-simulation.</p>
+<h3 id="return-values">Return values</h3>
+<p>A <a href="#VeosCoSim_Result">VeosCoSim_Result</a> describing the success of the function:</p>
+<ul>
+<li><strong>VeosCoSim_Result_OK</strong>, if starting the co-simulation was successful.</li>
+<li><strong>VeosCoSim_Result_Error</strong>, if an error occurred.</li>
+</ul>
+<div id="VeosCoSim_Time" />
+<h2 id="veoscosimtime-typedef">VeosCoSim_Time typedef</h2>
+<p>The <strong>VeosCoSim_Time</strong> type definition describes the simulation time.</p>
+<h3 id="syntax">Syntax</h3>
+<pre class="hljs"><code><div><span class="hljs-meta">#<span class="hljs-meta-keyword">define</span> VEOSCOSIM_TIME_RESOLUTION_PER_SECOND 1e9</span>
+
+<span class="hljs-keyword">typedef</span> <span class="hljs-keyword">int64_t</span> VeosCoSim_Time;
+</div></code></pre>
+<h3 id="remarks">Remarks</h3>
+<p>The unit is nanoseconds. To get the time in seconds, one has to divide the value by <strong>VEOSCOSIM_TIME_RESOLUTION_PER_SECOND</strong>.</p>
+
+</body>
+</html>

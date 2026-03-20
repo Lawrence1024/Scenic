@@ -1,3 +1,0 @@
--xc++
--std=c++17
--DDSVEOSCOSIM_EXPORT

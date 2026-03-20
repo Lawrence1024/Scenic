@@ -1,7 +1,0 @@
-root=true
-
-[*.{cpp,h}]
-charset = utf-8
-trim_trailing_whitespace = true
-
-file_header_template = Copyright dSPACE SE & Co. KG. All rights reserved.
