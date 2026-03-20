@@ -293,8 +293,8 @@ VeosCoSim_Result HostClient(std::string_view host, std::string_view serverName) 
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string host = "127.0.0.1";
-    std::string serverName = "Example1";
+    std::string host = "192.168.100.101";
+    std::string serverName = "CoSimServerScenic";
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--host") == 0) {
