@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61", "pybind11>=2.11"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "veos-cosim"
+version = "0.2.0"
+description = "Python bindings for the dSPACE VeosCoSim client library (VeosCoSimAppl)."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "BSD-3-Clause" }
+authors = [{ name = "Scenic contributors" }]
+keywords = ["dspace", "veos", "cosim", "scenic"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C++",
+    "Operating System :: Microsoft :: Windows",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["veos_cosim*"]

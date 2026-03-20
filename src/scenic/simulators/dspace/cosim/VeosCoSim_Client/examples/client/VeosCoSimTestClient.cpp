@@ -3,9 +3,24 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "Ws2_32.lib")
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 #include "ClientServerTestHelper.h"
 #include "Generator.h"
@@ -18,6 +33,17 @@ uint32_t g_busControllersCount;
 const VeosCoSim_BusChannelInfo* g_busControllers;
 uint32_t g_ioSignalsCount;
 const VeosCoSim_IoSignalInfo* g_ioSignals;
+std::mutex g_apiMutex;
+
+bool g_bridgeEnabled = false;
+uint16_t g_bridgePort = 0;
+std::atomic<bool> g_bridgeShutdown{false};
+std::thread g_bridgeThread;
+std::mutex g_stepMutex;
+std::condition_variable g_stepCv;
+bool g_waitForStepRequest = false;
+bool g_stepAvailable = false;
+VeosCoSim_Time g_stepTime = 0;
 
 #define CHECK_RESULT(action)                  \
     do {                                      \
@@ -169,7 +195,21 @@ VeosCoSim_Result SendSomeData(VeosCoSim_Time simulationTime) {
 }
 
 void OnTimeTriggerCallback(VeosCoSim_Time simulationTime, void* /*unused*/) {
-    SendSomeData(simulationTime);
+    {
+        std::lock_guard<std::mutex> lock(g_apiMutex);
+        SendSomeData(simulationTime);
+    }
+    if (!g_bridgeEnabled) {
+        return;
+    }
+    std::unique_lock<std::mutex> lock(g_stepMutex);
+    if (!g_waitForStepRequest) {
+        return;
+    }
+    g_stepTime = simulationTime;
+    g_stepAvailable = true;
+    g_stepCv.notify_all();
+    g_stepCv.wait(lock, [] { return !g_waitForStepRequest || g_bridgeShutdown.load(); });
 }
 
 void OnInputSignalChanged(VeosCoSim_Time simulationTime, VeosCoSim_IoSignalId id, uint32_t length, const void* value, void* /*unused*/) {
@@ -262,14 +302,123 @@ VeosCoSim_Result Connect(std::string_view host, std::string_view serverName) {
     return VeosCoSim_Result_OK;
 }
 
-VeosCoSim_Result HostClient(std::string_view host, std::string_view serverName) {
+std::string ReadLineFromSocket(int socketFd) {
+    std::string line;
+    while (true) {
+        char ch = 0;
+#ifdef _WIN32
+        const int read = recv(socketFd, &ch, 1, 0);
+#else
+        const int read = static_cast<int>(recv(socketFd, &ch, 1, 0));
+#endif
+        if (read <= 0) {
+            return {};
+        }
+        if (ch == '\n') {
+            return line;
+        }
+        if (ch != '\r') {
+            line.push_back(ch);
+        }
+    }
+}
+
+void WriteLineToSocket(int socketFd, const std::string& line) {
+    const std::string message = line + "\n";
+#ifdef _WIN32
+    (void)send(socketFd, message.c_str(), static_cast<int>(message.size()), 0);
+#else
+    (void)send(socketFd, message.c_str(), message.size(), 0);
+#endif
+}
+
+void BridgeServerThread() {
+#ifdef _WIN32
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        return;
+    }
+#endif
+    const int listenFd = static_cast<int>(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
+    if (listenFd < 0) {
+        return;
+    }
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(g_bridgePort);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(listenFd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+        return;
+    }
+    if (listen(listenFd, 1) != 0) {
+        return;
+    }
+    printf("Bridge server listening on 127.0.0.1:%u\n", g_bridgePort);
+
+    const int clientFd = static_cast<int>(accept(listenFd, nullptr, nullptr));
+    if (clientFd < 0) {
+        return;
+    }
+    WriteLineToSocket(clientFd, "OK VeosCoSim bridge ready");
+
+    while (!g_bridgeShutdown.load()) {
+        const std::string line = ReadLineFromSocket(clientFd);
+        if (line.empty()) {
+            break;
+        }
+        if (line == "PING") {
+            WriteLineToSocket(clientFd, "PONG");
+            continue;
+        }
+        if (line == "STEP") {
+            VeosCoSim_Time stepTime = 0;
+            {
+                std::unique_lock<std::mutex> lock(g_stepMutex);
+                g_waitForStepRequest = true;
+                g_stepAvailable = false;
+                g_stepCv.wait(lock, [] { return g_stepAvailable || g_bridgeShutdown.load(); });
+                stepTime = g_stepTime;
+                g_waitForStepRequest = false;
+            }
+            g_stepCv.notify_all();
+            WriteLineToSocket(clientFd, "STEP " + std::to_string(stepTime));
+            continue;
+        }
+        if (line == "QUIT") {
+            WriteLineToSocket(clientFd, "BYE");
+            break;
+        }
+        WriteLineToSocket(clientFd, "ERR unknown command");
+    }
+
+#ifdef _WIN32
+    closesocket(clientFd);
+    closesocket(listenFd);
+    WSACleanup();
+#else
+    close(clientFd);
+    close(listenFd);
+#endif
+}
+
+VeosCoSim_Result HostClient(std::string_view host, std::string_view serverName, uint16_t bridgePort) {
     CHECK_RESULT(Connect(host, serverName));
+    if (bridgePort > 0) {
+        g_bridgeEnabled = true;
+        g_bridgePort = bridgePort;
+        g_bridgeThread = std::thread(BridgeServerThread);
+    }
 
     std::thread(RunCoSimulationBlocking).detach();
 
     while (true) {
         switch (GetChar()) {
             case CTRL('c'):
+                g_bridgeShutdown.store(true);
+                g_stepCv.notify_all();
+                if (g_bridgeThread.joinable()) {
+                    g_bridgeThread.join();
+                }
                 return VeosCoSim_DisconnectMI(g_handle);
             case '1':
                 SwitchSendingIoSignals();
@@ -295,6 +444,7 @@ VeosCoSim_Result HostClient(std::string_view host, std::string_view serverName) 
 int main(int argc, char** argv) {
     std::string host = "192.168.100.101";
     std::string serverName = "CoSimServerScenic";
+    uint16_t bridgePort = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--host") == 0) {
@@ -314,9 +464,18 @@ int main(int argc, char** argv) {
                 return 1;
             }
         }
+
+        if (strcmp(argv[i], "--bridge-port") == 0) {
+            if (++i < argc) {
+                bridgePort = static_cast<uint16_t>(std::stoi(argv[i]));
+            } else {
+                printf("No bridge port specified.\n");
+                return 1;
+            }
+        }
     }
 
-    const VeosCoSim_Result result = HostClient(host, serverName);
+    const VeosCoSim_Result result = HostClient(host, serverName, bridgePort);
 
     return result == VeosCoSim_Result_OK ? 0 : 1;
 }

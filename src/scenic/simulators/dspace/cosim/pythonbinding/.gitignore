@@ -1,0 +1,24 @@
+# Build / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Extension artifacts
+*.pyd
+*.so
+*.obj
+*.exp
+*.lib
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.vs/
+*.user
