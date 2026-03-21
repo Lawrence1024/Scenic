@@ -6,6 +6,7 @@ param control_period = 0.05
 param scenic_control = True
 param fellow_dummy_centerline = True
 param fellow_dummy_velocity_kmh = 50
+param launch_veos_ipc_client = True
 model scenic.simulators.dspace.racing_model
 
 # --- Ego car with MPC behavior ---

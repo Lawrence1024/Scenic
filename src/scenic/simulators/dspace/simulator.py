@@ -46,6 +46,18 @@ print(f"[PatchID] simulator.py loaded from {__file__}")
 # dSPACE path for simulated time (read on each control step and logged)
 SIMULATED_TIME_PATH = "Platform()://ASM_Traffic/Simulation and RTOS/Simulation/SimulationTime"
 
+
+def _default_veos_ipc_client_exe() -> Path:
+    """Built IPC client next to this package (see ``cosim/veos_cosim_ipc_bridge/build_client.bat``)."""
+    return (
+        Path(__file__).resolve().parent
+        / "cosim"
+        / "veos_cosim_ipc_bridge"
+        / "client"
+        / "build"
+        / "VeosCoSimTestClientIpc.exe"
+    )
+
 # MAPort teardown: manual_mode off before RTA start and maneuver stop
 MANUAL_MODE_PATH = "Platform()://RaceControl/Model Root/Parameters/manual_mode"
 
@@ -53,7 +65,14 @@ MANUAL_MODE_PATH = "Platform()://RaceControl/Model Root/Parameters/manual_mode"
 class DSpaceSimulator(RacingSimulator):
     def __init__(self, *, scenario_src="LagunaSeca_ExternalControl",
                  scenario_name=None, timestep=1, control_period=None, save_as=True,
-                 scenic_control=True, art_stack_container="art_driving_stack"):
+                 scenic_control=True, art_stack_container="art_driving_stack",
+                 launch_veos_ipc_client=False,
+                 veos_ipc_client_exe=None,
+                 veos_host="192.168.100.101",
+                 veos_cosim_server_name="CoSimServerScenic",
+                 sync_bridge_host="127.0.0.1",
+                 sync_bridge_port=50555,
+                 veos_ipc_client_connect_timeout=120.0):
         super().__init__()
         self.scenario_src = scenario_src
         self.scenario_name = scenario_name
@@ -65,6 +84,14 @@ class DSpaceSimulator(RacingSimulator):
         self.scenic_control = bool(scenic_control)
         # ART stack: Docker container name for ROS2 reset_vks_state and set_selected_ttl
         self.art_stack_container = str(art_stack_container)
+        # VEOS CoSim: optionally spawn VeosCoSimTestClientIpc.exe (see cosim/README.md)
+        self.launch_veos_ipc_client = bool(launch_veos_ipc_client)
+        self.veos_ipc_client_exe = veos_ipc_client_exe  # None -> _default_veos_ipc_client_exe()
+        self.veos_host = str(veos_host)
+        self.veos_cosim_server_name = str(veos_cosim_server_name)
+        self.sync_bridge_host = str(sync_bridge_host)
+        self.sync_bridge_port = int(sync_bridge_port)
+        self.veos_ipc_client_connect_timeout = float(veos_ipc_client_connect_timeout)
 
     def createSimulation(self, scene, **kwargs):
         return DSpaceSimulation(scene, self, **kwargs)
@@ -80,6 +107,7 @@ class DSpaceSimulation(RacingSimulation):
         self._ego_created = False  # Track if ego vehicle was created
         self._sync_bridge = None
         self._sync_bridge_connected_once = False
+        self._veos_ipc_client_proc = None  # subprocess.Popen if launch_veos_ipc_client
         
         # dSPACE two-phase architecture
         self._modeldesk_app = None  # ModelDesk COM application
@@ -324,10 +352,72 @@ class DSpaceSimulation(RacingSimulation):
                 print(f"[ModelDesk] Reset after Download failed: {e}")
 
         # 8) Initialize SyncStepBridge for VEOS CoSim synchronization
-        self._sync_bridge = SyncStepBridge(host="127.0.0.1", port=50555)
+        _sb_host = getattr(self.sim, "sync_bridge_host", "127.0.0.1")
+        _sb_port = int(getattr(self.sim, "sync_bridge_port", 50555))
+        self._sync_bridge = SyncStepBridge(host=_sb_host, port=_sb_port)
         self._sync_bridge.start()
-        print("[CoSimSync] SyncStepBridge listening on 127.0.0.1:50555")
-        print("[CoSimSync] Waiting for VEOS IPC client will happen on first Scenic step.")
+        print(f"[CoSimSync] SyncStepBridge listening on {_sb_host}:{_sb_port}")
+
+        if getattr(self.sim, "launch_veos_ipc_client", False):
+            exe_raw = getattr(self.sim, "veos_ipc_client_exe", None)
+            exe_path = Path(exe_raw) if exe_raw else _default_veos_ipc_client_exe()
+            if not exe_path.is_file():
+                try:
+                    self._sync_bridge.close()
+                finally:
+                    self._sync_bridge = None
+                raise SimulationCreationError(
+                    f"launch_veos_ipc_client=True but IPC client EXE not found: {exe_path}. "
+                    "Build with cosim\\veos_cosim_ipc_bridge\\build_client.bat or set veos_ipc_client_exe=..."
+                )
+            _vh = getattr(self.sim, "veos_host", "192.168.100.101")
+            _vn = getattr(self.sim, "veos_cosim_server_name", "CoSimServerScenic")
+            _timeout = float(getattr(self.sim, "veos_ipc_client_connect_timeout", 120.0))
+            cmd = [
+                str(exe_path),
+                "--host",
+                _vh,
+                "--name",
+                _vn,
+                "--ipc-host",
+                _sb_host,
+                "--ipc-port",
+                str(_sb_port),
+            ]
+            print(f"[CoSimSync] Launching VEOS IPC client: {' '.join(cmd)}")
+            self._veos_ipc_client_proc = subprocess.Popen(
+                cmd,
+                cwd=str(exe_path.parent),
+                creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
+            )
+            print(
+                f"[CoSimSync] Waiting for IPC client to connect (timeout {_timeout}s) ..."
+            )
+            try:
+                self._sync_bridge.wait_connected(timeout=_timeout)
+            except Exception as e:
+                try:
+                    self._veos_ipc_client_proc.terminate()
+                    self._veos_ipc_client_proc.wait(timeout=5)
+                except Exception:
+                    try:
+                        self._veos_ipc_client_proc.kill()
+                    except Exception:
+                        pass
+                self._veos_ipc_client_proc = None
+                try:
+                    self._sync_bridge.close()
+                finally:
+                    self._sync_bridge = None
+                raise SimulationCreationError(
+                    f"VEOS IPC client did not connect to SyncStepBridge within {_timeout}s: {e}"
+                ) from e
+            print("[CoSimSync] VEOS IPC client connected to SyncStepBridge.")
+        else:
+            print(
+                "[CoSimSync] launch_veos_ipc_client=False — start VeosCoSimTestClientIpc.exe manually "
+                "if VEOS requires the client, or set launch_veos_ipc_client=True on DSpaceSimulator."
+            )
 
         # 8) Connect ControlDesk and initialize VesiInterface (single connection before reset)
         self._cd = cd_session.connect_and_prepare(self)
@@ -1522,6 +1612,21 @@ class DSpaceSimulation(RacingSimulation):
             finally:
                 self._sync_bridge = None
                 self._sync_bridge_connected_once = False
+
+        # 3b) VEOS IPC client subprocess (if Scenic launched it via launch_veos_ipc_client)
+        if getattr(self, "_veos_ipc_client_proc", None) is not None:
+            print("[CoSimSync] Terminating VEOS IPC client process ...")
+            try:
+                self._veos_ipc_client_proc.terminate()
+                self._veos_ipc_client_proc.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                try:
+                    self._veos_ipc_client_proc.kill()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            self._veos_ipc_client_proc = None
 
         # 4) MAPort teardown
         if self._maport is not None:

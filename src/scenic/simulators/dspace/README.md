@@ -190,8 +190,39 @@ against the same VEOS server simultaneously.
 
 ## Practical startup order for Scenic + CoSim sync
 
-### Step 1 — start Scenic
-Launch Scenic normally.
+### Option A — let Scenic launch the IPC client (recommended)
+
+In your Scenic program or model, set:
+
+```text
+param launch_veos_ipc_client = True
+```
+
+(Or pass `launch_veos_ipc_client=True` to `DSpaceSimulator` from Python.)
+
+During `setup()`, Scenic will:
+
+1. Start `SyncStepBridge` on `127.0.0.1:50555` (override with `sync_bridge_host` / `sync_bridge_port`).
+2. Spawn `VeosCoSimTestClientIpc.exe` from `cosim/veos_cosim_ipc_bridge/client/build/` (override with `veos_ipc_client_exe`).
+3. Wait until the client connects, then continue (VEOS host/name: `veos_host`, `veos_cosim_server_name`).
+
+You should see:
+
+```text
+[CoSimSync] SyncStepBridge listening on 127.0.0.1:50555
+[CoSimSync] Launching VEOS IPC client: ...
+[CoSimSync] VEOS IPC client connected to SyncStepBridge.
+```
+
+On simulation shutdown, Scenic terminates that process.
+
+Build the client once: `cosim\veos_cosim_ipc_bridge\build_client.bat`.
+
+### Option B — manual Terminal 2
+
+If `launch_veos_ipc_client` is `False` (default), start Scenic first, then start the IPC client yourself.
+
+#### Step 1 — start Scenic
 
 During setup, Scenic should print something like:
 
@@ -201,15 +232,18 @@ During setup, Scenic should print something like:
 
 This means Scenic is ready to accept the IPC client connection.
 
-### Step 2 — start the IPC-enabled CoSim client
+#### Step 2 — start the IPC-enabled CoSim client
+
 From the IPC bridge build folder, run:
 
 ```powershell
 .\VeosCoSimTestClientIpc.exe --host 192.168.100.101 --name CoSimServerScenic --ipc-host 127.0.0.1 --ipc-port 50555
 ```
 
-### Step 3 — verify VEOS-side connection
+#### Step 3 — verify VEOS-side connection
+
 The IPC client should:
+
 - connect to Scenic’s sync bridge
 - then connect to the VEOS CoSim server
 - then begin participating in step-by-step synchronization

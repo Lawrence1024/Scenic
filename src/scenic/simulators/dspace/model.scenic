@@ -32,6 +32,15 @@ param control_period = (globalParameters.control_period if 'control_period' in g
 # Set to False for external control (e.g. baseline from external_control_baseline.json).
 param scenic_control = (globalParameters.scenic_control if 'scenic_control' in globalParameters else True)
 
+# VEOS CoSim: set launch_veos_ipc_client=True to auto-start VeosCoSimTestClientIpc.exe (see cosim/README.md).
+param launch_veos_ipc_client = (globalParameters.launch_veos_ipc_client if 'launch_veos_ipc_client' in globalParameters else False)
+param veos_host = (globalParameters.veos_host if 'veos_host' in globalParameters else "192.168.100.101")
+param veos_cosim_server_name = (globalParameters.veos_cosim_server_name if 'veos_cosim_server_name' in globalParameters else "CoSimServerScenic")
+param veos_ipc_client_exe = (globalParameters.veos_ipc_client_exe if 'veos_ipc_client_exe' in globalParameters else None)
+param sync_bridge_host = (globalParameters.sync_bridge_host if 'sync_bridge_host' in globalParameters else "127.0.0.1")
+param sync_bridge_port = (globalParameters.sync_bridge_port if 'sync_bridge_port' in globalParameters else 50555)
+param veos_ipc_client_connect_timeout = (globalParameters.veos_ipc_client_connect_timeout if 'veos_ipc_client_connect_timeout' in globalParameters else 120.0)
+
 # Configure the dSPACE simulator
 simulator dspace.DSpaceSimulator(
     scenario_src=globalParameters.scenario_src,
@@ -39,6 +48,13 @@ simulator dspace.DSpaceSimulator(
     timestep=globalParameters.timestep,
     control_period=globalParameters.control_period,
     scenic_control=globalParameters.scenic_control,
+    launch_veos_ipc_client=globalParameters.launch_veos_ipc_client,
+    veos_host=globalParameters.veos_host,
+    veos_cosim_server_name=globalParameters.veos_cosim_server_name,
+    veos_ipc_client_exe=globalParameters.veos_ipc_client_exe,
+    sync_bridge_host=globalParameters.sync_bridge_host,
+    sync_bridge_port=globalParameters.sync_bridge_port,
+    veos_ipc_client_connect_timeout=globalParameters.veos_ipc_client_connect_timeout,
 )
 
 # dSPACE-specific racing car implementation

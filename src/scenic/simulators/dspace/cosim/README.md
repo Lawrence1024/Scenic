@@ -167,14 +167,18 @@ Scenic should log something like:
 That means Scenic is ready for the VEOS IPC client.
 
 #### VEOS side
-Then launch the IPC-enabled client:
+
+**Automatic (Scenic):** set `launch_veos_ipc_client=True` on `DSpaceSimulator` (or `param launch_veos_ipc_client = True` in `model.scenic`). Scenic spawns `VeosCoSimTestClientIpc.exe` after starting `SyncStepBridge` and waits for the connection. See `simulator.py` and `model.scenic`.
+
+**Manual:** launch the IPC-enabled client in a separate terminal:
 
 ```powershell
 cd C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\cosim\veos_cosim_ipc_bridge\client\build
 .\VeosCoSimTestClientIpc.exe --host 192.168.100.101 --name CoSimServerScenic --ipc-host 127.0.0.1 --ipc-port 50555
 ```
 
-What this terminal does:
+What this process does:
+
 - connects to Scenic’s localhost sync bridge
 - then connects to the VEOS CoSim server at `192.168.100.101`
 - waits on each `TIME_TRIGGER` until Scenic releases the next step
@@ -288,5 +292,5 @@ Then inspect:
 The most important thing to remember now is:
 
 - Scenic itself hosts the Python synchronization gate
-- the external IPC-enabled C++ client is the only VEOS-connected process
+- the external IPC-enabled C++ client is the only VEOS-connected process (Scenic can **spawn** it when `launch_veos_ipc_client=True`, or you start it manually)
 - synchronous stepping is implemented by blocking VEOS at `TIME_TRIGGER` until Scenic releases one step
