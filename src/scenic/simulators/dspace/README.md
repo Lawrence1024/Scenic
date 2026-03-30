@@ -28,6 +28,7 @@ At a high level, the dSPACE backend is responsible for four things:
 2. **Vehicle placement**
    - projecting Scenic world positions into route-relative `(s, t)`
    - placing ego and fellow vehicles in ModelDesk
+   - setting each fellow’s ModelDesk **Traffic Object** (3D vehicle asset from the Traffic Object browser)
    - comparing expected placement with ControlDesk readback
 
 3. **Control application**
@@ -72,6 +73,8 @@ At a high level, the dSPACE backend is responsible for four things:
 ### Placement / readback
 
 - `modeldesk/placement.py`
+- `modeldesk/traffic_object.py` — fellow **Traffic Object** asset (`TrafficObjectType.Activate` via ModelDesk COM)
+- `modeldesk/authoring.py`
 - `controldesk/readback.py`
 
 ### CoSim integration
@@ -228,6 +231,24 @@ To experiment with the IPC client and `SyncStepBridge` outside the normal Scenic
 
 ---
 
+## Fellow vehicle asset (Traffic Object)
+
+Every fellow Scenic creates in ModelDesk gets an explicit **Traffic Object** selection (the same field as in the ModelDesk Traffic Object browser). Implementation:
+
+- Module: `modeldesk/traffic_object.py`
+- API: `apply_fellow_traffic_object(fellow)` resolves a short asset name against `TrafficObjectType.AvailableElements` and calls `TrafficObjectType.Activate(full_path)`.
+- Default asset name: `DEFAULT_FELLOW_TRAFFIC_OBJECT_BASENAME` in that file (currently **`IAC_Car_AIRacing`**, resolving to a path such as `Vehicles\IAC_Racecars\IAC_Car_AIRacing.tro` when present in the library).
+
+Called from:
+
+- `modeldesk/placement.py` (`place_fellow`, after route setup)
+- `modeldesk/authoring.py` (`configure_fellow`)
+- `simulator.py` (`_configureFellowInModelDesk`, when placement did not already create the fellow)
+
+To use a different default vehicle for all fellows, change **`DEFAULT_FELLOW_TRAFFIC_OBJECT_BASENAME`** in `traffic_object.py` (use the object name as shown in ModelDesk, not necessarily the full `.tro` path).
+
+---
+
 ## ModelDesk / VEOS notes
 
 In practice, the CoSim workflow also depends on the VEOS application / `.osa` used by ModelDesk.
@@ -266,6 +287,7 @@ Use these files first:
 
 ### placement
 - `modeldesk/placement.py`
+- `modeldesk/traffic_object.py` (fellow Traffic Object asset)
 
 ### readback
 - `controldesk/readback.py`
@@ -296,6 +318,7 @@ This folder is the Scenic-side control center for dSPACE.
 
 If you are debugging:
 - **placement** → inspect `modeldesk/placement.py`
+- **fellow 3D asset (Traffic Object)** → inspect `modeldesk/traffic_object.py`
 - **readback** → inspect `controldesk/readback.py`
 - **control application** → inspect `vehicle/controller.py`
 - **synchronous CoSim stepping** → inspect `simulator.py` and `cosim/veos_cosim_ipc_bridge/`

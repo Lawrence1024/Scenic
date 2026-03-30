@@ -1,4 +1,5 @@
 from ..controldesk.per_tick_control import ExternalControlManager
+from .traffic_object import apply_fellow_traffic_object
 
 
 def author_scenario(sim):
@@ -104,6 +105,7 @@ def configure_fellow(sim, scenic_obj):
             route_sel.UseExternal = True
         except Exception:
             pass
+        apply_fellow_traffic_object(fellow)
         sim._fellow_vehicles[fellow_name] = {
             'fellow_object': fellow,
             'scenic_object': scenic_obj,

@@ -27,6 +27,7 @@ from .vehicle.actor import ensure_actor, DSpaceVehicleActor
 from .vehicle.indexing import get_fellow_index as indexing_get_fellow_index
 from .geometry.pipeline import build_road_index_and_transform
 from .modeldesk.authoring import author_scenario, configure_fellow
+from .modeldesk.traffic_object import apply_fellow_traffic_object
 from .modeldesk.placement import (
     place_ego,
     place_fellow,
@@ -792,6 +793,8 @@ class DSpaceSimulation(RacingSimulation):
                 route_sel.UseExternal = True  # Enable external control for fellow vehicles
             except Exception:
                 pass
+
+            apply_fellow_traffic_object(fellow)
             
             # Store fellow reference for runtime control
             self._fellow_vehicles[fellow_name] = {

@@ -3,7 +3,8 @@ param use2DMap = True
 param time_step = 0.01
 param control_period = 0.05
 param ttlFolder = localPath('../../assets/ttls/LS_ENU_TTL_CSV')
-param launch_veos_ipc_client = True
+param launch_veos_ipc_client = False
+param scenic_control = True
 model scenic.simulators.dspace.racing_model
 
 # --- Ego car with MPC behavior ---
@@ -24,8 +25,8 @@ ego = new RacingCar at (55.766137,88.269387), \
     with raceNumber 1, \
     # with ttlFileName 'ttl_main_road.csv', \
     # with ttlFileName 'ttl_pitlane.csv', \
-    #with ttlFileName 'ttl_optimal_xodr.csv', \
-    with ttlFileName 'ttl_right_xodr.csv', \
+    with ttlFileName 'ttl_optimal_xodr.csv', \
+    # with ttlFileName 'ttl_right_xodr.csv', \
     with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV')
 
 # Use MPC behavior for improved racing performance

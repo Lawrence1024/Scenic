@@ -1,6 +1,7 @@
 import math
 
 from ..utils import legacy as dutils
+from .traffic_object import apply_fellow_traffic_object
 
 # TTL filenames for route preference (distance to main vs pitlane; if similar, prefer main)
 TTL_MAIN_ROAD_FILE = "ttl_main_road.csv"
@@ -596,6 +597,8 @@ def place_fellow(sim, obj):
     except Exception as e:
         # Fallback to original method
         sim._set_fellow_route_via_sequence(S1, obj)
+
+    apply_fellow_traffic_object(F)
 
     # Store reference
     sim._fellow_vehicles[F.Name] = {
