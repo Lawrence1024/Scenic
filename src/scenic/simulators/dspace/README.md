@@ -218,37 +218,13 @@ On simulation shutdown, Scenic terminates that process.
 
 Build the client once: `cosim\veos_cosim_ipc_bridge\build_client.bat`.
 
-### Option B — manual Terminal 2
+### Option B — CoSim off (default)
 
-If `launch_veos_ipc_client` is `False` (default), start Scenic first, then start the IPC client yourself.
+If `launch_veos_ipc_client` is `False` (default), Scenic does **not** start `SyncStepBridge` or bind any CoSim socket. Simulation steps use ControlDesk / MAPort only. Use this when you do not need VEOS–Scenic synchronous stepping (for example to avoid Windows port-permission issues on the sync port).
 
-#### Step 1 — start Scenic
+### Option C — manual bridge + client (without a full Scenic run)
 
-During setup, Scenic should print something like:
-
-```text
-[CoSimSync] SyncStepBridge listening on 127.0.0.1:50555
-```
-
-This means Scenic is ready to accept the IPC client connection.
-
-#### Step 2 — start the IPC-enabled CoSim client
-
-From the IPC bridge build folder, run:
-
-```powershell
-.\VeosCoSimTestClientIpc.exe --host 192.168.100.101 --name CoSimServerScenic --ipc-host 127.0.0.1 --ipc-port 50555
-```
-
-#### Step 3 — verify VEOS-side connection
-
-The IPC client should:
-
-- connect to Scenic’s sync bridge
-- then connect to the VEOS CoSim server
-- then begin participating in step-by-step synchronization
-
-If VEOS is not ready yet, the client may fail to connect even though Scenic is already listening. In that case, the issue is on the VEOS startup side, not the Python-side sync bridge.
+To experiment with the IPC client and `SyncStepBridge` outside the normal Scenic lifecycle, use `modeldesk_connection_test/test_modeldesk_connection.py --with-cosim` (see that script’s README) or start `SyncStepBridge` from Python yourself, then run `VeosCoSimTestClientIpc.exe` with matching `--ipc-host` / `--ipc-port`.
 
 ---
 

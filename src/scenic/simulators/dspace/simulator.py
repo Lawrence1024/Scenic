@@ -84,7 +84,7 @@ class DSpaceSimulator(RacingSimulator):
         self.scenic_control = bool(scenic_control)
         # ART stack: Docker container name for ROS2 reset_vks_state and set_selected_ttl
         self.art_stack_container = str(art_stack_container)
-        # VEOS CoSim: optionally spawn VeosCoSimTestClientIpc.exe (see cosim/README.md)
+        # VEOS CoSim master switch: True = SyncStepBridge + auto-spawn IPC client; False = no CoSim (ControlDesk stepping only)
         self.launch_veos_ipc_client = bool(launch_veos_ipc_client)
         self.veos_ipc_client_exe = veos_ipc_client_exe  # None -> _default_veos_ipc_client_exe()
         self.veos_host = str(veos_host)
@@ -107,7 +107,7 @@ class DSpaceSimulation(RacingSimulation):
         self._ego_created = False  # Track if ego vehicle was created
         self._sync_bridge = None
         self._sync_bridge_connected_once = False
-        self._veos_ipc_client_proc = None  # subprocess.Popen if launch_veos_ipc_client
+        self._veos_ipc_client_proc = None  # subprocess.Popen when CoSim enabled and client auto-launched
         
         # dSPACE two-phase architecture
         self._modeldesk_app = None  # ModelDesk COM application
@@ -351,14 +351,15 @@ class DSpaceSimulation(RacingSimulation):
             except Exception as e:
                 print(f"[ModelDesk] Reset after Download failed: {e}")
 
-        # 8) Initialize SyncStepBridge for VEOS CoSim synchronization
-        _sb_host = getattr(self.sim, "sync_bridge_host", "127.0.0.1")
-        _sb_port = int(getattr(self.sim, "sync_bridge_port", 50555))
-        self._sync_bridge = SyncStepBridge(host=_sb_host, port=_sb_port)
-        self._sync_bridge.start()
-        print(f"[CoSimSync] SyncStepBridge listening on {_sb_host}:{_sb_port}")
-
+        # 8) VEOS CoSim (optional): SyncStepBridge + auto-spawn IPC client when launch_veos_ipc_client=True.
+        #    When False, skip all CoSim setup; stepping uses ControlDesk advance only (no socket bind).
         if getattr(self.sim, "launch_veos_ipc_client", False):
+            _sb_host = getattr(self.sim, "sync_bridge_host", "127.0.0.1")
+            _sb_port = int(getattr(self.sim, "sync_bridge_port", 50555))
+            self._sync_bridge = SyncStepBridge(host=_sb_host, port=_sb_port)
+            self._sync_bridge.start()
+            print(f"[CoSimSync] SyncStepBridge listening on {_sb_host}:{_sb_port}")
+
             exe_raw = getattr(self.sim, "veos_ipc_client_exe", None)
             exe_path = Path(exe_raw) if exe_raw else _default_veos_ipc_client_exe()
             if not exe_path.is_file():
@@ -414,9 +415,11 @@ class DSpaceSimulation(RacingSimulation):
                 ) from e
             print("[CoSimSync] VEOS IPC client connected to SyncStepBridge.")
         else:
+            self._sync_bridge = None
             print(
-                "[CoSimSync] launch_veos_ipc_client=False — start VeosCoSimTestClientIpc.exe manually "
-                "if VEOS requires the client, or set launch_veos_ipc_client=True on DSpaceSimulator."
+                "[CoSimSync] launch_veos_ipc_client=False — VEOS CoSim disabled "
+                "(no SyncStepBridge; direct ControlDesk stepping). "
+                "Set launch_veos_ipc_client=True to enable CoSim."
             )
 
         # 8) Connect ControlDesk and initialize VesiInterface (single connection before reset)
@@ -611,24 +614,23 @@ class DSpaceSimulation(RacingSimulation):
         attach_ttl(self, obj, vehicle_type="fellow")
         return result
     
-    def _is_fellow_dummy_centerline(self, obj):
-        """True if this fellow should be driven in dummy centerline mode (constant v, d=0)."""
-        if obj is self.scene.egoObject:
-            return False
-        params = getattr(self.scene, "params", None) or {}
-        return bool(params.get("fellow_dummy_centerline", False))
-
     def _needsDynamicControl(self):
         """Check if any Scenic objects need dynamic control (have behaviors with dSPACE actions)."""
         try:
-            # Check if any objects have behaviors that use dSPACE actions
+            from scenic.domains.racing.fellow_plant import (
+                is_fellow_constant_speed_track_offset_behavior,
+            )
+
             for obj in self.scene.objects:
-                if hasattr(obj, 'behavior'):
+                if hasattr(obj, "behavior"):
                     behavior = obj.behavior
                     if behavior:
                         behavior_name = behavior.__class__.__name__
-                        # Check if it's a racing behavior that uses dSPACE actions
-                        if 'Racing' in behavior_name or 'Pit' in behavior_name:
+                        if (
+                            "Racing" in behavior_name
+                            or "Pit" in behavior_name
+                            or is_fellow_constant_speed_track_offset_behavior(obj)
+                        ):
                             return True
             return False
         except Exception:
@@ -1013,8 +1015,8 @@ class DSpaceSimulation(RacingSimulation):
                     # Ego: Use VesiInterface physics-based control
                     self._vehicle_controller.apply_ego_control(obj)
                 else:
-                    # Fellow: drive if behavior exists or dummy centerline mode (Velocity/Lateral deviation Extern)
-                    if getattr(obj, 'behavior', None) or self._is_fellow_dummy_centerline(obj):
+                    # Fellow: requires a behavior (e.g. MPC or FellowConstantSpeedTrackOffsetBehavior)
+                    if getattr(obj, "behavior", None):
                         self._vehicle_controller.apply_fellow_control(obj)
 
                 # Clear control state after applying

@@ -3,7 +3,7 @@
 Use this to verify:
 
 1. **ModelDesk COM** — same path as Scenic’s dSPACE simulator (`Dispatch("ModelDesk.Application")`, active project, active experiment) via `ModelDeskConnection`.
-2. **Optional CoSim IPC** — same pattern as `src/scenic/simulators/dspace/cosim/README.md`: start `SyncStepBridge` on localhost, then launch `VeosCoSimTestClientIpc.exe` so VEOS can find its client before ModelDesk / VEOS are fully usable. **Full Scenic runs** can do the same automatically with `param launch_veos_ipc_client = True` (see `model.scenic` / `simulator.py`).
+2. **Optional CoSim IPC** — same pattern as `src/scenic/simulators/dspace/cosim/README.md`: start `SyncStepBridge` on localhost, then launch `VeosCoSimTestClientIpc.exe` so VEOS can find its client before ModelDesk / VEOS are fully usable. **Full Scenic runs** enable that path only when `param launch_veos_ipc_client = True` (starts bridge + spawns client); when `False`, Scenic does not start CoSim at all (see `model.scenic` / `simulator.py`).
 
 ## Prerequisites
 

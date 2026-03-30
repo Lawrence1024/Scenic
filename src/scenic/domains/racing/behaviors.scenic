@@ -419,6 +419,21 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
         # Execute all actions together
         take actions_to_take
 
+behavior FellowConstantSpeedTrackOffsetBehavior(speed_mph=31):
+    """Constant-speed fellow with lateral offset fixed from Scenic placement.
+
+    Intended for **dSPACE** traffic fellows controlled via External_Signals
+    (``Const_v_Fellows_External``, ``Const_d_Fellows_External``): holds constant speed
+    (**speed_mph**, converted to km/h for the plant) and **d** equal to the lateral
+    deviation from placement (``_route_s_t``). This is not MPC and does not populate
+    throttle/steer control state.
+
+    Other simulators do not apply this unless they implement the same (v, d) contract.
+    """
+    wait
+    while True:
+        wait
+
 behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None):
     """Follow the car's TTL using MPC (Model Predictive Control) for lateral control.
     

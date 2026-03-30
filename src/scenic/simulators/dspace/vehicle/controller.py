@@ -7,6 +7,8 @@ dSPACE simulation environment, including both ego and fellow vehicles.
 import logging
 import math
 
+from scenic.domains.racing.fellow_plant import fellow_constant_speed_kmh_from_behavior
+
 from ..vehicle.physics import VehiclePhysicsState
 
 logger = logging.getLogger(__name__)
@@ -327,16 +329,6 @@ class VehicleController:
     # -------------------------------------------------------------------------
     # Fellow control
     # -------------------------------------------------------------------------
-    def _is_fellow_dummy_centerline(self, obj):
-        """True if scene param fellow_dummy_centerline is set (all fellows use constant v, d=0)."""
-        params = getattr(getattr(self.simulation, "scene", None), "params", None) or {}
-        return bool(params.get("fellow_dummy_centerline", False))
-
-    def _get_fellow_dummy_velocity_kmh(self):
-        """Constant velocity in km/h for dummy centerline fellows (from scene param)."""
-        params = getattr(getattr(self.simulation, "scene", None), "params", None) or {}
-        return float(params.get("fellow_dummy_velocity_kmh", 50.0))
-
     def _get_fellow_placed_lateral_deviation(self, obj):
         """Lateral deviation (d) from placement so fellow stays where specified in Scenic (not forced to centerline)."""
         st = getattr(obj, "_route_s_t", None)
@@ -344,11 +336,13 @@ class VehicleController:
             return float(st[1])
         return 0.0
 
-    def _apply_fellow_control_dummy(self, obj, fellow_index, eff_index):
-        """Write constant velocity and placed lateral deviation to External_Signals (Velocity/Lateral deviation Extern).
-        Uses the fellow's Scenic placement for d so the vehicle starts and stays at that lateral position;
-        only velocity drives motion."""
-        v_value = self._get_fellow_dummy_velocity_kmh()
+    def _apply_fellow_constant_vd_from_placement(self, obj, fellow_index, eff_index, v_kmh: float):
+        """Write constant velocity (km/h) and placement lateral deviation to External_Signals.
+
+        Lateral ``d`` comes from Scenic placement (``_route_s_t``), not closed-loop tracking.
+        Used for :obj:`FellowConstantSpeedTrackOffsetBehavior` (speed_mph → km/h for dSPACE).
+        """
+        v_value = float(v_kmh)
         d_value = self._get_fellow_placed_lateral_deviation(obj)
 
         base_ext = (
@@ -382,7 +376,7 @@ class VehicleController:
         obj._fellow_control_count += 1
         if obj._fellow_control_count <= 3 or obj._fellow_control_count % 50 == 0:
             print(
-                f"[Fellow {fellow_index}] Dummy: v={v_value:.1f} km/h, d={d_value:.2f} m (from placement)"
+                f"[Fellow {fellow_index}] Constant v/d: v={v_value:.1f} km/h, d={d_value:.2f} m (from placement)"
             )
 
     def apply_fellow_control(self, obj):
@@ -398,7 +392,7 @@ class VehicleController:
         or when the delta table cannot be built; set
         ``obj._fellow_force_bicycle_lateral = True`` to force bicycle on Lap.
 
-        Dummy centerline mode: constant v and d from placement.
+        FellowConstantSpeedTrackOffsetBehavior: constant v (from behavior ``speed_mph``, written as km/h) and d from placement.
         """
         # Ensure fellow arrays are initialized before attempting to write
         from ..controldesk.arrays import ensure_fellow_arrays_initialized
@@ -414,9 +408,12 @@ class VehicleController:
         # Adjust for base (0-based vs 1-based arrays) for writing
         eff_index = fellow_index + (self.simulation._fellow_index_base or 0)
 
-        # Dummy mode: constant velocity, lateral deviation from placement (no physics, no _control_state)
-        if self._is_fellow_dummy_centerline(obj):
-            self._apply_fellow_control_dummy(obj, fellow_index, eff_index)
+        # Constant-speed fellow plant: v from behavior, d from placement (no physics, no _control_state)
+        _v_plant = fellow_constant_speed_kmh_from_behavior(obj)
+        if _v_plant is not None:
+            self._apply_fellow_constant_vd_from_placement(
+                obj, fellow_index, eff_index, _v_plant
+            )
             return
 
         # Kinematic path requires _control_state from behavior
