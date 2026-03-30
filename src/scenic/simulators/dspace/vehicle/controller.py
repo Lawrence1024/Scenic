@@ -7,14 +7,23 @@ dSPACE simulation environment, including both ego and fellow vehicles.
 import logging
 import math
 
-from scenic.domains.racing.fellow_plant import fellow_constant_speed_kmh_from_behavior
+from scenic.domains.racing.fellow_plant import (
+    fellow_constant_speed_kmh_from_behavior,
+    fellow_follow_ttl_geometric_speed_kmh,
+)
+from scenic.domains.racing.waypoints import (
+    initialize_racing_waypoint_start_index,
+    select_forward_racing_waypoint,
+)
 
 from ..vehicle.physics import VehiclePhysicsState
 
 logger = logging.getLogger(__name__)
 from ..modeldesk.placement import t_for_dspace_lateral
 
-print(f"[PatchID] controller.py loaded from {__file__}")
+# Fellow plant: log first N control ticks, then every Kth (INFO).
+_FELLOW_LOG_INITIAL = 3
+_FELLOW_LOG_INTERVAL = 50
 
 
 class VehicleController:
@@ -72,8 +81,7 @@ class VehicleController:
 
         # path -> {"attempts": int, "skips": int, "execs": int}
         self._dedup_stats = {}
-        self._dedup_stats_print_every = 50  # print every N ego control ticks
-        self._dedup_banner_printed = False
+        self._dedup_stats_print_every = 50  # log every N ego control ticks
 
         # Epsilons for dedup comparison (after scaling into CD units)
         self._eps_throttle = 1e-4
@@ -105,10 +113,6 @@ class VehicleController:
         Returns:
             bool: True if write executed, False if skipped by dedup.
         """
-        if not self._dedup_banner_printed:
-            self._dedup_banner_printed = True
-            print(f"[PatchID] controller dedup active from {__file__}")
-
         self._dedup_stat_inc(path, "attempts", 1)
 
         v = self._normalize_for_dedup(value)
@@ -161,7 +165,7 @@ class VehicleController:
             parts.append(f"{p}: a={st['attempts']} s={st['skips']} e={st['execs']}")
 
         if parts:
-            print("[DedupStats] " + " | ".join(parts))
+            logger.debug("[DedupStats] %s", " | ".join(parts))
 
     @staticmethod
     def _safe_float(v, default=0.0):
@@ -374,9 +378,210 @@ class VehicleController:
         if not hasattr(obj, "_fellow_control_count"):
             obj._fellow_control_count = 0
         obj._fellow_control_count += 1
-        if obj._fellow_control_count <= 3 or obj._fellow_control_count % 50 == 0:
-            print(
-                f"[Fellow {fellow_index}] Constant v/d: v={v_value:.1f} km/h, d={d_value:.2f} m (from placement)"
+        c = obj._fellow_control_count
+        if c <= _FELLOW_LOG_INITIAL or c % _FELLOW_LOG_INTERVAL == 0:
+            logger.info(
+                "[Fellow %s] constant_plant v=%.1f km/h d=%.3f m (placement t)",
+                fellow_index,
+                v_value,
+                d_value,
+            )
+
+    def _apply_fellow_geometric_ttl_follow(self, obj, fellow_index, eff_index, v_kmh: float):
+        """Constant v (km/h); d = δ(s) feedforward on main centerline (kp=0); waypoint index via shared helper."""
+        from .fellow_racing_line_lateral import (
+            _road_index_main_track_only,
+            get_or_build_delta_table,
+            lookup_delta,
+        )
+        from ..utils.legacy import project_world_to_st
+
+        control_interval = getattr(self.simulation, "_control_interval", 1)
+        dt = float(self.simulation.timestep) * max(1, control_interval)
+
+        route_pref = getattr(obj, "_route", None)
+        scene = getattr(self.simulation, "scene", None)
+        scene_params = getattr(scene, "params", None) or {}
+        ttl_folder = getattr(obj, "ttlFolder", None) or scene_params.get("ttlFolder")
+        optimal_csv = getattr(obj, "ttlFileName", None) or scene_params.get("ttlFileName")
+        road_index = getattr(self.simulation, "_road_index_ttl", None) or self.simulation._road_index
+
+        v_value = float(v_kmh)
+        d_cmd = self._get_fellow_placed_lateral_deviation(obj)
+        used_delta = False
+
+        plant_base = (
+            "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/"
+            "FellowMovement/FELLOW_POS_VEL/FellowTrailer"
+        )
+        x_rd = y_rd = None
+        try:
+            x_arr = self.cd.get_var(f"{plant_base}/x")
+            y_arr = self.cd.get_var(f"{plant_base}/y")
+            if isinstance(x_arr, (list, tuple)) and isinstance(y_arr, (list, tuple)):
+                if eff_index < len(x_arr) and eff_index < len(y_arr):
+                    if x_arr[eff_index] is not None and y_arr[eff_index] is not None:
+                        x_rd = float(x_arr[eff_index])
+                        y_rd = float(y_arr[eff_index])
+        except Exception:
+            pass
+
+        heading = 0.0
+        try:
+            da = getattr(obj, "dspaceActor", None)
+            if da is not None and getattr(da, "heading", None) is not None:
+                heading = float(da.heading)
+        except Exception:
+            heading = 0.0
+
+        wps = getattr(obj, "waypoints", None)
+        if x_rd is not None and y_rd is not None and wps and len(wps) >= 2:
+            if not getattr(obj, "_fellow_geo_wp_inited", False):
+                idx, _res, _nd = initialize_racing_waypoint_start_index(
+                    (x_rd, y_rd), heading, wps
+                )
+                obj._fellow_geo_wp_last_idx = int(idx)
+                obj._fellow_geo_wp_inited = True
+            else:
+                last_i = int(getattr(obj, "_fellow_geo_wp_last_idx", 0))
+                res = select_forward_racing_waypoint(
+                    car_position=(x_rd, y_rd),
+                    car_heading=heading,
+                    waypoints=wps,
+                    last_known_index=last_i,
+                    max_search_distance=100.0,
+                    forward_bias=0.9,
+                    min_forward_distance=5.0,
+                    forward_only=True,
+                )
+                if res is not None:
+                    obj._fellow_geo_wp_last_idx = int(res["index"])
+
+        if (
+            x_rd is not None
+            and y_rd is not None
+            and route_pref == "Lap"
+            and ttl_folder
+            and str(ttl_folder).strip()
+            and optimal_csv
+            and road_index
+        ):
+            idx_main = _road_index_main_track_only(road_index)
+            if idx_main is not None:
+                tbl = get_or_build_delta_table(
+                    self.simulation,
+                    str(ttl_folder),
+                    str(optimal_csv),
+                    road_index,
+                )
+                if tbl is not None:
+                    pos_xy = (x_rd, y_rd)
+                    try:
+                        s_meas, t_meas = project_world_to_st(idx_main, pos_xy)
+                        s_filt = getattr(obj, "_fellow_geo_s_meas_filtered", None)
+                        if s_filt is None:
+                            s_use = float(s_meas)
+                        else:
+                            s_use = 0.42 * float(s_meas) + 0.58 * float(s_filt)
+                        obj._fellow_geo_s_meas_filtered = s_use
+                        s_arr, d_arr_tbl, track_len = tbl
+                        d_raw, delta_ref, _e = lookup_delta(
+                            s_use, t_meas, s_arr, d_arr_tbl, track_len, kp=0.0
+                        )
+                        prev_d = getattr(obj, "_fellow_geo_d_cmd_prev", None)
+                        max_slew = 0.32 * max(1.0, dt / 0.05)
+                        if prev_d is not None:
+                            d_raw = max(
+                                prev_d - max_slew,
+                                min(prev_d + max_slew, d_raw),
+                            )
+                        obj._fellow_geo_d_cmd_prev = float(d_raw)
+                        d_cmd = float(d_raw)
+                        used_delta = True
+                    except Exception as ex:
+                        if not getattr(obj, "_fellow_geo_warned_projection", False):
+                            obj._fellow_geo_warned_projection = True
+                            logger.warning(
+                                "[Fellow %s] geometric TTL: δ(s) projection failed (%s); placement d",
+                                fellow_index,
+                                ex,
+                            )
+                elif not getattr(obj, "_fellow_geo_warned_no_table", False):
+                    obj._fellow_geo_warned_no_table = True
+                    logger.warning(
+                        "[Fellow %s] geometric TTL: delta table missing (ttlFolder=%r ttlFileName=%r); placement d",
+                        fellow_index,
+                        ttl_folder,
+                        optimal_csv,
+                    )
+            elif not getattr(obj, "_fellow_geo_warned_no_main_idx", False):
+                obj._fellow_geo_warned_no_main_idx = True
+                logger.warning(
+                    "[Fellow %s] geometric TTL: no MainTrack_TTL road index; placement d",
+                    fellow_index,
+                )
+        else:
+            if not getattr(obj, "_fellow_geo_warned_requirements", False):
+                obj._fellow_geo_warned_requirements = True
+                reasons = []
+                if x_rd is None or y_rd is None:
+                    reasons.append("no FellowTrailer x/y")
+                if route_pref != "Lap":
+                    reasons.append(f"route={route_pref!r} (need Lap)")
+                if not ttl_folder or not str(ttl_folder).strip():
+                    reasons.append("no ttlFolder (param or per-object)")
+                if not optimal_csv:
+                    reasons.append(
+                        "no ttlFileName (set param ttlFileName or fellow with ttlFileName, e.g. ttl_optimal_xodr.csv)"
+                    )
+                if not road_index:
+                    reasons.append("no road_index")
+                logger.warning(
+                    "[Fellow %s] geometric TTL inactive: %s — using placement d",
+                    fellow_index,
+                    "; ".join(reasons) if reasons else "preconditions not met",
+                )
+
+        base_ext = (
+            "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/"
+            "FellowMovement/External_Signals"
+        )
+        v_path_bulk = f"{base_ext}/Const_v_Fellows_External[km|h]/Value"
+        d_path_bulk = f"{base_ext}/Const_d_Fellows_External[m]/Value"
+
+        try:
+            v_arr = list(self.cd.get_var(v_path_bulk) or [])
+            d_arr = list(self.cd.get_var(d_path_bulk) or [])
+        except Exception:
+            v_arr = []
+            d_arr = []
+
+        need_len = eff_index + 1
+        if len(v_arr) < need_len:
+            v_arr.extend([0.0] * (need_len - len(v_arr)))
+        if len(d_arr) < need_len:
+            d_arr.extend([0.0] * (need_len - len(d_arr)))
+
+        v_arr[eff_index] = v_value
+        d_arr[eff_index] = t_for_dspace_lateral(d_cmd)
+
+        self.cd.set_var(v_path_bulk, v_arr)
+        self.cd.set_var(d_path_bulk, d_arr)
+
+        if not hasattr(obj, "_fellow_control_count"):
+            obj._fellow_control_count = 0
+        obj._fellow_control_count += 1
+        c = obj._fellow_control_count
+        if c <= _FELLOW_LOG_INITIAL or c % _FELLOW_LOG_INTERVAL == 0:
+            wp_i = int(getattr(obj, "_fellow_geo_wp_last_idx", -1))
+            mode = "delta(s)" if used_delta else "placement_d"
+            logger.info(
+                "[Fellow %s] geometric_ttl %s v=%.1f km/h d_cmd=%.3f m wp_idx=%s",
+                fellow_index,
+                mode,
+                v_value,
+                d_cmd,
+                wp_i,
             )
 
     def apply_fellow_control(self, obj):
@@ -393,6 +598,7 @@ class VehicleController:
         ``obj._fellow_force_bicycle_lateral = True`` to force bicycle on Lap.
 
         FellowConstantSpeedTrackOffsetBehavior: constant v (from behavior ``speed_mph``, written as km/h) and d from placement.
+        FellowFollowTTLGeometricBehavior: constant v and d from δ(s) feedforward (no PID/MPC _control_state).
         """
         # Ensure fellow arrays are initialized before attempting to write
         from ..controldesk.arrays import ensure_fellow_arrays_initialized
@@ -402,7 +608,7 @@ class VehicleController:
         # Get fellow index
         fellow_index = self.get_fellow_index(obj)
         if fellow_index is None:
-            print(f"[VehicleController:FellowControl] Could not determine index for {obj}")
+            logger.warning("FellowControl: could not determine array index for %s", obj)
             return
 
         # Adjust for base (0-based vs 1-based arrays) for writing
@@ -413,6 +619,13 @@ class VehicleController:
         if _v_plant is not None:
             self._apply_fellow_constant_vd_from_placement(
                 obj, fellow_index, eff_index, _v_plant
+            )
+            return
+
+        _v_geo = fellow_follow_ttl_geometric_speed_kmh(obj)
+        if _v_geo is not None:
+            self._apply_fellow_geometric_ttl_follow(
+                obj, fellow_index, eff_index, _v_geo
             )
             return
 
@@ -450,7 +663,7 @@ class VehicleController:
             # Ensure physics model exists for kinematic update
             if getattr(actor, "physics", None) is None:
                 actor.physics = VehiclePhysicsState(initial_velocity=0.0, initial_deviation=0.0)
-                print(f"[Fellow {fellow_index}] Physics model created (initial velocity=0.0 m/s)")
+                logger.info("[Fellow %s] physics model created (v=0)", fellow_index)
 
             # Sync physics model with actual velocity from ControlDesk
             actual_speed = 0.0
@@ -472,10 +685,12 @@ class VehicleController:
             old_physics_velocity = actor.physics.velocity
             actor.physics.velocity = actual_speed
 
-            if obj._fellow_control_count <= 3:
-                print(
-                    f"[Fellow {fellow_index} Physics] Synced velocity: "
-                    f"{old_physics_velocity:.2f} -> {actual_speed:.2f} m/s"
+            if obj._fellow_control_count <= _FELLOW_LOG_INITIAL:
+                logger.debug(
+                    "[Fellow %s] sync plant v %.2f -> %.2f m/s",
+                    fellow_index,
+                    old_physics_velocity,
+                    actual_speed,
                 )
 
             # Initialize deviation on first step to maintain continuity
@@ -579,9 +794,9 @@ class VehicleController:
                                 new_deviation = d_cmd
                                 actor.physics.deviation = d_cmd
                                 used_racing_servo = True
-                                if obj._fellow_control_count <= 5 or obj._fellow_control_count % 50 == 0:
-                                    logger.info(
-                                        "[Fellow %s] racing_servo s=%.1f t=%.3f d_ref=%.3f e=%.3f -> d_cmd=%.3f",
+                                if obj._fellow_control_count <= _FELLOW_LOG_INITIAL or obj._fellow_control_count % _FELLOW_LOG_INTERVAL == 0:
+                                    logger.debug(
+                                        "[Fellow %s] racing_servo s=%.1f t=%.3f d_ref=%.3f e=%.3f d_cmd=%.3f",
                                         fellow_index,
                                         s_meas,
                                         t_meas,
@@ -669,42 +884,42 @@ class VehicleController:
             self.cd.set_var(v_path_bulk, v_arr)
             self.cd.set_var(d_path_bulk, d_arr)
 
-            # Diagnostic logs: first 5 steps (startup) and every 50 steps (periodic)
             step = obj._fellow_control_count
-            log_this_step = step <= 5 or step % 50 == 0
+            log_this_step = step <= _FELLOW_LOG_INITIAL or step % _FELLOW_LOG_INTERVAL == 0
             if log_this_step:
                 psi_e_rad = getattr(actor.physics, "heading_error", 0.0)
                 psi_e_deg = math.degrees(psi_e_rad)
-                delta_rad = getattr(actor.physics, "_last_delta_rad", None)
-                yaw_rate = getattr(actor.physics, "_last_yaw_rate", None)
-                d_dot = getattr(actor.physics, "_last_d_dot", None)
-                acc = getattr(actor.physics, "_last_acceleration", None)
                 steer_rad_str = f"{steering_rad:.3f} rad" if steering_rad is not None else "norm"
                 logger.info(
-                    "[Fellow %s] step=%s | controls: throttle=%.2f brake=%.2f steering=%s dt=%.3f",
-                    fellow_index, step, throttle, brake, steer_rad_str, dt,
+                    "[Fellow %s] mpc_plant step=%s thr=%.2f brk=%.2f %s v=%.2f m/s d=%.3f m psi_e=%.1f deg",
+                    fellow_index,
+                    step,
+                    throttle,
+                    brake,
+                    steer_rad_str,
+                    new_velocity,
+                    new_deviation,
+                    psi_e_deg,
                 )
-                logger.info(
-                    "[Fellow %s] step=%s | state: v=%.2f m/s (%.1f km/h) d=%.3f m psi_e=%.2f deg",
-                    fellow_index, step, new_velocity, v_value, new_deviation, psi_e_deg,
-                )
-                if delta_rad is not None and yaw_rate is not None and d_dot is not None:
-                    logger.info(
-                        "[Fellow %s] step=%s | bicycle: delta=%.3f rad r=%.3f rad/s d_dot=%.3f m/s a=%.2f",
-                        fellow_index, step, delta_rad, yaw_rate, d_dot, acc or 0.0,
-                    )
-                if step <= 3:
-                    print(
-                        f"[Fellow {fellow_index}] Physics step {step}: v={new_velocity:.2f} m/s, d={new_deviation:.3f} m, "
-                        f"psi_e={psi_e_deg:.1f} deg, d_dot={d_dot or 0:.3f} m/s"
-                    )
+                if logger.isEnabledFor(logging.DEBUG):
+                    delta_rad = getattr(actor.physics, "_last_delta_rad", None)
+                    yaw_rate = getattr(actor.physics, "_last_yaw_rate", None)
+                    d_dot = getattr(actor.physics, "_last_d_dot", None)
+                    acc = getattr(actor.physics, "_last_acceleration", None)
+                    if delta_rad is not None and yaw_rate is not None and d_dot is not None:
+                        logger.debug(
+                            "[Fellow %s] bicycle delta=%.3f r=%.3f d_dot=%.3f a=%.2f",
+                            fellow_index,
+                            delta_rad,
+                            yaw_rate,
+                            d_dot,
+                            acc or 0.0,
+                        )
 
         except Exception as e:
             error_msg = str(e)
             if "Index was outside the bounds" not in error_msg:
-                print(f"[VehicleController:FellowControl] Error: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.exception("FellowControl: %s", e)
 
     def get_fellow_index(self, obj):
         """Get the array index for a fellow vehicle (0-based)."""

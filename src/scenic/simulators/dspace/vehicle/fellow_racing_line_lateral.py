@@ -109,7 +109,7 @@ def build_racing_line_delta_table(
     s_arr = np.concatenate([[s_centers[-1] - track_len], s_centers, [s_centers[0] + track_len]])
     d_arr = np.concatenate([[d_filled[-1]], d_filled, [d_filled[0]]])
 
-    logger.info(
+    logger.debug(
         "[Fellow racing-line lateral] delta table: %s optimal pts -> %s bins on %s, L=%.0fm",
         len(samples),
         nb,

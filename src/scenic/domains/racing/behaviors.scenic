@@ -13,7 +13,10 @@ import scenic.domains.racing.model as _racing
 import math
 import numpy as np
 
-from scenic.domains.racing.waypoints import find_best_racing_waypoint
+from scenic.domains.racing.waypoints import (
+    initialize_racing_waypoint_start_index,
+    select_forward_racing_waypoint,
+)
 from scenic.domains.racing.segments import (
     build_waypoint_segment_map,
     build_waypoint_segment_map_from_ttl,
@@ -87,39 +90,17 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
                 except:
                     pass
             
-            # First, find the actual nearest waypoint (simple distance-based search)
-            # This ensures we start from a reasonable starting point
-            nearest_idx = 0
-            best_d2 = 1e18
-            for i in range(len(wp_list_init)):
-                wx, wy = float(wp_list_init[i][0]), float(wp_list_init[i][1])
-                dx = px - wx; dy = py - wy
-                d2 = dx*dx + dy*dy
-                if d2 < best_d2:
-                    best_d2 = d2; nearest_idx = i
-            
-            # Now use find_best_racing_waypoint starting from the nearest waypoint
-            # This ensures we start from a reasonable position and consider forward direction
-            result = find_best_racing_waypoint(
-                car_position=(px, py),
-                car_heading=car_heading if car_heading is not None else 0.0,
-                waypoints=wp_list_init,
-                last_known_index=nearest_idx,  # Start from nearest, not index 0
-                max_search_distance=50.0,  # Smaller search radius since we're starting from nearest
-                forward_bias=0.9,
-                min_forward_distance=5.0,
-                forward_only=False  # Allow any waypoint for initialization
+            wp_last_idx, init_result, nearest_dist = initialize_racing_waypoint_start_index(
+                (px, py),
+                car_heading if car_heading is not None else 0.0,
+                wp_list_init,
             )
-            
-            if result:
-                wp_last_idx = result['index']
+            if init_result is not None:
                 print(f"[FollowRacingLineBehavior] Initialized: starting at ({px:.2f}, {py:.2f}), "
-                      f"waypoint index={wp_last_idx}, distance={result['distance']:.2f}m")
+                      f"waypoint index={wp_last_idx}, distance={init_result['distance']:.2f}m")
             else:
-                # Fallback: use the nearest waypoint we found
-                wp_last_idx = nearest_idx
                 print(f"[FollowRacingLineBehavior] Initialized (fallback): starting at ({px:.2f}, {py:.2f}), "
-                      f"nearest waypoint index={nearest_idx}, distance={best_d2**0.5:.2f}m")
+                      f"nearest waypoint index={wp_last_idx}, distance={nearest_dist:.2f}m")
         except Exception as e:
             print(f"[FollowRacingLineBehavior] Warning: Could not initialize waypoint index: {e}, starting from index 0")
             wp_last_idx = 0
@@ -157,9 +138,9 @@ behavior FollowRacingLineBehavior(target_speed=30, manage_gears=True, use_waypoi
                 except:
                     pass
             
-            # Use find_best_racing_waypoint for robust forward-only waypoint selection
+            # Forward-only waypoint selection (shared helper with simulator TTL followers)
             try:
-                result = find_best_racing_waypoint(
+                result = select_forward_racing_waypoint(
                     car_position=(px, py),
                     car_heading=car_heading if car_heading is not None else 0.0,
                     waypoints=wp_list,
@@ -429,6 +410,24 @@ behavior FellowConstantSpeedTrackOffsetBehavior(speed_mph=31):
     throttle/steer control state.
 
     Other simulators do not apply this unless they implement the same (v, d) contract.
+    """
+    wait
+    while True:
+        wait
+
+behavior FellowFollowTTLGeometricBehavior(speed_mph=31):
+    """dSPACE fellow: constant speed and lateral **d** from TTL geometry (no PID/MPC).
+
+    The simulator writes **Const_v_Fellows_External** from **speed_mph** (converted to km/h)
+    and **Const_d_Fellows_External** from feedforward δ(s) on the main track centerline
+    (optimal TTL vs ``ttl_main_road``), matching the racing line used by MPC fellows.
+
+    Waypoint progress uses :func:`select_forward_racing_waypoint` (same family as
+    ``FollowRacingLineBehavior``) for a stable polyline index; **d** is not a controller
+    output—it is pure geometry at the (v, d) plant.
+
+    Requires **Lap** route, ``ttlFolder``, ``ttlFileName`` (optimal CSV), TTL waypoints on
+    the agent, and a valid delta table. Other simulators may ignore this behavior.
     """
     wait
     while True:

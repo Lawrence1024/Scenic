@@ -41,7 +41,6 @@ from .controldesk import session as cd_session
 from .geometry.params import get_map_path
 from .steer_io import road_rad_to_dspace_value, log_startup_once, DELTA_MAX_RAD, THETA_SW_MAX_DEG, R
 from .cosim.veos_cosim_ipc_bridge.python_listener.sync_step_bridge import SyncStepBridge
-print(f"[PatchID] simulator.py loaded from {__file__}")
 
 # dSPACE path for simulated time (read on each control step and logged)
 SIMULATED_TIME_PATH = "Platform()://ASM_Traffic/Simulation and RTOS/Simulation/SimulationTime"
@@ -619,6 +618,7 @@ class DSpaceSimulation(RacingSimulation):
         try:
             from scenic.domains.racing.fellow_plant import (
                 is_fellow_constant_speed_track_offset_behavior,
+                is_fellow_follow_ttl_geometric_behavior,
             )
 
             for obj in self.scene.objects:
@@ -630,6 +630,7 @@ class DSpaceSimulation(RacingSimulation):
                             "Racing" in behavior_name
                             or "Pit" in behavior_name
                             or is_fellow_constant_speed_track_offset_behavior(obj)
+                            or is_fellow_follow_ttl_geometric_behavior(obj)
                         ):
                             return True
             return False

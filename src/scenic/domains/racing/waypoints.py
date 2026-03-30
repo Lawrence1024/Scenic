@@ -142,3 +142,85 @@ def find_best_racing_waypoint(
         "forward_score": float(best_cos),
     }
 
+
+def select_forward_racing_waypoint(
+    *,
+    car_position: Tuple[float, float],
+    car_heading: float,
+    waypoints: Iterable[PointLike],
+    last_known_index: int,
+    max_search_distance: float = 100.0,
+    forward_bias: float = 0.9,
+    min_forward_distance: float = 5.0,
+    forward_only: bool = True,
+) -> Optional[dict]:
+    """Pick the best waypoint index for forward progress along a closed polyline.
+
+    Thin wrapper around :func:`find_best_racing_waypoint` so racing behaviors and
+    simulator-side helpers share one entry point (same semantics as before).
+    """
+    return find_best_racing_waypoint(
+        car_position=car_position,
+        car_heading=car_heading,
+        waypoints=waypoints,
+        last_known_index=last_known_index,
+        max_search_distance=max_search_distance,
+        forward_bias=forward_bias,
+        min_forward_distance=min_forward_distance,
+        forward_only=forward_only,
+    )
+
+
+def initialize_racing_waypoint_start_index(
+    car_position: Tuple[float, float],
+    car_heading: float,
+    waypoints: Iterable[PointLike],
+) -> Tuple[int, Optional[dict], float]:
+    """First waypoint index for polyline following (same logic as ``FollowRacingLineBehavior`` init).
+
+    1. Euclidean nearest waypoint to the car.
+    2. :func:`select_forward_racing_waypoint` from that index with ``forward_only=False``
+       and a 50 m search cap (initialization scan).
+
+    Returns:
+        ``(wp_index, selector_result_or_none, nearest_euclidean_distance)``.
+        If the selector returns ``None``, callers should use ``wp_index`` (nearest index)
+        and ``nearest_euclidean_distance`` for logging.
+    """
+    wps: List[Tuple[float, float]] = []
+    for wp in waypoints:
+        try:
+            wps.append(_get_xy(wp))
+        except Exception:
+            continue
+    n = len(wps)
+    if n < 2:
+        return 0, None, 0.0
+
+    px, py = float(car_position[0]), float(car_position[1])
+    nearest_idx = 0
+    best_d2 = 1e18
+    for i in range(n):
+        wx, wy = wps[i]
+        dx = px - wx
+        dy = py - wy
+        d2 = dx * dx + dy * dy
+        if d2 < best_d2:
+            best_d2 = d2
+            nearest_idx = i
+
+    nearest_dist = math.sqrt(best_d2) if best_d2 < 1e34 else 0.0
+    result = select_forward_racing_waypoint(
+        car_position=(px, py),
+        car_heading=float(car_heading),
+        waypoints=waypoints,
+        last_known_index=nearest_idx,
+        max_search_distance=50.0,
+        forward_bias=0.9,
+        min_forward_distance=5.0,
+        forward_only=False,
+    )
+    if result is not None:
+        return int(result["index"]), result, nearest_dist
+    return int(nearest_idx), None, nearest_dist
+

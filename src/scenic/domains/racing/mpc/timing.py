@@ -11,8 +11,6 @@ every control_interval steps (e.g. every 5), not every sim step.
 
 import time
 from typing import Dict, Optional
-print(f"[PatchID] timing.py loaded from {__file__}")
-
 # Module-level state for this process
 _step = 0
 _last_lateral_ms = 0.0
