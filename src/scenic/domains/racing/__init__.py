@@ -9,6 +9,9 @@ racing-specific features such as:
 * **Starting grid** - Formation positions for race starts
 * **Track limits** - Boundaries that must not be exceeded
 
+Traffic fellow helpers for dSPACE-style (v, d) plants live under
+:mod:`scenic.domains.racing.fellow` (submodules ``plant`` and ``commands``).
+
 The :doc:`world model <scenic.domains.racing.model>` defines Scenic classes for racing
 cars, pit crews, track marshals, etc., as well as racing-specific behaviors like
 following the racing line, executing pit stops, and overtaking maneuvers.

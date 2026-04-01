@@ -617,7 +617,7 @@ class DSpaceSimulation(RacingSimulation):
     def _needsDynamicControl(self):
         """Check if any Scenic objects need dynamic control (have behaviors with dSPACE actions)."""
         try:
-            from scenic.domains.racing.fellow_plant import (
+            from scenic.domains.racing.fellow.plant import (
                 is_fellow_constant_speed_track_offset_behavior,
                 is_fellow_follow_ttl_geometric_behavior,
             )

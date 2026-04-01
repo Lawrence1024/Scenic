@@ -7,13 +7,10 @@ dSPACE simulation environment, including both ego and fellow vehicles.
 import logging
 import math
 
-from scenic.domains.racing.fellow_plant import (
+from scenic.domains.racing.fellow import commands as fellow_commands_mod
+from scenic.domains.racing.fellow.plant import (
     fellow_constant_speed_kmh_from_behavior,
     fellow_follow_ttl_geometric_speed_kmh,
-)
-from scenic.domains.racing.waypoints import (
-    initialize_racing_waypoint_start_index,
-    select_forward_racing_waypoint,
 )
 
 from ..vehicle.physics import VehiclePhysicsState
@@ -333,214 +330,19 @@ class VehicleController:
     # -------------------------------------------------------------------------
     # Fellow control
     # -------------------------------------------------------------------------
-    def _get_fellow_placed_lateral_deviation(self, obj):
-        """Lateral deviation (d) from placement so fellow stays where specified in Scenic (not forced to centerline)."""
-        st = getattr(obj, "_route_s_t", None)
-        if st is not None and len(st) == 2:
-            return float(st[1])
-        return 0.0
-
-    def _apply_fellow_constant_vd_from_placement(self, obj, fellow_index, eff_index, v_kmh: float):
-        """Write constant velocity (km/h) and placement lateral deviation to External_Signals.
-
-        Lateral ``d`` comes from Scenic placement (``_route_s_t``), not closed-loop tracking.
-        Used for :obj:`FellowConstantSpeedTrackOffsetBehavior` (speed_mph → km/h for dSPACE).
-        """
-        v_value = float(v_kmh)
-        d_value = self._get_fellow_placed_lateral_deviation(obj)
-
-        base_ext = (
-            "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/"
-            "FellowMovement/External_Signals"
-        )
-        v_path_bulk = f"{base_ext}/Const_v_Fellows_External[km|h]/Value"
-        d_path_bulk = f"{base_ext}/Const_d_Fellows_External[m]/Value"
-
-        try:
-            v_arr = list(self.cd.get_var(v_path_bulk) or [])
-            d_arr = list(self.cd.get_var(d_path_bulk) or [])
-        except Exception:
-            v_arr = []
-            d_arr = []
-
-        need_len = eff_index + 1
-        if len(v_arr) < need_len:
-            v_arr.extend([0.0] * (need_len - len(v_arr)))
-        if len(d_arr) < need_len:
-            d_arr.extend([0.0] * (need_len - len(d_arr)))
-
-        v_arr[eff_index] = v_value
-        d_arr[eff_index] = t_for_dspace_lateral(d_value)
-
-        self.cd.set_var(v_path_bulk, v_arr)
-        self.cd.set_var(d_path_bulk, d_arr)
-
-        if not hasattr(obj, "_fellow_control_count"):
-            obj._fellow_control_count = 0
-        obj._fellow_control_count += 1
-        c = obj._fellow_control_count
-        if c <= _FELLOW_LOG_INITIAL or c % _FELLOW_LOG_INTERVAL == 0:
-            logger.info(
-                "[Fellow %s] constant_plant v=%.1f km/h d=%.3f m (placement t)",
-                fellow_index,
-                v_value,
-                d_value,
+    def _write_fellow_plant_external_signals(self, obj, fellow_index, eff_index):
+        """Write ``_fellow_plant_v_kmh`` / ``_fellow_plant_d_m`` to Const_v / Const_d bulk arrays."""
+        v_value = getattr(obj, "_fellow_plant_v_kmh", None)
+        d_cmd = getattr(obj, "_fellow_plant_d_m", None)
+        if v_value is None or d_cmd is None:
+            logger.warning(
+                "FellowControl: missing _fellow_plant_v_kmh/_fellow_plant_d_m for %s; skip write",
+                obj,
             )
+            return
 
-    def _apply_fellow_geometric_ttl_follow(self, obj, fellow_index, eff_index, v_kmh: float):
-        """Constant v (km/h); d = δ(s) feedforward on main centerline (kp=0); waypoint index via shared helper."""
-        from .fellow_racing_line_lateral import (
-            _road_index_main_track_only,
-            get_or_build_delta_table,
-            lookup_delta,
-        )
-        from ..utils.legacy import project_world_to_st
-
-        control_interval = getattr(self.simulation, "_control_interval", 1)
-        dt = float(self.simulation.timestep) * max(1, control_interval)
-
-        route_pref = getattr(obj, "_route", None)
-        scene = getattr(self.simulation, "scene", None)
-        scene_params = getattr(scene, "params", None) or {}
-        ttl_folder = getattr(obj, "ttlFolder", None) or scene_params.get("ttlFolder")
-        optimal_csv = getattr(obj, "ttlFileName", None) or scene_params.get("ttlFileName")
-        road_index = getattr(self.simulation, "_road_index_ttl", None) or self.simulation._road_index
-
-        v_value = float(v_kmh)
-        d_cmd = self._get_fellow_placed_lateral_deviation(obj)
-        used_delta = False
-
-        plant_base = (
-            "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/"
-            "FellowMovement/FELLOW_POS_VEL/FellowTrailer"
-        )
-        x_rd = y_rd = None
-        try:
-            x_arr = self.cd.get_var(f"{plant_base}/x")
-            y_arr = self.cd.get_var(f"{plant_base}/y")
-            if isinstance(x_arr, (list, tuple)) and isinstance(y_arr, (list, tuple)):
-                if eff_index < len(x_arr) and eff_index < len(y_arr):
-                    if x_arr[eff_index] is not None and y_arr[eff_index] is not None:
-                        x_rd = float(x_arr[eff_index])
-                        y_rd = float(y_arr[eff_index])
-        except Exception:
-            pass
-
-        heading = 0.0
-        try:
-            da = getattr(obj, "dspaceActor", None)
-            if da is not None and getattr(da, "heading", None) is not None:
-                heading = float(da.heading)
-        except Exception:
-            heading = 0.0
-
-        wps = getattr(obj, "waypoints", None)
-        if x_rd is not None and y_rd is not None and wps and len(wps) >= 2:
-            if not getattr(obj, "_fellow_geo_wp_inited", False):
-                idx, _res, _nd = initialize_racing_waypoint_start_index(
-                    (x_rd, y_rd), heading, wps
-                )
-                obj._fellow_geo_wp_last_idx = int(idx)
-                obj._fellow_geo_wp_inited = True
-            else:
-                last_i = int(getattr(obj, "_fellow_geo_wp_last_idx", 0))
-                res = select_forward_racing_waypoint(
-                    car_position=(x_rd, y_rd),
-                    car_heading=heading,
-                    waypoints=wps,
-                    last_known_index=last_i,
-                    max_search_distance=100.0,
-                    forward_bias=0.9,
-                    min_forward_distance=5.0,
-                    forward_only=True,
-                )
-                if res is not None:
-                    obj._fellow_geo_wp_last_idx = int(res["index"])
-
-        if (
-            x_rd is not None
-            and y_rd is not None
-            and route_pref == "Lap"
-            and ttl_folder
-            and str(ttl_folder).strip()
-            and optimal_csv
-            and road_index
-        ):
-            idx_main = _road_index_main_track_only(road_index)
-            if idx_main is not None:
-                tbl = get_or_build_delta_table(
-                    self.simulation,
-                    str(ttl_folder),
-                    str(optimal_csv),
-                    road_index,
-                )
-                if tbl is not None:
-                    pos_xy = (x_rd, y_rd)
-                    try:
-                        s_meas, t_meas = project_world_to_st(idx_main, pos_xy)
-                        s_filt = getattr(obj, "_fellow_geo_s_meas_filtered", None)
-                        if s_filt is None:
-                            s_use = float(s_meas)
-                        else:
-                            s_use = 0.42 * float(s_meas) + 0.58 * float(s_filt)
-                        obj._fellow_geo_s_meas_filtered = s_use
-                        s_arr, d_arr_tbl, track_len = tbl
-                        d_raw, delta_ref, _e = lookup_delta(
-                            s_use, t_meas, s_arr, d_arr_tbl, track_len, kp=0.0
-                        )
-                        prev_d = getattr(obj, "_fellow_geo_d_cmd_prev", None)
-                        max_slew = 0.32 * max(1.0, dt / 0.05)
-                        if prev_d is not None:
-                            d_raw = max(
-                                prev_d - max_slew,
-                                min(prev_d + max_slew, d_raw),
-                            )
-                        obj._fellow_geo_d_cmd_prev = float(d_raw)
-                        d_cmd = float(d_raw)
-                        used_delta = True
-                    except Exception as ex:
-                        if not getattr(obj, "_fellow_geo_warned_projection", False):
-                            obj._fellow_geo_warned_projection = True
-                            logger.warning(
-                                "[Fellow %s] geometric TTL: δ(s) projection failed (%s); placement d",
-                                fellow_index,
-                                ex,
-                            )
-                elif not getattr(obj, "_fellow_geo_warned_no_table", False):
-                    obj._fellow_geo_warned_no_table = True
-                    logger.warning(
-                        "[Fellow %s] geometric TTL: delta table missing (ttlFolder=%r ttlFileName=%r); placement d",
-                        fellow_index,
-                        ttl_folder,
-                        optimal_csv,
-                    )
-            elif not getattr(obj, "_fellow_geo_warned_no_main_idx", False):
-                obj._fellow_geo_warned_no_main_idx = True
-                logger.warning(
-                    "[Fellow %s] geometric TTL: no MainTrack_TTL road index; placement d",
-                    fellow_index,
-                )
-        else:
-            if not getattr(obj, "_fellow_geo_warned_requirements", False):
-                obj._fellow_geo_warned_requirements = True
-                reasons = []
-                if x_rd is None or y_rd is None:
-                    reasons.append("no FellowTrailer x/y")
-                if route_pref != "Lap":
-                    reasons.append(f"route={route_pref!r} (need Lap)")
-                if not ttl_folder or not str(ttl_folder).strip():
-                    reasons.append("no ttlFolder (param or per-object)")
-                if not optimal_csv:
-                    reasons.append(
-                        "no ttlFileName (set param ttlFileName or fellow with ttlFileName, e.g. ttl_optimal_xodr.csv)"
-                    )
-                if not road_index:
-                    reasons.append("no road_index")
-                logger.warning(
-                    "[Fellow %s] geometric TTL inactive: %s — using placement d",
-                    fellow_index,
-                    "; ".join(reasons) if reasons else "preconditions not met",
-                )
+        v_value = float(v_value)
+        d_cmd = float(d_cmd)
 
         base_ext = (
             "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/"
@@ -573,16 +375,24 @@ class VehicleController:
         obj._fellow_control_count += 1
         c = obj._fellow_control_count
         if c <= _FELLOW_LOG_INITIAL or c % _FELLOW_LOG_INTERVAL == 0:
+            mode = getattr(obj, "_fellow_plant_log_mode", "plant")
             wp_i = int(getattr(obj, "_fellow_geo_wp_last_idx", -1))
-            mode = "delta(s)" if used_delta else "placement_d"
-            logger.info(
-                "[Fellow %s] geometric_ttl %s v=%.1f km/h d_cmd=%.3f m wp_idx=%s",
-                fellow_index,
-                mode,
-                v_value,
-                d_cmd,
-                wp_i,
-            )
+            if mode == "placement_t":
+                logger.info(
+                    "[Fellow %s] constant_plant v=%.1f km/h d=%.3f m (placement t)",
+                    fellow_index,
+                    v_value,
+                    d_cmd,
+                )
+            else:
+                logger.info(
+                    "[Fellow %s] geometric_ttl %s v=%.1f km/h d_cmd=%.3f m wp_idx=%s",
+                    fellow_index,
+                    mode,
+                    v_value,
+                    d_cmd,
+                    wp_i,
+                )
 
     def apply_fellow_control(self, obj):
         """Apply control for fellow vehicle via v and d only.
@@ -597,8 +407,9 @@ class VehicleController:
         or when the delta table cannot be built; set
         ``obj._fellow_force_bicycle_lateral = True`` to force bicycle on Lap.
 
-        FellowConstantSpeedTrackOffsetBehavior: constant v (from behavior ``speed_mph``, written as km/h) and d from placement.
-        FellowFollowTTLGeometricBehavior: constant v and d from δ(s) feedforward (no PID/MPC _control_state).
+        FellowConstantSpeedTrackOffsetBehavior / FellowFollowTTLGeometricBehavior: read
+        ``_fellow_plant_v_kmh`` and ``_fellow_plant_d_m`` set by the Scenic behavior
+        (fallback refresh here if missing). No PID/MPC _control_state for these modes.
         """
         # Ensure fellow arrays are initialized before attempting to write
         from ..controldesk.arrays import ensure_fellow_arrays_initialized
@@ -614,19 +425,29 @@ class VehicleController:
         # Adjust for base (0-based vs 1-based arrays) for writing
         eff_index = fellow_index + (self.simulation._fellow_index_base or 0)
 
-        # Constant-speed fellow plant: v from behavior, d from placement (no physics, no _control_state)
+        # Fellow (v, d) plant: values computed in Scenic; controller writes External_Signals only.
         _v_plant = fellow_constant_speed_kmh_from_behavior(obj)
         if _v_plant is not None:
-            self._apply_fellow_constant_vd_from_placement(
-                obj, fellow_index, eff_index, _v_plant
-            )
+            if (
+                getattr(obj, "_fellow_plant_v_kmh", None) is None
+                or getattr(obj, "_fellow_plant_d_m", None) is None
+            ):
+                fellow_commands_mod.update_fellow_constant_speed_track_offset_plant(
+                    obj, self.simulation
+                )
+            self._write_fellow_plant_external_signals(obj, fellow_index, eff_index)
             return
 
         _v_geo = fellow_follow_ttl_geometric_speed_kmh(obj)
         if _v_geo is not None:
-            self._apply_fellow_geometric_ttl_follow(
-                obj, fellow_index, eff_index, _v_geo
-            )
+            if (
+                getattr(obj, "_fellow_plant_v_kmh", None) is None
+                or getattr(obj, "_fellow_plant_d_m", None) is None
+            ):
+                fellow_commands_mod.update_fellow_follow_ttl_geometric_plant(
+                    obj, self.simulation, fellow_index=fellow_index
+                )
+            self._write_fellow_plant_external_signals(obj, fellow_index, eff_index)
             return
 
         # Kinematic path requires _control_state from behavior

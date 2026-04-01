@@ -17,6 +17,10 @@ from scenic.domains.racing.waypoints import (
     initialize_racing_waypoint_start_index,
     select_forward_racing_waypoint,
 )
+from scenic.domains.racing.fellow import (
+    update_fellow_constant_speed_track_offset_plant,
+    update_fellow_follow_ttl_geometric_plant,
+)
 from scenic.domains.racing.segments import (
     build_waypoint_segment_map,
     build_waypoint_segment_map_from_ttl,
@@ -404,33 +408,34 @@ behavior FellowConstantSpeedTrackOffsetBehavior(speed_mph=31):
     """Constant-speed fellow with lateral offset fixed from Scenic placement.
 
     Intended for **dSPACE** traffic fellows controlled via External_Signals
-    (``Const_v_Fellows_External``, ``Const_d_Fellows_External``): holds constant speed
-    (**speed_mph**, converted to km/h for the plant) and **d** equal to the lateral
-    deviation from placement (``_route_s_t``). This is not MPC and does not populate
-    throttle/steer control state.
+    (``Const_v_Fellows_External``, ``Const_d_Fellows_External``): each step this behavior
+    sets ``_fellow_plant_v_kmh`` and ``_fellow_plant_d_m`` from **speed_mph** (km/h) and
+    lateral placement (``_route_s_t``). The dSPACE controller only writes those values to
+    the platform. Not MPC; does not populate throttle/steer control state.
 
     Other simulators do not apply this unless they implement the same (v, d) contract.
     """
-    wait
     while True:
+        update_fellow_constant_speed_track_offset_plant(self, simulation())
         wait
 
 behavior FellowFollowTTLGeometricBehavior(speed_mph=31):
     """dSPACE fellow: constant speed and lateral **d** from TTL geometry (no PID/MPC).
 
-    The simulator writes **Const_v_Fellows_External** from **speed_mph** (converted to km/h)
-    and **Const_d_Fellows_External** from feedforward δ(s) on the main track centerline
-    (optimal TTL vs ``ttl_main_road``), matching the racing line used by MPC fellows.
+    Each step sets ``_fellow_plant_v_kmh`` from **speed_mph**. On control-interval steps
+    (aligned with simulator readback), sets ``_fellow_plant_d_m`` from feedforward δ(s)
+    on the main track centerline (optimal TTL vs ``ttl_main_road``), matching the racing
+    line used by MPC fellows. The dSPACE controller writes those attrs to External_Signals.
 
     Waypoint progress uses :func:`select_forward_racing_waypoint` (same family as
-    ``FollowRacingLineBehavior``) for a stable polyline index; **d** is not a controller
-    output—it is pure geometry at the (v, d) plant.
+    ``FollowRacingLineBehavior``) for a stable polyline index; **d** is pure geometry.
 
     Requires **Lap** route, ``ttlFolder``, ``ttlFileName`` (optimal CSV), TTL waypoints on
-    the agent, and a valid delta table. Other simulators may ignore this behavior.
+    the agent, and a valid delta table. Uses ``dspaceActor`` pose from readback. Other
+    simulators may ignore this behavior.
     """
-    wait
     while True:
+        update_fellow_follow_ttl_geometric_plant(self, simulation())
         wait
 
 behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None):

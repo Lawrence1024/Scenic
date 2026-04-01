@@ -46,3 +46,15 @@ a representation of a road network that can be loaded from standard map formats 
 dynamic scenarios, providing actions for agents which can drive and walk as well as
 implementations of common behaviors like lane following and collision avoidance. See the
 documentation of the `scenic.domains.driving` module for further details.
+
+..  _racing_domain:
+
+Racing Domain
+-------------
+
+The racing domain extends the driving domain for closed-circuit tracks, pit lanes, and
+racing-line (TTL) workflows. Its Python API includes `scenic.domains.racing.fellow`, a
+subpackage for **traffic fellow** plant helpers used with simulators such as dSPACE
+(constant-speed / TTL-geometric behaviors and External_Signals ``(v, d)`` writes). See
+`scenic.domains.racing.fellow.plant` for behavior detection and
+`scenic.domains.racing.fellow.commands` for per-step command computation.
