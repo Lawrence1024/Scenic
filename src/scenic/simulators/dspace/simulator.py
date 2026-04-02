@@ -108,7 +108,8 @@ class DSpaceSimulation(RacingSimulation):
         self._sync_bridge = None
         self._sync_bridge_connected_once = False
         self._veos_ipc_client_proc = None  # subprocess.Popen when CoSim enabled and client auto-launched
-        
+        self._ros2_bag_recorder = None  # Ros2BagRecorder when param record_ros2_bag is True
+
         # dSPACE two-phase architecture
         self._modeldesk_app = None  # ModelDesk COM application
         self._fellow_vehicles = {}  # Track fellow vehicles for runtime control
@@ -554,6 +555,18 @@ class DSpaceSimulation(RacingSimulation):
                 print("[Setup] Race go signals applied (track_flag[0]=1, vehicle_flag[0]=0, manual_mode=1).")
             except Exception as e:
                 print(f"[Setup] [WARN] Failed to apply race go signals: {e}")
+
+        # 15) Optional ROS 2 bag recording (Docker container; per-sample, default off via param)
+        try:
+            from scenic.simulators.dspace.ros2_bag import load_ros2_bag_config, Ros2BagRecorder
+
+            _rb_cfg = load_ros2_bag_config(self.scene, self.sim)
+            if _rb_cfg is not None:
+                _rb_rec = Ros2BagRecorder(_rb_cfg)
+                if _rb_rec.start():
+                    self._ros2_bag_recorder = _rb_rec
+        except Exception as e:
+            print(f"[ROS2 bag] [WARN] Could not start recording: {e}")
 
     def createObjectInSimulator(self, obj):
         """Place car (ego or fellow) by absolute (s,t) computed from (x,y) and XODR.
@@ -1556,6 +1569,15 @@ class DSpaceSimulation(RacingSimulation):
         NOTE: The 0.2s sleep before RTA Start is required so the simulation can fully settle before starting;
         do not remove it or RTA Start may not take effect correctly.
         """
+        _ros2 = getattr(self, "_ros2_bag_recorder", None)
+        if _ros2 is not None:
+            try:
+                _ros2.stop()
+            except Exception as e:
+                print(f"[ROS2 bag] [WARN] stop failed: {e}")
+            finally:
+                self._ros2_bag_recorder = None
+
         # 1) ControlDesk actions first (before timing and port teardown)
         if self._cd:
             var = getattr(self, "_var_access", None) or getattr(self, "_cd", None)

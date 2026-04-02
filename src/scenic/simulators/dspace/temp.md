@@ -1,281 +1,57 @@
-Yes — in your case, the cleanest setup is:
+# ROS 2 bag recording with Scenic dSPACE
 
-* keep the container doing its normal job
-* start recording on demand with `docker exec`
-* stop recording on demand by sending a graceful signal to the recorder process
-* wrap both actions in Python so you can do it from Windows
+This document describes how **optional** ROS 2 bag recording is tied to **each Scenic simulation sample** when using the dSPACE simulator.
 
-A good pattern is to avoid `tmux` entirely unless you want an interactive session manager. Since you want “start recording” and “stop recording” commands, the simplest reliable approach is:
+## Behavior
 
-1. inside the container, start `ros2 bag record` in the background and save its PID
-2. later, read that PID and send `SIGINT` so the bag closes cleanly
+- **Default:** no recording. Nothing runs unless you opt in with a Scenic `param`.
+- **Start:** at the end of `DSpaceSimulation.setup()`, after ModelDesk/ControlDesk setup and race “go” signals—immediately before the simulation begins stepping.
+- **Stop:** at the **beginning** of `DSpaceSimulation.destroy()`, before ControlDesk teardown. Scenic’s `Simulation.run()` always calls `destroy()` in a `finally` block, so each sample gets a matching stop.
 
-That gives you explicit control.
+Implementation lives under [`ros2_bag/`](ros2_bag/): [`config.py`](ros2_bag/config.py) (scene params) and [`recorder.py`](ros2_bag/recorder.py). Recording uses **native `docker exec <container> bash -c '…'`**, the same engine and container model as **`DSpaceSimulation._call_art_stack_reset`** (ART reset). No WSL indirection.
 
-## Inside-container commands
+## Enabling recording
 
-Assuming:
+Set in your `.scenic` file:
 
-* container name: `art_driving_stach`
-* mounted host path: `~/ros_ws/ros_bags:/ros_bags`
+```scenic
+param record_ros2_bag = True
+```
 
-### Start recording
+If this param is **absent** or **false**, no `ros2 bag record` process is started.
+
+### Other scene params (only when `record_ros2_bag` is true)
+
+| Param | Purpose |
+|--------|---------|
+| `ros2_bag_container` | Docker container name. If omitted, uses the simulator’s `art_stack_container` (see `DSpaceSimulator`). |
+| `ros2_bag_parent_dir` | Directory **inside** the container for bags (default `/ros_bags`). Mount this to the host (e.g. `~/ros_ws/ros_bags:/ros_bags`). |
+| `ros2_bag_topics` | Optional list of topic names; if set, records those topics only. If omitted, uses `ros2 bag record -a`. |
+| `ros2_bag_setup_source` | Shell line to source the ROS workspace before `ros2 bag record`. **Default:** `source /opt/race_common/install/setup.bash` (matches ART reset in `simulator.py`). |
+
+The legacy params `ros2_bag_use_wsl` and `ros2_bag_wsl_distro` are **ignored** if present; use the same `docker` on your host PATH that successfully runs ART reset.
+
+## Docker / container expectations
+
+- The container must have ROS 2 CLI available and a workspace that matches `ros2_bag_setup_source`.
+- Recording runs as: `nohup ros2 bag record … &` with the PID in **`/tmp/rosbag_record.pid`** inside the container. Each sample writes to **`${ros2_bag_parent_dir}/rosbag_<YYYYMMDD_HHMMSS>/`** (and a matching `.log` next to it). That timestamp is **wall-clock second** resolution: two samples starting in the same second could target the same folder name.
+- **Stop** sends **SIGINT** to that PID so the bag finalizes cleanly (same idea as Ctrl+C).
+
+## Limitations
+
+- **Host setup:** The container must be reachable from whatever runs `docker exec` (the same as ART tooling).
+- **Process groups:** some ROS versions spawn children; stopping the recorded PID is usually enough. A process-group-based stop can be added later if needed.
+
+## Example
+
+See `examples/racing/art_fellow_combined.scenic` in the repo root for `param record_ros2_bag = True` (container defaults to `art_stack_container` unless overridden).
+
+## Manual smoke test (no Scenic)
+
+From the repo root (with Scenic importable):
 
 ```bash
-docker exec art_driving_stach bash -lc '
-source install/setup.bash
-mkdir -p /ros_bags
-STAMP=$(date +%Y%m%d_%H%M%S)
-BAG_DIR=/ros_bags/rosbag_$STAMP
-LOG_FILE=/ros_bags/rosbag_$STAMP.log
-
-if [ -f /tmp/rosbag_record.pid ] && kill -0 $(cat /tmp/rosbag_record.pid) 2>/dev/null; then
-  echo "rosbag recorder already running with PID $(cat /tmp/rosbag_record.pid)"
-  exit 1
-fi
-
-nohup ros2 bag record -a -o "$BAG_DIR" > "$LOG_FILE" 2>&1 &
-echo $! > /tmp/rosbag_record.pid
-echo "started recording: PID=$!, BAG_DIR=$BAG_DIR"
-'
+python -m scenic.simulators.dspace.ros2_bag.test_record_5s
 ```
 
-### Stop recording gracefully
-
-```bash
-docker exec art_driving_stach bash -lc '
-if [ ! -f /tmp/rosbag_record.pid ]; then
-  echo "no pid file found"
-  exit 1
-fi
-
-PID=$(cat /tmp/rosbag_record.pid)
-
-if ! kill -0 "$PID" 2>/dev/null; then
-  echo "process $PID is not running"
-  rm -f /tmp/rosbag_record.pid
-  exit 1
-fi
-
-kill -INT "$PID"
-wait "$PID" 2>/dev/null || true
-rm -f /tmp/rosbag_record.pid
-echo "stopped recording: PID=$PID"
-'
-```
-
-### Check status
-
-```bash
-docker exec art_driving_stach bash -lc '
-if [ -f /tmp/rosbag_record.pid ]; then
-  PID=$(cat /tmp/rosbag_record.pid)
-  if kill -0 "$PID" 2>/dev/null; then
-    echo "recording, PID=$PID"
-  else
-    echo "stale pid file"
-  fi
-else
-  echo "not recording"
-fi
-'
-```
-
-## Why this is better than killing the container
-
-Because `kill -INT` is basically the same as pressing `Ctrl+C`, which lets `ros2 bag record` flush and finalize metadata properly. That is much safer than killing the whole container or hard-killing the process.
-
-## Python version
-
-If you want this all doable in Python from Windows, the easiest way is to have Python call `wsl` and then `docker exec`.
-
-Here is a usable script:
-
-```python
-import subprocess
-import sys
-
-
-CONTAINER = "art_driving_stach"
-
-
-def run_wsl_cmd(cmd: str):
-    full_cmd = ["wsl", "bash", "-lc", cmd]
-    result = subprocess.run(full_cmd, capture_output=True, text=True)
-    return result.returncode, result.stdout.strip(), result.stderr.strip()
-
-
-def start_recording():
-    cmd = rf"""
-docker exec {CONTAINER} bash -lc '
-source install/setup.bash
-mkdir -p /ros_bags
-STAMP=$(date +%Y%m%d_%H%M%S)
-BAG_DIR=/ros_bags/rosbag_$STAMP
-LOG_FILE=/ros_bags/rosbag_$STAMP.log
-
-if [ -f /tmp/rosbag_record.pid ] && kill -0 $(cat /tmp/rosbag_record.pid) 2>/dev/null; then
-  echo "rosbag recorder already running with PID $(cat /tmp/rosbag_record.pid)"
-  exit 1
-fi
-
-nohup ros2 bag record -a -o "$BAG_DIR" > "$LOG_FILE" 2>&1 &
-echo $! > /tmp/rosbag_record.pid
-echo "started recording: PID=$!, BAG_DIR=$BAG_DIR"
-'
-"""
-    return run_wsl_cmd(cmd)
-
-
-def stop_recording():
-    cmd = rf"""
-docker exec {CONTAINER} bash -lc '
-if [ ! -f /tmp/rosbag_record.pid ]; then
-  echo "no pid file found"
-  exit 1
-fi
-
-PID=$(cat /tmp/rosbag_record.pid)
-
-if ! kill -0 "$PID" 2>/dev/null; then
-  echo "process $PID is not running"
-  rm -f /tmp/rosbag_record.pid
-  exit 1
-fi
-
-kill -INT "$PID"
-rm -f /tmp/rosbag_record.pid
-echo "stopped recording: PID=$PID"
-'
-"""
-    return run_wsl_cmd(cmd)
-
-
-def status_recording():
-    cmd = rf"""
-docker exec {CONTAINER} bash -lc '
-if [ -f /tmp/rosbag_record.pid ]; then
-  PID=$(cat /tmp/rosbag_record.pid)
-  if kill -0 "$PID" 2>/dev/null; then
-    echo "recording, PID=$PID"
-  else
-    echo "stale pid file"
-    exit 1
-  fi
-else
-  echo "not recording"
-fi
-'
-"""
-    return run_wsl_cmd(cmd)
-
-
-if __name__ == "__main__":
-    if len(sys.argv) != 2 or sys.argv[1] not in {"start", "stop", "status"}:
-        print("Usage: python rosbag_control.py [start|stop|status]")
-        sys.exit(1)
-
-    action = sys.argv[1]
-    if action == "start":
-        code, out, err = start_recording()
-    elif action == "stop":
-        code, out, err = stop_recording()
-    else:
-        code, out, err = status_recording()
-
-    if out:
-        print(out)
-    if err:
-        print(err, file=sys.stderr)
-
-    sys.exit(code)
-```
-
-## How you would use it
-
-From Windows PowerShell:
-
-```bash
-python rosbag_control.py start
-python rosbag_control.py status
-python rosbag_control.py stop
-```
-
-That script will:
-
-* enter WSL
-* run `docker exec ...`
-* start or stop recording inside the running container
-
-## Even cleaner option: put scripts inside the container
-
-If you can add two helper scripts into the container, this gets much cleaner.
-
-### `/usr/local/bin/start_rosbag.sh`
-
-```bash
-#!/usr/bin/env bash
-set -e
-
-source install/setup.bash
-mkdir -p /ros_bags
-STAMP=$(date +%Y%m%d_%H%M%S)
-BAG_DIR=/ros_bags/rosbag_$STAMP
-LOG_FILE=/ros_bags/rosbag_$STAMP.log
-
-if [ -f /tmp/rosbag_record.pid ] && kill -0 $(cat /tmp/rosbag_record.pid) 2>/dev/null; then
-  echo "rosbag recorder already running with PID $(cat /tmp/rosbag_record.pid)"
-  exit 1
-fi
-
-nohup ros2 bag record -a -o "$BAG_DIR" > "$LOG_FILE" 2>&1 &
-echo $! > /tmp/rosbag_record.pid
-echo "started recording: PID=$!, BAG_DIR=$BAG_DIR"
-```
-
-### `/usr/local/bin/stop_rosbag.sh`
-
-```bash
-#!/usr/bin/env bash
-set -e
-
-if [ ! -f /tmp/rosbag_record.pid ]; then
-  echo "no pid file found"
-  exit 1
-fi
-
-PID=$(cat /tmp/rosbag_record.pid)
-
-if ! kill -0 "$PID" 2>/dev/null; then
-  echo "process $PID is not running"
-  rm -f /tmp/rosbag_record.pid
-  exit 1
-fi
-
-kill -INT "$PID"
-rm -f /tmp/rosbag_record.pid
-echo "stopped recording: PID=$PID"
-```
-
-Then your commands become much shorter:
-
-```bash
-wsl bash -lc "docker exec art_driving_stach start_rosbag.sh"
-wsl bash -lc "docker exec art_driving_stach stop_rosbag.sh"
-```
-
-And Python just calls those.
-
-## Recommendation
-
-For your workflow, I’d use the PID-file approach, not `tmux`.
-
-Best practical setup:
-
-* mount `~/ros_ws/ros_bags:/ros_bags`
-* start with `docker exec ... nohup ros2 bag record ... &`
-* store PID in `/tmp/rosbag_record.pid`
-* stop with `kill -INT $(cat /tmp/rosbag_record.pid)`
-* wrap both in Python using `subprocess.run(["wsl", ...])`
-
-One important note: if `ros2 bag record` spawns child processes in your ROS version, stopping by PID may occasionally miss part of the process tree. Usually it works fine, but if you want, I can give you a slightly more robust version that starts the recorder in its own process group and stops the whole group cleanly.
+This starts recording, sleeps **5 seconds** (override with `--duration`), then stops—exercising the same `Ros2BagRecorder` start/stop path as the simulator. Use `--container`, `--parent-dir`, `--topics`, and `--setup-source` as needed.

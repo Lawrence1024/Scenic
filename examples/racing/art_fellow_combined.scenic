@@ -5,6 +5,7 @@ param time_step = 0.01
 param control_period = 0.05
 param scenic_control = False
 param launch_veos_ipc_client = False
+param record_ros2_bag = True
 model scenic.simulators.dspace.racing_model
 
 ego = new RacingCar at (-78.86454576530903,-112.41203639782893), \
