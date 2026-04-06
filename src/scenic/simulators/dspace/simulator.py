@@ -1032,7 +1032,7 @@ class DSpaceSimulation(RacingSimulation):
                     # Ego: Use VesiInterface physics-based control
                     self._vehicle_controller.apply_ego_control(obj)
                 else:
-                    # Fellow: requires a behavior (e.g. MPC or FellowConstantSpeedTrackOffsetBehavior)
+                    # Fellow: requires a behavior (e.g. MPC or fellow (v,d) plant behaviors)
                     if getattr(obj, "behavior", None):
                         self._vehicle_controller.apply_fellow_control(obj)
 

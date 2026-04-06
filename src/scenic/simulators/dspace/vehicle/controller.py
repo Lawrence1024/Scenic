@@ -11,6 +11,7 @@ from scenic.domains.racing.fellow import commands as fellow_commands_mod
 from scenic.domains.racing.fellow.plant import (
     fellow_constant_speed_kmh_from_behavior,
     fellow_follow_ttl_geometric_speed_kmh,
+    is_fellow_sudden_stop_interval_behavior,
 )
 
 from ..vehicle.physics import VehiclePhysicsState
@@ -407,9 +408,11 @@ class VehicleController:
         or when the delta table cannot be built; set
         ``obj._fellow_force_bicycle_lateral = True`` to force bicycle on Lap.
 
-        FellowConstantSpeedTrackOffsetBehavior / FellowFollowTTLGeometricBehavior: read
-        ``_fellow_plant_v_kmh`` and ``_fellow_plant_d_m`` set by the Scenic behavior
-        (fallback refresh here if missing). No PID/MPC _control_state for these modes.
+        FellowConstantSpeedTrackOffsetBehavior / FellowFollowTTLGeometricBehavior /
+        FellowSuddenStopIntervalBehavior: read ``_fellow_plant_v_kmh`` and
+        ``_fellow_plant_d_m`` (sudden-stop **v** schedule every tick; **d** from TTL
+        geometry on control intervals, same as geometric fellow).
+        No PID/MPC _control_state for these modes.
         """
         # Ensure fellow arrays are initialized before attempting to write
         from ..controldesk.arrays import ensure_fellow_arrays_initialized
@@ -447,6 +450,13 @@ class VehicleController:
                 fellow_commands_mod.update_fellow_follow_ttl_geometric_plant(
                     obj, self.simulation, fellow_index=fellow_index
                 )
+            self._write_fellow_plant_external_signals(obj, fellow_index, eff_index)
+            return
+
+        if is_fellow_sudden_stop_interval_behavior(obj):
+            fellow_commands_mod.update_fellow_sudden_stop_interval_plant(
+                obj, self.simulation, fellow_index=fellow_index
+            )
             self._write_fellow_plant_external_signals(obj, fellow_index, eff_index)
             return
 

@@ -9,6 +9,8 @@ writes those to External_Signals (see :mod:`scenic.domains.racing.fellow.command
 - :obj:`FellowFollowTTLGeometricBehavior` — constant ``speed_mph`` and lateral ``d`` from
   feedforward δ(s) on the main centerline (optimal TTL vs ``ttl_main_road``), with waypoint
   index updates via shared racing helpers.
+- :obj:`FellowSuddenStopIntervalBehavior` — periodic full stops (cruise **speed** mph, then v=0)
+  with lateral **d** from TTL delta(s) like :obj:`FellowFollowTTLGeometricBehavior`.
 
 Other simulators may ignore these unless they implement the same contract.
 """
@@ -21,6 +23,8 @@ from typing import Any, Optional
 FELLOW_CONSTANT_SPEED_TRACK_OFFSET_CLASS = "FellowConstantSpeedTrackOffsetBehavior"
 # Must match ``behavior FellowFollowTTLGeometricBehavior``.
 FELLOW_FOLLOW_TTL_GEOMETRIC_CLASS = "FellowFollowTTLGeometricBehavior"
+# Must match ``behavior FellowSuddenStopIntervalBehavior``.
+FELLOW_SUDDEN_STOP_INTERVAL_CLASS = "FellowSuddenStopIntervalBehavior"
 
 # International mile (exact): 1 mi = 1.609344 km
 _MPH_TO_KMH = 1.609344
@@ -69,3 +73,9 @@ def is_fellow_follow_ttl_geometric_behavior(obj: Any) -> bool:
     """True if ``obj`` has :class:`FellowFollowTTLGeometricBehavior`."""
     b = getattr(obj, "behavior", None)
     return b is not None and b.__class__.__name__ == FELLOW_FOLLOW_TTL_GEOMETRIC_CLASS
+
+
+def is_fellow_sudden_stop_interval_behavior(obj: Any) -> bool:
+    """True if ``obj`` has :class:`FellowSuddenStopIntervalBehavior`."""
+    b = getattr(obj, "behavior", None)
+    return b is not None and b.__class__.__name__ == FELLOW_SUDDEN_STOP_INTERVAL_CLASS

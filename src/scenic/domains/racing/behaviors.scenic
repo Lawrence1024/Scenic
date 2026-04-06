@@ -20,6 +20,7 @@ from scenic.domains.racing.waypoints import (
 from scenic.domains.racing.fellow import (
     update_fellow_constant_speed_track_offset_plant,
     update_fellow_follow_ttl_geometric_plant,
+    update_fellow_sudden_stop_interval_plant,
 )
 from scenic.domains.racing.segments import (
     build_waypoint_segment_map,
@@ -436,6 +437,27 @@ behavior FellowFollowTTLGeometricBehavior(speed_mph=31):
     """
     while True:
         update_fellow_follow_ttl_geometric_plant(self, simulation())
+        wait
+
+behavior FellowSuddenStopIntervalBehavior(speed=150, interval=20.0, duration=3.0):
+    """dSPACE fellow: periodic full stops (commanded v=0), then back to cruise speed.
+
+    Uses simulation time (:obj:`Simulation.currentRealTime`). Each cycle lasts
+    **interval + duration** seconds: cruise at **speed** (mph) for **interval** seconds,
+    then commanded **0 km/h** for **duration** seconds, then repeat. Lateral **d** uses the
+    same TTL delta(s) geometry as :obj:`FellowFollowTTLGeometricBehavior` (Lap route,
+    ``ttlFolder``, ``ttlFileName``, optimal CSV, waypoints). For placement-only fallback
+    when geometry is inactive, see that behavior's requirements.
+
+    Args:
+        speed: Cruise speed between stops in **mph** (same convention as ``speed_mph`` on
+            :obj:`FellowConstantSpeedTrackOffsetBehavior`).
+        interval: Cruise phase length in seconds (must be ≥ 0).
+        duration: Stop phase length in seconds (commanded longitudinal v=0; must be ≥ 0).
+            If **duration** is 0, the fellow never enters the stop phase.
+    """
+    while True:
+        update_fellow_sudden_stop_interval_plant(self, simulation())
         wait
 
 behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None):

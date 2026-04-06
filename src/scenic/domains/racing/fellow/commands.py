@@ -16,6 +16,7 @@ from typing import Any, Optional
 from scenic.domains.racing.fellow.plant import (
     FELLOW_CONSTANT_SPEED_TRACK_OFFSET_CLASS,
     FELLOW_FOLLOW_TTL_GEOMETRIC_CLASS,
+    FELLOW_SUDDEN_STOP_INTERVAL_CLASS,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,37 +32,13 @@ def get_fellow_placed_lateral_deviation(obj: Any) -> float:
     return 0.0
 
 
-def update_fellow_constant_speed_track_offset_plant(obj: Any, simulation: Any) -> None:
-    """Set ``_fellow_plant_v_kmh`` and ``_fellow_plant_d_m`` for constant-offset plant."""
-    b = getattr(obj, "behavior", None)
-    if b is None or b.__class__.__name__ != FELLOW_CONSTANT_SPEED_TRACK_OFFSET_CLASS:
-        return
-    try:
-        mph = float(getattr(b, "speed_mph"))
-    except (TypeError, ValueError):
-        mph = 31.0
-    obj._fellow_plant_v_kmh = float(mph) * _MPH_TO_KMH
-    obj._fellow_plant_d_m = get_fellow_placed_lateral_deviation(obj)
-    obj._fellow_plant_log_mode = "placement_t"
-
-
-def update_fellow_follow_ttl_geometric_plant(
+def _update_fellow_plant_d_ttl_geometric(
     obj: Any,
     simulation: Any,
     *,
     fellow_index: Optional[int] = None,
 ) -> None:
-    """Set plant v and d from TTL δ(s) on control-interval steps; v refreshed every step."""
-    b = getattr(obj, "behavior", None)
-    if b is None or b.__class__.__name__ != FELLOW_FOLLOW_TTL_GEOMETRIC_CLASS:
-        return
-    try:
-        mph = float(getattr(b, "speed_mph"))
-    except (TypeError, ValueError):
-        mph = 31.0
-    v_kmh = float(mph) * _MPH_TO_KMH
-    obj._fellow_plant_v_kmh = v_kmh
-
+    """Set ``_fellow_plant_d_m`` from TTL delta(s) on control-interval steps; placement fallback."""
     control_interval = max(1, int(getattr(simulation, "_control_interval", 1) or 1))
     current_time = int(getattr(simulation, "currentTime", 0) or 0)
     if current_time % control_interval != 0:
@@ -182,7 +159,7 @@ def update_fellow_follow_ttl_geometric_plant(
                     if not getattr(obj, "_fellow_geo_warned_projection", False):
                         obj._fellow_geo_warned_projection = True
                         logger.warning(
-                            "[Fellow %s] geometric TTL: δ(s) projection failed (%s); placement d",
+                            "[Fellow %s] geometric TTL: delta(s) projection failed (%s); placement d",
                             idx_label,
                             ex,
                         )
@@ -224,3 +201,116 @@ def update_fellow_follow_ttl_geometric_plant(
 
     obj._fellow_plant_d_m = d_cmd
     obj._fellow_plant_log_mode = "delta(s)" if used_delta else "placement_d"
+
+
+def update_fellow_sudden_stop_interval_plant(
+    obj: Any,
+    simulation: Any,
+    *,
+    fellow_index: Optional[int] = None,
+) -> None:
+    """Set plant **v** from periodic cruise / full-stop; **d** from TTL delta(s) like geometric fellow.
+
+    Longitudinal schedule uses :attr:`simulation.currentRealTime`. Lateral **d** uses
+    :func:`_update_fellow_plant_d_ttl_geometric` (same as :func:`update_fellow_follow_ttl_geometric_plant`).
+    """
+    b = getattr(obj, "behavior", None)
+    if b is None or b.__class__.__name__ != FELLOW_SUDDEN_STOP_INTERVAL_CLASS:
+        return
+    try:
+        _spd = getattr(b, "speed", None)
+        if _spd is None:
+            _spd = getattr(b, "speed_mph", 150.0)
+        mph = float(_spd)
+    except (TypeError, ValueError):
+        mph = 150.0
+    try:
+        interval = float(getattr(b, "interval", 20.0))
+    except (TypeError, ValueError):
+        interval = 20.0
+    try:
+        duration = float(getattr(b, "duration", 3.0))
+    except (TypeError, ValueError):
+        duration = 3.0
+
+    interval = max(0.0, interval)
+    duration = max(0.0, duration)
+    period = interval + duration
+    t_sim = float(getattr(simulation, "currentRealTime", 0.0) or 0.0)
+
+    if duration <= 0.0 or period <= 0.0:
+        phase = "cruise_only"
+        pos_in_cycle = float("nan")
+        v_kmh = float(mph) * _MPH_TO_KMH
+    else:
+        pos_in_cycle = t_sim % period
+        phase = "cruise" if pos_in_cycle < interval else "stop"
+        if phase == "cruise":
+            v_kmh = float(mph) * _MPH_TO_KMH
+        else:
+            v_kmh = 0.0
+
+    prev_phase = getattr(obj, "_fellow_sudden_stop_log_phase", None)
+    phase_changed = prev_phase != phase
+    first_log = not getattr(obj, "_fellow_sudden_stop_log_inited", False)
+    if first_log or phase_changed:
+        obj._fellow_sudden_stop_log_inited = True
+        obj._fellow_sudden_stop_log_phase = phase
+        if first_log:
+            print(
+                f"[Fellow sudden_stop] config: speed={mph:.2f} mph interval={interval:.4f}s "
+                f"duration={duration:.4f}s -> period={period:.4f}s "
+                f"(cruise [0, interval), then stop [interval, period)); "
+                f"time base=simulation.currentRealTime"
+            )
+        if phase == "cruise_only":
+            print(
+                f"[Fellow sudden_stop] {'start' if first_log else 'edge'} phase={phase!r} "
+                f"t_sim={t_sim:.6f}s (no cycling; duration<=0 or period<=0) "
+                f"v_cmd={v_kmh:.2f} km/h"
+            )
+        else:
+            print(
+                f"[Fellow sudden_stop] {'start' if first_log else 'edge'} phase={phase!r} "
+                f"t_sim={t_sim:.6f}s pos_in_cycle={pos_in_cycle:.6f}s / period={period:.6f}s "
+                f"(cruise window [0, {interval:.6f}s), stop window [{interval:.6f}s, {period:.6f}s)) "
+                f"v_cmd={v_kmh:.2f} km/h"
+            )
+
+    obj._fellow_plant_v_kmh = v_kmh
+    _update_fellow_plant_d_ttl_geometric(obj, simulation, fellow_index=fellow_index)
+    _sub = getattr(obj, "_fellow_plant_log_mode", "placement_d")
+    obj._fellow_plant_log_mode = f"sudden_stop/{_sub}"
+
+
+def update_fellow_constant_speed_track_offset_plant(obj: Any, simulation: Any) -> None:
+    """Set ``_fellow_plant_v_kmh`` and ``_fellow_plant_d_m`` for constant-offset plant."""
+    b = getattr(obj, "behavior", None)
+    if b is None or b.__class__.__name__ != FELLOW_CONSTANT_SPEED_TRACK_OFFSET_CLASS:
+        return
+    try:
+        mph = float(getattr(b, "speed_mph"))
+    except (TypeError, ValueError):
+        mph = 31.0
+    obj._fellow_plant_v_kmh = float(mph) * _MPH_TO_KMH
+    obj._fellow_plant_d_m = get_fellow_placed_lateral_deviation(obj)
+    obj._fellow_plant_log_mode = "placement_t"
+
+
+def update_fellow_follow_ttl_geometric_plant(
+    obj: Any,
+    simulation: Any,
+    *,
+    fellow_index: Optional[int] = None,
+) -> None:
+    """Set plant v and d from TTL δ(s) on control-interval steps; v refreshed every step."""
+    b = getattr(obj, "behavior", None)
+    if b is None or b.__class__.__name__ != FELLOW_FOLLOW_TTL_GEOMETRIC_CLASS:
+        return
+    try:
+        mph = float(getattr(b, "speed_mph"))
+    except (TypeError, ValueError):
+        mph = 31.0
+    v_kmh = float(mph) * _MPH_TO_KMH
+    obj._fellow_plant_v_kmh = v_kmh
+    _update_fellow_plant_d_ttl_geometric(obj, simulation, fellow_index=fellow_index)
