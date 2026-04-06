@@ -138,10 +138,10 @@ def _route_pref_from_ttl_distances(sim, xodr_x, xodr_y):
         if not scene_params.get("ttlFolder"):
             return None  # Scenario uses XODR track; don't use TTL centerlines for route
         from ..ttl.loader import get_ttl_config, load_ttl_region
-        ttl_folder, _, _ = get_ttl_config(scene_params)
+        ttl_folder, _ = get_ttl_config(scene_params)
         ttl_folder = str(ttl_folder)
-        _, main_pts = load_ttl_region(ttl_folder, 0, TTL_MAIN_ROAD_FILE)
-        _, pit_pts = load_ttl_region(ttl_folder, 0, TTL_PITLANE_FILE)
+        _, main_pts = load_ttl_region(ttl_folder, TTL_MAIN_ROAD_FILE)
+        _, pit_pts = load_ttl_region(ttl_folder, TTL_PITLANE_FILE)
         if not main_pts or not pit_pts:
             return None
         # Use polyline (segment) distance so assignment is by closest centerline
@@ -193,11 +193,11 @@ def place_ego(sim, obj):
             try:
                 from ..ttl.loader import get_ttl_config
                 from ..ttl.road_index import build_road_index_from_ttl
-                ttl_folder, _, _ = get_ttl_config(scene_params)
+                ttl_folder, _ = get_ttl_config(scene_params)
                 if ttl_folder:
-                    ttl_index = build_road_index_from_ttl(str(ttl_folder))
-                    if ttl_index is not None:
-                        sim._road_index_ttl = ttl_index
+                    ttl_road_index = build_road_index_from_ttl(str(ttl_folder))
+                    if ttl_road_index is not None:
+                        sim._road_index_ttl = ttl_road_index
             except Exception as e:
                 pass  # Fall back to XODR-based index
         road_index_for_projection = getattr(sim, '_road_index_ttl', None) or sim._road_index
@@ -461,9 +461,9 @@ def place_fellow(sim, obj):
                     try:
                         from ..ttl.loader import get_ttl_config, load_ttl_region
                         scene_params = getattr(getattr(sim, "scene", None), "params", None) or {}
-                        ttl_folder, _, _ = get_ttl_config(scene_params)
+                        ttl_folder, _ = get_ttl_config(scene_params)
                         if ttl_folder:
-                            _, main_pts = load_ttl_region(str(ttl_folder), 0, TTL_MAIN_ROAD_FILE)
+                            _, main_pts = load_ttl_region(str(ttl_folder), TTL_MAIN_ROAD_FILE)
                             if main_pts:
                                 dist_to_ttl = _min_dist_to_polyline(ex, ey, main_pts)
                                 msg += f" | dist_to_ttl_main_centerline_m={dist_to_ttl:.2f}"

@@ -61,8 +61,8 @@ def build_racing_line_delta_table(
         logger.warning("[Fellow racing-line lateral] optimal CSV missing: %s", opt_path)
         return None
 
-    _, main_pts = load_ttl_region(folder, 0, TTL_MAIN_ROAD_FILE)
-    _, optimal_pts = load_ttl_region(folder, 0, optimal_csv_name)
+    _, main_pts = load_ttl_region(folder, TTL_MAIN_ROAD_FILE)
+    _, optimal_pts = load_ttl_region(folder, optimal_csv_name)
     if not main_pts or not optimal_pts or len(optimal_pts) < 10:
         return None
 

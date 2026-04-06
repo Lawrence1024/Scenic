@@ -1,46 +1,45 @@
 import os
 import csv
 from datetime import datetime, timezone
-from pathlib import Path
 
 from scenic.core.regions import PolylineRegion
+
+
+def _default_ttl_folder() -> str:
+    """Absolute path to repo assets/ttls/LS_ENU_TTL_CSV (named CSVs only; no indexed ttl_N.csv)."""
+    _here = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.abspath(os.path.join(_here, "..", "..", "..", "..", ".."))
+    return os.path.join(repo_root, "assets", "ttls", "LS_ENU_TTL_CSV")
 
 
 def get_ttl_config(scene_params):
     """Build TTL configuration from scene params with sensible defaults.
 
-    Returns: (ttl_folder, ttl_index, ttl_file_name_or_None)
+    Returns: (ttl_folder, ttl_file_name) — filename is a basename like ``ttl_main_road.csv``.
     """
     params = scene_params or {}
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
-    default_folder = os.path.join(repo_root, "assets", "ttls", "LS_ENU_TTL_CSV")
-    ttl_folder = params.get("ttlFolder") or default_folder
-    ttl_index = int(params.get("ttlIndex", 17))  # default to 17
-    ttl_file = params.get("ttlFileName", None)
-    # Default to main road centerline so we never request missing ttl_{index}.csv (e.g. ttl_17.csv)
-    if ttl_file is None:
-        ttl_file = "ttl_main_road.csv"
-    return ttl_folder, ttl_index, ttl_file
+    ttl_folder = params.get("ttlFolder") or _default_ttl_folder()
+    ttl_file = params.get("ttlFileName") or "ttl_main_road.csv"
+    return str(ttl_folder), str(ttl_file)
 
 
-def load_ttl_region(ttl_folder, ttl_index, ttl_file_name=None):
+def load_ttl_region(ttl_folder, ttl_file_name):
     """Load TTL CSV and return (PolylineRegion, waypoints). No offset applied (TTL files are in map/XODR coordinates).
-
-    If ttl_file_name is provided, use that exact file; otherwise uses ttl_{index}.csv.
 
     Args:
         ttl_folder: Path to folder containing TTL CSV files
-        ttl_index: Index of TTL file (e.g., 17 for ttl_17.csv)
-        ttl_file_name: Optional specific filename (overrides ttl_index)
+        ttl_file_name: Basename of the CSV (e.g. ``ttl_main_road.csv``). Empty/None defaults to ``ttl_main_road.csv``.
 
     Returns:
         (PolylineRegion, list_of_waypoints) or (None, []) if loading fails
     """
-    ttl_path = os.path.join(ttl_folder, ttl_file_name) if ttl_file_name else os.path.join(ttl_folder, f"ttl_{ttl_index}.csv")
+    if not ttl_file_name:
+        ttl_file_name = "ttl_main_road.csv"
+    ttl_path = os.path.join(str(ttl_folder), ttl_file_name)
     if not os.path.exists(ttl_path):
         print(f"[TTL] File not found: {ttl_path}")
         return None, []
-    
+
     pts = []
     with open(ttl_path, newline="") as f:
         r = csv.reader(f)
@@ -70,7 +69,7 @@ def load_ttl_region(ttl_folder, ttl_index, ttl_file_name=None):
                         pass
         except StopIteration:
             has_z_column = False
-        
+
         # Process remaining rows
         for row in r:
             if not row or len(row) < 2:
@@ -88,7 +87,7 @@ def load_ttl_region(ttl_folder, ttl_index, ttl_file_name=None):
                     pts.append((x, y))
             except (ValueError, IndexError):
                 continue
-    
+
     if len(pts) < 2:
         print(f"[TTL] Not enough points in {ttl_path}")
         return None, []
@@ -103,34 +102,26 @@ def attach_ttl(sim, obj, vehicle_type="vehicle"):
     """Load TTL based on scene params or object properties and attach region/waypoints to object.
 
     TTL configuration priority:
-    1. Object-specific properties (obj.ttlIndex, obj.ttlFolder, obj.ttlFileName)
-    2. Scene parameters (ttlIndex, ttlFolder, ttlFileName)
+    1. Object-specific properties (obj.ttlFolder, obj.ttlFileName)
+    2. Scene parameters (ttlFolder, ttlFileName)
     """
     try:
-        # Check for object-specific TTL configuration
         scene_params = getattr(sim.scene, "params", {}) or {}
 
-        # Priority 1: Object-specific properties
-        if hasattr(obj, 'ttlIndex') or hasattr(obj, 'ttlFolder') or hasattr(obj, 'ttlFileName'):
-            ttl_folder = getattr(obj, 'ttlFolder', scene_params.get("ttlFolder", None))
-            ttl_index = getattr(obj, 'ttlIndex', scene_params.get("ttlIndex", 17))
-            ttl_file = getattr(obj, 'ttlFileName', scene_params.get("ttlFileName", None))
-            if ttl_file is None and (ttl_folder or scene_params.get("ttlFolder")):
-                ttl_file = "ttl_main_road.csv"
-            if ttl_folder is None:
-                repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-                ttl_folder = scene_params.get("ttlFolder",
-                    os.path.join(repo_root, "assets", "ttls", "LS_ENU_TTL_CSV"))
+        obj_folder = getattr(obj, "ttlFolder", None)
+        obj_file = getattr(obj, "ttlFileName", None)
+        if obj_folder is not None or obj_file is not None:
+            ttl_folder = obj_folder or scene_params.get("ttlFolder") or _default_ttl_folder()
+            ttl_file = obj_file or scene_params.get("ttlFileName") or "ttl_main_road.csv"
             ttl_folder = str(ttl_folder)
-            ttl_index = int(ttl_index)
-            ttl_file = str(ttl_file) if ttl_file else None
+            ttl_file = str(ttl_file)
         else:
-            ttl_folder, ttl_index, ttl_file = get_ttl_config(scene_params)
+            ttl_folder, ttl_file = get_ttl_config(scene_params)
 
-        region, pts = load_ttl_region(ttl_folder, ttl_index, ttl_file)
+        region, pts = load_ttl_region(ttl_folder, ttl_file)
         if region is not None:
             setattr(obj, "ttl", region)
-            name = ttl_file if ttl_file else f"ttl_{ttl_index}.csv"
+            name = os.path.basename(ttl_file)
             print(f"[TTL] Assigned TTL PolylineRegion to {vehicle_type} ({name})")
             # Log run identifier for analysis scripts (TTL, timestamp)
             if vehicle_type == "ego":
@@ -148,9 +139,8 @@ def attach_ttl(sim, obj, vehicle_type="vehicle"):
 
 def attach_to_ego(sim, obj):
     """Load TTL based on scene params and attach region/waypoints to ego object.
-    
+
     This is a convenience wrapper for backward compatibility.
     For new code, use attach_ttl() directly.
     """
     attach_ttl(sim, obj, vehicle_type="ego")
-

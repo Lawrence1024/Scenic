@@ -12,7 +12,7 @@ The racing domain (`scenic.domains.racing`) extends the driving domain with clos
 domains/racing/
 ├── constants.py              # Single source of truth: DELTA_MAX_RAD, THETA_SW_MAX_DEG, R
 ├── README.md                  # Racing domain reference (includes control contract)
-├── behaviors.scenic          # FollowRacingLineBehavior (PID), FollowRacingLineMPCBehavior (MPC), etc.
+├── behaviors.scenic          # FollowRacingLineMPCBehavior (MPC line follow), fellow (v,d) plants, etc.
 ├── actions.py                # Racing actions (SetMaxSpeed, SetTTL, SetGear, …)
 ├── simulators.py             # RacingSimulation: getRacingControllers(use_mpc=…), sets _racing_steer_units
 ├── model.scenic, tracks.py   # RacingCar, RacingTrack, regions

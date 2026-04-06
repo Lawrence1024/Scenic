@@ -189,12 +189,11 @@ class DSpaceSimulation(RacingSimulation):
     def _load_ttl_region(self):
         """Load a TTL CSV as a PolylineRegion."""
         params = getattr(self.scene, "params", {}) or {}
-        ttl_folder, ttl_index, ttl_file = get_ttl_config(params)
+        ttl_folder, ttl_file = get_ttl_config(params)
         try:
-            region, pts = load_ttl_region(ttl_folder, ttl_index, ttl_file)
+            region, pts = load_ttl_region(ttl_folder, ttl_file)
             if region is None:
                 return None
-            ttl_name = params.get("ttlFileName") or ttl_file or f"ttl_{ttl_index}.csv"
             self._ttl_points_loaded = pts
             return region
         except Exception as e:
@@ -609,9 +608,9 @@ class DSpaceSimulation(RacingSimulation):
         params = getattr(self.scene, "params", None) or {}
         if params.get("ttlFolder"):
             try:
-                ttl_folder, _, _ = get_ttl_config(params)
-                _, main_pts = load_ttl_region(ttl_folder, 0, TTL_MAIN_ROAD_FILE)
-                _, pit_pts = load_ttl_region(ttl_folder, 0, TTL_PITLANE_FILE)
+                ttl_folder, _ = get_ttl_config(params)
+                _, main_pts = load_ttl_region(ttl_folder, TTL_MAIN_ROAD_FILE)
+                _, pit_pts = load_ttl_region(ttl_folder, TTL_PITLANE_FILE)
                 if main_pts:
                     setattr(self.scene, "_main_ttl_waypoints", main_pts)
                     setattr(self.scene, "_pit_ttl_waypoints", pit_pts if pit_pts else [])
@@ -1860,10 +1859,10 @@ class DSpaceSimulation(RacingSimulation):
         """
         try:
             scene_params = getattr(getattr(self, "scene", None), "params", None) or {}
-            ttl_folder, _, _ = get_ttl_config(scene_params)
+            ttl_folder, _ = get_ttl_config(scene_params)
             ttl_folder = str(ttl_folder)
             filename = TTL_MAIN_ROAD_FILE if route_pref == "Lap" else TTL_PITLANE_FILE
-            region, pts = load_ttl_region(ttl_folder, 0, filename)
+            region, pts = load_ttl_region(ttl_folder, filename)
             if not pts or len(pts) < 2:
                 print(f"[Ego] TTL switch skipped: could not load {filename} ({len(pts) if pts else 0} points)")
                 return

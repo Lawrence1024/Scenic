@@ -53,7 +53,7 @@ param use2DMap = True
 model scenic.domains.racing.model
 
 ego = new RacingCar on mainTrack, \
-    with behavior FollowRacingLineBehavior(target_speed=30)
+    with behavior FollowRacingLineMPCBehavior(target_speed=30)
 ```
 
 ---
@@ -221,39 +221,13 @@ The following actions are referenced in behaviors but are **not** implemented in
 
 **Location**: `src/scenic/domains/racing/behaviors.scenic`
 
-### `FollowRacingLineBehavior`
-
-**Purpose**: Follow the car's TTL (target line) using PID controllers, respecting max speed.
-
-**Implementation**:
-```scenic
-behavior FollowRacingLineBehavior(target_speed=30):
-    # Ensure TTL/max speed set; default TTL is racingLine or mainRacingRoad
-    if not hasattr(self, 'ttl') or self.ttl is None:
-        take SetTTLAction(track.racingLine if hasattr(track, 'racingLine') and track.racingLine else mainRacingRoad)
-    take SetMaxSpeedAction(target_speed)
-    _lon_controller, _lat_controller = simulation().getRacingControllers(self)
-    past_steer_angle = 0
-    while True:
-        current_speed = (self.speed if self.speed is not None else 0)
-        line = (self.ttl if hasattr(self, 'ttl') and self.ttl is not None else (track.racingLine if hasattr(track, 'racingLine') and track.racingLine else mainRacingRoad))
-        cte = line.signedDistanceTo(self.position)
-        speed_error = min(self.maxSpeed, target_speed) - current_speed
-        throttle = _lon_controller.run_step(speed_error)
-        steer = _lat_controller.run_step(cte)
-        take RegulatedControlAction(throttle, steer, past_steer_angle)
-        past_steer_angle = steer
-```
-
-**Usage**: `do FollowRacingLineBehavior(target_speed=35)`
-
 ### `FollowRacingLineMPCBehavior`
 
-**Purpose**: Follow the car's TTL using **MPC** for lateral control (MPCC) and longitudinal control, with waypoint-based reference and curvature/CTE speed profile.
+**Purpose**: Primary racing-line behavior: follow the car's TTL using **MPC** for lateral control (MPCC) and longitudinal control, with waypoint-based reference and curvature/CTE speed profile. The legacy PID-only line-follow behavior was removed; use this behavior (or ``ARTStackControlBehavior`` when an external stack drives the vehicle).
 
-**Implementation**: Uses `getRacingControllers(self, use_mpc=True, mpc_config_path=...)` to obtain `MPCLateralController` and `MPCLongitudinalController`. CTE and reference are computed from waypoints (same geometry as MPCC). Supports gear management, configurable lookahead, and optional custom MPC config path.
+**Implementation**: Uses `getRacingControllers(self, use_mpc=True, mpc_config_path=...)` to obtain `MPCLateralController` and `MPCLongitudinalController`. CTE and reference are computed from waypoints. Supports gear management and optional custom MPC config path.
 
-**Usage**: `do FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, lookahead=20.0, mpc_config_path=None)`
+**Usage**: `do FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None)`
 
 **Details**: See `mpc/README.md` for formulation, configuration, and integration.
 
@@ -268,7 +242,7 @@ behavior PitStopBehavior():
     
     # Enter pit lane with speed limiter
     take PitLimiterAction(activate=True)  # ⚠️ Not implemented - simulator must provide
-    do FollowRacingLineBehavior(target_speed=20)
+    do FollowRacingLineMPCBehavior(target_speed=20)
     
     # Stop for pit stop
     take SetBrakeAction(1.0)
@@ -298,7 +272,7 @@ behavior OvertakingBehavior(target_car, aggressive=False):
     
     # Close the gap
     while (distance from self to target_car) > 5:
-        do FollowRacingLineBehavior(target_speed=35)
+        do FollowRacingLineMPCBehavior(target_speed=35)
     
     # Execute overtake with racing systems
     if aggressive:
@@ -309,10 +283,10 @@ behavior OvertakingBehavior(target_car, aggressive=False):
     take SetThrottleAction(1.0)
     
     # Complete overtake
-    do FollowRacingLineBehavior() until (distance from self to target_car) > 10
+    do FollowRacingLineMPCBehavior() until (distance from self to target_car) > 10
     
     # Return to racing line
-    do FollowRacingLineBehavior()
+    do FollowRacingLineMPCBehavior()
 ```
 
 **Usage**: `do OvertakingBehavior(opponent_car, aggressive=True)`
@@ -333,7 +307,7 @@ behavior DefensiveBehavior():
     take BrakeBiasAction(bias=0.6)  # ⚠️ Not implemented
     
     # Follow racing line defensively
-    do FollowRacingLineBehavior(target_speed=25)
+    do FollowRacingLineMPCBehavior(target_speed=25)
 ```
 
 **Usage**: `do DefensiveBehavior()`
@@ -496,7 +470,7 @@ model scenic.domains.racing.model
 
 # Ego on grid with racing behavior
 ego = new RacingCar on mainTrack, \
-    with behavior FollowRacingLineBehavior(target_speed=30)
+    with behavior FollowRacingLineMPCBehavior(target_speed=30)
 
 # Opponent with defensive behavior
 opponent = new RacingCar on mainTrack, \
@@ -551,7 +525,7 @@ chaser.behavior = OvertakingBehavior(leader, aggressive=True)
 - Track direction enforcement
 - Starting grid generation
 - Racing car objects with proper properties
-- 5 racing behaviors: `FollowRacingLineBehavior`, **`FollowRacingLineMPCBehavior`** (MPC), `PitStopBehavior`, `OvertakingBehavior`, `DefensiveBehavior`
+- Core racing behaviors: `FollowRacingLineMPCBehavior` (TTL line follow), `PitStopBehavior`, `OvertakingBehavior`, `DefensiveBehavior`, plus dSPACE fellow (v, d) plants and decision-tree helpers in `behaviors.scenic`
 - 5 racing actions (max speed, TTL, gear/clutch)
 - dSPACE integration (via `racing_model.scenic`)
 - Pit lane identification (via road ID or name pattern)
@@ -643,8 +617,7 @@ ReleaseClutchAction()
 ### Racing Behaviors
 
 ```scenic
-FollowRacingLineBehavior(target_speed=30)
-FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, lookahead=20.0, mpc_config_path=None)
+FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None)
 PitStopBehavior()  # May require simulator-specific PitLimiterAction
 OvertakingBehavior(target_car, aggressive=False)  # May require simulator-specific actions
 DefensiveBehavior()  # May require simulator-specific actions

@@ -40,7 +40,7 @@ Example racing scenario::
     opponent2 = new RacingCar on mainTrack
     
     # Follow racing line behavior
-    ego with behavior FollowRacingLineBehavior()
+    ego with behavior FollowRacingLineMPCBehavior()
 
 The racing domain is designed to work with simulators that inherit from
 :class:`RacingSimulator`:

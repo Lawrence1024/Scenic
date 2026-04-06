@@ -8,19 +8,7 @@ param scenic_control = True
 model scenic.simulators.dspace.racing_model
 
 # --- Ego car with MPC behavior ---
-# Using main racing road centerline TTL (excluding pitlane)
-# Pitlane Start
-# ego = new RacingCar at (79.766382000,97.055717000), \
-# Pitlane End
-# ego = new RacingCar at (196.952588000,9.974341000), \
-# Main End
-# ego = new RacingCar at (134.131413,125.953041),\  
-# Weird Curve
-# ego = new RacingCar at (614.659946,-302.782016),\  
-# Werid Curve
-# ego = new RacingCar at (-110.956171,-151.841778,8.331000),\ 
-# Main Start
-ego = new RacingCar at (55.766137,88.269387), \
+ego = new RacingCar at (-78.86454576530903,-112.41203639782893), \
     with regionContainedIn everywhere, \
     with raceNumber 1, \
     # with ttlFileName 'ttl_main_road.csv', \

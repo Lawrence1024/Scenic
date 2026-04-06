@@ -51,8 +51,8 @@ def build_road_index_from_ttl(ttl_folder: str) -> Optional[Dict[str, Any]]:
     except ImportError:
         return None
     folder = str(ttl_folder)
-    _, main_pts = load_ttl_region(folder, 0, TTL_MAIN_ROAD_FILE)
-    _, pit_pts = load_ttl_region(folder, 0, TTL_PITLANE_FILE)
+    _, main_pts = load_ttl_region(folder, TTL_MAIN_ROAD_FILE)
+    _, pit_pts = load_ttl_region(folder, TTL_PITLANE_FILE)
     if not main_pts or len(main_pts) < 2:
         return None
     main_sec = _waypoints_to_sec_points(main_pts)

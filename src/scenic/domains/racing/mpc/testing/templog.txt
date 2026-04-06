@@ -58,8 +58,8 @@ Built 3 independent RD roads with separate s-coordinate systems
   [RouteDetection] Road name: 'Pit Lane1_2' (lowercase: 'pit lane1_2')
   [RouteDetection] Name contains 'pit' -> 'pitLane'
 [Fellow_0] XODR: (66.428759, 87.330550) -> RD: (70.165797, 81.676838) -> Route Pit (s=160.51, t=-1.495799)
-[TTL] Loaded 3600 waypoints from ttl_17.csv (offset: (0.0, 0.0), coordinate system: XODR (already transformed))
-[TTL] Assigned TTL PolylineRegion to fellow (ttl_17.csv)
+[TTL] Loaded 3600 waypoints from ttl_main_road.csv
+[TTL] Assigned TTL PolylineRegion to fellow (ttl_main_road.csv)
 [TTL] Attached 3600 TTL waypoints to fellow
 [dSPACE] Dynamic control detected - authoring scenario in ModelDesk
 [ModelDesk] Using existing scenario: Scenic_20251217_133841

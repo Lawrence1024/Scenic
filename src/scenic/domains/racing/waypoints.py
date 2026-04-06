@@ -176,7 +176,7 @@ def initialize_racing_waypoint_start_index(
     car_heading: float,
     waypoints: Iterable[PointLike],
 ) -> Tuple[int, Optional[dict], float]:
-    """First waypoint index for polyline following (same logic as ``FollowRacingLineBehavior`` init).
+    """First waypoint index for polyline following (same logic as ``FollowRacingLineMPCBehavior`` init).
 
     1. Euclidean nearest waypoint to the car.
     2. :func:`select_forward_racing_waypoint` from that index with ``forward_only=False``

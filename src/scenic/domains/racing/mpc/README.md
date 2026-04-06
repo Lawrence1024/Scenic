@@ -86,7 +86,7 @@ After changing config, run a simulation and use `result_data/analyze_racing_log`
 ### With Scenic behaviors
 
 - **`FollowRacingLineMPCBehavior`** (in `behaviors.scenic`): Uses lateral + longitudinal MPC, waypoint-based CTE, optional `mpc_config_path`.
-- Example: `ego.behavior = FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, lookahead=20.0, mpc_config_path=None)`
+- Example: `ego.behavior = FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None)`
 
 ### With simulator
 
@@ -145,7 +145,7 @@ wheel_base (e.g. 2.9718 m); delta_ff = atan(L * kappa_ref); max_steer_angle in r
 ```scenic
 ego.behavior = FollowRacingLineMPCBehavior(
     target_speed=30, manage_gears=True, use_waypoints=True,
-    lookahead=20.0, mpc_config_path=None
+    mpc_config_path=None
 )
 ```
 
