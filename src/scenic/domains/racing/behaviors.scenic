@@ -21,6 +21,7 @@ from scenic.domains.racing.fellow import (
     update_fellow_constant_speed_track_offset_plant,
     update_fellow_follow_ttl_geometric_plant,
     update_fellow_sudden_stop_interval_plant,
+    update_fellow_swerve_out_of_control_plant,
 )
 from scenic.domains.racing.segments import (
     build_waypoint_segment_map,
@@ -444,20 +445,79 @@ behavior FellowSuddenStopIntervalBehavior(speed=150, interval=20.0, duration=3.0
 
     Uses simulation time (:obj:`Simulation.currentRealTime`). Each cycle lasts
     **interval + duration** seconds: cruise at **speed** (mph) for **interval** seconds,
-    then commanded **0 km/h** for **duration** seconds, then repeat. Lateral **d** uses the
-    same TTL delta(s) geometry as :obj:`FellowFollowTTLGeometricBehavior` (Lap route,
-    ``ttlFolder``, ``ttlFileName``, optimal CSV, waypoints). For placement-only fallback
-    when geometry is inactive, see that behavior's requirements.
+    then commanded **0 km/h** for **duration** seconds, then repeat forever. Unlike
+    :obj:`FellowSwerveOutOfControlBehavior`, lateral **d** always tracks TTL geometry
+    (no open-loop swerve legs): each step uses the same δ(s) path as
+    :obj:`FellowFollowTTLGeometricBehavior` (Lap route, ``ttlFolder``, ``ttlFileName``,
+    optimal CSV, waypoints). For placement-only fallback when geometry is inactive, see
+    that behavior's requirements.
+
+    Implementation: :func:`update_fellow_sudden_stop_interval_plant` in
+    ``scenic.domains.racing.fellow.commands`` sets ``_fellow_plant_v_kmh`` and
+    ``_fellow_plant_d_m``; the dSPACE :class:`~scenic.simulators.dspace.vehicle.controller.VehicleController`
+    writes them to ``Const_v_Fellows_External`` / ``Const_d_Fellows_External``.
+
+    Example scene: ``examples/combined/fellow_sudden_stop.scenic``.
 
     Args:
         speed: Cruise speed between stops in **mph** (same convention as ``speed_mph`` on
-            :obj:`FellowConstantSpeedTrackOffsetBehavior`).
-        interval: Cruise phase length in seconds (must be ≥ 0).
-        duration: Stop phase length in seconds (commanded longitudinal v=0; must be ≥ 0).
-            If **duration** is 0, the fellow never enters the stop phase.
+            :obj:`FellowConstantSpeedTrackOffsetBehavior`). Default **150**.
+        interval: Cruise phase length in seconds (≥ 0). Default **20**.
+        duration: Stop phase length in seconds (commanded longitudinal v=0; ≥ 0). Default **3**.
+            If **duration** is **0**, the fellow stays in cruise only (no stop phase).
     """
     while True:
         update_fellow_sudden_stop_interval_plant(self, simulation())
+        wait
+
+behavior FellowSwerveOutOfControlBehavior(
+    speed=150,
+    interval=10.0,
+    swerve_right_s=1.8,
+    swerve_left_s=2.0,
+    swerve_amp_m=6.0,
+    swerve_d_rate_m_s=6.5,
+    stop_hold_d=True,
+):
+    """dSPACE fellow: TTL cruise, then gradual swerve right then left, then stop.
+
+    Default numeric parameters match ``examples/combined/fellow_swerve_out_of_control.scenic``.
+
+    For **interval** seconds the fellow matches :obj:`FellowFollowTTLGeometricBehavior`
+    lateral **d** (delta(s)) at **speed** (mph). Then **d** slews toward **-swerve_amp_m** m
+    (right of centerline) and toward **+swerve_amp_m** m (left) at up to **swerve_d_rate_m_s**
+    m/s change in commanded **d**, so lateral commands ramp instead of stepping. **swerve_right_s**
+    and **swerve_left_s** bound how long each leg lasts; each leg should be at least about
+    **swerve_amp_m / swerve_d_rate_m_s** seconds to reach full offset in one direction, and
+    crossing from **-amp** to **+amp** needs about **2 * swerve_amp_m / swerve_d_rate_m_s** in
+    the second leg. Then **v = 0**. If **stop_hold_d** is true (default), commanded **d** stays
+    at the end-of-maneuver value so the car does not creep laterally while stationary; if false,
+    **d** slews toward TTL delta(s) like a moving target (can look like sliding in place).
+
+    Centerline convention: positive **d** = left, negative = right (same as placement).
+
+    Requires Lap route, ``ttlFolder``, ``ttlFileName``, waypoints, and delta table when
+    using TTL phases (same as geometric fellow).
+
+    Implementation: :func:`update_fellow_swerve_out_of_control_plant` in
+    ``scenic.domains.racing.fellow.commands``; dSPACE controller writes plant outputs to
+    fellow External_Signals (same as other (v, d) plant behaviors).
+
+    Args:
+        speed: Cruise and swerve-leg speed in **mph**. Default **150**.
+        interval: Seconds of TTL cruise before the swerve maneuver. Default **10**.
+        swerve_right_s: Duration (s) of the leg slewing **d** toward **-swerve_amp_m** (right).
+            Default **1.8**.
+        swerve_left_s: Duration (s) of the leg slewing **d** toward **+swerve_amp_m** (left).
+            Default **2.0**.
+        swerve_amp_m: Lateral command magnitude (m) for each swerve target relative to
+            centerline (positive = left, negative = right). Default **6.0**.
+        swerve_d_rate_m_s: Maximum rate of change of commanded **d** (m/s). Default **6.5**.
+        stop_hold_d: If true (default), after **v = 0** keep **d** fixed at the end of the
+            maneuver; if false, slew **d** toward TTL δ(s) while stopped (can look like drift).
+    """
+    while True:
+        update_fellow_swerve_out_of_control_plant(self, simulation())
         wait
 
 behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None):

@@ -9,8 +9,19 @@ writes those to External_Signals (see :mod:`scenic.domains.racing.fellow.command
 - :obj:`FellowFollowTTLGeometricBehavior` — constant ``speed_mph`` and lateral ``d`` from
   feedforward δ(s) on the main centerline (optimal TTL vs ``ttl_main_road``), with waypoint
   index updates via shared racing helpers.
-- :obj:`FellowSuddenStopIntervalBehavior` — periodic full stops (cruise **speed** mph, then v=0)
-  with lateral **d** from TTL delta(s) like :obj:`FellowFollowTTLGeometricBehavior`.
+
+- :obj:`FellowSuddenStopIntervalBehavior` — **repeating** cruise / full-stop schedule on
+  simulation time: ``interval`` seconds at **speed** (mph), then ``duration`` seconds at
+  commanded **v = 0**, then repeat. Lateral **d** always follows TTL δ(s) like
+  :obj:`FellowFollowTTLGeometricBehavior` (no open-loop lateral maneuver). Defaults:
+  ``speed=150``, ``interval=20``, ``duration=3``. Example:
+  ``examples/combined/fellow_sudden_stop.scenic``.
+
+- :obj:`FellowSwerveOutOfControlBehavior` — **one-shot** maneuver: ``interval`` seconds TTL
+  cruise, then rate-limited slew of **d** toward full right (−amp) then full left (+amp),
+  then **v = 0**. Use ``stop_hold_d`` (default true) to freeze **d** after the stop so TTL
+  tracking does not move the lateral command while the car is stationary. Defaults match
+  ``examples/combined/fellow_swerve_out_of_control.scenic``.
 
 Other simulators may ignore these unless they implement the same contract.
 """
@@ -25,6 +36,8 @@ FELLOW_CONSTANT_SPEED_TRACK_OFFSET_CLASS = "FellowConstantSpeedTrackOffsetBehavi
 FELLOW_FOLLOW_TTL_GEOMETRIC_CLASS = "FellowFollowTTLGeometricBehavior"
 # Must match ``behavior FellowSuddenStopIntervalBehavior``.
 FELLOW_SUDDEN_STOP_INTERVAL_CLASS = "FellowSuddenStopIntervalBehavior"
+# Must match ``behavior FellowSwerveOutOfControlBehavior``.
+FELLOW_SWERVE_OUT_OF_CONTROL_CLASS = "FellowSwerveOutOfControlBehavior"
 
 # International mile (exact): 1 mi = 1.609344 km
 _MPH_TO_KMH = 1.609344
@@ -76,6 +89,12 @@ def is_fellow_follow_ttl_geometric_behavior(obj: Any) -> bool:
 
 
 def is_fellow_sudden_stop_interval_behavior(obj: Any) -> bool:
-    """True if ``obj`` has :class:`FellowSuddenStopIntervalBehavior`."""
+    """True if ``obj`` has :class:`FellowSuddenStopIntervalBehavior` (periodic cruise/stop, TTL **d**)."""
     b = getattr(obj, "behavior", None)
     return b is not None and b.__class__.__name__ == FELLOW_SUDDEN_STOP_INTERVAL_CLASS
+
+
+def is_fellow_swerve_out_of_control_behavior(obj: Any) -> bool:
+    """True if ``obj`` has :class:`FellowSwerveOutOfControlBehavior` (swerve maneuver then stop)."""
+    b = getattr(obj, "behavior", None)
+    return b is not None and b.__class__.__name__ == FELLOW_SWERVE_OUT_OF_CONTROL_CLASS

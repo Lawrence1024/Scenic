@@ -12,6 +12,7 @@ from scenic.domains.racing.fellow.plant import (
     fellow_constant_speed_kmh_from_behavior,
     fellow_follow_ttl_geometric_speed_kmh,
     is_fellow_sudden_stop_interval_behavior,
+    is_fellow_swerve_out_of_control_behavior,
 )
 
 from ..vehicle.physics import VehiclePhysicsState
@@ -409,10 +410,12 @@ class VehicleController:
         ``obj._fellow_force_bicycle_lateral = True`` to force bicycle on Lap.
 
         FellowConstantSpeedTrackOffsetBehavior / FellowFollowTTLGeometricBehavior /
-        FellowSuddenStopIntervalBehavior: read ``_fellow_plant_v_kmh`` and
-        ``_fellow_plant_d_m`` (sudden-stop **v** schedule every tick; **d** from TTL
-        geometry on control intervals, same as geometric fellow).
-        No PID/MPC _control_state for these modes.
+        FellowSwerveOutOfControlBehavior / FellowSuddenStopIntervalBehavior: read
+        ``_fellow_plant_v_kmh`` and ``_fellow_plant_d_m`` and write fellow External_Signals.
+        **FellowSuddenStopIntervalBehavior**: **d** from TTL every step; **v** alternates cruise
+        and zero on simulation time. **FellowSwerveOutOfControlBehavior**: **d** follows TTL in
+        cruise, open-loop rate-limited swerve legs, then optional hold or TTL track when stopped;
+        **v** is cruise until the final stop phase. No PID/MPC _control_state for these modes.
         """
         # Ensure fellow arrays are initialized before attempting to write
         from ..controldesk.arrays import ensure_fellow_arrays_initialized
@@ -450,6 +453,13 @@ class VehicleController:
                 fellow_commands_mod.update_fellow_follow_ttl_geometric_plant(
                     obj, self.simulation, fellow_index=fellow_index
                 )
+            self._write_fellow_plant_external_signals(obj, fellow_index, eff_index)
+            return
+
+        if is_fellow_swerve_out_of_control_behavior(obj):
+            fellow_commands_mod.update_fellow_swerve_out_of_control_plant(
+                obj, self.simulation, fellow_index=fellow_index
+            )
             self._write_fellow_plant_external_signals(obj, fellow_index, eff_index)
             return
 

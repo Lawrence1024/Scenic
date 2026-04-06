@@ -64,6 +64,22 @@ At a high level, the dSPACE backend is responsible for four things:
 - `vehicle/physics.py`
   - fellow kinematic model
 
+#### Fellow (v, d) plant behaviors (dSPACE External_Signals)
+
+Some traffic fellows do not use throttle/steer from Scenic; instead Scenic sets
+`_fellow_plant_v_kmh` and `_fellow_plant_d_m` each step, and `VehicleController` writes them to
+`Const_v_Fellows_External` / `Const_d_Fellows_External`.
+
+Documented in `src/scenic/domains/racing/behaviors.scenic` and implemented in
+`src/scenic/domains/racing/fellow/commands.py`:
+
+| Behavior | Role | Example scene |
+|----------|------|----------------|
+| **FellowSuddenStopIntervalBehavior** | Repeating cruise (mph) then commanded **v = 0**; lateral **d** always tracks TTL δ(s) like geometric follow. | `examples/combined/fellow_sudden_stop.scenic` |
+| **FellowSwerveOutOfControlBehavior** | One-shot: TTL cruise, then rate-limited swerve right/left in **d**, then stop; optional **stop_hold_d** freezes **d** after stop. | `examples/combined/fellow_swerve_out_of_control.scenic` |
+
+See also module docstrings in `scenic.domains.racing.fellow.plant` and `scenic.domains.racing.fellow.commands`.
+
 ### Coordinate and route logic
 
 - `geometry/coordinate_transform.py`
