@@ -7,7 +7,7 @@ must implement.
 
 from scenic.domains.driving.behaviors import *
 from scenic.domains.driving.actions import SetThrottleAction, SetBrakeAction, SetSteerAction
-from scenic.domains.racing.actions import SetMaxSpeedAction, SetTTLAction, SetSpeedLimitAction, SetTTLSelectionAction, SetTargetGapAction, SetStrategyAction, SetPowertrainModeAction, SetScaleFactorAction, SetPush2PassAction, StopCarAction, SetGearAction
+from scenic.domains.racing.actions import SetMaxSpeedAction, SetTTLAction, SetSpeedLimitAction, SetTTLSelectionAction, SetTargetGapAction, SetStrategyAction, SetPowertrainModeAction, SetScaleFactorAction, SetPush2PassAction, StopCarAction, SetGearAction, SetFellowPlantAction
 import scenic.domains.racing.model as _racing
 import math
 import numpy as np
@@ -17,10 +17,10 @@ from scenic.domains.racing.waypoints import (
     select_forward_racing_waypoint,
 )
 from scenic.domains.racing.fellow import (
-    update_fellow_constant_speed_track_offset_plant,
-    update_fellow_follow_ttl_geometric_plant,
-    update_fellow_sudden_stop_interval_plant,
-    update_fellow_swerve_out_of_control_plant,
+    compute_constant_offset_plant_command,
+    compute_fellow_swerve_out_of_control_command,
+    compute_follow_ttl_geometric_plant_command,
+    compute_sudden_stop_plant_command,
 )
 from scenic.domains.racing.segments import (
     build_waypoint_segment_map,
@@ -38,23 +38,27 @@ behavior FellowConstantSpeedTrackOffsetBehavior(speed_mph=31):
 
     Intended for **dSPACE** traffic fellows controlled via External_Signals
     (``Const_v_Fellows_External``, ``Const_d_Fellows_External``): each step this behavior
-    fills ``_fellow_plant_state`` (``v_kmh``, ``d_m``) from **speed_mph** (km/h) and
-    lateral placement (``_route_s_t``). The dSPACE controller only writes those values to
-    the platform. Not MPC; does not populate throttle/steer control state.
+    **takes** :class:`~scenic.domains.racing.actions.SetFellowPlantAction` with **v** from
+    **speed_mph** (converted to km/h) and **d** from lateral placement (``_route_s_t``).
+    The dSPACE controller reads ``_fellow_plant_state`` and writes those values to the
+    platform. Not MPC; does not populate throttle/steer control state.
 
     Other simulators do not apply this unless they implement the same (v, d) contract.
     """
     while True:
-        update_fellow_constant_speed_track_offset_plant(self, simulation())
+        v_kmh, d_m, mode = compute_constant_offset_plant_command(self)
+        take SetFellowPlantAction(v_kmh, d_m)
+        self._fellow_plant_log_mode = mode
         wait
 
 behavior FellowFollowTTLGeometricBehavior(speed_mph=31):
     """dSPACE fellow: constant speed and lateral **d** from TTL geometry (no PID/MPC).
 
-    Each step sets ``v_kmh`` in ``_fellow_plant_state`` from **speed_mph**. On control-interval steps
-    (aligned with simulator readback), sets ``d_m`` from feedforward δ(s)
-    on the main track centerline (optimal TTL vs ``ttl_main_road``), matching the racing
-    line used by MPC fellows. The dSPACE controller writes those attrs to External_Signals.
+    Each step **takes** :class:`~scenic.domains.racing.actions.SetFellowPlantAction` with **v**
+    from **speed_mph** and **d** from feedforward δ(s) on control-interval steps (aligned
+    with simulator readback) on the main track centerline (optimal TTL vs ``ttl_main_road``),
+    matching the racing line used by MPC fellows. The dSPACE controller writes those values
+    to External_Signals.
 
     Waypoint progress uses :func:`select_forward_racing_waypoint` (same family as
     ``FollowRacingLineMPCBehavior`` / racing line followers) for a stable polyline index;
@@ -65,7 +69,11 @@ behavior FellowFollowTTLGeometricBehavior(speed_mph=31):
     simulators may ignore this behavior.
     """
     while True:
-        update_fellow_follow_ttl_geometric_plant(self, simulation())
+        v_kmh, d_m, mode = compute_follow_ttl_geometric_plant_command(
+            self, simulation(), speed_mph
+        )
+        take SetFellowPlantAction(v_kmh, d_m)
+        self._fellow_plant_log_mode = mode
         wait
 
 behavior FellowSuddenStopIntervalBehavior(speed=150, interval=20.0, duration=3.0):
@@ -80,9 +88,10 @@ behavior FellowSuddenStopIntervalBehavior(speed=150, interval=20.0, duration=3.0
     optimal CSV, waypoints). For placement-only fallback when geometry is inactive, see
     that behavior's requirements.
 
-    Implementation: :func:`update_fellow_sudden_stop_interval_plant` in
-    ``scenic.domains.racing.fellow.commands`` sets ``_fellow_plant_state`` (``v_kmh``, ``d_m``); the dSPACE :class:`~scenic.simulators.dspace.vehicle.controller.VehicleController`
-    writes them to ``Const_v_Fellows_External`` / ``Const_d_Fellows_External``.
+    Each step **takes** :class:`~scenic.domains.racing.actions.SetFellowPlantAction` with
+    outputs from :func:`compute_sudden_stop_plant_command`; the dSPACE
+    :class:`~scenic.simulators.dspace.vehicle.controller.VehicleController` writes them to
+    ``Const_v_Fellows_External`` / ``Const_d_Fellows_External``.
 
     Example scene: ``examples/combined/fellow_sudden_stop.scenic``.
 
@@ -94,7 +103,15 @@ behavior FellowSuddenStopIntervalBehavior(speed=150, interval=20.0, duration=3.0
             If **duration** is **0**, the fellow stays in cruise only (no stop phase).
     """
     while True:
-        update_fellow_sudden_stop_interval_plant(self, simulation())
+        v_kmh, d_m, mode = compute_sudden_stop_plant_command(
+            self,
+            simulation(),
+            speed_mph=speed,
+            interval_s=interval,
+            duration_s=duration,
+        )
+        take SetFellowPlantAction(v_kmh, d_m)
+        self._fellow_plant_log_mode = mode
         wait
 
 behavior FellowSwerveOutOfControlBehavior(
@@ -126,9 +143,9 @@ behavior FellowSwerveOutOfControlBehavior(
     Requires Lap route, ``ttlFolder``, ``ttlFileName``, waypoints, and delta table when
     using TTL phases (same as geometric fellow).
 
-    Implementation: :func:`update_fellow_swerve_out_of_control_plant` in
-    ``scenic.domains.racing.fellow.commands``; dSPACE controller writes plant outputs to
-    fellow External_Signals (same as other (v, d) plant behaviors).
+    Each step **takes** :class:`~scenic.domains.racing.actions.SetFellowPlantAction` with
+    outputs from :func:`compute_fellow_swerve_out_of_control_command`; dSPACE writes plant
+    outputs to fellow External_Signals (same as other (v, d) plant behaviors).
 
     Args:
         speed: Cruise and swerve-leg speed in **mph**. Default **150**.
@@ -144,7 +161,19 @@ behavior FellowSwerveOutOfControlBehavior(
             maneuver; if false, slew **d** toward TTL δ(s) while stopped (can look like drift).
     """
     while True:
-        update_fellow_swerve_out_of_control_plant(self, simulation())
+        v_kmh, d_m, mode = compute_fellow_swerve_out_of_control_command(
+            self,
+            simulation(),
+            speed_mph=speed,
+            interval_s=interval,
+            swerve_right_s=swerve_right_s,
+            swerve_left_s=swerve_left_s,
+            swerve_amp_m=swerve_amp_m,
+            swerve_d_rate_m_s=swerve_d_rate_m_s,
+            stop_hold_d=stop_hold_d,
+        )
+        take SetFellowPlantAction(v_kmh, d_m)
+        self._fellow_plant_log_mode = mode
         wait
 
 behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None):

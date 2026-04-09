@@ -6,57 +6,48 @@ fellow vehicles driven via external speed/lateral commands—not ego control.
 Submodules
 ----------
 
-* :mod:`scenic.domains.racing.fellow.plant` — detect fellow plant behaviors and read
-  target speed from Scenic behavior instances.
-* :mod:`scenic.domains.racing.fellow.commands` — compute ``_fellow_plant_state`` (``v_kmh``,
-  ``d_m``) each step for plant behaviors (constant offset, TTL geometric,
-  sudden-stop, swerve-out-of-control). Scenario behaviors: ``FellowSuddenStopIntervalBehavior``
-  (``examples/combined/fellow_sudden_stop.scenic``) and ``FellowSwerveOutOfControlBehavior``
-  (defaults in ``behaviors.scenic`` match ``examples/combined/fellow_swerve_out_of_control.scenic``).
+* :mod:`scenic.domains.racing.fellow.plant` — detect fellow (v, d) plant behaviors
+  (:func:`is_fellow_vd_plant_behavior`).
+* :mod:`scenic.domains.racing.fellow.commands` — compute fellow plant commands (``compute_*``)
+  and optional ``update_fellow_*_plant`` writers for non–Action call sites.
 """
 
 from __future__ import annotations
 
 from scenic.domains.racing.fellow.commands import (
+    compute_constant_offset_plant_command,
+    compute_fellow_swerve_out_of_control_command,
+    compute_fellow_ttl_geometric_d_m,
+    compute_follow_ttl_geometric_plant_command,
+    compute_sudden_stop_plant_command,
     get_fellow_placed_lateral_deviation,
     get_fellow_plant_d_m,
     get_fellow_plant_v_kmh,
+    mph_to_kmh,
     set_fellow_plant_d_m,
     set_fellow_plant_v_kmh,
+    sudden_stop_v_kmh,
     update_fellow_constant_speed_track_offset_plant,
     update_fellow_follow_ttl_geometric_plant,
     update_fellow_sudden_stop_interval_plant,
     update_fellow_swerve_out_of_control_plant,
 )
-from scenic.domains.racing.fellow.plant import (
-    FELLOW_CONSTANT_SPEED_TRACK_OFFSET_CLASS,
-    FELLOW_FOLLOW_TTL_GEOMETRIC_CLASS,
-    FELLOW_SUDDEN_STOP_INTERVAL_CLASS,
-    FELLOW_SWERVE_OUT_OF_CONTROL_CLASS,
-    fellow_constant_speed_kmh_from_behavior,
-    fellow_follow_ttl_geometric_speed_kmh,
-    is_fellow_constant_speed_track_offset_behavior,
-    is_fellow_follow_ttl_geometric_behavior,
-    is_fellow_sudden_stop_interval_behavior,
-    is_fellow_swerve_out_of_control_behavior,
-)
+from scenic.domains.racing.fellow.plant import is_fellow_vd_plant_behavior
 
 __all__ = [
-    "FELLOW_CONSTANT_SPEED_TRACK_OFFSET_CLASS",
-    "FELLOW_FOLLOW_TTL_GEOMETRIC_CLASS",
-    "FELLOW_SUDDEN_STOP_INTERVAL_CLASS",
-    "FELLOW_SWERVE_OUT_OF_CONTROL_CLASS",
-    "fellow_constant_speed_kmh_from_behavior",
-    "fellow_follow_ttl_geometric_speed_kmh",
+    "compute_constant_offset_plant_command",
+    "compute_fellow_swerve_out_of_control_command",
+    "compute_fellow_ttl_geometric_d_m",
+    "compute_follow_ttl_geometric_plant_command",
+    "compute_sudden_stop_plant_command",
     "get_fellow_placed_lateral_deviation",
     "get_fellow_plant_d_m",
     "get_fellow_plant_v_kmh",
+    "is_fellow_vd_plant_behavior",
+    "mph_to_kmh",
     "set_fellow_plant_d_m",
     "set_fellow_plant_v_kmh",
-    "is_fellow_constant_speed_track_offset_behavior",
-    "is_fellow_follow_ttl_geometric_behavior",
-    "is_fellow_sudden_stop_interval_behavior",
-    "is_fellow_swerve_out_of_control_behavior",
+    "sudden_stop_v_kmh",
     "update_fellow_constant_speed_track_offset_plant",
     "update_fellow_follow_ttl_geometric_plant",
     "update_fellow_sudden_stop_interval_plant",

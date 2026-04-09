@@ -66,17 +66,23 @@ At a high level, the dSPACE backend is responsible for four things:
 
 #### Fellow (v, d) plant behaviors (dSPACE External_Signals)
 
-Some traffic fellows do not use throttle/steer from Scenic; instead Scenic fills
-`_fellow_plant_state` (`v_kmh`, `d_m`) each step, and `VehicleController` writes them to
-`Const_v_Fellows_External` / `Const_d_Fellows_External`.
+Some traffic fellows do not use throttle/steer from Scenic. Each step their behaviors **take**
+`SetFellowPlantAction` (racing domain action), which stages `_fellow_plant_state` (`v_kmh`,
+`d_m`) on the agent—same idea as ego driving actions staging `_control_state`. After
+`executeActions`, `VehicleController.apply_fellow_control` detects plant fellows by behavior
+class name prefix `Fellow` (`is_fellow_vd_plant_behavior`) and writes those values to
+`Const_v_Fellows_External` / `Const_d_Fellows_External` without branching on individual
+behavior types.
 
-Documented in `src/scenic/domains/racing/behaviors.scenic` and implemented in
-`src/scenic/domains/racing/fellow/commands.py`:
+Numeric helpers live in `src/scenic/domains/racing/fellow/commands.py` (`compute_*`); see
+`src/scenic/domains/racing/behaviors.scenic` for the behavior bodies.
 
 | Behavior | Role | Example scene |
 |----------|------|----------------|
-| **FellowSuddenStopIntervalBehavior** | Repeating cruise (mph) then commanded **v = 0**; lateral **d** always tracks TTL δ(s) like geometric follow. | `examples/combined/fellow_sudden_stop.scenic` |
-| **FellowSwerveOutOfControlBehavior** | One-shot: TTL cruise, then rate-limited swerve right/left in **d**, then stop; optional **stop_hold_d** freezes **d** after stop. | `examples/combined/fellow_swerve_out_of_control.scenic` |
+| **FellowConstantSpeedTrackOffsetBehavior** | Constant `speed_mph` and lateral **d** from placement. | `examples/dSPACE/dummy_fellow.scenic` |
+| **FellowFollowTTLGeometricBehavior** | Constant **v** and lateral **d** from TTL δ(s) (Lap + optimal CSV). | `examples/dSPACE/ttl_fellow.scenic` |
+| **FellowSuddenStopIntervalBehavior** | Repeating cruise (mph) then commanded **v = 0**; **d** tracks TTL δ(s). | `examples/combined/fellow_sudden_stop.scenic` |
+| **FellowSwerveOutOfControlBehavior** | TTL cruise, then rate-limited swerve right/left in **d**, then stop; optional **stop_hold_d**. | `examples/combined/fellow_swerve_out_of_control.scenic` |
 
 See also module docstrings in `scenic.domains.racing.fellow.plant` and `scenic.domains.racing.fellow.commands`.
 

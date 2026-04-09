@@ -1,19 +1,18 @@
 """Compute fellow (v, d) plant commands for dSPACE External_Signals.
 
-Behaviors call these updaters each simulation step; the dSPACE
-:class:`~scenic.simulators.dspace.vehicle.controller.VehicleController`
-reads ``_fellow_plant_state`` (keys ``v_kmh``, ``d_m``; same structured role as ego
-``_control_state``) and writes ControlDesk only (no geometry in the controller).
+Racing fellow behaviors should **take**
+:class:`~scenic.domains.racing.actions.SetFellowPlantAction` each control tick; ``applyTo``
+stages ``_fellow_plant_state`` (keys ``v_kmh``, ``d_m``). Use the **compute_*** helpers
+below for numeric primitives (TTL **d**, cruise/stop **v**, swerve slew). Thin
+``update_fellow_*_plant`` functions remain for non–Action call sites.
 
-**Scenario-style plant behaviors** (declared in ``behaviors.scenic``):
+The dSPACE :class:`~scenic.simulators.dspace.vehicle.controller.VehicleController` reads
+``_fellow_plant_state`` and writes ControlDesk only (no geometry in the controller).
 
-- :func:`update_fellow_sudden_stop_interval_plant` — ``FellowSuddenStopIntervalBehavior``
-  (:mod:`scenic.domains.racing.fellow.plant`): periodic cruise then commanded stop; lateral **d**
-  from TTL geometry every step. See ``examples/combined/fellow_sudden_stop.scenic``.
-
-- :func:`update_fellow_swerve_out_of_control_plant` — ``FellowSwerveOutOfControlBehavior``: one cruise + swerve-right + swerve-left + stop
-  sequence; lateral **d** is open-loop during swerve legs (rate-limited). See
-  ``examples/combined/fellow_swerve_out_of_control.scenic``.
+**Behaviors** (``behaviors.scenic``): ``FellowSuddenStopIntervalBehavior``
+(``examples/combined/fellow_sudden_stop.scenic``),
+``FellowSwerveOutOfControlBehavior`` (``examples/combined/fellow_swerve_out_of_control.scenic``),
+constant-offset and TTL-geometric fellows.
 
 Ego vehicles are unaffected.
 """
@@ -22,18 +21,53 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any, Optional
-
-from scenic.domains.racing.fellow.plant import (
-    FELLOW_CONSTANT_SPEED_TRACK_OFFSET_CLASS,
-    FELLOW_FOLLOW_TTL_GEOMETRIC_CLASS,
-    FELLOW_SUDDEN_STOP_INTERVAL_CLASS,
-    FELLOW_SWERVE_OUT_OF_CONTROL_CLASS,
-)
+from typing import Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
 _MPH_TO_KMH = 1.609344
+
+
+def mph_to_kmh(mph: float) -> float:
+    """Convert statute mph to km/h (exact factor 1.609344)."""
+    return float(mph) * _MPH_TO_KMH
+
+
+def _fellow_param_sources(obj: Any) -> List[Any]:
+    """Agent first, then Scenic ``behavior`` instance (if distinct), for parameter lookup."""
+    b = getattr(obj, "behavior", None)
+    sources: List[Any] = []
+    if obj is not None:
+        sources.append(obj)
+    if b is not None and b is not obj:
+        sources.append(b)
+    return sources
+
+
+def _parse_speed_mph_from_agent(obj: Any, *, default: float = 31.0) -> float:
+    for src in _fellow_param_sources(obj):
+        v = getattr(src, "speed_mph", None)
+        if v is None:
+            continue
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
+    return default
+
+
+def _float_param_first(sources: List[Any], name: str, default: float) -> float:
+    for src in sources:
+        v = getattr(src, name, None)
+        if v is None:
+            continue
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
+    return float(default)
+
+
 # Sim-time spacing for swerve_oc progress lines during slew/stop (phase edges always log).
 _SWERVE_OC_LOG_INTERVAL_S = 0.2
 
@@ -85,21 +119,27 @@ def get_fellow_placed_lateral_deviation(obj: Any) -> float:
     return 0.0
 
 
-def _update_fellow_plant_d_ttl_geometric(
+def compute_fellow_ttl_geometric_d_m(
     obj: Any,
     simulation: Any,
     *,
     fellow_index: Optional[int] = None,
-) -> None:
-    """Set ``d_m`` in ``_fellow_plant_state`` from TTL delta(s) on control-interval steps; placement fallback."""
+) -> tuple[float, str]:
+    """Compute lateral **d** (m) from TTL δ(s) or placement; returns ``(d_m, log_suffix)``.
+
+    ``log_suffix`` is ``delta(s)`` or ``placement_d``. On non-control-interval steps, returns
+    the last commanded **d** from ``_fellow_plant_state`` if present, else placement.
+    """
     control_interval = max(1, int(getattr(simulation, "_control_interval", 1) or 1))
     current_time = int(getattr(simulation, "currentTime", 0) or 0)
     if current_time % control_interval != 0:
         st = getattr(obj, "_fellow_plant_state", None)
-        if not isinstance(st, dict) or st.get("d_m") is None:
-            set_fellow_plant_d_m(obj, get_fellow_placed_lateral_deviation(obj))
-            obj._fellow_plant_log_mode = "placement_d"
-        return
+        if isinstance(st, dict) and st.get("d_m") is not None:
+            return float(st["d_m"]), getattr(
+                obj, "_fellow_plant_log_mode", "placement_d"
+            )
+        d0 = get_fellow_placed_lateral_deviation(obj)
+        return d0, "placement_d"
 
     from scenic.simulators.dspace.utils import legacy as dutils
     from scenic.simulators.dspace.vehicle.fellow_racing_line_lateral import (
@@ -253,70 +293,29 @@ def _update_fellow_plant_d_ttl_geometric(
                 "; ".join(reasons) if reasons else "preconditions not met",
             )
 
-    set_fellow_plant_d_m(obj, d_cmd)
-    obj._fellow_plant_log_mode = "delta(s)" if used_delta else "placement_d"
+    sub = "delta(s)" if used_delta else "placement_d"
+    return float(d_cmd), sub
 
 
-def update_fellow_sudden_stop_interval_plant(
-    obj: Any,
+def sudden_stop_v_kmh(
     simulation: Any,
-    *,
-    fellow_index: Optional[int] = None,
-) -> None:
-    """Update plant for ``FellowSuddenStopIntervalBehavior``: repeating cruise / stop, TTL lateral **d**.
-
-    Longitudinal schedule uses :attr:`simulation.currentRealTime`. For each cycle of length
-    **interval + duration**, **v** is cruise speed (**speed** mph → km/h) for **interval** s,
-    then **0 km/h** for **duration** s. If **duration** is 0, **v** stays at cruise.
-
-    Lateral **d** always uses :func:`_update_fellow_plant_d_ttl_geometric` (same path as
-    :func:`update_fellow_follow_ttl_geometric_plant`): TTL δ(s) on Lap when prerequisites
-    hold, else placement fallback.
-
-    Fallback behavior fields if missing match ``FellowSuddenStopIntervalBehavior`` defaults
-    in ``behaviors.scenic`` (``speed`` 150 mph, ``interval`` 20 s, ``duration`` 3 s).
-    Example scene: ``examples/combined/fellow_sudden_stop.scenic``.
-    """
-    b = getattr(obj, "behavior", None)
-    if b is None or b.__class__.__name__ != FELLOW_SUDDEN_STOP_INTERVAL_CLASS:
-        return
-    try:
-        _spd = getattr(b, "speed", None)
-        if _spd is None:
-            _spd = getattr(b, "speed_mph", 150.0)
-        mph = float(_spd)
-    except (TypeError, ValueError):
-        mph = 150.0
-    try:
-        interval = float(getattr(b, "interval", 20.0))
-    except (TypeError, ValueError):
-        interval = 20.0
-    try:
-        duration = float(getattr(b, "duration", 3.0))
-    except (TypeError, ValueError):
-        duration = 3.0
-
-    interval = max(0.0, interval)
-    duration = max(0.0, duration)
+    mph: float,
+    interval: float,
+    duration: float,
+) -> float:
+    """Longitudinal **v** (km/h) for repeating cruise / stop schedule using ``currentRealTime``."""
+    interval = max(0.0, float(interval))
+    duration = max(0.0, float(duration))
     period = interval + duration
     t_sim = float(getattr(simulation, "currentRealTime", 0.0) or 0.0)
+    mph = float(mph)
 
     if duration <= 0.0 or period <= 0.0:
-        phase = "cruise_only"
-        pos_in_cycle = float("nan")
-        v_kmh = float(mph) * _MPH_TO_KMH
-    else:
-        pos_in_cycle = t_sim % period
-        phase = "cruise" if pos_in_cycle < interval else "stop"
-        if phase == "cruise":
-            v_kmh = float(mph) * _MPH_TO_KMH
-        else:
-            v_kmh = 0.0
-
-    set_fellow_plant_v_kmh(obj, v_kmh)
-    _update_fellow_plant_d_ttl_geometric(obj, simulation, fellow_index=fellow_index)
-    _sub = getattr(obj, "_fellow_plant_log_mode", "placement_d")
-    obj._fellow_plant_log_mode = f"sudden_stop/{_sub}"
+        return mph_to_kmh(mph)
+    pos_in_cycle = t_sim % period
+    if pos_in_cycle < interval:
+        return mph_to_kmh(mph)
+    return 0.0
 
 
 def _swerve_oc_slew_d_toward(
@@ -390,6 +389,7 @@ def _swerve_oc_progress_log(
     swerve_amp_m: float,
     t_swerve_r_end: float,
     t_swerve_done: float,
+    d_cmd: Optional[float] = None,
 ) -> None:
     """Print throttled diagnostics: target **d**, slew step size, and cap (verifies gradual slew)."""
     prev_phase = getattr(obj, "_fellow_swerve_oc_prog_log_phase", None)
@@ -404,7 +404,8 @@ def _swerve_oc_progress_log(
     if not (phase_changed or due_interval):
         return
 
-    d_cmd = get_fellow_plant_d_m(obj, if_missing=float("nan"))
+    if d_cmd is None:
+        d_cmd = get_fellow_plant_d_m(obj, if_missing=float("nan"))
     parts = [
         f"[Fellow swerve_oc] t={t_sim:.6f}s phase={phase!r}",
         f"v_cmd={v_kmh:.2f}km/h d_cmd={d_cmd:.4f}m",
@@ -456,13 +457,24 @@ def _swerve_oc_progress_log(
     obj._fellow_swerve_oc_prog_log_t = t_sim
 
 
-def update_fellow_swerve_out_of_control_plant(
+def compute_fellow_swerve_out_of_control_command(
     obj: Any,
     simulation: Any,
     *,
     fellow_index: Optional[int] = None,
-) -> None:
+    speed_mph: Optional[float] = None,
+    interval_s: Optional[float] = None,
+    swerve_right_s: Optional[float] = None,
+    swerve_left_s: Optional[float] = None,
+    swerve_amp_m: Optional[float] = None,
+    swerve_d_rate_m_s: Optional[float] = None,
+    stop_hold_d: Optional[bool] = None,
+) -> tuple[float, float, str]:
     """Cruise on TTL, then gradual swerve toward full right, then full left, then v=0.
+
+    Returns ``(v_kmh, d_m, log_mode)`` without writing ``_fellow_plant_state`` (use
+    :class:`~scenic.domains.racing.actions.SetFellowPlantAction` or the thin
+    :func:`update_fellow_swerve_out_of_control_plant` wrapper).
 
     Lateral convention (centerline / Const_d): positive = left, negative = right.
     During swerve legs, **d** slews toward +/- **swerve_amp_m** at at most **swerve_d_rate_m_s**
@@ -477,36 +489,56 @@ def update_fellow_swerve_out_of_control_plant(
     ``FellowSwerveOutOfControlBehavior`` in ``behaviors.scenic``.
     """
     b = getattr(obj, "behavior", None)
-    if b is None or b.__class__.__name__ != FELLOW_SWERVE_OUT_OF_CONTROL_CLASS:
-        return
-    try:
-        _spd = getattr(b, "speed", None)
-        if _spd is None:
-            _spd = getattr(b, "speed_mph", 150.0)
-        mph = float(_spd)
-    except (TypeError, ValueError):
-        mph = 150.0
-    try:
-        interval = float(getattr(b, "interval", 10.0))
-    except (TypeError, ValueError):
-        interval = 10.0
-    try:
-        swerve_right_s = float(getattr(b, "swerve_right_s", 1.8))
-    except (TypeError, ValueError):
-        swerve_right_s = 1.8
-    try:
-        swerve_left_s = float(getattr(b, "swerve_left_s", 2.0))
-    except (TypeError, ValueError):
-        swerve_left_s = 2.0
-    try:
-        swerve_amp_m = float(getattr(b, "swerve_amp_m", 6.0))
-    except (TypeError, ValueError):
-        swerve_amp_m = 6.0
-    try:
-        swerve_d_rate_m_s = float(getattr(b, "swerve_d_rate_m_s", 6.5))
-    except (TypeError, ValueError):
-        swerve_d_rate_m_s = 6.5
-    stop_hold_d = _parse_swerve_oc_stop_hold_d(b)
+    src = b if b is not None else obj
+    if speed_mph is None:
+        try:
+            _spd = getattr(src, "speed", None)
+            if _spd is None:
+                _spd = getattr(src, "speed_mph", 150.0)
+            mph = float(_spd)
+        except (TypeError, ValueError):
+            mph = 150.0
+    else:
+        mph = float(speed_mph)
+    if interval_s is None:
+        try:
+            interval = float(getattr(src, "interval", 10.0))
+        except (TypeError, ValueError):
+            interval = 10.0
+    else:
+        interval = float(interval_s)
+    if swerve_right_s is None:
+        try:
+            swerve_right_s = float(getattr(src, "swerve_right_s", 1.8))
+        except (TypeError, ValueError):
+            swerve_right_s = 1.8
+    else:
+        swerve_right_s = float(swerve_right_s)
+    if swerve_left_s is None:
+        try:
+            swerve_left_s = float(getattr(src, "swerve_left_s", 2.0))
+        except (TypeError, ValueError):
+            swerve_left_s = 2.0
+    else:
+        swerve_left_s = float(swerve_left_s)
+    if swerve_amp_m is None:
+        try:
+            swerve_amp_m = float(getattr(src, "swerve_amp_m", 6.0))
+        except (TypeError, ValueError):
+            swerve_amp_m = 6.0
+    else:
+        swerve_amp_m = float(swerve_amp_m)
+    if swerve_d_rate_m_s is None:
+        try:
+            swerve_d_rate_m_s = float(getattr(src, "swerve_d_rate_m_s", 6.5))
+        except (TypeError, ValueError):
+            swerve_d_rate_m_s = 6.5
+    else:
+        swerve_d_rate_m_s = float(swerve_d_rate_m_s)
+    if stop_hold_d is None:
+        stop_hold_d = _parse_swerve_oc_stop_hold_d(src)
+    else:
+        stop_hold_d = bool(stop_hold_d)
 
     interval = max(0.0, interval)
     swerve_right_s = max(0.0, swerve_right_s)
@@ -577,35 +609,34 @@ def update_fellow_swerve_out_of_control_plant(
             )
 
     if phase == "cruise":
-        v_kmh = float(mph) * _MPH_TO_KMH
-        _update_fellow_plant_d_ttl_geometric(obj, simulation, fellow_index=fellow_index)
-        obj._fellow_swerve_oc_d_smooth = get_fellow_plant_d_m(obj)
-        obj._fellow_swerve_oc_slew_dbg = None
-        _sub = getattr(obj, "_fellow_plant_log_mode", "placement_d")
-        obj._fellow_plant_log_mode = f"swerve_oc/cruise/{_sub}"
-    elif phase == "swerve_right":
-        v_kmh = float(mph) * _MPH_TO_KMH
-        set_fellow_plant_d_m(
-            obj,
-            _swerve_oc_slew_d_toward(obj, simulation, -swerve_amp_m, swerve_d_rate_m_s),
+        v_kmh = mph_to_kmh(mph)
+        d_m, _sub = compute_fellow_ttl_geometric_d_m(
+            obj, simulation, fellow_index=fellow_index
         )
-        cur = get_fellow_plant_d_m(obj)
+        obj._fellow_swerve_oc_d_smooth = d_m
+        obj._fellow_swerve_oc_slew_dbg = None
+        log_mode = f"swerve_oc/cruise/{_sub}"
+    elif phase == "swerve_right":
+        v_kmh = mph_to_kmh(mph)
+        d_m = _swerve_oc_slew_d_toward(
+            obj, simulation, -swerve_amp_m, swerve_d_rate_m_s
+        )
+        cur = d_m
         pmin = getattr(obj, "_fellow_swerve_oc_leg_min_d", None)
         obj._fellow_swerve_oc_leg_min_d = cur if pmin is None else min(float(pmin), cur)
-        obj._fellow_plant_log_mode = "swerve_oc/right"
+        log_mode = "swerve_oc/right"
     elif phase == "swerve_left":
-        v_kmh = float(mph) * _MPH_TO_KMH
-        set_fellow_plant_d_m(
-            obj,
-            _swerve_oc_slew_d_toward(obj, simulation, swerve_amp_m, swerve_d_rate_m_s),
+        v_kmh = mph_to_kmh(mph)
+        d_m = _swerve_oc_slew_d_toward(
+            obj, simulation, swerve_amp_m, swerve_d_rate_m_s
         )
-        cur = get_fellow_plant_d_m(obj)
+        cur = d_m
         pmax = getattr(obj, "_fellow_swerve_oc_leg_max_d", None)
         if pmax is None or (isinstance(pmax, float) and math.isnan(pmax)):
             obj._fellow_swerve_oc_leg_max_d = cur
         else:
             obj._fellow_swerve_oc_leg_max_d = max(float(pmax), cur)
-        obj._fellow_plant_log_mode = "swerve_oc/left"
+        log_mode = "swerve_oc/left"
     else:
         v_kmh = 0.0
         if stop_hold_d:
@@ -614,7 +645,7 @@ def update_fellow_swerve_out_of_control_plant(
                 d_f = get_fellow_plant_d_m(obj, if_missing=0.0)
                 obj._fellow_swerve_oc_stop_d_frozen = d_f
             d_f = float(d_f)
-            set_fellow_plant_d_m(obj, d_f)
+            d_m = d_f
             obj._fellow_swerve_oc_d_smooth = d_f
             obj._fellow_swerve_oc_slew_dbg = {
                 "dt": 0.0,
@@ -623,19 +654,16 @@ def update_fellow_swerve_out_of_control_plant(
                 "max_dd_step": 0.0,
                 "err_to_target": 0.0,
             }
-            obj._fellow_plant_log_mode = "swerve_oc/stopped/hold_d"
+            log_mode = "swerve_oc/stopped/hold_d"
         else:
-            _update_fellow_plant_d_ttl_geometric(obj, simulation, fellow_index=fellow_index)
-            d_ttl = get_fellow_plant_d_m(obj)
-            obj._fellow_swerve_oc_last_d_ttl_geo = d_ttl
-            set_fellow_plant_d_m(
-                obj,
-                _swerve_oc_slew_d_toward(obj, simulation, d_ttl, swerve_d_rate_m_s),
+            d_ttl, _sub = compute_fellow_ttl_geometric_d_m(
+                obj, simulation, fellow_index=fellow_index
             )
-            _sub = getattr(obj, "_fellow_plant_log_mode", "placement_d")
-            obj._fellow_plant_log_mode = f"swerve_oc/stopped/{_sub}"
-
-    set_fellow_plant_v_kmh(obj, v_kmh)
+            obj._fellow_swerve_oc_last_d_ttl_geo = d_ttl
+            d_m = _swerve_oc_slew_d_toward(
+                obj, simulation, d_ttl, swerve_d_rate_m_s
+            )
+            log_mode = f"swerve_oc/stopped/{_sub}"
 
     obj._fellow_swerve_oc_prog_extras = None
     if phase == "stopped":
@@ -662,21 +690,103 @@ def update_fellow_swerve_out_of_control_plant(
         swerve_amp_m=swerve_amp_m,
         t_swerve_r_end=t_swerve_r_end,
         t_swerve_done=t_swerve_done,
+        d_cmd=d_m,
     )
+    return v_kmh, d_m, log_mode
+
+
+def update_fellow_swerve_out_of_control_plant(
+    obj: Any,
+    simulation: Any,
+    *,
+    fellow_index: Optional[int] = None,
+) -> None:
+    """Write swerve maneuver outputs into ``_fellow_plant_state`` (non–Action call sites)."""
+    v_kmh, d_m, log_mode = compute_fellow_swerve_out_of_control_command(
+        obj, simulation, fellow_index=fellow_index
+    )
+    set_fellow_plant_v_kmh(obj, v_kmh)
+    set_fellow_plant_d_m(obj, d_m)
+    obj._fellow_plant_log_mode = log_mode
+
+
+def compute_constant_offset_plant_command(obj: Any) -> tuple[float, float, str]:
+    """Constant **v** from ``speed_mph`` on agent or behavior and **d** from Scenic placement."""
+    mph = _parse_speed_mph_from_agent(obj)
+    return mph_to_kmh(mph), get_fellow_placed_lateral_deviation(obj), "placement_t"
+
+
+def compute_follow_ttl_geometric_plant_command(
+    obj: Any,
+    simulation: Any,
+    mph: float,
+    *,
+    fellow_index: Optional[int] = None,
+) -> tuple[float, float, str]:
+    """Constant **v** and TTL geometric **d** (or placement fallback)."""
+    v_kmh = mph_to_kmh(mph)
+    d_m, sub = compute_fellow_ttl_geometric_d_m(
+        obj, simulation, fellow_index=fellow_index
+    )
+    return v_kmh, d_m, sub
+
+
+def _parse_sudden_stop_behavior_fields(obj: Any) -> tuple[float, float, float]:
+    b = getattr(obj, "behavior", None)
+    src = b if b is not None else obj
+    try:
+        _spd = getattr(src, "speed", None)
+        if _spd is None:
+            _spd = getattr(src, "speed_mph", 150.0)
+        mph = float(_spd)
+    except (TypeError, ValueError):
+        mph = 150.0
+    try:
+        interval = float(getattr(src, "interval", 20.0))
+    except (TypeError, ValueError):
+        interval = 20.0
+    try:
+        duration = float(getattr(src, "duration", 3.0))
+    except (TypeError, ValueError):
+        duration = 3.0
+    return mph, interval, duration
+
+
+def compute_sudden_stop_plant_command(
+    obj: Any,
+    simulation: Any,
+    *,
+    fellow_index: Optional[int] = None,
+    speed_mph: Optional[float] = None,
+    interval_s: Optional[float] = None,
+    duration_s: Optional[float] = None,
+) -> tuple[float, float, str]:
+    """Periodic cruise / stop **v** and TTL geometric **d**."""
+    if speed_mph is None or interval_s is None or duration_s is None:
+        mph, interval, duration = _parse_sudden_stop_behavior_fields(obj)
+        if speed_mph is not None:
+            mph = float(speed_mph)
+        if interval_s is not None:
+            interval = float(interval_s)
+        if duration_s is not None:
+            duration = float(duration_s)
+    else:
+        mph = float(speed_mph)
+        interval = float(interval_s)
+        duration = float(duration_s)
+    v_kmh = sudden_stop_v_kmh(simulation, mph, interval, duration)
+    d_m, sub = compute_fellow_ttl_geometric_d_m(
+        obj, simulation, fellow_index=fellow_index
+    )
+    return v_kmh, d_m, f"sudden_stop/{sub}"
 
 
 def update_fellow_constant_speed_track_offset_plant(obj: Any, simulation: Any) -> None:
     """Set constant-offset plant ``v_kmh`` and ``d_m`` in ``_fellow_plant_state``."""
-    b = getattr(obj, "behavior", None)
-    if b is None or b.__class__.__name__ != FELLOW_CONSTANT_SPEED_TRACK_OFFSET_CLASS:
-        return
-    try:
-        mph = float(getattr(b, "speed_mph"))
-    except (TypeError, ValueError):
-        mph = 31.0
-    set_fellow_plant_v_kmh(obj, float(mph) * _MPH_TO_KMH)
-    set_fellow_plant_d_m(obj, get_fellow_placed_lateral_deviation(obj))
-    obj._fellow_plant_log_mode = "placement_t"
+    v_kmh, d_m, mode = compute_constant_offset_plant_command(obj)
+    set_fellow_plant_v_kmh(obj, v_kmh)
+    set_fellow_plant_d_m(obj, d_m)
+    obj._fellow_plant_log_mode = mode
 
 
 def update_fellow_follow_ttl_geometric_plant(
@@ -686,13 +796,25 @@ def update_fellow_follow_ttl_geometric_plant(
     fellow_index: Optional[int] = None,
 ) -> None:
     """Set plant v and d from TTL δ(s) on control-interval steps; v refreshed every step."""
-    b = getattr(obj, "behavior", None)
-    if b is None or b.__class__.__name__ != FELLOW_FOLLOW_TTL_GEOMETRIC_CLASS:
-        return
-    try:
-        mph = float(getattr(b, "speed_mph"))
-    except (TypeError, ValueError):
-        mph = 31.0
-    v_kmh = float(mph) * _MPH_TO_KMH
+    mph = _parse_speed_mph_from_agent(obj)
+    v_kmh, d_m, sub = compute_follow_ttl_geometric_plant_command(
+        obj, simulation, mph, fellow_index=fellow_index
+    )
     set_fellow_plant_v_kmh(obj, v_kmh)
-    _update_fellow_plant_d_ttl_geometric(obj, simulation, fellow_index=fellow_index)
+    set_fellow_plant_d_m(obj, d_m)
+    obj._fellow_plant_log_mode = sub
+
+
+def update_fellow_sudden_stop_interval_plant(
+    obj: Any,
+    simulation: Any,
+    *,
+    fellow_index: Optional[int] = None,
+) -> None:
+    """Set plant for repeating cruise/stop schedule and TTL **d** (non–Action call sites)."""
+    v_kmh, d_m, mode = compute_sudden_stop_plant_command(
+        obj, simulation, fellow_index=fellow_index
+    )
+    set_fellow_plant_v_kmh(obj, v_kmh)
+    set_fellow_plant_d_m(obj, d_m)
+    obj._fellow_plant_log_mode = mode

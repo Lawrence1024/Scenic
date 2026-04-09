@@ -629,10 +629,7 @@ class DSpaceSimulation(RacingSimulation):
     def _needsDynamicControl(self):
         """Check if any Scenic objects need dynamic control (have behaviors with dSPACE actions)."""
         try:
-            from scenic.domains.racing.fellow.plant import (
-                is_fellow_constant_speed_track_offset_behavior,
-                is_fellow_follow_ttl_geometric_behavior,
-            )
+            from scenic.domains.racing.fellow.plant import is_fellow_vd_plant_behavior
 
             for obj in self.scene.objects:
                 if hasattr(obj, "behavior"):
@@ -642,8 +639,7 @@ class DSpaceSimulation(RacingSimulation):
                         if (
                             "Racing" in behavior_name
                             or "Pit" in behavior_name
-                            or is_fellow_constant_speed_track_offset_behavior(obj)
-                            or is_fellow_follow_ttl_geometric_behavior(obj)
+                            or is_fellow_vd_plant_behavior(obj)
                         ):
                             return True
             return False

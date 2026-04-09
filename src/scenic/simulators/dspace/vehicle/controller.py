@@ -7,13 +7,7 @@ dSPACE simulation environment, including both ego and fellow vehicles.
 import logging
 import math
 
-from scenic.domains.racing.fellow import commands as fellow_commands_mod
-from scenic.domains.racing.fellow.plant import (
-    fellow_constant_speed_kmh_from_behavior,
-    fellow_follow_ttl_geometric_speed_kmh,
-    is_fellow_sudden_stop_interval_behavior,
-    is_fellow_swerve_out_of_control_behavior,
-)
+from scenic.domains.racing.fellow.plant import is_fellow_vd_plant_behavior
 
 from ..vehicle.physics import VehiclePhysicsState
 
@@ -422,13 +416,10 @@ class VehicleController:
         or when the delta table cannot be built; set
         ``obj._fellow_force_bicycle_lateral = True`` to force bicycle on Lap.
 
-        FellowConstantSpeedTrackOffsetBehavior / FellowFollowTTLGeometricBehavior /
-        FellowSwerveOutOfControlBehavior / FellowSuddenStopIntervalBehavior: read
-        ``_fellow_plant_state`` (``v_kmh``, ``d_m``) and write fellow External_Signals.
-        **FellowSuddenStopIntervalBehavior**: **d** from TTL every step; **v** alternates cruise
-        and zero on simulation time. **FellowSwerveOutOfControlBehavior**: **d** follows TTL in
-        cruise, open-loop rate-limited swerve legs, then optional hold or TTL track when stopped;
-        **v** is cruise until the final stop phase. No PID/MPC _control_state for these modes.
+        Fellow* plant behaviors (class name starts with ``Fellow``): read staged
+        ``_fellow_plant_state`` (``v_kmh``, ``d_m``) from
+        :class:`~scenic.domains.racing.actions.SetFellowPlantAction` and write fellow
+        External_Signals only—no per-behavior Python updaters in the controller.
         """
         # Ensure fellow arrays are initialized before attempting to write
         from ..controldesk.arrays import ensure_fellow_arrays_initialized
@@ -444,37 +435,17 @@ class VehicleController:
         # Adjust for base (0-based vs 1-based arrays) for writing
         eff_index = fellow_index + (self.simulation._fellow_index_base or 0)
 
-        # Fellow (v, d) plant: values computed in Scenic; controller writes External_Signals only.
-        _v_plant = fellow_constant_speed_kmh_from_behavior(obj)
-        if _v_plant is not None:
-            if not _fellow_plant_outputs_ready(obj):
-                fellow_commands_mod.update_fellow_constant_speed_track_offset_plant(
-                    obj, self.simulation
+        # Fellow (v, d) plant: values staged by Scenic actions; controller writes External_Signals only.
+        if is_fellow_vd_plant_behavior(obj):
+            if _fellow_plant_outputs_ready(obj):
+                self._write_fellow_plant_external_signals(obj, fellow_index, eff_index)
+            elif not getattr(obj, "_fellow_plant_incomplete_warned", False):
+                logger.warning(
+                    "FellowControl: incomplete _fellow_plant_state for %s; skip plant write "
+                    "(behavior should take SetFellowPlantAction each step)",
+                    obj,
                 )
-            self._write_fellow_plant_external_signals(obj, fellow_index, eff_index)
-            return
-
-        _v_geo = fellow_follow_ttl_geometric_speed_kmh(obj)
-        if _v_geo is not None:
-            if not _fellow_plant_outputs_ready(obj):
-                fellow_commands_mod.update_fellow_follow_ttl_geometric_plant(
-                    obj, self.simulation, fellow_index=fellow_index
-                )
-            self._write_fellow_plant_external_signals(obj, fellow_index, eff_index)
-            return
-
-        if is_fellow_swerve_out_of_control_behavior(obj):
-            fellow_commands_mod.update_fellow_swerve_out_of_control_plant(
-                obj, self.simulation, fellow_index=fellow_index
-            )
-            self._write_fellow_plant_external_signals(obj, fellow_index, eff_index)
-            return
-
-        if is_fellow_sudden_stop_interval_behavior(obj):
-            fellow_commands_mod.update_fellow_sudden_stop_interval_plant(
-                obj, self.simulation, fellow_index=fellow_index
-            )
-            self._write_fellow_plant_external_signals(obj, fellow_index, eff_index)
+                obj._fellow_plant_incomplete_warned = True
             return
 
         # Kinematic path requires _control_state from behavior

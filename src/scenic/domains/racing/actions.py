@@ -14,6 +14,7 @@ Racing domain actions extending the driving domain:
 - SetScaleFactorAction: apply speed scale factor
 - SetPush2PassAction: activate/deactivate push2pass
 - StopCarAction: emergency/immediate/safe stop
+- SetFellowPlantAction: stage fellow traffic (v, d) plant commands for dSPACE External_Signals
 
 The gear and clutch actions follow the same protocol pattern as Steers from
 the driving domain - simulators implement the protocol methods, actions call them.
@@ -89,6 +90,28 @@ class HasFellowPlant:
     def setFellowPlant(self, v_kmh: float, d_m: float):
         """Command longitudinal speed (km/h) and lateral offset **d** in meters (same as **t**)."""
         raise NotImplementedError
+
+
+class FellowPlantAction(Action):
+    """Abstract base for actions that command the fellow (v, d) plant."""
+
+    def canBeTakenBy(self, agent):
+        return hasattr(agent, "setFellowPlant")
+
+
+class SetFellowPlantAction(FellowPlantAction):
+    """Stage fellow plant commands (km/h lateral speed, **d** in m = Frenet **t**).
+
+    Same role for traffic as :class:`~scenic.domains.driving.actions.SetThrottleAction` for ego:
+    ``applyTo`` calls :meth:`HasFellowPlant.setFellowPlant`, which updates ``_fellow_plant_state``.
+    """
+
+    def __init__(self, v_kmh: float, d_m: float):
+        self.v_kmh = float(v_kmh)
+        self.d_m = float(d_m)
+
+    def applyTo(self, obj, sim):
+        obj.setFellowPlant(self.v_kmh, self.d_m)
 
 
 ## Racing-specific actions
