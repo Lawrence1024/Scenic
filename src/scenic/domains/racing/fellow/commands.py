@@ -119,7 +119,7 @@ def compute_fellow_ttl_geometric_d_m(
         d0 = get_fellow_placed_lateral_deviation(obj)
         return d0, "placement_d"
 
-    from scenic.simulators.dspace.utils import legacy as dutils
+    from scenic.simulators.dspace import utils as dutils
     from scenic.simulators.dspace.vehicle.fellow_racing_line_lateral import (
         _road_index_main_track_only,
         get_or_build_delta_table,

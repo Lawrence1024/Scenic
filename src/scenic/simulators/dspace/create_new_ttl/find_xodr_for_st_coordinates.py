@@ -38,7 +38,7 @@ from scenic.simulators.dspace.controldesk.readback import (
     FELLOW_GPS_BASE,
     FELLOW_GPS_BASE_ALT,
 )
-from scenic.simulators.dspace.utils import legacy as dutils
+from scenic.simulators.dspace import utils as dutils
 from scenic.simulators.dspace.modeldesk.placement import t_for_dspace_lateral
 
 MAX_BATCH_SIZE = 30

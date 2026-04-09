@@ -29,7 +29,7 @@ If this param is **absent** or **false**, no `ros2 bag record` process is starte
 | `ros2_bag_topics` | Optional list of topic names; if set, records those topics only. If omitted, uses `ros2 bag record -a`. |
 | `ros2_bag_setup_source` | Shell line to source the ROS workspace before `ros2 bag record`. **Default:** `source /opt/race_common/install/setup.bash` (matches ART reset in `simulator.py`). |
 
-The legacy params `ros2_bag_use_wsl` and `ros2_bag_wsl_distro` are **ignored** if present; use the same `docker` on your host PATH that successfully runs ART reset.
+Params `ros2_bag_use_wsl` and `ros2_bag_wsl_distro` are not used; use the same `docker` on your host PATH that successfully runs ART reset.
 
 ## Docker / container expectations
 

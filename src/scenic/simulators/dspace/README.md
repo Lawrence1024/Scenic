@@ -110,12 +110,12 @@ See also module docstrings in `scenic.domains.racing.fellow.commands`.
 
 There are now **two conceptual stepping modes**:
 
-### 1. Legacy / non-blocking step mode
-This is the older approach, where Scenic performs a step and then polls simulated time until the step has advanced.
+### 1. ControlDesk polling step mode
+In this mode, Scenic performs a step and then polls simulated time until the step has advanced.
 
-This mode is still useful for:
+This mode is useful for:
 - non-CoSim usage
-- older dSPACE-only workflows
+- dSPACE-only workflows
 - debugging ControlDesk timing
 
 ### 2. CoSim synchronous step mode

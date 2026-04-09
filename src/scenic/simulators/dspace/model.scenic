@@ -23,7 +23,7 @@ from scenic.domains.driving.actions import Steers
 # dSPACE ModelDesk parameters
 param scenario_src = "LagunaSeca_ExternalControl"
 param scenario_name = None
-# Support both time_step (from examples) and timestep (from model) for compatibility
+# Accept either parameter alias: time_step or timestep
 param timestep = (globalParameters.time_step if 'time_step' in globalParameters else (globalParameters.timestep if 'timestep' in globalParameters else 1.0))
 # Period between control/readback updates in seconds. Must be a multiple of timestep.
 # None or omit = every step. Example: timestep=0.01, control_period=0.05 → 20 Hz control and readback

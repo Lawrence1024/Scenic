@@ -415,11 +415,11 @@ class VehicleController:
         **Lateral (Lap + optimal TTL)**: d commands the racing line expressed in
         centerline coordinates: δ(s) from the optimal polyline vs main
         centerline, plus feedback so the plant converges to that offset—aligned
-        with MPC's reference. Legacy bicycle-from-steering is used for Pit route
+        with MPC's reference. Bicycle-from-steering is used for Pit route
         or when the delta table cannot be built; set
         ``obj._fellow_force_bicycle_lateral = True`` to force bicycle on Lap.
 
-        Fellow* plant behaviors (class name starts with ``Fellow``): read staged
+        Fellow (v, d) plant behaviors (``_fellow_vd_plant_enabled``): read staged
         ``_fellow_plant_state`` (``v_kmh``, ``d_m``) from
         :class:`~scenic.domains.racing.actions.SetFellowPlantAction` and write fellow
         External_Signals only—no per-behavior Python updaters in the controller.
@@ -468,7 +468,7 @@ class VehicleController:
             from scenic.domains.racing.constants import DELTA_MAX_RAD
 
             steering_rad = steering  # behavior already in rad
-            steering = max(-1.0, min(1.0, steering / DELTA_MAX_RAD))  # normalized for legacy
+            steering = max(-1.0, min(1.0, steering / DELTA_MAX_RAD))  # normalized scale
 
         # CRITICAL: Get the actual CTE (cross-track error) from the behavior
         _ = getattr(obj, "_current_cte", None)  # retained for debugging / future use
@@ -590,7 +590,7 @@ class VehicleController:
                             )
                             idx_main = _road_index_main_track_only(road_index)
                             if tbl is not None and idx_main is not None:
-                                from ..utils.legacy import project_world_to_st
+                                from ..geometry import project_world_to_st
 
                                 s_meas, t_meas = project_world_to_st(idx_main, pos_xy)
                                 s_filt = getattr(obj, "_fellow_s_meas_filtered", None)
@@ -643,7 +643,7 @@ class VehicleController:
                                     route_preference=route_pref,
                                 )
                             else:
-                                from ..utils.legacy import project_world_to_st
+                                from ..geometry import project_world_to_st
 
                                 _, t_actual = project_world_to_st(
                                     road_index,

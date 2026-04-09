@@ -10,7 +10,7 @@ plant (which tracks Const_d in centerline coordinates) is steered toward the
 same geometric path MPC uses, instead of open-loop bicycle-from-steering (which
 does not match ASM fellow lateral dynamics).
 
-See apply_fellow_control: racing-line servo vs legacy bicycle mode.
+See apply_fellow_control: racing-line servo vs bicycle mode.
 """
 
 from __future__ import annotations

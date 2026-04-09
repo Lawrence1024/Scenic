@@ -259,7 +259,7 @@ def calculate_route_s_from_road_sequence(
                 route_s = road_relative_s + transition_point + offset
             return route_s
     
-    # Fallback: Legacy calculation using road lengths (shouldn't be reached for known routes)
+    # Fallback: cumulative-length calculation (shouldn't be reached for known routes)
     # Calculate cumulative s up to this road
     cumulative_s = 0.0
     

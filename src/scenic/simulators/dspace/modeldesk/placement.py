@@ -1,6 +1,6 @@
 import math
 
-from ..utils import legacy as dutils
+from .. import utils as dutils
 from .traffic_object import apply_fellow_traffic_object
 
 # TTL filenames for route preference (distance to main vs pitlane; if similar, prefer main)

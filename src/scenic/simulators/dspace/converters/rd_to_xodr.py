@@ -717,9 +717,9 @@ def main():
     mode_group.add_argument('--pit-lane', action='store_true',
                            help='Generate corkscrew connected to pit lane mode')
     
-    # Legacy support
+    # Optional single-track support
     ap.add_argument('--single-track', action='store_true',
-                    help='Generate only one track section (legacy mode)')
+                    help='Generate only one track section')
     ap.add_argument('--main-road', type=int, default=None,
                     help='Index of road to use as main track (for single-track mode)')
     
@@ -771,7 +771,7 @@ def main():
     elif args.pit_lane:
         generate_simple_circuit_mode(od, track_sections, args, "pit_lane")
     elif args.single_track and args.main_road is not None:
-        # Legacy single track mode
+        # Single-track mode
         main_idx = args.main_road
         if main_idx < 0 or main_idx >= len(refs):
             raise ValueError(f"--main-road {main_idx} out of range [0,{len(refs)-1}]")

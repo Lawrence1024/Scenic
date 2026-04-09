@@ -50,7 +50,7 @@ def read_state_from_controldesk(sim: DSpaceSimulation, obj) -> Dict[str, float]:
 
     # Use existing readback infrastructure
     from scenic.simulators.dspace.controldesk.readback import read_ego_state, read_fellow_state
-    from scenic.simulators.dspace.utils import legacy as dutils
+    from scenic.simulators.dspace import utils as dutils
     
     is_ego = (obj is sim.scene.egoObject)
     

@@ -17,7 +17,7 @@ from pathlib import Path
 from scenic.domains.racing.simulators import RacingSimulator, RacingSimulation
 from scenic.core.simulators import SimulationCreationError
 
-from .utils import legacy as dutils
+from . import utils as dutils
 from .controldesk.per_tick_control import ExternalControlManager
 from .vehicle import VehiclePhysicsState, VehicleController
 from .ttl.loader import get_ttl_config, load_ttl_region, attach_to_ego, attach_ttl
@@ -1241,10 +1241,6 @@ class DSpaceSimulation(RacingSimulation):
         
         return all_success
     
-    def _ensureFellowArraysInitialized(self):
-        """Deprecated wrapper for controldesk.arrays.ensure_fellow_arrays_initialized."""
-        ensure_fellow_arrays_initialized(self)
-
     def _initializeFellowExternalSignals(self):
         """Initialize External_Signals S/T arrays for fellows using RD (dSPACE) coordinates.
 
