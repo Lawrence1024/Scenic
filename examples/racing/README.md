@@ -13,6 +13,7 @@ Scenarios for the racing domain using the dSPACE racing simulator. All examples 
 | **decision_tree_example.scenic** | Decision-tree behaviors: `FlagBasedSpeedBehavior`, `LaneSelectionBehavior`, `StopBehavior`, `FollowModeBehavior`. |
 | **phase0_benchmark/** | Phase 0 baseline scenario bank + runner-oriented set (no opponent, slower opponent variants, weaving, corner approach, side-by-side). |
 | **phase1_planner/** | Phase 1 planner-to-MPC scripted handoff tests (optimal->left, left->right, right->optimal). |
+| **phase2_assessment/** | Phase 2 situation-assessment notes (`[Phase2]` logs, pytest snapshots). |
 
 Run with the racing model, e.g.:
 

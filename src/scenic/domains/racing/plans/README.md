@@ -6,7 +6,8 @@ This folder breaks the master roadmap in `overall_plan.md` into actionable per-p
 
 - **Phase 0** — complete (baseline metrics, scenario bank, `phase0_runner`).
 - **Phase 1** — complete (scripted TTL schedule + MPC handoff, `phase1_runner`, three validated switches).
-- **Phase 2** — next (situation assessment / opponent state for planner input).
+- **Phase 2** — complete (situation assessment module, snapshot tests, `[Phase2]` logs).
+- **Phase 3** — next (smart follow / stable TTL choice using Phase 2 features).
 
 ## Phase Plans
 
@@ -27,7 +28,7 @@ This folder breaks the master roadmap in `overall_plan.md` into actionable per-p
 
 - [x] Complete Phase 0 metrics and benchmark scenarios.
 - [x] Complete Phase 1 planner-to-MPC integration plumbing.
-- [ ] Complete Phase 2 opponent-state interpreter.
+- [x] Complete Phase 2 opponent-state interpreter.
 - [ ] Complete Phase 3 conservative tactical behavior.
 - [ ] Complete Phase 4 commit/abort overtaking with safety shield.
 - [ ] Complete Phase 5 segment-aware tactical improvements.

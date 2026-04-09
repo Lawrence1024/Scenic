@@ -31,6 +31,11 @@ from scenic.domains.racing.segments import (
 )
 from scenic.domains.racing.constants import DELTA_MAX_RAD
 from scenic.domains.racing.mode import RACING_MODE_MAIN, RACING_MODE_PIT
+from scenic.domains.racing.situation_assessment import (
+    assess_nearest_opponent,
+    format_phase2_log_line,
+    polyline_lap_length_m,
+)
 from scenic.simulators.dspace.ttl.loader import load_ttl_region
 
 
@@ -1767,6 +1772,42 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 f"ego_s={_ego_s_s} ego_speed={current_speed:.2f} "
                 f"nearest_opp_ds={_opp_rel_s_s} nearest_opp_rel_speed={_opp_rel_v_s} nearest_opp_dist={_opp_dist_s}"
             )
+            # Phase 2: race-semantics opponent state (planner inputs; same cadence as Phase 0 line).
+            try:
+                if nearest_obj is not None and car_heading is not None:
+                    _ox = float(nearest_obj.position.x)
+                    _oy = float(nearest_obj.position.y)
+                    _ov = float(getattr(nearest_obj, "speed", 0.0) or 0.0)
+                    _prog = getattr(self, "_waypoint_progress", None)
+                    _smap_p2 = getattr(self, "_waypoint_segment_map", None)
+                    _sid = getattr(self, "_last_valid_segment_id", None)
+                    _snm = getattr(self, "_last_valid_segment_name", "") or ""
+                    _Lap = None
+                    if use_waypoints and wp_list is not None and len(wp_list) >= 2:
+                        _Lap = polyline_lap_length_m(wp_list)
+                    _prev_ov = getattr(self, "_phase2_overlap_state", "clear_ahead")
+                    _sit_p2, _new_ov = assess_nearest_opponent(
+                        (px, py),
+                        float(car_heading),
+                        float(current_speed),
+                        (_ox, _oy),
+                        _ov,
+                        ego_progress_s_m=_prog,
+                        waypoints=wp_list if use_waypoints else None,
+                        lap_length_m=_Lap,
+                        segment_map=_smap_p2,
+                        ego_wp_idx=wp_last_idx,
+                        segment_id=_sid,
+                        segment_name=_snm,
+                        curvature_ahead_max=float(curvature_ahead_max),
+                        previous_overlap_state=_prev_ov,
+                    )
+                    self._phase2_overlap_state = _new_ov
+                    print(format_phase2_log_line(t_log, _sit_p2))
+                else:
+                    print(f"[Phase2] t={t_log:.2f}s opponent=none")
+            except Exception as _e_p2:
+                print(f"[Phase2] t={t_log:.2f}s assess_error={_e_p2}")
             # Event thresholds for baseline KPI extraction.
             if nearest_dist is not None and nearest_dist <= 3.0:
                 print(f"[Phase0Event] t={t_log:.2f}s type=near_miss distance_m={nearest_dist:.2f}")
