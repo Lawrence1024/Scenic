@@ -38,7 +38,7 @@ behavior FellowConstantSpeedTrackOffsetBehavior(speed_mph=31):
 
     Intended for **dSPACE** traffic fellows controlled via External_Signals
     (``Const_v_Fellows_External``, ``Const_d_Fellows_External``): each step this behavior
-    sets ``_fellow_plant_v_kmh`` and ``_fellow_plant_d_m`` from **speed_mph** (km/h) and
+    fills ``_fellow_plant_state`` (``v_kmh``, ``d_m``) from **speed_mph** (km/h) and
     lateral placement (``_route_s_t``). The dSPACE controller only writes those values to
     the platform. Not MPC; does not populate throttle/steer control state.
 
@@ -51,8 +51,8 @@ behavior FellowConstantSpeedTrackOffsetBehavior(speed_mph=31):
 behavior FellowFollowTTLGeometricBehavior(speed_mph=31):
     """dSPACE fellow: constant speed and lateral **d** from TTL geometry (no PID/MPC).
 
-    Each step sets ``_fellow_plant_v_kmh`` from **speed_mph**. On control-interval steps
-    (aligned with simulator readback), sets ``_fellow_plant_d_m`` from feedforward δ(s)
+    Each step sets ``v_kmh`` in ``_fellow_plant_state`` from **speed_mph**. On control-interval steps
+    (aligned with simulator readback), sets ``d_m`` from feedforward δ(s)
     on the main track centerline (optimal TTL vs ``ttl_main_road``), matching the racing
     line used by MPC fellows. The dSPACE controller writes those attrs to External_Signals.
 
@@ -81,8 +81,7 @@ behavior FellowSuddenStopIntervalBehavior(speed=150, interval=20.0, duration=3.0
     that behavior's requirements.
 
     Implementation: :func:`update_fellow_sudden_stop_interval_plant` in
-    ``scenic.domains.racing.fellow.commands`` sets ``_fellow_plant_v_kmh`` and
-    ``_fellow_plant_d_m``; the dSPACE :class:`~scenic.simulators.dspace.vehicle.controller.VehicleController`
+    ``scenic.domains.racing.fellow.commands`` sets ``_fellow_plant_state`` (``v_kmh``, ``d_m``); the dSPACE :class:`~scenic.simulators.dspace.vehicle.controller.VehicleController`
     writes them to ``Const_v_Fellows_External`` / ``Const_d_Fellows_External``.
 
     Example scene: ``examples/combined/fellow_sudden_stop.scenic``.

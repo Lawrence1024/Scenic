@@ -77,6 +77,20 @@ class RacingSteers:
         raise NotImplementedError
 
 
+class HasFellowPlant:
+    """Mixin protocol for traffic agents driven by route-relative **v** and **d** (Frenet **t**).
+
+    Same structural idea as :class:`~scenic.domains.driving.actions.Steers` for ego: simulators
+    implement a setter that stages per-step commands. Fellow plant output is mirrored in
+    ``agent._fellow_plant_state`` with keys ``v_kmh`` and ``d_m`` (see
+    :mod:`scenic.domains.racing.fellow.commands`).
+    """
+
+    def setFellowPlant(self, v_kmh: float, d_m: float):
+        """Command longitudinal speed (km/h) and lateral offset **d** in meters (same as **t**)."""
+        raise NotImplementedError
+
+
 ## Racing-specific actions
 
 class SetMaxSpeedAction(Action):

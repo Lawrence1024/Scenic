@@ -211,5 +211,12 @@ class DSPACERacingCar(RacingCar, _DSpaceVehicle, Steers, HasManualTransmission, 
             self.dspaceActor.push2pass_active = bool(active)
             self.dspaceActor.set_control({'push2pass_active': bool(active)})
 
+    def setFellowPlant(self, v_kmh, d_m):
+        """Stage fellow (v, d) plant commands (HasFellowPlant); mirrors ego ``_control_state`` pattern."""
+        if not hasattr(self, "_fellow_plant_state"):
+            self._fellow_plant_state = {}
+        self._fellow_plant_state["v_kmh"] = float(v_kmh)
+        self._fellow_plant_state["d_m"] = float(d_m)
+
 # Replace the abstract RacingCar with dSPACE implementation
 RacingCar = DSPACERacingCar

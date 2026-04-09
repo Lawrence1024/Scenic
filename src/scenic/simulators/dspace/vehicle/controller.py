@@ -25,6 +25,15 @@ _FELLOW_LOG_INITIAL = 3
 _FELLOW_LOG_INTERVAL = 50
 
 
+def _fellow_plant_outputs_ready(obj) -> bool:
+    st = getattr(obj, "_fellow_plant_state", None)
+    return (
+        isinstance(st, dict)
+        and st.get("v_kmh") is not None
+        and st.get("d_m") is not None
+    )
+
+
 class VehicleController:
     """Controller for applying vehicle commands to ControlDesk.
 
@@ -333,15 +342,18 @@ class VehicleController:
     # Fellow control
     # -------------------------------------------------------------------------
     def _write_fellow_plant_external_signals(self, obj, fellow_index, eff_index):
-        """Write ``_fellow_plant_v_kmh`` / ``_fellow_plant_d_m`` to Const_v / Const_d bulk arrays."""
-        v_value = getattr(obj, "_fellow_plant_v_kmh", None)
-        d_cmd = getattr(obj, "_fellow_plant_d_m", None)
-        if v_value is None or d_cmd is None:
-            logger.warning(
-                "FellowControl: missing _fellow_plant_v_kmh/_fellow_plant_d_m for %s; skip write",
-                obj,
-            )
+        """Write fellow plant commands to Const_v / Const_d bulk arrays from ``_fellow_plant_state``."""
+        st = getattr(obj, "_fellow_plant_state", None)
+        if not isinstance(st, dict) or st.get("v_kmh") is None or st.get("d_m") is None:
+            if not getattr(obj, "_fellow_plant_incomplete_warned", False):
+                logger.warning(
+                    "FellowControl: expected _fellow_plant_state with v_kmh and d_m on %s; skip write",
+                    obj,
+                )
+                obj._fellow_plant_incomplete_warned = True
             return
+        v_value = st["v_kmh"]
+        d_cmd = st["d_m"]
 
         v_value = float(v_value)
         d_cmd = float(d_cmd)
@@ -371,6 +383,7 @@ class VehicleController:
 
         self.cd.set_var(v_path_bulk, v_arr)
         self.cd.set_var(d_path_bulk, d_arr)
+        obj._fellow_plant_incomplete_warned = False
 
         if not hasattr(obj, "_fellow_control_count"):
             obj._fellow_control_count = 0
@@ -411,7 +424,7 @@ class VehicleController:
 
         FellowConstantSpeedTrackOffsetBehavior / FellowFollowTTLGeometricBehavior /
         FellowSwerveOutOfControlBehavior / FellowSuddenStopIntervalBehavior: read
-        ``_fellow_plant_v_kmh`` and ``_fellow_plant_d_m`` and write fellow External_Signals.
+        ``_fellow_plant_state`` (``v_kmh``, ``d_m``) and write fellow External_Signals.
         **FellowSuddenStopIntervalBehavior**: **d** from TTL every step; **v** alternates cruise
         and zero on simulation time. **FellowSwerveOutOfControlBehavior**: **d** follows TTL in
         cruise, open-loop rate-limited swerve legs, then optional hold or TTL track when stopped;
@@ -434,10 +447,7 @@ class VehicleController:
         # Fellow (v, d) plant: values computed in Scenic; controller writes External_Signals only.
         _v_plant = fellow_constant_speed_kmh_from_behavior(obj)
         if _v_plant is not None:
-            if (
-                getattr(obj, "_fellow_plant_v_kmh", None) is None
-                or getattr(obj, "_fellow_plant_d_m", None) is None
-            ):
+            if not _fellow_plant_outputs_ready(obj):
                 fellow_commands_mod.update_fellow_constant_speed_track_offset_plant(
                     obj, self.simulation
                 )
@@ -446,10 +456,7 @@ class VehicleController:
 
         _v_geo = fellow_follow_ttl_geometric_speed_kmh(obj)
         if _v_geo is not None:
-            if (
-                getattr(obj, "_fellow_plant_v_kmh", None) is None
-                or getattr(obj, "_fellow_plant_d_m", None) is None
-            ):
+            if not _fellow_plant_outputs_ready(obj):
                 fellow_commands_mod.update_fellow_follow_ttl_geometric_plant(
                     obj, self.simulation, fellow_index=fellow_index
                 )

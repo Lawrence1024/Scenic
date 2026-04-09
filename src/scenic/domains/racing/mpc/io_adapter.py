@@ -5,6 +5,8 @@ steering commands back to ControlDesk.
 """
 
 from typing import Dict, Optional, Tuple
+
+from scenic.domains.racing.control_output import apply_steering_command
 from scenic.simulators.dspace.simulator import DSpaceSimulation
 
 
@@ -126,10 +128,6 @@ def write_steering_to_controldesk(sim: DSpaceSimulation,
     if not sim._cd or not hasattr(sim, '_vehicle_controller'):
         return
     
-    # Use existing VehicleController infrastructure
-    # Store in _control_state, which will be applied by executeActions()
-    if not hasattr(obj, '_control_state'):
-        obj._control_state = {}
-    
-    obj._control_state['steering'] = steer_cmd_normalized
+    # Same path as SetSteerAction / Steers.setSteering → _control_state['steering']
+    apply_steering_command(obj, steer_cmd_normalized)
 

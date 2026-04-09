@@ -1,8 +1,8 @@
 """Fellow plant-mode helpers for simulators that drive traffic via (v, d) signals.
 
 Behaviors in ``behaviors.scenic`` for **dSPACE** fellow (v, d) plants update
-``_fellow_plant_v_kmh`` and ``_fellow_plant_d_m`` each step; the dSPACE controller
-writes those to External_Signals (see :mod:`scenic.domains.racing.fellow.commands`).
+``_fellow_plant_state`` (keys ``v_kmh``, ``d_m``) each step; the dSPACE controller writes
+those to External_Signals (see :mod:`scenic.domains.racing.fellow.commands`).
 
 - :obj:`FellowConstantSpeedTrackOffsetBehavior` — constant ``speed_mph`` and lateral offset
   from placement.

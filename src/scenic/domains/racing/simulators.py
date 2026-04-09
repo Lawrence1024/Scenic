@@ -33,6 +33,11 @@ class RacingSimulation(Simulation):
     - Track segment detection and route assignment
     - Racing-specific behaviors (racing line following, pit stops, etc.)
     - Performance monitoring and timing
+
+    **Ego control output** matches the driving domain: per-step commands are staged via the
+    :class:`~scenic.domains.driving.actions.Steers` protocol (``setThrottle``, ``setBraking``,
+    ``setSteering``) into ``agent._control_state`` with keys ``throttle``, ``braking``,
+    ``steering``. See :mod:`scenic.domains.racing.control_output` for helpers.
     
     Racing simulations should inherit from this class and implement:
     - Racing-specific object creation and positioning

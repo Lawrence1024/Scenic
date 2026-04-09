@@ -2,8 +2,8 @@
 
 Behaviors call these updaters each simulation step; the dSPACE
 :class:`~scenic.simulators.dspace.vehicle.controller.VehicleController`
-reads ``_fellow_plant_v_kmh`` and ``_fellow_plant_d_m`` and writes ControlDesk
-only (no geometry in the controller).
+reads ``_fellow_plant_state`` (keys ``v_kmh``, ``d_m``; same structured role as ego
+``_control_state``) and writes ControlDesk only (no geometry in the controller).
 
 **Scenario-style plant behaviors** (declared in ``behaviors.scenic``):
 
@@ -38,6 +38,45 @@ _MPH_TO_KMH = 1.609344
 _SWERVE_OC_LOG_INTERVAL_S = 0.2
 
 
+def _ensure_fellow_plant_state(obj: Any) -> dict:
+    if not hasattr(obj, "_fellow_plant_state") or obj._fellow_plant_state is None:
+        obj._fellow_plant_state = {}
+    return obj._fellow_plant_state
+
+
+def set_fellow_plant_v_kmh(obj: Any, v_kmh: float) -> None:
+    """Set commanded fellow speed (km/h) in ``_fellow_plant_state``."""
+    st = _ensure_fellow_plant_state(obj)
+    st["v_kmh"] = float(v_kmh)
+    if st.get("d_m") is None:
+        st["d_m"] = float(get_fellow_placed_lateral_deviation(obj))
+
+
+def set_fellow_plant_d_m(obj: Any, d_m: float) -> None:
+    """Set commanded lateral **d** in meters (Frenet **t**) in ``_fellow_plant_state``."""
+    st = _ensure_fellow_plant_state(obj)
+    st["d_m"] = float(d_m)
+    if st.get("v_kmh") is None:
+        st["v_kmh"] = 0.0
+
+
+def get_fellow_plant_d_m(obj: Any, *, if_missing: Optional[float] = None) -> float:
+    """Read commanded **d** (m). If unset and *if_missing* is ``None``, use placement."""
+    st = getattr(obj, "_fellow_plant_state", None)
+    if isinstance(st, dict) and st.get("d_m") is not None:
+        return float(st["d_m"])
+    if if_missing is not None:
+        return float(if_missing)
+    return float(get_fellow_placed_lateral_deviation(obj))
+
+
+def get_fellow_plant_v_kmh(obj: Any) -> Optional[float]:
+    st = getattr(obj, "_fellow_plant_state", None)
+    if isinstance(st, dict) and st.get("v_kmh") is not None:
+        return float(st["v_kmh"])
+    return None
+
+
 def get_fellow_placed_lateral_deviation(obj: Any) -> float:
     """Lateral deviation (d) from Scenic placement (``_route_s_t``)."""
     st = getattr(obj, "_route_s_t", None)
@@ -52,12 +91,13 @@ def _update_fellow_plant_d_ttl_geometric(
     *,
     fellow_index: Optional[int] = None,
 ) -> None:
-    """Set ``_fellow_plant_d_m`` from TTL delta(s) on control-interval steps; placement fallback."""
+    """Set ``d_m`` in ``_fellow_plant_state`` from TTL delta(s) on control-interval steps; placement fallback."""
     control_interval = max(1, int(getattr(simulation, "_control_interval", 1) or 1))
     current_time = int(getattr(simulation, "currentTime", 0) or 0)
     if current_time % control_interval != 0:
-        if getattr(obj, "_fellow_plant_d_m", None) is None:
-            obj._fellow_plant_d_m = get_fellow_placed_lateral_deviation(obj)
+        st = getattr(obj, "_fellow_plant_state", None)
+        if not isinstance(st, dict) or st.get("d_m") is None:
+            set_fellow_plant_d_m(obj, get_fellow_placed_lateral_deviation(obj))
             obj._fellow_plant_log_mode = "placement_d"
         return
 
@@ -213,7 +253,7 @@ def _update_fellow_plant_d_ttl_geometric(
                 "; ".join(reasons) if reasons else "preconditions not met",
             )
 
-    obj._fellow_plant_d_m = d_cmd
+    set_fellow_plant_d_m(obj, d_cmd)
     obj._fellow_plant_log_mode = "delta(s)" if used_delta else "placement_d"
 
 
@@ -273,7 +313,7 @@ def update_fellow_sudden_stop_interval_plant(
         else:
             v_kmh = 0.0
 
-    obj._fellow_plant_v_kmh = v_kmh
+    set_fellow_plant_v_kmh(obj, v_kmh)
     _update_fellow_plant_d_ttl_geometric(obj, simulation, fellow_index=fellow_index)
     _sub = getattr(obj, "_fellow_plant_log_mode", "placement_d")
     obj._fellow_plant_log_mode = f"sudden_stop/{_sub}"
@@ -301,7 +341,7 @@ def _swerve_oc_slew_d_toward(
 
     d_s = getattr(obj, "_fellow_swerve_oc_d_smooth", None)
     if d_s is None:
-        d_s = float(getattr(obj, "_fellow_plant_d_m", 0.0) or 0.0)
+        d_s = get_fellow_plant_d_m(obj, if_missing=0.0)
 
     d_start = float(d_s)
     rate = max(0.0, float(rate_m_s))
@@ -364,7 +404,7 @@ def _swerve_oc_progress_log(
     if not (phase_changed or due_interval):
         return
 
-    d_cmd = float(getattr(obj, "_fellow_plant_d_m", float("nan")))
+    d_cmd = get_fellow_plant_d_m(obj, if_missing=float("nan"))
     parts = [
         f"[Fellow swerve_oc] t={t_sim:.6f}s phase={phase!r}",
         f"v_cmd={v_kmh:.2f}km/h d_cmd={d_cmd:.4f}m",
@@ -509,7 +549,7 @@ def update_fellow_swerve_out_of_control_plant(
         obj._fellow_swerve_oc_slew_last_t = None
         if phase == "swerve_right" and prev_motion_phase == "cruise":
             obj._fellow_swerve_oc_d_smooth = float(
-                getattr(obj, "_fellow_plant_d_m", 0.0) or 0.0
+                get_fellow_plant_d_m(obj, if_missing=0.0)
             )
             obj._fellow_swerve_oc_d_cruise_ref = float(obj._fellow_swerve_oc_d_smooth)
         elif phase == "cruise":
@@ -517,7 +557,7 @@ def update_fellow_swerve_out_of_control_plant(
         if phase == "stopped":
             ds = getattr(obj, "_fellow_swerve_oc_d_smooth", None)
             obj._fellow_swerve_oc_stop_d_frozen = float(
-                ds if ds is not None else float(getattr(obj, "_fellow_plant_d_m", 0.0) or 0.0)
+                ds if ds is not None else get_fellow_plant_d_m(obj, if_missing=0.0)
             )
         if phase == "swerve_left" and prev_motion_phase == "swerve_right":
             mn = float(getattr(obj, "_fellow_swerve_oc_leg_min_d", float("nan")))
@@ -539,25 +579,27 @@ def update_fellow_swerve_out_of_control_plant(
     if phase == "cruise":
         v_kmh = float(mph) * _MPH_TO_KMH
         _update_fellow_plant_d_ttl_geometric(obj, simulation, fellow_index=fellow_index)
-        obj._fellow_swerve_oc_d_smooth = float(obj._fellow_plant_d_m)
+        obj._fellow_swerve_oc_d_smooth = get_fellow_plant_d_m(obj)
         obj._fellow_swerve_oc_slew_dbg = None
         _sub = getattr(obj, "_fellow_plant_log_mode", "placement_d")
         obj._fellow_plant_log_mode = f"swerve_oc/cruise/{_sub}"
     elif phase == "swerve_right":
         v_kmh = float(mph) * _MPH_TO_KMH
-        obj._fellow_plant_d_m = _swerve_oc_slew_d_toward(
-            obj, simulation, -swerve_amp_m, swerve_d_rate_m_s
+        set_fellow_plant_d_m(
+            obj,
+            _swerve_oc_slew_d_toward(obj, simulation, -swerve_amp_m, swerve_d_rate_m_s),
         )
-        cur = float(obj._fellow_plant_d_m)
+        cur = get_fellow_plant_d_m(obj)
         pmin = getattr(obj, "_fellow_swerve_oc_leg_min_d", None)
         obj._fellow_swerve_oc_leg_min_d = cur if pmin is None else min(float(pmin), cur)
         obj._fellow_plant_log_mode = "swerve_oc/right"
     elif phase == "swerve_left":
         v_kmh = float(mph) * _MPH_TO_KMH
-        obj._fellow_plant_d_m = _swerve_oc_slew_d_toward(
-            obj, simulation, swerve_amp_m, swerve_d_rate_m_s
+        set_fellow_plant_d_m(
+            obj,
+            _swerve_oc_slew_d_toward(obj, simulation, swerve_amp_m, swerve_d_rate_m_s),
         )
-        cur = float(obj._fellow_plant_d_m)
+        cur = get_fellow_plant_d_m(obj)
         pmax = getattr(obj, "_fellow_swerve_oc_leg_max_d", None)
         if pmax is None or (isinstance(pmax, float) and math.isnan(pmax)):
             obj._fellow_swerve_oc_leg_max_d = cur
@@ -569,10 +611,10 @@ def update_fellow_swerve_out_of_control_plant(
         if stop_hold_d:
             d_f = getattr(obj, "_fellow_swerve_oc_stop_d_frozen", None)
             if d_f is None:
-                d_f = float(getattr(obj, "_fellow_plant_d_m", 0.0) or 0.0)
+                d_f = get_fellow_plant_d_m(obj, if_missing=0.0)
                 obj._fellow_swerve_oc_stop_d_frozen = d_f
             d_f = float(d_f)
-            obj._fellow_plant_d_m = d_f
+            set_fellow_plant_d_m(obj, d_f)
             obj._fellow_swerve_oc_d_smooth = d_f
             obj._fellow_swerve_oc_slew_dbg = {
                 "dt": 0.0,
@@ -584,15 +626,16 @@ def update_fellow_swerve_out_of_control_plant(
             obj._fellow_plant_log_mode = "swerve_oc/stopped/hold_d"
         else:
             _update_fellow_plant_d_ttl_geometric(obj, simulation, fellow_index=fellow_index)
-            d_ttl = float(obj._fellow_plant_d_m)
+            d_ttl = get_fellow_plant_d_m(obj)
             obj._fellow_swerve_oc_last_d_ttl_geo = d_ttl
-            obj._fellow_plant_d_m = _swerve_oc_slew_d_toward(
-                obj, simulation, d_ttl, swerve_d_rate_m_s
+            set_fellow_plant_d_m(
+                obj,
+                _swerve_oc_slew_d_toward(obj, simulation, d_ttl, swerve_d_rate_m_s),
             )
             _sub = getattr(obj, "_fellow_plant_log_mode", "placement_d")
             obj._fellow_plant_log_mode = f"swerve_oc/stopped/{_sub}"
 
-    obj._fellow_plant_v_kmh = v_kmh
+    set_fellow_plant_v_kmh(obj, v_kmh)
 
     obj._fellow_swerve_oc_prog_extras = None
     if phase == "stopped":
@@ -623,7 +666,7 @@ def update_fellow_swerve_out_of_control_plant(
 
 
 def update_fellow_constant_speed_track_offset_plant(obj: Any, simulation: Any) -> None:
-    """Set ``_fellow_plant_v_kmh`` and ``_fellow_plant_d_m`` for constant-offset plant."""
+    """Set constant-offset plant ``v_kmh`` and ``d_m`` in ``_fellow_plant_state``."""
     b = getattr(obj, "behavior", None)
     if b is None or b.__class__.__name__ != FELLOW_CONSTANT_SPEED_TRACK_OFFSET_CLASS:
         return
@@ -631,8 +674,8 @@ def update_fellow_constant_speed_track_offset_plant(obj: Any, simulation: Any) -
         mph = float(getattr(b, "speed_mph"))
     except (TypeError, ValueError):
         mph = 31.0
-    obj._fellow_plant_v_kmh = float(mph) * _MPH_TO_KMH
-    obj._fellow_plant_d_m = get_fellow_placed_lateral_deviation(obj)
+    set_fellow_plant_v_kmh(obj, float(mph) * _MPH_TO_KMH)
+    set_fellow_plant_d_m(obj, get_fellow_placed_lateral_deviation(obj))
     obj._fellow_plant_log_mode = "placement_t"
 
 
@@ -651,5 +694,5 @@ def update_fellow_follow_ttl_geometric_plant(
     except (TypeError, ValueError):
         mph = 31.0
     v_kmh = float(mph) * _MPH_TO_KMH
-    obj._fellow_plant_v_kmh = v_kmh
+    set_fellow_plant_v_kmh(obj, v_kmh)
     _update_fellow_plant_d_ttl_geometric(obj, simulation, fellow_index=fellow_index)

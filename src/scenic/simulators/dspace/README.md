@@ -66,8 +66,8 @@ At a high level, the dSPACE backend is responsible for four things:
 
 #### Fellow (v, d) plant behaviors (dSPACE External_Signals)
 
-Some traffic fellows do not use throttle/steer from Scenic; instead Scenic sets
-`_fellow_plant_v_kmh` and `_fellow_plant_d_m` each step, and `VehicleController` writes them to
+Some traffic fellows do not use throttle/steer from Scenic; instead Scenic fills
+`_fellow_plant_state` (`v_kmh`, `d_m`) each step, and `VehicleController` writes them to
 `Const_v_Fellows_External` / `Const_d_Fellows_External`.
 
 Documented in `src/scenic/domains/racing/behaviors.scenic` and implemented in
