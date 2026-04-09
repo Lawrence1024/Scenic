@@ -70,7 +70,7 @@ Some traffic fellows do not use throttle/steer from Scenic. Each step their beha
 `SetFellowPlantAction` (racing domain action), which stages `_fellow_plant_state` (`v_kmh`,
 `d_m`) on the agent—same idea as ego driving actions staging `_control_state`. After
 `executeActions`, `VehicleController.apply_fellow_control` detects plant fellows by behavior
-class name prefix `Fellow` (`is_fellow_vd_plant_behavior`) and writes those values to
+flag `_fellow_vd_plant_enabled` and writes those values to
 `Const_v_Fellows_External` / `Const_d_Fellows_External` without branching on individual
 behavior types.
 
@@ -81,10 +81,10 @@ Numeric helpers live in `src/scenic/domains/racing/fellow/commands.py` (`compute
 |----------|------|----------------|
 | **FellowConstantSpeedTrackOffsetBehavior** | Constant `speed_mph` and lateral **d** from placement. | `examples/dSPACE/dummy_fellow.scenic` |
 | **FellowFollowTTLGeometricBehavior** | Constant **v** and lateral **d** from TTL δ(s) (Lap + optimal CSV). | `examples/dSPACE/ttl_fellow.scenic` |
-| **FellowSuddenStopIntervalBehavior** | Repeating cruise (mph) then commanded **v = 0**; **d** tracks TTL δ(s). | `examples/combined/fellow_sudden_stop.scenic` |
-| **FellowSwerveOutOfControlBehavior** | TTL cruise, then rate-limited swerve right/left in **d**, then stop; optional **stop_hold_d**. | `examples/combined/fellow_swerve_out_of_control.scenic` |
+| **FellowSuddenStopIntervalBehavior** | Repeating cruise (`speed_mph`) then commanded **v = 0**; **d** tracks TTL δ(s). | `examples/combined/fellow_sudden_stop.scenic` |
+| **FellowSwerveOutOfControlBehavior** | TTL cruise (`speed_mph`), then rate-limited swerve right/left in **d**, then stop; optional **stop_hold_d**. | `examples/combined/fellow_swerve_out_of_control.scenic` |
 
-See also module docstrings in `scenic.domains.racing.fellow.plant` and `scenic.domains.racing.fellow.commands`.
+See also module docstrings in `scenic.domains.racing.fellow.commands`.
 
 ### Coordinate and route logic
 

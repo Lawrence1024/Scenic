@@ -45,6 +45,7 @@ behavior FellowConstantSpeedTrackOffsetBehavior(speed_mph=31):
 
     Other simulators do not apply this unless they implement the same (v, d) contract.
     """
+    self._fellow_vd_plant_enabled = True
     while True:
         v_kmh, d_m, mode = compute_constant_offset_plant_command(self)
         take SetFellowPlantAction(v_kmh, d_m)
@@ -68,6 +69,7 @@ behavior FellowFollowTTLGeometricBehavior(speed_mph=31):
     the agent, and a valid delta table. Uses ``dspaceActor`` pose from readback. Other
     simulators may ignore this behavior.
     """
+    self._fellow_vd_plant_enabled = True
     while True:
         v_kmh, d_m, mode = compute_follow_ttl_geometric_plant_command(
             self, simulation(), speed_mph
@@ -76,11 +78,11 @@ behavior FellowFollowTTLGeometricBehavior(speed_mph=31):
         self._fellow_plant_log_mode = mode
         wait
 
-behavior FellowSuddenStopIntervalBehavior(speed=150, interval=20.0, duration=3.0):
+behavior FellowSuddenStopIntervalBehavior(speed_mph=150, interval=20.0, duration=3.0):
     """dSPACE fellow: periodic full stops (commanded v=0), then back to cruise speed.
 
     Uses simulation time (:obj:`Simulation.currentRealTime`). Each cycle lasts
-    **interval + duration** seconds: cruise at **speed** (mph) for **interval** seconds,
+    **interval + duration** seconds: cruise at **speed_mph** for **interval** seconds,
     then commanded **0 km/h** for **duration** seconds, then repeat forever. Unlike
     :obj:`FellowSwerveOutOfControlBehavior`, lateral **d** always tracks TTL geometry
     (no open-loop swerve legs): each step uses the same δ(s) path as
@@ -96,17 +98,17 @@ behavior FellowSuddenStopIntervalBehavior(speed=150, interval=20.0, duration=3.0
     Example scene: ``examples/combined/fellow_sudden_stop.scenic``.
 
     Args:
-        speed: Cruise speed between stops in **mph** (same convention as ``speed_mph`` on
-            :obj:`FellowConstantSpeedTrackOffsetBehavior`). Default **150**.
+        speed_mph: Cruise speed between stops in **mph**. Default **150**.
         interval: Cruise phase length in seconds (≥ 0). Default **20**.
         duration: Stop phase length in seconds (commanded longitudinal v=0; ≥ 0). Default **3**.
             If **duration** is **0**, the fellow stays in cruise only (no stop phase).
     """
+    self._fellow_vd_plant_enabled = True
     while True:
         v_kmh, d_m, mode = compute_sudden_stop_plant_command(
             self,
             simulation(),
-            speed_mph=speed,
+            speed_mph=speed_mph,
             interval_s=interval,
             duration_s=duration,
         )
@@ -115,7 +117,7 @@ behavior FellowSuddenStopIntervalBehavior(speed=150, interval=20.0, duration=3.0
         wait
 
 behavior FellowSwerveOutOfControlBehavior(
-    speed=150,
+    speed_mph=150,
     interval=10.0,
     swerve_right_s=1.8,
     swerve_left_s=2.0,
@@ -128,7 +130,7 @@ behavior FellowSwerveOutOfControlBehavior(
     Default numeric parameters match ``examples/combined/fellow_swerve_out_of_control.scenic``.
 
     For **interval** seconds the fellow matches :obj:`FellowFollowTTLGeometricBehavior`
-    lateral **d** (delta(s)) at **speed** (mph). Then **d** slews toward **-swerve_amp_m** m
+    lateral **d** (delta(s)) at **speed_mph**. Then **d** slews toward **-swerve_amp_m** m
     (right of centerline) and toward **+swerve_amp_m** m (left) at up to **swerve_d_rate_m_s**
     m/s change in commanded **d**, so lateral commands ramp instead of stepping. **swerve_right_s**
     and **swerve_left_s** bound how long each leg lasts; each leg should be at least about
@@ -148,7 +150,7 @@ behavior FellowSwerveOutOfControlBehavior(
     outputs to fellow External_Signals (same as other (v, d) plant behaviors).
 
     Args:
-        speed: Cruise and swerve-leg speed in **mph**. Default **150**.
+        speed_mph: Cruise and swerve-leg speed in **mph**. Default **150**.
         interval: Seconds of TTL cruise before the swerve maneuver. Default **10**.
         swerve_right_s: Duration (s) of the leg slewing **d** toward **-swerve_amp_m** (right).
             Default **1.8**.
@@ -160,11 +162,12 @@ behavior FellowSwerveOutOfControlBehavior(
         stop_hold_d: If true (default), after **v = 0** keep **d** fixed at the end of the
             maneuver; if false, slew **d** toward TTL δ(s) while stopped (can look like drift).
     """
+    self._fellow_vd_plant_enabled = True
     while True:
         v_kmh, d_m, mode = compute_fellow_swerve_out_of_control_command(
             self,
             simulation(),
-            speed_mph=speed,
+            speed_mph=speed_mph,
             interval_s=interval,
             swerve_right_s=swerve_right_s,
             swerve_left_s=swerve_left_s,

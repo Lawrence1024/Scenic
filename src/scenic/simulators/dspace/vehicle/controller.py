@@ -7,8 +7,6 @@ dSPACE simulation environment, including both ego and fellow vehicles.
 import logging
 import math
 
-from scenic.domains.racing.fellow.plant import is_fellow_vd_plant_behavior
-
 from ..vehicle.physics import VehiclePhysicsState
 
 logger = logging.getLogger(__name__)
@@ -26,6 +24,11 @@ def _fellow_plant_outputs_ready(obj) -> bool:
         and st.get("v_kmh") is not None
         and st.get("d_m") is not None
     )
+
+
+def _is_fellow_vd_plant_behavior(obj) -> bool:
+    """True when fellow behavior opted into (v, d) plant dispatch."""
+    return bool(getattr(obj, "_fellow_vd_plant_enabled", False))
 
 
 class VehicleController:
@@ -436,7 +439,7 @@ class VehicleController:
         eff_index = fellow_index + (self.simulation._fellow_index_base or 0)
 
         # Fellow (v, d) plant: values staged by Scenic actions; controller writes External_Signals only.
-        if is_fellow_vd_plant_behavior(obj):
+        if _is_fellow_vd_plant_behavior(obj):
             if _fellow_plant_outputs_ready(obj):
                 self._write_fellow_plant_external_signals(obj, fellow_index, eff_index)
             elif not getattr(obj, "_fellow_plant_incomplete_warned", False):

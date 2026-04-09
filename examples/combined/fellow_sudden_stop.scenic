@@ -23,4 +23,4 @@ fellow0 = new RacingCar with _racing_st_offset ('ahead', 30), \
     with raceNumber 2, \
     with ttlFileName 'ttl_optimal_xodr.csv', \
     with ttlFolder localPath('../../assets/ttls/LS_ENU_TTL_CSV')
-fellow0.behavior = FellowSuddenStopIntervalBehavior(speed=150, interval=20, duration=3)
+fellow0.behavior = FellowSuddenStopIntervalBehavior(speed_mph=150, interval=20, duration=3)
