@@ -1,0 +1,2 @@
+scenario,return_code,lap_completion_status,lap_time_s,phase3_ttl_switch_count,phase3_tactical_status_count,phase2_line_count,phase2_overlap_count,phase2_seg_ctx_count,phase2_opponent_none_lines,phase2_assess_errors,collision,off_track,waypoint_hits,phase0_samples
+examples\racing\phase3_tactical\01_slower_opponent_tactical.scenic,0,completed,29.049999999999997,2,12,12,12,12,0,0,False,False,540,12

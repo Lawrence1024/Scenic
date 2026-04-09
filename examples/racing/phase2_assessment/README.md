@@ -34,4 +34,6 @@ Any Phase 0 benchmark scenario with an opponent will emit `[Phase2]` lines, e.g.
 python -m scenic.domains.racing.benchmarks.phase0_runner --time 3000 --scenario 01_slower_opponent_optimal.scenic
 ```
 
+The same `[Phase2]` lines appear when running **`phase3_on_phase0_runner`** on `examples/racing/phase3_on_phase0_bank/` (Phase 0 bank with **Phase 3** tactical enabled on ego); see `examples/racing/README.md`.
+
 See `src/scenic/domains/racing/plans/phase-2-situation-assessment.md` for goals and exit checklist.

@@ -36,6 +36,12 @@ from scenic.domains.racing.situation_assessment import (
     format_phase2_log_line,
     polyline_lap_length_m,
 )
+from scenic.domains.racing.tactical_planner import (
+    TacticalPlannerConfig,
+    TacticalPlannerState,
+    apply_ttl_key_to_agent,
+    tactical_planner_step,
+)
 from scenic.simulators.dspace.ttl.loader import load_ttl_region
 
 
@@ -248,7 +254,7 @@ behavior FellowSwerveOutOfControlBehavior(
         self._fellow_plant_log_mode = mode
         wait
 
-behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None):
+behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False):
     """Follow the car's TTL using MPC (Model Predictive Control) for lateral control.
     
     Primary Scenic behavior for line-following on the racing TTL. Lateral and longitudinal
@@ -264,6 +270,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         manage_gears: Whether to automatically manage gears
         use_waypoints: Whether to use waypoint-based control
         mpc_config_path: Path to MPC config YAML file (optional, uses default if None)
+        tactical_planner_enabled: Phase 3 — conservative FOLLOW / SETUP_LEFT / SETUP_RIGHT using
+            Phase 2 situation assessment (mutually exclusive with scripted ``planner_enabled`` schedule).
     """
     
     # SETUP & DEFAULTS
@@ -290,7 +298,11 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
     # Get Controllers: Longitudinal MPC + Lateral MPC
     _lon_controller, _lat_controller = simulation().getRacingControllers(self, use_mpc=True, mpc_config_path=mpc_config_path)
     _fbhv = getattr(self, '_follow_mpc_behavior_log_prefix', '[FollowRacingLineMPCBehavior]')
-    _phase1_planner_enabled = bool(planner_enabled)
+    _phase1_schedule_enabled = bool(planner_enabled)
+    _tactical_planner_enabled = bool(tactical_planner_enabled)
+    if _tactical_planner_enabled and _phase1_schedule_enabled:
+        print(f"{_fbhv} tactical_planner_enabled=True: ignoring Phase 1 scripted ttl_schedule (tactical owns TTL).")
+        _phase1_schedule_enabled = False
     _phase1_schedule = []
     _phase1_ttl_cache = {}
     _phase1_active_ttl = str(getattr(self, 'ttl_selection', '') or '').lower()
@@ -303,11 +315,13 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _phase1_speed_cap = max(0.0, float(target_speed_cap))
         except Exception:
             _phase1_speed_cap = None
-    if _phase1_planner_enabled:
+    _tactical_config = TacticalPlannerConfig()
+    if _phase1_schedule_enabled or _tactical_planner_enabled:
         try:
             _params = getattr(simulation().scene, 'params', None) or {}
-            _raw_schedule = ttl_schedule if ttl_schedule is not None else _params.get("ttlSwitchSchedule")
-            _phase1_schedule = _phase1_parse_ttl_schedule(_raw_schedule)
+            if _phase1_schedule_enabled:
+                _raw_schedule = ttl_schedule if ttl_schedule is not None else _params.get("ttlSwitchSchedule")
+                _phase1_schedule = _phase1_parse_ttl_schedule(_raw_schedule)
             _ttl_folder = getattr(self, 'ttlFolder', None) or _params.get("ttlFolder")
             if _ttl_folder:
                 _preloaded_keys = []
@@ -318,12 +332,16 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                             _phase1_ttl_cache[_ttl_key] = (_region, list(_pts))
                             _preloaded_keys.append(_ttl_key)
                     except Exception:
-                        print(f"{_fbhv} Phase1 planner preload failed for {_ttl_file}.")
-                print(f"{_fbhv} Phase1 planner TTL preload: folder={_ttl_folder} keys={_preloaded_keys}")
-            print(f"{_fbhv} Phase1 planner enabled: schedule={_phase1_schedule if _phase1_schedule else '[]'} speed_cap={_phase1_speed_cap}")
+                        print(f"{_fbhv} TTL preload failed for {_ttl_file}.")
+                print(f"{_fbhv} TTL preload (Phase 1 / Phase 3): folder={_ttl_folder} keys={_preloaded_keys}")
+            if _phase1_schedule_enabled:
+                print(f"{_fbhv} Phase1 planner enabled: schedule={_phase1_schedule if _phase1_schedule else '[]'} speed_cap={_phase1_speed_cap}")
+            if _tactical_planner_enabled:
+                print(f"{_fbhv} Phase3 tactical planner enabled (FREE_RUN / FOLLOW / SETUP_*) speed_cap={_phase1_speed_cap}")
         except Exception:
-            _phase1_planner_enabled = False
-            print(f"{_fbhv} Phase1 planner disabled due to setup error.")
+            _phase1_schedule_enabled = False
+            _tactical_planner_enabled = False
+            print(f"{_fbhv} Phase1/Phase3 TTL dynamic mode disabled due to setup error.")
 
     # Gear thresholds (m/s)
     gear_up_thresholds = [0.0, 12.0, 22.0, 32.0, 42.0, 52.0]
@@ -427,7 +445,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         if _dt_sim is None or _dt_sim <= 0:
             _dt_sim = float(getattr(_sim, 'control_period', 0.05) or 0.05)
         _sim_time_s = float(getattr(_sim, 'currentTime', 0)) * float(_dt_sim)
-        if _phase1_planner_enabled:
+        if _phase1_schedule_enabled:
             _desired_ttl = _phase1_active_ttl
             for _t_switch, _ttl_sel in _phase1_schedule:
                 if _sim_time_s >= _t_switch:
@@ -784,6 +802,91 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             pit_mode = in_pit_by_segment
             self._in_pit_by_segment = pit_mode
             
+            # --- Phase 3 tactical planner (TTL + follow cap; uses prior-step curvature lookahead) ---
+            self._phase3_speed_cap = None
+            if _tactical_planner_enabled and self is getattr(simulation().scene, 'egoObject', None):
+                if not hasattr(self, '_phase3_tp_state'):
+                    self._phase3_tp_state = TacticalPlannerState()
+                _k_prev = float(getattr(self, '_last_curvature_ahead_for_tactical', 0.0) or 0.0)
+                _nearest_o3 = None
+                _nearest_d3 = None
+                _nearest_vs3 = 0.0
+                try:
+                    _objs3 = getattr(simulation().scene, 'objects', [])
+                    _ego_h3 = car_heading if car_heading is not None else 0.0
+                    _efx3 = math.cos(_ego_h3)
+                    _efy3 = math.sin(_ego_h3)
+                    _best32 = None
+                    for _ob3 in _objs3:
+                        if _ob3 is self:
+                            continue
+                        if not hasattr(_ob3, 'position') or _ob3.position is None:
+                            continue
+                        _ox3 = float(_ob3.position.x)
+                        _oy3 = float(_ob3.position.y)
+                        _dx3 = _ox3 - px
+                        _dy3 = _oy3 - py
+                        _d22 = _dx3 * _dx3 + _dy3 * _dy3
+                        if _best32 is None or _d22 < _best32:
+                            _best32 = _d22
+                            _nearest_o3 = _ob3
+                            _nearest_d3 = _d22 ** 0.5
+                            _nearest_vs3 = float(getattr(_ob3, 'speed', 0.0) or 0.0)
+                except Exception:
+                    _nearest_o3 = None
+                _sit3 = None
+                if _nearest_o3 is not None and car_heading is not None:
+                    _ox3 = float(_nearest_o3.position.x)
+                    _oy3 = float(_nearest_o3.position.y)
+                    _prog3 = getattr(self, '_waypoint_progress', None)
+                    _smap3 = getattr(self, '_waypoint_segment_map', None)
+                    _sid3 = getattr(self, '_last_valid_segment_id', None)
+                    _snm3 = getattr(self, '_last_valid_segment_name', '') or ''
+                    _Lap3 = None
+                    if use_waypoints and wp_list is not None and len(wp_list) >= 2:
+                        _Lap3 = polyline_lap_length_m(wp_list)
+                    _prev_ov3 = getattr(self, '_phase2_overlap_state', 'clear_ahead')
+                    _sit3, _new_ov3 = assess_nearest_opponent(
+                        (px, py),
+                        float(car_heading),
+                        float(current_speed),
+                        (_ox3, _oy3),
+                        _nearest_vs3,
+                        ego_progress_s_m=_prog3,
+                        waypoints=wp_list if use_waypoints else None,
+                        lap_length_m=_Lap3,
+                        segment_map=_smap3,
+                        ego_wp_idx=wp_last_idx,
+                        segment_id=_sid3,
+                        segment_name=_snm3,
+                        curvature_ahead_max=_k_prev,
+                        previous_overlap_state=_prev_ov3,
+                    )
+                    self._phase2_overlap_state = _new_ov3
+                _mode3, _ttl3, _cap3 = tactical_planner_step(
+                    self._phase3_tp_state,
+                    _sit3,
+                    has_opponent=_nearest_o3 is not None,
+                    ego_speed_mps=float(current_speed),
+                    opponent_speed_mps=float(_nearest_vs3 or 0.0),
+                    sim_time_s=float(_sim_time_s),
+                    pit_mode=bool(pit_mode),
+                    config=_tactical_config,
+                )
+                if _ttl3 != _phase1_active_ttl and _ttl3 in _phase1_ttl_cache:
+                    if apply_ttl_key_to_agent(self, _ttl3, _phase1_ttl_cache, _PHASE1_TTL_FILE_BY_SELECTION):
+                        _p3 = _phase1_active_ttl
+                        _phase1_active_ttl = _ttl3
+                        wp_last_idx = 0
+                        wp_list = list(self.waypoints)
+                        print(f"{_fl_mpc} [Phase3Tactical] t={_sim_time_s:.2f}s ttl_switch {_p3}->{_phase1_active_ttl} mode={_mode3}")
+                self.active_ttl = _phase1_active_ttl
+                if _cap3 is not None:
+                    self._phase3_speed_cap = float(_cap3)
+                self._phase3_last_mode = _mode3
+                if getattr(self, '_full_control_ticks', 0) % 50 == 0:
+                    print(f"{_fl_mpc} [Phase3Tactical] t={_sim_time_s:.2f}s mode={_mode3} ttl={_phase1_active_ttl} cap={self._phase3_speed_cap}")
+            
             # --- Curvature-based speed gate (from suggestion.md) ---
             # Formula: v_max(s) = sqrt(a_y_max / (|κ(s)| + ε))
             # v_ref = min(v_desired, min_{s∈[s_0, s_0+L]} v_max(s))
@@ -891,6 +994,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     pass
             else:
                 curvature_speed_cap = target_speed
+            self._last_curvature_ahead_for_tactical = float(curvature_ahead_max)
             
             # --- CTE-based speed reduction (for MPC speed reference) ---
             # Generic: no TTL or segment IDs; only |CTE| so we slow when off-line on any track.
@@ -936,6 +1040,9 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             effective_target_speed = min(cte_target_speed, curvature_speed_cap)
             if _phase1_speed_cap is not None:
                 effective_target_speed = min(effective_target_speed, _phase1_speed_cap)
+            _p3cap = getattr(self, '_phase3_speed_cap', None)
+            if _p3cap is not None:
+                effective_target_speed = min(effective_target_speed, float(_p3cap))
             
             # Apply universal max speed limit
             effective_target_speed = min(effective_target_speed, MAX_SPEED_LIMIT_MS)

@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
 """Run Phase 1 planner-MPC integration scenarios and produce metrics.
 
-Outputs (per run):
-- one log file per scenario
-- summary.json (Phase 1 + baseline KPIs)
-- summary.csv (core KPIs)
-
 Usage (repo root):
     python -m scenic.domains.racing.benchmarks.phase1_runner --time 3000
     python -m scenic.domains.racing.benchmarks.phase1_runner --time 3000 --scenario 01_optimal_to_left.scenic
-    python -m scenic.domains.racing.benchmarks.phase1_runner --time 3000 --scenario-glob "0[1-2]_*.scenic"
 """
 
 from __future__ import annotations
@@ -17,164 +11,31 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import math
-import re
-import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from scenic.domains.racing.mpc.result_data.analyze_racing_log import (
-    compute_segment_times,
-    parse_log,
+from scenic.domains.racing.benchmarks.phase_run_common import (
+    analyze_waypoint_timing,
+    build_benchmark_ai_digest_payload,
+    collect_metrics_from_log,
+    finalize_row,
+    print_benchmark_ai_digest,
+    repo_root,
+    run_scenic_scenario,
+    STANDARD_BENCHMARK_DIGEST_KEYS,
 )
 
 
-RE_PHASE0_LINE = re.compile(
-    r"\[Phase0\]\s+t=(?P<t>\d+\.?\d*)s\s+ttl=(?P<ttl>\S+)\s+planner_mode=(?P<mode>\S+)\s+"
-    r"ego_s=(?P<ego_s>\S+)\s+ego_speed=(?P<ego_speed>\S+)\s+"
-    r"nearest_opp_ds=(?P<opp_ds>\S+)\s+nearest_opp_rel_speed=(?P<opp_rel_v>\S+)\s+nearest_opp_dist=(?P<opp_dist>\S+)"
-)
-RE_PHASE0_EVENT = re.compile(r"\[Phase0Event\]\s+t=(?P<t>\d+\.?\d*)s\s+type=(?P<event>\S+)")
-RE_PHASE1_SWITCH = re.compile(
-    r"\[Phase1Planner\]\s+t=(?P<t>\d+\.?\d*)s\s+ttl_switch\s+(?P<from>\w+)->(?P<to>\w+)"
-)
-
-
-def _repo_root() -> Path:
-    p = Path(__file__).resolve()
-    for _ in range(12):
-        if (p / "src").is_dir() and (p / "examples").is_dir():
-            return p
-        p = p.parent
-    return Path.cwd()
-
-
-def _parse_float_or_none(value: str) -> Optional[float]:
-    if value is None:
-        return None
-    v = value.strip().lower()
-    if v in ("na", "none", "nan", "?"):
-        return None
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return None
-    if math.isfinite(f):
-        return f
-    return None
-
-
-def _collect_metrics_from_log(log_path: Path) -> Dict[str, Any]:
-    min_opp_dist: Optional[float] = None
-    ttl_seen: List[str] = []
-    planner_modes: List[str] = []
-    event_counts: Dict[str, int] = {}
-    phase1_switches: List[Dict[str, Any]] = []
-
-    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            m = RE_PHASE0_LINE.search(line)
-            if m:
-                ttl = m.group("ttl")
-                mode = m.group("mode")
-                ttl_seen.append(ttl)
-                planner_modes.append(mode)
-                d = _parse_float_or_none(m.group("opp_dist"))
-                if d is not None:
-                    min_opp_dist = d if min_opp_dist is None else min(min_opp_dist, d)
-                continue
-            e = RE_PHASE0_EVENT.search(line)
-            if e:
-                ev = e.group("event")
-                event_counts[ev] = event_counts.get(ev, 0) + 1
-                continue
-            p1 = RE_PHASE1_SWITCH.search(line)
-            if p1:
-                phase1_switches.append(
-                    {
-                        "t_s": float(p1.group("t")),
-                        "from": p1.group("from"),
-                        "to": p1.group("to"),
-                    }
-                )
-
-    return {
-        "min_opponent_distance_m": min_opp_dist,
-        "phase0_samples": len(ttl_seen),
-        "ttls_observed": sorted(set(ttl_seen)),
-        "planner_modes_observed": sorted(set(planner_modes)),
-        "ttl_switch_count": int(event_counts.get("ttl_switch", 0)),
-        "near_miss_count": int(event_counts.get("near_miss", 0)),
-        "collision_count": int(event_counts.get("collision", 0)),
-        "off_track_count": int(event_counts.get("off_track", 0)),
-        "phase1_switch_observed": bool(len(phase1_switches) > 0),
-        "phase1_switch_count": len(phase1_switches),
-        "phase1_switches": phase1_switches,
-    }
-
-
-def _analyze_waypoint_timing(log_path: Path) -> Dict[str, Any]:
-    try:
-        events, _mpc, _run_info = parse_log(log_path)
-    except Exception as e:
-        return {
-            "lap_completion_status": "parse_error",
-            "lap_time_s": None,
-            "waypoint_hits": 0,
-            "parse_error": str(e),
-        }
-    if not events:
-        return {
-            "lap_completion_status": "no_waypoint_events",
-            "lap_time_s": None,
-            "waypoint_hits": 0,
-        }
-    _seg_time_s, _seg_name_map, seg_waypoint_count, total_time_s = compute_segment_times(events)
-    return {
-        "lap_completion_status": "completed",
-        "lap_time_s": float(total_time_s),
-        "waypoint_hits": int(sum(seg_waypoint_count.values())),
-    }
-
-
-def _run_one_scenario(repo_root: Path, scenario: Path, out_log: Path, sim_steps: int) -> Dict[str, Any]:
-    cmd = [
-        sys.executable,
-        "-m",
-        "scenic",
-        str(scenario),
-        "--2d",
-        "--model",
-        "scenic.simulators.dspace.racing_model",
-        "--simulate",
-        "-b",
-        "--count",
-        "1",
-        "--time",
-        str(int(sim_steps)),
-    ]
-    out_log.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_log, "w", encoding="utf-8") as f:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(repo_root),
-            stdout=f,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-    base = {
-        "scenario": str(scenario.relative_to(repo_root)),
-        "log": str(out_log),
-        "return_code": int(proc.returncode),
-    }
-    base.update(_collect_metrics_from_log(out_log))
-    base.update(_analyze_waypoint_timing(out_log))
-    base["collision"] = bool(base.get("collision_count", 0) > 0)
-    base["off_track"] = bool(base.get("off_track_count", 0) > 0)
-    return base
+def _run_one_scenario(root: Path, scenario: Path, out_log: Path, sim_steps: int) -> Dict[str, Any]:
+    base = run_scenic_scenario(root, scenario, out_log, sim_steps)
+    base.update(
+        collect_metrics_from_log(out_log, phase1_switches=True),
+    )
+    base.update(analyze_waypoint_timing(out_log))
+    return finalize_row(base)
 
 
 def main() -> int:
@@ -184,19 +45,11 @@ def main() -> int:
         default="examples/racing/phase1_planner",
         help="Directory with phase1 .scenic files (default: examples/racing/phase1_planner)",
     )
-    parser.add_argument(
-        "--scenario",
-        action="append",
-        default=[],
-        help=(
-            "Specific scenario filename(s) to run from scenario-dir. "
-            "Repeat flag for multiple values."
-        ),
-    )
+    parser.add_argument("--scenario", action="append", default=[], help="Scenario filename(s) in scenario-dir.")
     parser.add_argument(
         "--scenario-glob",
         default=None,
-        help='Glob pattern (within scenario-dir) to select subset, e.g. "01_*.scenic".',
+        help='Glob pattern within scenario-dir, e.g. "01_*.scenic".',
     )
     parser.add_argument(
         "--time",
@@ -223,7 +76,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    root = _repo_root()
+    root = repo_root()
     scenario_dir = root / args.scenario_dir
     if not scenario_dir.is_dir():
         print(f"Scenario directory not found: {scenario_dir}", file=sys.stderr)
@@ -244,8 +97,7 @@ def main() -> int:
                 file=sys.stderr,
             )
     if args.scenario_glob:
-        pattern = str(args.scenario_glob)
-        allowed = {p.resolve() for p in scenario_dir.glob(pattern)}
+        allowed = {p.resolve() for p in scenario_dir.glob(str(args.scenario_glob))}
         scenarios = [s for s in scenarios if s.resolve() in allowed]
 
     if not scenarios:
@@ -323,6 +175,19 @@ def main() -> int:
 
     print(f"\n[Phase1Runner] Wrote {summary_json}")
     print(f"[Phase1Runner] Wrote {summary_csv}")
+    print_benchmark_ai_digest(
+        build_benchmark_ai_digest_payload(
+            runner_label="Phase1Runner",
+            run_id=run_id,
+            run_dir=run_dir,
+            scenario_dir=scenario_dir,
+            sim_steps=int(args.time),
+            assumed_time_step_s=float(args.time_step_s),
+            inter_run_delay_s=inter_run_delay_s,
+            results=results,
+            digest_keys=list(STANDARD_BENCHMARK_DIGEST_KEYS),
+        )
+    )
     return 0
 
 

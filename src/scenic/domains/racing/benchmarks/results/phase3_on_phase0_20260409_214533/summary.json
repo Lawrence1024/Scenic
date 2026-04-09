@@ -1,0 +1,438 @@
+{
+  "run_id": "phase3_on_phase0_20260409_214533",
+  "created_utc": "2026-04-09T22:34:01.555275+00:00",
+  "scenario_dir": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\examples\\racing\\phase3_on_phase0_bank",
+  "sim_steps": 3000,
+  "assumed_time_step_s": 0.01,
+  "approx_requested_sim_time_s": 30.0,
+  "inter_run_delay_s": 15.0,
+  "runner": "Phase3OnPhase0Runner",
+  "results": [
+    {
+      "scenario": "examples\\racing\\phase3_on_phase0_bank\\00_no_opponent.scenic",
+      "log": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\src\\scenic\\domains\\racing\\benchmarks\\results\\phase3_on_phase0_20260409_214533\\logs\\00_no_opponent.log",
+      "return_code": 0,
+      "min_opponent_distance_m": null,
+      "phase0_samples": 12,
+      "ttls_observed": [
+        "optimal"
+      ],
+      "planner_modes_observed": [
+        "follow_mpc"
+      ],
+      "ttl_switch_count": 0,
+      "near_miss_count": 0,
+      "collision_count": 0,
+      "off_track_count": 0,
+      "phase2_line_count": 12,
+      "phase2_opponent_none_lines": 12,
+      "phase2_assess_errors": 0,
+      "phase2_overlap_count": 0,
+      "phase2_seg_ctx_count": 0,
+      "phase2_overlaps_observed": [],
+      "phase2_seg_ctx_observed": [],
+      "phase3_ttl_switch_count": 0,
+      "phase3_tactical_status_count": 12,
+      "phase3_switches": [],
+      "phase3_modes_observed": [
+        "FREE_RUN"
+      ],
+      "phase3_ttls_observed": [
+        "optimal"
+      ],
+      "lap_completion_status": "completed",
+      "lap_time_s": 29.099999999999998,
+      "waypoint_hits": 547,
+      "collision": false,
+      "off_track": false
+    },
+    {
+      "scenario": "examples\\racing\\phase3_on_phase0_bank\\01_slower_opponent_optimal.scenic",
+      "log": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\src\\scenic\\domains\\racing\\benchmarks\\results\\phase3_on_phase0_20260409_214533\\logs\\01_slower_opponent_optimal.log",
+      "return_code": 0,
+      "min_opponent_distance_m": 12.16,
+      "phase0_samples": 12,
+      "ttls_observed": [
+        "optimal",
+        "right"
+      ],
+      "planner_modes_observed": [
+        "follow_mpc"
+      ],
+      "ttl_switch_count": 2,
+      "near_miss_count": 0,
+      "collision_count": 0,
+      "off_track_count": 0,
+      "phase2_line_count": 12,
+      "phase2_opponent_none_lines": 0,
+      "phase2_assess_errors": 0,
+      "phase2_overlap_count": 12,
+      "phase2_seg_ctx_count": 12,
+      "phase2_overlaps_observed": [
+        "clear_ahead",
+        "closing_behind",
+        "partial_overlap"
+      ],
+      "phase2_seg_ctx_observed": [
+        "corner_body",
+        "corner_entry",
+        "corner_exit",
+        "straight"
+      ],
+      "phase3_ttl_switch_count": 2,
+      "phase3_tactical_status_count": 12,
+      "phase3_switches": [
+        {
+          "t_s": 3.9,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 10.8,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        }
+      ],
+      "phase3_modes_observed": [
+        "FREE_RUN",
+        "SETUP_RIGHT"
+      ],
+      "phase3_ttls_observed": [
+        "optimal",
+        "right"
+      ],
+      "lap_completion_status": "completed",
+      "lap_time_s": 29.049999999999997,
+      "waypoint_hits": 538,
+      "collision": false,
+      "off_track": false
+    },
+    {
+      "scenario": "examples\\racing\\phase3_on_phase0_bank\\02_slower_opponent_left.scenic",
+      "log": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\src\\scenic\\domains\\racing\\benchmarks\\results\\phase3_on_phase0_20260409_214533\\logs\\02_slower_opponent_left.log",
+      "return_code": 0,
+      "min_opponent_distance_m": 10.75,
+      "phase0_samples": 12,
+      "ttls_observed": [
+        "optimal",
+        "right"
+      ],
+      "planner_modes_observed": [
+        "follow_mpc"
+      ],
+      "ttl_switch_count": 2,
+      "near_miss_count": 0,
+      "collision_count": 0,
+      "off_track_count": 0,
+      "phase2_line_count": 12,
+      "phase2_opponent_none_lines": 0,
+      "phase2_assess_errors": 0,
+      "phase2_overlap_count": 12,
+      "phase2_seg_ctx_count": 12,
+      "phase2_overlaps_observed": [
+        "clear_ahead",
+        "clear_behind",
+        "closing_behind",
+        "partial_overlap"
+      ],
+      "phase2_seg_ctx_observed": [
+        "corner_body",
+        "corner_entry",
+        "corner_exit",
+        "straight"
+      ],
+      "phase3_ttl_switch_count": 2,
+      "phase3_tactical_status_count": 12,
+      "phase3_switches": [
+        {
+          "t_s": 4.0,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 10.7,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        }
+      ],
+      "phase3_modes_observed": [
+        "FREE_RUN",
+        "SETUP_RIGHT"
+      ],
+      "phase3_ttls_observed": [
+        "optimal",
+        "right"
+      ],
+      "lap_completion_status": "completed",
+      "lap_time_s": 28.999999999999996,
+      "waypoint_hits": 540,
+      "collision": false,
+      "off_track": false
+    },
+    {
+      "scenario": "examples\\racing\\phase3_on_phase0_bank\\03_slower_opponent_right.scenic",
+      "log": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\src\\scenic\\domains\\racing\\benchmarks\\results\\phase3_on_phase0_20260409_214533\\logs\\03_slower_opponent_right.log",
+      "return_code": 0,
+      "min_opponent_distance_m": 5.45,
+      "phase0_samples": 12,
+      "ttls_observed": [
+        "optimal",
+        "right"
+      ],
+      "planner_modes_observed": [
+        "follow_mpc"
+      ],
+      "ttl_switch_count": 2,
+      "near_miss_count": 0,
+      "collision_count": 0,
+      "off_track_count": 0,
+      "phase2_line_count": 12,
+      "phase2_opponent_none_lines": 0,
+      "phase2_assess_errors": 0,
+      "phase2_overlap_count": 12,
+      "phase2_seg_ctx_count": 12,
+      "phase2_overlaps_observed": [
+        "clear_ahead",
+        "closing_behind",
+        "partial_overlap"
+      ],
+      "phase2_seg_ctx_observed": [
+        "corner_body",
+        "corner_entry",
+        "corner_exit",
+        "straight"
+      ],
+      "phase3_ttl_switch_count": 2,
+      "phase3_tactical_status_count": 12,
+      "phase3_switches": [
+        {
+          "t_s": 3.5,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 10.25,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        }
+      ],
+      "phase3_modes_observed": [
+        "FREE_RUN",
+        "SETUP_RIGHT"
+      ],
+      "phase3_ttls_observed": [
+        "optimal",
+        "right"
+      ],
+      "lap_completion_status": "completed",
+      "lap_time_s": 29.15,
+      "waypoint_hits": 537,
+      "collision": false,
+      "off_track": false
+    },
+    {
+      "scenario": "examples\\racing\\phase3_on_phase0_bank\\04_opponent_weaving_lightly.scenic",
+      "log": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\src\\scenic\\domains\\racing\\benchmarks\\results\\phase3_on_phase0_20260409_214533\\logs\\04_opponent_weaving_lightly.log",
+      "return_code": 0,
+      "min_opponent_distance_m": 16.28,
+      "phase0_samples": 12,
+      "ttls_observed": [
+        "optimal",
+        "right"
+      ],
+      "planner_modes_observed": [
+        "follow_mpc"
+      ],
+      "ttl_switch_count": 3,
+      "near_miss_count": 0,
+      "collision_count": 0,
+      "off_track_count": 0,
+      "phase2_line_count": 12,
+      "phase2_opponent_none_lines": 0,
+      "phase2_assess_errors": 0,
+      "phase2_overlap_count": 12,
+      "phase2_seg_ctx_count": 12,
+      "phase2_overlaps_observed": [
+        "clear_ahead",
+        "clear_behind"
+      ],
+      "phase2_seg_ctx_observed": [
+        "corner_body",
+        "straight"
+      ],
+      "phase3_ttl_switch_count": 4,
+      "phase3_tactical_status_count": 12,
+      "phase3_switches": [
+        {
+          "t_s": 0.02,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 0.7,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 3.05,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 10.7,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FOLLOW"
+        }
+      ],
+      "phase3_modes_observed": [
+        "FREE_RUN",
+        "SETUP_RIGHT"
+      ],
+      "phase3_ttls_observed": [
+        "optimal",
+        "right"
+      ],
+      "lap_completion_status": "completed",
+      "lap_time_s": 29.9,
+      "waypoint_hits": 536,
+      "collision": false,
+      "off_track": false
+    },
+    {
+      "scenario": "examples\\racing\\phase3_on_phase0_bank\\05_opponent_just_ahead_corner.scenic",
+      "log": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\src\\scenic\\domains\\racing\\benchmarks\\results\\phase3_on_phase0_20260409_214533\\logs\\05_opponent_just_ahead_corner.log",
+      "return_code": 0,
+      "min_opponent_distance_m": 7.33,
+      "phase0_samples": 12,
+      "ttls_observed": [
+        "optimal",
+        "right"
+      ],
+      "planner_modes_observed": [
+        "follow_mpc"
+      ],
+      "ttl_switch_count": 1,
+      "near_miss_count": 0,
+      "collision_count": 0,
+      "off_track_count": 0,
+      "phase2_line_count": 12,
+      "phase2_opponent_none_lines": 0,
+      "phase2_assess_errors": 0,
+      "phase2_overlap_count": 12,
+      "phase2_seg_ctx_count": 12,
+      "phase2_overlaps_observed": [
+        "clear_ahead",
+        "clear_behind",
+        "closing_behind",
+        "partial_overlap"
+      ],
+      "phase2_seg_ctx_observed": [
+        "corner_body",
+        "corner_entry",
+        "straight"
+      ],
+      "phase3_ttl_switch_count": 2,
+      "phase3_tactical_status_count": 12,
+      "phase3_switches": [
+        {
+          "t_s": 0.02,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 0.05,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FOLLOW"
+        }
+      ],
+      "phase3_modes_observed": [
+        "FOLLOW",
+        "FREE_RUN"
+      ],
+      "phase3_ttls_observed": [
+        "optimal"
+      ],
+      "lap_completion_status": "completed",
+      "lap_time_s": 29.9,
+      "waypoint_hits": 549,
+      "collision": false,
+      "off_track": false
+    },
+    {
+      "scenario": "examples\\racing\\phase3_on_phase0_bank\\06_side_by_side_start.scenic",
+      "log": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\src\\scenic\\domains\\racing\\benchmarks\\results\\phase3_on_phase0_20260409_214533\\logs\\06_side_by_side_start.log",
+      "return_code": 0,
+      "min_opponent_distance_m": 6.85,
+      "phase0_samples": 12,
+      "ttls_observed": [
+        "optimal",
+        "right"
+      ],
+      "planner_modes_observed": [
+        "follow_mpc"
+      ],
+      "ttl_switch_count": 2,
+      "near_miss_count": 0,
+      "collision_count": 0,
+      "off_track_count": 0,
+      "phase2_line_count": 12,
+      "phase2_opponent_none_lines": 0,
+      "phase2_assess_errors": 0,
+      "phase2_overlap_count": 12,
+      "phase2_seg_ctx_count": 12,
+      "phase2_overlaps_observed": [
+        "clear_ahead",
+        "clear_behind",
+        "closing_behind",
+        "side_by_side"
+      ],
+      "phase2_seg_ctx_observed": [
+        "corner_body",
+        "corner_entry",
+        "corner_exit",
+        "straight"
+      ],
+      "phase3_ttl_switch_count": 2,
+      "phase3_tactical_status_count": 12,
+      "phase3_switches": [
+        {
+          "t_s": 0.05,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 6.3,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FOLLOW"
+        }
+      ],
+      "phase3_modes_observed": [
+        "FREE_RUN",
+        "SETUP_RIGHT"
+      ],
+      "phase3_ttls_observed": [
+        "optimal",
+        "right"
+      ],
+      "lap_completion_status": "completed",
+      "lap_time_s": 29.849999999999998,
+      "waypoint_hits": 537,
+      "collision": false,
+      "off_track": false
+    }
+  ]
+}

@@ -12,7 +12,7 @@ This folder contains the baseline Phase 0 scenario set for repeatable opponent-a
 
 ## Run the full benchmark set
 
-From repository root:
+From repository root (default **`--time` is 3000**; shown explicitly below for clarity):
 
 ```bash
 python -m scenic.domains.racing.benchmarks.phase0_runner --time 3000

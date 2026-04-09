@@ -1,0 +1,8 @@
+scenario,return_code,lap_completion_status,lap_time_s,phase3_ttl_switch_count,phase3_tactical_status_count,phase2_line_count,phase2_overlap_count,phase2_seg_ctx_count,phase2_opponent_none_lines,phase2_assess_errors,min_opponent_distance_m,collision,off_track,near_miss_count,waypoint_hits,phase0_samples,ttl_switch_count
+examples\racing\phase3_on_phase0_bank\00_no_opponent.scenic,0,completed,29.099999999999998,0,12,12,0,0,12,0,,False,False,0,547,12,0
+examples\racing\phase3_on_phase0_bank\01_slower_opponent_optimal.scenic,0,completed,29.049999999999997,2,12,12,12,12,0,0,12.16,False,False,0,538,12,2
+examples\racing\phase3_on_phase0_bank\02_slower_opponent_left.scenic,0,completed,28.999999999999996,2,12,12,12,12,0,0,10.75,False,False,0,540,12,2
+examples\racing\phase3_on_phase0_bank\03_slower_opponent_right.scenic,0,completed,29.15,2,12,12,12,12,0,0,5.45,False,False,0,537,12,2
+examples\racing\phase3_on_phase0_bank\04_opponent_weaving_lightly.scenic,0,completed,29.9,4,12,12,12,12,0,0,16.28,False,False,0,536,12,3
+examples\racing\phase3_on_phase0_bank\05_opponent_just_ahead_corner.scenic,0,completed,29.9,2,12,12,12,12,0,0,7.33,False,False,0,549,12,1
+examples\racing\phase3_on_phase0_bank\06_side_by_side_start.scenic,0,completed,29.849999999999998,2,12,12,12,12,0,0,6.85,False,False,0,537,12,2
