@@ -119,7 +119,7 @@ def _parse_log_with_encoding(
                     mpc_samples.append((t, seg_id, seg_name, speed, cte))
                     if first is None:
                         first = (seg_id, seg_name)
-    except (UnicodeDecodeError, LookupError):
+    except (UnicodeError, LookupError):
         return None
     return first
 

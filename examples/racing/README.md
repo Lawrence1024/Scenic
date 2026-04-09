@@ -11,9 +11,16 @@ Scenarios for the racing domain using the dSPACE racing simulator. All examples 
 | **test_relative.scenic** | Fellows placed relatively (ahead/behind). |
 | **ego_calibration_accel_decel.scenic** | Throttle/brake calibration for MPC tuning; prints acceleration/deceleration for `vehicle_mpc.yaml`. |
 | **decision_tree_example.scenic** | Decision-tree behaviors: `FlagBasedSpeedBehavior`, `LaneSelectionBehavior`, `StopBehavior`, `FollowModeBehavior`. |
+| **phase0_benchmark/** | Phase 0 baseline scenario bank + runner-oriented set (no opponent, slower opponent variants, weaving, corner approach, side-by-side). |
 
 Run with the racing model, e.g.:
 
 ```bash
 scenic examples/racing/ego_mpc_behavior.scenic --2d --model scenic.simulators.dspace.racing_model --simulate -b --count 1
+```
+
+Run the full Phase 0 benchmark bank:
+
+```bash
+python -m scenic.domains.racing.benchmarks.phase0_runner --time 45
 ```

@@ -1,0 +1,2 @@
+scenario,return_code,lap_completion_status,lap_time_s,ttl_switch_count,min_opponent_distance_m,collision,off_track,near_miss_count,waypoint_hits,phase0_samples
+examples\racing\phase0_benchmark\06_side_by_side_start.scenic,0,completed,28.2,0,11.28,False,True,0,34,12

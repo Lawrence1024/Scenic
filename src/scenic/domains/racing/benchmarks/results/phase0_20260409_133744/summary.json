@@ -1,0 +1,32 @@
+{
+  "run_id": "phase0_20260409_133744",
+  "created_utc": "2026-04-09T13:44:28.428562+00:00",
+  "scenario_dir": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\examples\\racing\\phase0_benchmark",
+  "sim_steps": 3000,
+  "assumed_time_step_s": 0.01,
+  "approx_requested_sim_time_s": 30.0,
+  "results": [
+    {
+      "scenario": "examples\\racing\\phase0_benchmark\\04_opponent_weaving_lightly.scenic",
+      "log": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\src\\scenic\\domains\\racing\\benchmarks\\results\\phase0_20260409_133744\\logs\\04_opponent_weaving_lightly.log",
+      "return_code": 0,
+      "min_opponent_distance_m": 40.47,
+      "phase0_samples": 12,
+      "ttls_observed": [
+        "optimal"
+      ],
+      "planner_modes_observed": [
+        "follow_mpc"
+      ],
+      "ttl_switch_count": 0,
+      "near_miss_count": 0,
+      "collision_count": 0,
+      "off_track_count": 10,
+      "lap_completion_status": "completed",
+      "lap_time_s": 28.150000000000002,
+      "waypoint_hits": 34,
+      "collision": false,
+      "off_track": true
+    }
+  ]
+}

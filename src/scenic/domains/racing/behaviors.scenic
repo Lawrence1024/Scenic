@@ -1557,6 +1557,85 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _ename_log = getattr(self, '_last_valid_segment_name', "") or ""
             segment_str = f" {get_segment_label(_eid_log, _ename_log)}" if (_eid_log is not None or _ename_log) else " segment ?"
             print(f"{_fl_mpc} t={t_log:.2f}s Step {self._behavior_step_count}: pos=({px:.2f},{py:.2f}) speed={current_speed:.2f}m/s CTE={cte:.3f}m steer={final_steer:.3f} throttle={final_throttle:.3f} brake={final_brake:.3f} gear={gear_val} curv_ahead={curvature_ahead_max:.3f}{segment_str}")
+            # Phase 0 telemetry (baseline visibility): active TTL, planner mode, ego s/speed,
+            # nearest-opponent relative metrics, and event markers (switch/near-miss/collision/off-track).
+            _ttl_label = None
+            _ttl_file = getattr(self, 'ttlFileName', None)
+            _ttl_sel = getattr(self, 'ttl_selection', None)
+            if isinstance(_ttl_sel, str) and _ttl_sel:
+                _ttl_label = _ttl_sel
+            elif isinstance(_ttl_file, str) and _ttl_file:
+                _tf = _ttl_file.lower()
+                if "left" in _tf:
+                    _ttl_label = "left"
+                elif "right" in _tf:
+                    _ttl_label = "right"
+                elif "pit" in _tf:
+                    _ttl_label = "pit"
+                else:
+                    _ttl_label = "optimal"
+            else:
+                _ttl_label = "unknown"
+            _planner_mode = getattr(self, 'strategy_type', None) or "follow_mpc"
+            # Use MPC controller progress estimate if available; keep None-safe for early ticks.
+            _ego_s = getattr(_lat_controller, '_log_s_ref', None)
+
+            # Detect TTL switch event.
+            _last_ttl_label = getattr(self, '_phase0_last_ttl_label', None)
+            if _last_ttl_label is None:
+                self._phase0_last_ttl_label = _ttl_label
+            elif _last_ttl_label != _ttl_label:
+                print(f"[Phase0Event] t={t_log:.2f}s type=ttl_switch from={_last_ttl_label} to={_ttl_label}")
+                self._phase0_last_ttl_label = _ttl_label
+
+            # Nearest-opponent visibility.
+            nearest_obj = None
+            nearest_dist = None
+            nearest_rel_speed = None
+            nearest_rel_longitudinal = None
+            try:
+                _objs = getattr(simulation().scene, 'objects', [])
+                _ego_h = car_heading if car_heading is not None else 0.0
+                _ego_fx = math.cos(_ego_h)
+                _ego_fy = math.sin(_ego_h)
+                _ego_speed = float(current_speed if current_speed is not None else 0.0)
+                _best_d2 = None
+                for _obj in _objs:
+                    if _obj is self:
+                        continue
+                    if not hasattr(_obj, 'position') or _obj.position is None:
+                        continue
+                    _ox = float(_obj.position.x); _oy = float(_obj.position.y)
+                    _dx = _ox - px
+                    _dy = _oy - py
+                    _d2 = _dx*_dx + _dy*_dy
+                    if _best_d2 is None or _d2 < _best_d2:
+                        _best_d2 = _d2
+                        nearest_obj = _obj
+                        nearest_dist = _d2 ** 0.5
+                        _ov = float(getattr(_obj, 'speed', 0.0) or 0.0)
+                        nearest_rel_speed = _ov - _ego_speed
+                        # Positive means opponent is ahead along ego heading.
+                        nearest_rel_longitudinal = _dx * _ego_fx + _dy * _ego_fy
+            except Exception:
+                nearest_obj = None
+
+            _opp_dist_s = f"{nearest_dist:.2f}" if nearest_dist is not None else "na"
+            _opp_rel_v_s = f"{nearest_rel_speed:.2f}" if nearest_rel_speed is not None else "na"
+            _opp_rel_s_s = f"{nearest_rel_longitudinal:.2f}" if nearest_rel_longitudinal is not None else "na"
+            _ego_s_s = f"{_ego_s:.2f}" if _ego_s is not None else "na"
+            print(
+                f"[Phase0] t={t_log:.2f}s ttl={_ttl_label} planner_mode={_planner_mode} "
+                f"ego_s={_ego_s_s} ego_speed={current_speed:.2f} "
+                f"nearest_opp_ds={_opp_rel_s_s} nearest_opp_rel_speed={_opp_rel_v_s} nearest_opp_dist={_opp_dist_s}"
+            )
+            # Event thresholds for baseline KPI extraction.
+            if nearest_dist is not None and nearest_dist <= 3.0:
+                print(f"[Phase0Event] t={t_log:.2f}s type=near_miss distance_m={nearest_dist:.2f}")
+            if nearest_dist is not None and nearest_dist <= 1.0:
+                print(f"[Phase0Event] t={t_log:.2f}s type=collision distance_m={nearest_dist:.2f}")
+            if cte is not None and abs(float(cte)) >= 10.0:
+                print(f"[Phase0Event] t={t_log:.2f}s type=off_track cte_m={float(cte):.3f}")
             # Ref continuity / gate logging (todo1: match_dist, gate ACCEPT/REJECT, s_ref/dS_ref/s_jump_flag, segment_prev->new, stick_blocked, e_y_mpc vs cte_behavior)
             _lc = _lat_controller
             _md = getattr(_lc, '_log_match_dist_m', None)

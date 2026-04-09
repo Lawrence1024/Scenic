@@ -1,0 +1,2 @@
+scenario,return_code,lap_completion_status,lap_time_s,ttl_switch_count,min_opponent_distance_m,collision,off_track,near_miss_count,waypoint_hits,phase0_samples
+examples\racing\phase0_benchmark\04_opponent_weaving_lightly.scenic,0,completed,28.150000000000002,0,40.47,False,True,0,34,12
