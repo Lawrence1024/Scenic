@@ -1,0 +1,43 @@
+{
+  "run_id": "phase1_20260409_144907",
+  "created_utc": "2026-04-09T14:52:18.514367+00:00",
+  "scenario_dir": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\examples\\racing\\phase1_planner",
+  "sim_steps": 1200,
+  "assumed_time_step_s": 0.01,
+  "approx_requested_sim_time_s": 12.0,
+  "inter_run_delay_s": 0.0,
+  "results": [
+    {
+      "scenario": "examples\\racing\\phase1_planner\\01_optimal_to_left.scenic",
+      "log": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\src\\scenic\\domains\\racing\\benchmarks\\results\\phase1_20260409_144907\\logs\\01_optimal_to_left.log",
+      "return_code": 0,
+      "min_opponent_distance_m": null,
+      "phase0_samples": 5,
+      "ttls_observed": [
+        "left",
+        "optimal"
+      ],
+      "planner_modes_observed": [
+        "follow_mpc"
+      ],
+      "ttl_switch_count": 1,
+      "near_miss_count": 0,
+      "collision_count": 0,
+      "off_track_count": 0,
+      "phase1_switch_observed": true,
+      "phase1_switch_count": 1,
+      "phase1_switches": [
+        {
+          "t_s": 10.0,
+          "from": "optimal",
+          "to": "left"
+        }
+      ],
+      "lap_completion_status": "completed",
+      "lap_time_s": 11.7,
+      "waypoint_hits": 139,
+      "collision": false,
+      "off_track": false
+    }
+  ]
+}

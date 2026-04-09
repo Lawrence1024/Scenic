@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""Run Phase 0 benchmark scenarios and produce an automatic metrics report.
+"""Run Phase 1 planner-MPC integration scenarios and produce metrics.
 
-Outputs (per benchmark run set):
+Outputs (per run):
 - one log file per scenario
-- summary.json (all required Phase 0 KPIs)
-- summary.csv (same core KPIs)
+- summary.json (Phase 1 + baseline KPIs)
+- summary.csv (core KPIs)
 
 Usage (repo root):
-    python -m scenic.domains.racing.benchmarks.phase0_runner --time 4500
-    python -m scenic.domains.racing.benchmarks.phase0_runner --time 3000 --scenario 02_slower_opponent_left.scenic
-    python -m scenic.domains.racing.benchmarks.phase0_runner --time 3000 --scenario-glob "0[0-2]_*.scenic"
-    python -m scenic.domains.racing.benchmarks.phase0_runner --time 3000 --inter-run-delay-s 5
+    python -m scenic.domains.racing.benchmarks.phase1_runner --time 3000
+    python -m scenic.domains.racing.benchmarks.phase1_runner --time 3000 --scenario 01_optimal_to_left.scenic
+    python -m scenic.domains.racing.benchmarks.phase1_runner --time 3000 --scenario-glob "0[1-2]_*.scenic"
 """
 
 from __future__ import annotations
@@ -39,6 +38,9 @@ RE_PHASE0_LINE = re.compile(
     r"nearest_opp_ds=(?P<opp_ds>\S+)\s+nearest_opp_rel_speed=(?P<opp_rel_v>\S+)\s+nearest_opp_dist=(?P<opp_dist>\S+)"
 )
 RE_PHASE0_EVENT = re.compile(r"\[Phase0Event\]\s+t=(?P<t>\d+\.?\d*)s\s+type=(?P<event>\S+)")
+RE_PHASE1_SWITCH = re.compile(
+    r"\[Phase1Planner\]\s+t=(?P<t>\d+\.?\d*)s\s+ttl_switch\s+(?P<from>\w+)->(?P<to>\w+)"
+)
 
 
 def _repo_root() -> Path:
@@ -65,11 +67,12 @@ def _parse_float_or_none(value: str) -> Optional[float]:
     return None
 
 
-def _collect_phase0_metrics_from_log(log_path: Path) -> Dict[str, Any]:
+def _collect_metrics_from_log(log_path: Path) -> Dict[str, Any]:
     min_opp_dist: Optional[float] = None
     ttl_seen: List[str] = []
     planner_modes: List[str] = []
     event_counts: Dict[str, int] = {}
+    phase1_switches: List[Dict[str, Any]] = []
 
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -87,6 +90,16 @@ def _collect_phase0_metrics_from_log(log_path: Path) -> Dict[str, Any]:
             if e:
                 ev = e.group("event")
                 event_counts[ev] = event_counts.get(ev, 0) + 1
+                continue
+            p1 = RE_PHASE1_SWITCH.search(line)
+            if p1:
+                phase1_switches.append(
+                    {
+                        "t_s": float(p1.group("t")),
+                        "from": p1.group("from"),
+                        "to": p1.group("to"),
+                    }
+                )
 
     return {
         "min_opponent_distance_m": min_opp_dist,
@@ -97,6 +110,9 @@ def _collect_phase0_metrics_from_log(log_path: Path) -> Dict[str, Any]:
         "near_miss_count": int(event_counts.get("near_miss", 0)),
         "collision_count": int(event_counts.get("collision", 0)),
         "off_track_count": int(event_counts.get("off_track", 0)),
+        "phase1_switch_observed": bool(len(phase1_switches) > 0),
+        "phase1_switch_count": len(phase1_switches),
+        "phase1_switches": phase1_switches,
     }
 
 
@@ -116,8 +132,7 @@ def _analyze_waypoint_timing(log_path: Path) -> Dict[str, Any]:
             "lap_time_s": None,
             "waypoint_hits": 0,
         }
-    seg_time_s, _seg_name_map, seg_waypoint_count, total_time_s = compute_segment_times(events)
-    _ = seg_time_s
+    _seg_time_s, _seg_name_map, seg_waypoint_count, total_time_s = compute_segment_times(events)
     return {
         "lap_completion_status": "completed",
         "lap_time_s": float(total_time_s),
@@ -155,7 +170,7 @@ def _run_one_scenario(repo_root: Path, scenario: Path, out_log: Path, sim_steps:
         "log": str(out_log),
         "return_code": int(proc.returncode),
     }
-    base.update(_collect_phase0_metrics_from_log(out_log))
+    base.update(_collect_metrics_from_log(out_log))
     base.update(_analyze_waypoint_timing(out_log))
     base["collision"] = bool(base.get("collision_count", 0) > 0)
     base["off_track"] = bool(base.get("off_track_count", 0) > 0)
@@ -163,11 +178,11 @@ def _run_one_scenario(repo_root: Path, scenario: Path, out_log: Path, sim_steps:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run Phase 0 racing benchmarks and emit metrics summary.")
+    parser = argparse.ArgumentParser(description="Run Phase 1 planner-MPC scenarios and emit metrics summary.")
     parser.add_argument(
         "--scenario-dir",
-        default="examples/racing/phase0_benchmark",
-        help="Directory with benchmark .scenic files (default: examples/racing/phase0_benchmark)",
+        default="examples/racing/phase1_planner",
+        help="Directory with phase1 .scenic files (default: examples/racing/phase1_planner)",
     )
     parser.add_argument(
         "--scenario",
@@ -175,18 +190,18 @@ def main() -> int:
         default=[],
         help=(
             "Specific scenario filename(s) to run from scenario-dir. "
-            "Repeat flag for multiple values, e.g. --scenario 00_no_opponent.scenic --scenario 01_slower_opponent_optimal.scenic"
+            "Repeat flag for multiple values."
         ),
     )
     parser.add_argument(
         "--scenario-glob",
         default=None,
-        help='Glob pattern (within scenario-dir) to select subset, e.g. "02_*.scenic" or "0[0-2]_*.scenic".',
+        help='Glob pattern (within scenario-dir) to select subset, e.g. "01_*.scenic".',
     )
     parser.add_argument(
         "--time",
         type=int,
-        default=4500,
+        default=3000,
         help="Simulation steps per scenario (Scenic --time is step count, not seconds).",
     )
     parser.add_argument(
@@ -219,7 +234,6 @@ def main() -> int:
         print(f"No .scenic files found in {scenario_dir}", file=sys.stderr)
         return 2
 
-    # Optional filtering by exact filename(s) and/or glob.
     if args.scenario:
         wanted = set(args.scenario)
         scenarios = [s for s in scenarios if s.name in wanted]
@@ -242,30 +256,30 @@ def main() -> int:
         )
         return 2
 
-    run_id = datetime.now(timezone.utc).strftime("phase0_%Y%m%d_%H%M%S")
+    run_id = datetime.now(timezone.utc).strftime("phase1_%Y%m%d_%H%M%S")
     run_dir = (root / args.out_dir / run_id).resolve()
     logs_dir = run_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     inter_run_delay_s = max(0.0, min(15.0, float(args.inter_run_delay_s)))
     if float(args.inter_run_delay_s) != inter_run_delay_s:
-        print(f"[Phase0Runner] inter-run delay clamped to {inter_run_delay_s:.2f}s (requested {args.inter_run_delay_s}).")
+        print(f"[Phase1Runner] inter-run delay clamped to {inter_run_delay_s:.2f}s (requested {args.inter_run_delay_s}).")
 
     results: List[Dict[str, Any]] = []
     for idx, scenario in enumerate(scenarios):
         log_path = logs_dir / f"{scenario.stem}.log"
-        print(f"[Phase0Runner] Running {scenario.name} ...")
+        print(f"[Phase1Runner] Running {scenario.name} ...")
         row = _run_one_scenario(root, scenario, log_path, int(args.time))
         results.append(row)
         approx_sim_s = args.time * max(0.0, float(args.time_step_s))
         print(
-            f"[Phase0Runner] {scenario.stem}: rc={row['return_code']} "
+            f"[Phase1Runner] {scenario.stem}: rc={row['return_code']} "
             f"lap={row['lap_completion_status']} lap_time_s={row['lap_time_s']} "
             f"(requested_steps={int(args.time)} ~= {approx_sim_s:.2f}s) "
-            f"ttl_switches={row['ttl_switch_count']} min_opp_dist={row['min_opponent_distance_m']} "
-            f"collision={row['collision']} off_track={row['off_track']}"
+            f"phase1_switch_observed={row['phase1_switch_observed']} "
+            f"ttl_switches={row['ttl_switch_count']} collision={row['collision']} off_track={row['off_track']}"
         )
         if inter_run_delay_s > 0 and idx < (len(scenarios) - 1):
-            print(f"[Phase0Runner] Waiting {inter_run_delay_s:.2f}s before next scenario...")
+            print(f"[Phase1Runner] Waiting {inter_run_delay_s:.2f}s before next scenario...")
             time.sleep(inter_run_delay_s)
 
     summary_json = run_dir / "summary.json"
@@ -291,6 +305,8 @@ def main() -> int:
         "return_code",
         "lap_completion_status",
         "lap_time_s",
+        "phase1_switch_observed",
+        "phase1_switch_count",
         "ttl_switch_count",
         "min_opponent_distance_m",
         "collision",
@@ -305,8 +321,8 @@ def main() -> int:
         for row in results:
             writer.writerow({k: row.get(k) for k in csv_fields})
 
-    print(f"\n[Phase0Runner] Wrote {summary_json}")
-    print(f"[Phase0Runner] Wrote {summary_csv}")
+    print(f"\n[Phase1Runner] Wrote {summary_json}")
+    print(f"[Phase1Runner] Wrote {summary_csv}")
     return 0
 
 

@@ -30,10 +30,10 @@ Run a subset by glob:
 python -m scenic.domains.racing.benchmarks.phase0_runner --time 3000 --scenario-glob "0[0-2]_*.scenic"
 ```
 
-Run with inter-scenario delay (helps dSPACE reset/teardown settle between cases):
+Run with inter-scenario delay (helps dSPACE reset/teardown settle between cases; **default is 15 s**):
 
 ```bash
-python -m scenic.domains.racing.benchmarks.phase0_runner --time 3000 --inter-run-delay-s 5
+python -m scenic.domains.racing.benchmarks.phase0_runner --time 3000 --inter-run-delay-s 15
 ```
 
 Outputs are written under:
@@ -55,3 +55,4 @@ Notes:
 
 - `collision` / `off_track` are driven by Phase 0 event thresholds emitted by `FollowRacingLineMPCBehavior`.
 - Existing control behavior is unchanged; this phase is for visibility and benchmarking.
+- **Phase 0 exit checklist** (plans) is satisfied when the full bank runs non-interactively with stable completion and generated reports; see `src/scenic/domains/racing/plans/phase-0-baseline-and-visibility.md`.

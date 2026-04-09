@@ -533,6 +533,7 @@ chaser.behavior = OvertakingBehavior(leader, aggressive=True)
 - Manual transmission protocol (`HasManualTransmission`)
 - Racing controllers: **MPC** (lateral MPCC + longitudinal) when `getRacingControllers(agent, use_mpc=True)`; otherwise optimized PID from driving domain
 - MPC module: MPCC lateral controller, longitudinal MPC, reference builder, speed profile, result_data analysis (see `mpc/README.md`)
+- **Planner roadmap (Phases 0–1)**: baseline telemetry + Phase 0 benchmark bank (`phase0_runner`), and scripted planner-to-MPC TTL handoff + Phase 1 validation (`phase1_runner`). Status and per-phase checklists: `plans/README.md`.
 
 ### ⚠️ Partially Implemented
 

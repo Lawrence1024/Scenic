@@ -31,6 +31,70 @@ from scenic.domains.racing.segments import (
 )
 from scenic.domains.racing.constants import DELTA_MAX_RAD
 from scenic.domains.racing.mode import RACING_MODE_MAIN, RACING_MODE_PIT
+from scenic.simulators.dspace.ttl.loader import load_ttl_region
+
+
+_PHASE1_TTL_FILE_BY_SELECTION = {
+    "optimal": "ttl_optimal_xodr.csv",
+    "left": "ttl_left_xodr.csv",
+    "right": "ttl_right_xodr.csv",
+}
+
+
+def _phase1_selection_from_ttl_filename(ttl_file_name):
+    """Infer planner selection key from TTL filename."""
+    if ttl_file_name is None:
+        return None
+    try:
+        name = str(ttl_file_name).lower()
+    except Exception:
+        return None
+    if "left" in name:
+        return "left"
+    if "right" in name:
+        return "right"
+    if "optimal" in name:
+        return "optimal"
+    return None
+
+
+def _phase1_parse_ttl_schedule(schedule):
+    """Parse a scripted TTL schedule.
+
+    Accepted forms:
+    - None -> []
+    - "5:left,12:right,20:optimal"
+    - [("5", "left"), (12, "right"), ...]
+    """
+    if schedule is None:
+        return []
+    parsed = []
+    if isinstance(schedule, str):
+        for chunk in schedule.split(","):
+            item = chunk.strip()
+            if not item:
+                continue
+            if ":" not in item:
+                raise ValueError(f"Invalid schedule entry '{item}' (expected '<time_s>:<ttl>').")
+            t_raw, ttl_raw = item.split(":", 1)
+            t_s = float(t_raw.strip())
+            ttl = ttl_raw.strip().lower()
+            if ttl not in _PHASE1_TTL_FILE_BY_SELECTION:
+                raise ValueError(f"Invalid TTL '{ttl}' in schedule; expected one of optimal/left/right.")
+            parsed.append((t_s, ttl))
+    elif isinstance(schedule, (list, tuple)):
+        for item in schedule:
+            if not isinstance(item, (list, tuple)) or len(item) != 2:
+                raise ValueError(f"Invalid schedule item {item}; expected pair (time_s, ttl).")
+            t_s = float(item[0])
+            ttl = str(item[1]).strip().lower()
+            if ttl not in _PHASE1_TTL_FILE_BY_SELECTION:
+                raise ValueError(f"Invalid TTL '{ttl}' in schedule; expected one of optimal/left/right.")
+            parsed.append((t_s, ttl))
+    else:
+        raise ValueError("ttl_schedule must be None, a string, or a list/tuple of (time_s, ttl).")
+    parsed.sort(key=lambda x: x[0])
+    return parsed
 
 
 behavior FellowConstantSpeedTrackOffsetBehavior(speed_mph=31):
@@ -179,7 +243,7 @@ behavior FellowSwerveOutOfControlBehavior(
         self._fellow_plant_log_mode = mode
         wait
 
-behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None):
+behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None):
     """Follow the car's TTL using MPC (Model Predictive Control) for lateral control.
     
     Primary Scenic behavior for line-following on the racing TTL. Lateral and longitudinal
@@ -221,6 +285,40 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
     # Get Controllers: Longitudinal MPC + Lateral MPC
     _lon_controller, _lat_controller = simulation().getRacingControllers(self, use_mpc=True, mpc_config_path=mpc_config_path)
     _fbhv = getattr(self, '_follow_mpc_behavior_log_prefix', '[FollowRacingLineMPCBehavior]')
+    _phase1_planner_enabled = bool(planner_enabled)
+    _phase1_schedule = []
+    _phase1_ttl_cache = {}
+    _phase1_active_ttl = str(getattr(self, 'ttl_selection', '') or '').lower()
+    if _phase1_active_ttl not in _PHASE1_TTL_FILE_BY_SELECTION:
+        _phase1_active_ttl = _phase1_selection_from_ttl_filename(getattr(self, 'ttlFileName', None)) or "optimal"
+    _phase1_warned_missing_ttl = set()
+    _phase1_speed_cap = None
+    if target_speed_cap is not None:
+        try:
+            _phase1_speed_cap = max(0.0, float(target_speed_cap))
+        except Exception:
+            _phase1_speed_cap = None
+    if _phase1_planner_enabled:
+        try:
+            _params = getattr(simulation().scene, 'params', None) or {}
+            _raw_schedule = ttl_schedule if ttl_schedule is not None else _params.get("ttlSwitchSchedule")
+            _phase1_schedule = _phase1_parse_ttl_schedule(_raw_schedule)
+            _ttl_folder = getattr(self, 'ttlFolder', None) or _params.get("ttlFolder")
+            if _ttl_folder:
+                _preloaded_keys = []
+                for _ttl_key, _ttl_file in _PHASE1_TTL_FILE_BY_SELECTION.items():
+                    try:
+                        _region, _pts = load_ttl_region(str(_ttl_folder), _ttl_file)
+                        if _region is not None and _pts and len(_pts) >= 2:
+                            _phase1_ttl_cache[_ttl_key] = (_region, list(_pts))
+                            _preloaded_keys.append(_ttl_key)
+                    except Exception:
+                        print(f"{_fbhv} Phase1 planner preload failed for {_ttl_file}.")
+                print(f"{_fbhv} Phase1 planner TTL preload: folder={_ttl_folder} keys={_preloaded_keys}")
+            print(f"{_fbhv} Phase1 planner enabled: schedule={_phase1_schedule if _phase1_schedule else '[]'} speed_cap={_phase1_speed_cap}")
+        except Exception:
+            _phase1_planner_enabled = False
+            print(f"{_fbhv} Phase1 planner disabled due to setup error.")
 
     # Gear thresholds (m/s)
     gear_up_thresholds = [0.0, 12.0, 22.0, 32.0, 42.0, 52.0]
@@ -316,6 +414,44 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         _fl_mpc = getattr(self, '_follow_mpc_log_prefix', '[FollowRacingLineMPC]')
         # Calculate Control Signals
         current_speed = (self.speed if self.speed is not None else 0)
+        _sim = simulation()
+        # Planner schedule time is in simulation seconds based on simulation timestep.
+        _dt_sim = getattr(_sim, 'timestep', None)
+        if _dt_sim is None or _dt_sim <= 0:
+            _dt_sim = getattr(_sim, 'control_dt', None)
+        if _dt_sim is None or _dt_sim <= 0:
+            _dt_sim = float(getattr(_sim, 'control_period', 0.05) or 0.05)
+        _sim_time_s = float(getattr(_sim, 'currentTime', 0)) * float(_dt_sim)
+        if _phase1_planner_enabled:
+            _desired_ttl = _phase1_active_ttl
+            for _t_switch, _ttl_sel in _phase1_schedule:
+                if _sim_time_s >= _t_switch:
+                    _desired_ttl = _ttl_sel
+                else:
+                    break
+            if _desired_ttl != _phase1_active_ttl:
+                if _desired_ttl in _phase1_ttl_cache:
+                    _prev_ttl = _phase1_active_ttl
+                    _region_new, _pts_new = _phase1_ttl_cache[_desired_ttl]
+                    self.ttl = _region_new
+                    self.waypoints = list(_pts_new)
+                    self.ttl_selection = _desired_ttl
+                    self.ttlFileName = _PHASE1_TTL_FILE_BY_SELECTION.get(_desired_ttl, getattr(self, 'ttlFileName', None))
+                    self._waypoint_segment_map = None
+                    self._last_valid_segment_id = None
+                    self._last_valid_segment_name = ""
+                    self._cached_cumulative_dist_wp_idx = 0
+                    self._cached_cumulative_dist_to_wp = 0.0
+                    self._waypoint_progress = 0.0
+                    self._waypoint_progress_idx = 0
+                    wp_last_idx = 0
+                    _phase1_active_ttl = _desired_ttl
+                    print(f"{_fl_mpc} [Phase1Planner] t={_sim_time_s:.2f}s ttl_switch {_prev_ttl}->{_phase1_active_ttl}")
+                else:
+                    if _desired_ttl not in _phase1_warned_missing_ttl:
+                        print(f"{_fl_mpc} [Phase1Planner] TTL '{_desired_ttl}' not preloaded; staying on '{_phase1_active_ttl}'.")
+                        _phase1_warned_missing_ttl.add(_desired_ttl)
+            self.active_ttl = _phase1_active_ttl
 
         # Non-control-step fast path: exit before any heavy work (no waypoint/profile, NumPy, readbacks, progress, controller assembly)
         _run_full_control = (simulation().is_control_step if hasattr(simulation(), 'is_control_step') else True) or not hasattr(self, '_last_final_steer')
@@ -793,6 +929,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             # --- Combine CTE and curvature speed limits (take minimum) ---
             # Task 4: curvature-based speed cap applied here; use single cap from lookahead curvature
             effective_target_speed = min(cte_target_speed, curvature_speed_cap)
+            if _phase1_speed_cap is not None:
+                effective_target_speed = min(effective_target_speed, _phase1_speed_cap)
             
             # Apply universal max speed limit
             effective_target_speed = min(effective_target_speed, MAX_SPEED_LIMIT_MS)

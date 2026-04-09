@@ -2,6 +2,12 @@
 
 This folder breaks the master roadmap in `overall_plan.md` into actionable per-phase documents for building an opponent-aware ego planner that selects `optimal / left / right` TTLs and feeds the existing ego MPC, while keeping current pit handling unchanged.
 
+## Roadmap status
+
+- **Phase 0** — complete (baseline metrics, scenario bank, `phase0_runner`).
+- **Phase 1** — complete (scripted TTL schedule + MPC handoff, `phase1_runner`, three validated switches).
+- **Phase 2** — next (situation assessment / opponent state for planner input).
+
 ## Phase Plans
 
 - [Phase 0: Baseline and visibility](./phase-0-baseline-and-visibility.md)
@@ -20,7 +26,7 @@ This folder breaks the master roadmap in `overall_plan.md` into actionable per-p
 ## Execution Order Checklist
 
 - [x] Complete Phase 0 metrics and benchmark scenarios.
-- [ ] Complete Phase 1 planner-to-MPC integration plumbing.
+- [x] Complete Phase 1 planner-to-MPC integration plumbing.
 - [ ] Complete Phase 2 opponent-state interpreter.
 - [ ] Complete Phase 3 conservative tactical behavior.
 - [ ] Complete Phase 4 commit/abort overtaking with safety shield.
@@ -31,4 +37,4 @@ This folder breaks the master roadmap in `overall_plan.md` into actionable per-p
 
 - This split is organizational only; the source intent remains in `overall_plan.md`.
 - Pit logic redesign remains out of scope for these phases.
-- Baseline/off-track threshold calibration from Phase 0 is tracked as a deferred follow-up and does not block Phase 1 start.
+- Baseline/off-track threshold calibration from Phase 0 remains an optional follow-up; Phase 0 and Phase 1 are complete without it.

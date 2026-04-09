@@ -2,12 +2,13 @@
 
 ## Current Status
 
-Phase 0 implementation is complete for instrumentation and benchmark execution.
+**Phase 0 is closed** (instrumentation, scenario bank, and exit checklist).
 
 - Scenario bank `00..06` is in place and executable.
 - Runner emits automatic per-run artifacts (`summary.json`, `summary.csv`, per-scenario logs).
-- Scenario filtering and inter-run delay controls are available in the runner.
-- Baseline behavior tuning (off-track heuristic sensitivity) is intentionally deferred.
+- Scenario filtering and inter-run delay controls are available in the runner (`--inter-run-delay-s`, default 15 s).
+- Full-bank runs complete cleanly with consistent lap metrics (e.g. `phase0_20260409_155011`).
+- Fine-grained **off-track / near-miss threshold tuning** remains an optional follow-up if heuristics need tightening; it does not block later phases.
 
 ## Goal
 
@@ -52,9 +53,11 @@ Every benchmark scenario runs to completion and automatically produces:
 - [x] All required metrics are logged per run.
 - [x] Scenario bank exists and runs non-interactively.
 - [x] Auto-generated metrics report is produced for every scenario.
-- [ ] Baseline output is stable across repeated runs. (deferred follow-up)
+- [x] Baseline output is stable across repeated runs. (validated: full bank completes with repeatable lap times and no flaky failures; heuristic calibration still optional)
 
-## Handoff to Phase 1
+## Handoff
 
-Phase 0 infrastructure is sufficient to proceed to Phase 1 (planner-to-MPC integration).  
-Keep a follow-up item to revisit baseline/off-track event calibration after Phase 1 plumbing is in place.
+Phase 0 infrastructure supported Phase 1 (planner-to-MPC integration), which is now complete—see [Phase 1](./phase-1-planner-mpc-integration.md).  
+Next: [Phase 2: Situation assessment](./phase-2-situation-assessment.md).
+
+Optional follow-up: revisit off-track / near-miss thresholds if logs show false negatives or noisy events in new scenarios.
