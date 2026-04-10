@@ -8,7 +8,7 @@ This folder breaks the master roadmap in `overall_plan.md` into actionable per-p
 - **Phase 1** — complete (scripted TTL schedule + MPC handoff, `phase1_runner`, three validated switches).
 - **Phase 2** — complete (situation assessment module, snapshot tests, `[Phase2]` logs).
 - **Phase 3** — complete (tactical planner + `tactical_planner_enabled`; Phase 0–aligned bank via `phase3_runner` on `examples/racing/phase3_tactical/`, `BENCHMARK_AI_DIGEST` / `summary.json`). See [Phase 3 plan](./phase-3-smart-follow-and-stable-ttl.md#validated-benchmarks-dspace).
-- **Phase 4** — in progress (pass commit/abort/shield in `pass_commit_shield.py` + `pass_commit_shield_enabled`; on-track scenario bank TBD); [plan](./phase-4-pass-commit-abort-and-shield.md).
+- **Phase 4** — complete (pass commit/abort/shield in `pass_commit_shield.py` + `pass_commit_shield_enabled`; seven-scenario bank in `examples/racing/phase4_pass_shield/` validated via `phase4_runner`); [plan](./phase-4-pass-commit-abort-and-shield.md).
 
 ## Phase Plans
 
@@ -34,7 +34,7 @@ This folder breaks the master roadmap in `overall_plan.md` into actionable per-p
 - [x] Complete Phase 1 planner-to-MPC integration plumbing.
 - [x] Complete Phase 2 opponent-state interpreter.
 - [x] Complete Phase 3 conservative tactical behavior (code, unit tests, and Phase 0 bank cross-check on dSPACE).
-- [ ] Complete Phase 4 commit/abort overtaking with safety shield (core logic landed; dSPACE scenario bank + safety sign-off pending).
+- [x] Complete Phase 4 commit/abort overtaking with safety shield (logic, scenario bank, and dSPACE sign-off run completed).
 - [ ] Complete Phase 5 segment-aware tactical improvements.
 - [ ] Complete Phase 6 multi-opponent and long-run robustness.
 

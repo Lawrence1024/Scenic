@@ -57,5 +57,11 @@ Suggested targets:
 
 - [x] Commit and abort transitions are explicit and unit-tested (`test_pass_commit_shield.py`); on-track benchmarks optional.
 - [x] Safety shield preempts unsafe tactical actions (emergency risk, setup risk, corridor/overlap while committed).
-- [ ] Dedicated overtake/abort **scenario bank** and sign-off on dSPACE (extend beyond single smoke scenario).
-- [ ] Collision and boundary safety targets are met under Phase 4-specific stress cases.
+- [x] Dedicated overtake/abort **scenario bank** and sign-off on dSPACE (seven scenarios under `examples/racing/phase4_pass_shield/`, executed by `phase4_runner`).
+- [x] Collision and boundary safety targets are met under Phase 4-specific stress cases (latest sign-off run reported `all_return_codes_zero=true`, `any_collision=false`, `any_off_track=false`).
+
+## Validated Benchmarks (dSPACE)
+
+- Sign-off run: `phase4_20260410_100121` (`python -m scenic.domains.racing.benchmarks.phase4_runner --time 2000`).
+- Coverage: `00`-`06` scenario bank in `examples/racing/phase4_pass_shield/`.
+- Aggregate outcomes: all scenarios completed, no collision/off-track, and expected Phase 4 tactical events (`commit_pass`, `shield_release`, plus `emergency_avoid` in the close-corner stress case).

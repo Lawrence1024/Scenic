@@ -12,28 +12,28 @@ This folder contains the baseline Phase 0 scenario set for repeatable opponent-a
 
 ## Run the full benchmark set
 
-From repository root (default **`--time` is 3000**; shown explicitly below for clarity):
+From repository root (default **`--time` is 2000**; shown explicitly below for clarity):
 
 ```bash
-python -m scenic.domains.racing.benchmarks.phase0_runner --time 3000
+python -m scenic.domains.racing.benchmarks.phase0_runner --time 2000
 ```
 
 Run one specific scenario (still writes automatic logs + summary):
 
 ```bash
-python -m scenic.domains.racing.benchmarks.phase0_runner --time 3000 --scenario 02_slower_opponent_left.scenic
+python -m scenic.domains.racing.benchmarks.phase0_runner --time 2000 --scenario 02_slower_opponent_left.scenic
 ```
 
 Run a subset by glob:
 
 ```bash
-python -m scenic.domains.racing.benchmarks.phase0_runner --time 3000 --scenario-glob "0[0-2]_*.scenic"
+python -m scenic.domains.racing.benchmarks.phase0_runner --time 2000 --scenario-glob "0[0-2]_*.scenic"
 ```
 
 Run with inter-scenario delay (helps dSPACE reset/teardown settle between cases; **default is 15 s**):
 
 ```bash
-python -m scenic.domains.racing.benchmarks.phase0_runner --time 3000 --inter-run-delay-s 15
+python -m scenic.domains.racing.benchmarks.phase0_runner --time 2000 --inter-run-delay-s 15
 ```
 
 Outputs are written under:

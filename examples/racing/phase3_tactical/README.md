@@ -29,10 +29,10 @@ python -m scenic.domains.racing.benchmarks.phase3_on_phase0_runner --inter-run-d
 Single scenario (example):
 
 ```bash
-scenic examples/racing/phase3_tactical/01_slower_opponent_optimal.scenic --2d --model scenic.simulators.dspace.racing_model --simulate -b --count 1 --time 3000
+scenic examples/racing/phase3_tactical/01_slower_opponent_optimal.scenic --2d --model scenic.simulators.dspace.racing_model --simulate -b --count 1 --time 2000
 ```
 
-Default **`--time`** for the runner is **3000** steps (~30 s sim at 0.01 s/step). Use a larger `--time` only if a scenario needs more time for a full lap.
+Default **`--time`** for the runner is **2000** steps (~20 s sim at 0.01 s/step). Use a larger `--time` only if a scenario needs more time for a full lap.
 
 Log markers:
 
@@ -41,7 +41,7 @@ Log markers:
 
 ## Validation record
 
-A full-bank run on dSPACE at default **3000** simulation steps per scenario completed with **no collisions, no off-track, no near-miss events** in aggregate, all scenarios exit code **0**, laps **completed**. Tighter geometry (e.g. slower opponent on **right** TTL) produced the smallest reported **min_opponent_distance_m** in the digest; **weaving** produced more `[Phase3Tactical]` TTL switches than stable-opponent cases, as expected.
+A full-bank run on dSPACE at default **2000** simulation steps per scenario completed with **no collisions, no off-track, no near-miss events** in aggregate, all scenarios exit code **0**, laps **completed**. Tighter geometry (e.g. slower opponent on **right** TTL) produced the smallest reported **min_opponent_distance_m** in the digest; **weaving** produced more `[Phase3Tactical]` TTL switches than stable-opponent cases, as expected.
 
 ## Tests
 

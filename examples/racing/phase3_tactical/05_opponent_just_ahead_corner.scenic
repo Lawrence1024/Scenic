@@ -26,4 +26,4 @@ opponent = new RacingCar with _racing_st_offset ('ahead', 12), \
     with ttlFileName 'ttl_optimal_xodr.csv', \
     with ttlFolder localPath('../../../assets/ttls/LS_ENU_TTL_CSV')
 
-opponent.behavior = FellowConstantSpeedTrackOffsetBehavior(speed_mph=55)
+opponent.behavior = FellowFollowTTLGeometricBehavior(speed_mph=55)

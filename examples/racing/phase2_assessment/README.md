@@ -31,7 +31,7 @@ python -m pytest src/scenic/domains/racing/mpc/testing/test_situation_assessment
 Any Phase 0 benchmark scenario with an opponent will emit `[Phase2]` lines, e.g.:
 
 ```bash
-python -m scenic.domains.racing.benchmarks.phase0_runner --time 3000 --scenario 01_slower_opponent_optimal.scenic
+python -m scenic.domains.racing.benchmarks.phase0_runner --time 2000 --scenario 01_slower_opponent_optimal.scenic
 ```
 
 The same `[Phase2]` lines appear when running **`phase3_runner`** on `examples/racing/phase3_tactical/` (Phase 0–aligned bank with **Phase 3** tactical enabled on ego); see `examples/racing/README.md`.
