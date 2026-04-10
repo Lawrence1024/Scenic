@@ -23,20 +23,23 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from scenic.domains.racing.benchmarks.phase_run_common import (
+    FELLOW_HARNESS_SUMMARY_KEYS,
     analyze_waypoint_timing,
     build_benchmark_ai_digest_payload,
+    collect_fellow_harness_metrics_from_log,
     collect_metrics_from_log,
     finalize_row,
     print_benchmark_ai_digest,
     repo_root,
     run_scenic_scenario,
-    STANDARD_BENCHMARK_DIGEST_KEYS,
+    standard_benchmark_digest_keys_with_fellow,
 )
 
 
 def _run_one_scenario(root: Path, scenario: Path, out_log: Path, sim_steps: int) -> Dict[str, Any]:
     base = run_scenic_scenario(root, scenario, out_log, sim_steps)
     base.update(collect_metrics_from_log(out_log))
+    base.update(collect_fellow_harness_metrics_from_log(out_log))
     base.update(analyze_waypoint_timing(out_log))
     return finalize_row(base)
 
@@ -57,7 +60,7 @@ def main() -> int:
     parser.add_argument(
         "--time",
         type=int,
-        default=3000,
+        default=2000,
         help="Simulation steps per scenario (Scenic --time is step count, not seconds).",
     )
     parser.add_argument(
@@ -167,6 +170,7 @@ def main() -> int:
         "near_miss_count",
         "waypoint_hits",
         "phase0_samples",
+        *FELLOW_HARNESS_SUMMARY_KEYS,
     ]
     with open(summary_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=csv_fields)
@@ -186,7 +190,7 @@ def main() -> int:
             assumed_time_step_s=float(args.time_step_s),
             inter_run_delay_s=inter_run_delay_s,
             results=results,
-            digest_keys=list(STANDARD_BENCHMARK_DIGEST_KEYS),
+            digest_keys=standard_benchmark_digest_keys_with_fellow(),
         )
     )
     return 0

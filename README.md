@@ -20,7 +20,7 @@ If you have any problems using Scenic, please submit an issue to [our GitHub rep
 The repository is organized as follows:
 
 * the _src/scenic_ directory contains the package proper;
-* the _examples_ directory has many examples of Scenic programs;
+* the _examples_ directory has many examples of Scenic programs (for dSPACE racing benchmarks, KPI digests, and tips on adding log lines to inspect runs, see [examples/racing/README.md](examples/racing/README.md));
 * the _assets_ directory contains meshes and other resources used by the examples and tests;
 * the _docs_ directory contains the sources for the documentation;
 * the _tests_ directory contains tests for the Scenic tool.

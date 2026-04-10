@@ -7,7 +7,7 @@
 - Module: `src/scenic/domains/racing/tactical_planner.py` (modes + hysteresis + `apply_ttl_key_to_agent`).
 - Ego-only: runs after segment/pit resolution, before curvature speed gate; refreshes `wp_list` on TTL switch.
 - Follow speed cap combined into `effective_target_speed` (with Phase 1 cap and curvature/CTE limits).
-- Example: `examples/racing/phase3_tactical/01_slower_opponent_tactical.scenic`
+- Example: `examples/racing/phase3_tactical/01_slower_opponent_optimal.scenic`
 - Tests: `src/scenic/domains/racing/mpc/testing/test_tactical_planner.py`
 
 Tune thresholds via `TacticalPlannerConfig` in `behaviors.scenic` (currently default instance).
@@ -57,7 +57,7 @@ Suggested targets:
 ## Exit Checklist
 
 - [x] Mode transitions are deterministic and hysteresis-backed (see `tactical_planner_step`, setup flip cooldown).
-- [x] Follow behavior maintains safety gap across benchmarks — validated on dSPACE using `phase3_on_phase0_runner` over `examples/racing/phase3_on_phase0_bank/` (same seven layouts as Phase 0, ego with `tactical_planner_enabled=True`). Aggregate run: **0 collisions**, **0 off-track**, **0 near-miss events**, all scenarios **`return_code` 0**, laps **completed** at default **3000** steps (~30 s sim). See [Validated benchmarks (dSPACE)](#validated-benchmarks-dspace).
+- [x] Follow behavior maintains safety gap across benchmarks — validated on dSPACE using `phase3_runner` over `examples/racing/phase3_tactical/` (same seven layouts as Phase 0, ego with `tactical_planner_enabled=True`). Aggregate run: **0 collisions**, **0 off-track**, **0 near-miss events**, all scenarios **`return_code` 0**, laps **completed** at default **3000** steps (~30 s sim). See [Validated benchmarks (dSPACE)](#validated-benchmarks-dspace).
 - [x] Repositioning without pathological chatter — `[Phase3Tactical]` logs show bounded TTL switches on stable opponent cases (typically two switches: setup lane then return toward optimal); **04_opponent_weaving** shows more switches (reactive opponent), which is expected.
 - [ ] Multi-lap stability for blocked scenarios — **optional follow-up** (longer `--time`, dedicated multi-lap harness). Single-lap / ~30 s horizon validated.
 
@@ -66,12 +66,12 @@ Suggested targets:
 Cross-check command (repo root):
 
 ```bash
-python -m scenic.domains.racing.benchmarks.phase3_on_phase0_runner --inter-run-delay-s 0
+python -m scenic.domains.racing.benchmarks.phase3_runner --inter-run-delay-s 0
 ```
 
-This uses default **`--time` 3000** (override if you need more simulated time per scenario). Outputs: `src/scenic/domains/racing/benchmarks/results/<run_id>/summary.json`, per-scenario `logs/*.log`, and terminal **`BENCHMARK_AI_DIGEST_BEGIN` … `END`**.
+This uses default **`--time` 2000** (~20 s sim at 0.01 s/step); pass **`--time 3000`** to match the historical sign-off horizon (~30 s). Outputs: `src/scenic/domains/racing/benchmarks/results/<run_id>/summary.json`, per-scenario `logs/*.log`, and terminal **`BENCHMARK_AI_DIGEST_BEGIN` … `END`**.
 
-Smaller smoke set: `phase3_runner` on `examples/racing/phase3_tactical/` (single tactical scenario folder).
+Legacy alias (same scenarios and KPIs; `run_id_prefix=phase3_on_phase0`): `python -m scenic.domains.racing.benchmarks.phase3_on_phase0_runner`.
 
 ## Handoff to Phase 4
 

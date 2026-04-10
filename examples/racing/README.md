@@ -12,11 +12,12 @@ Scenarios for the racing domain using the dSPACE racing simulator. All examples 
 | **ego_calibration_accel_decel.scenic** | Throttle/brake calibration for MPC tuning; prints acceleration/deceleration for `vehicle_mpc.yaml`. |
 | **decision_tree_example.scenic** | Decision-tree behaviors: `FlagBasedSpeedBehavior`, `LaneSelectionBehavior`, `StopBehavior`, `FollowModeBehavior`. |
 | **phase0_benchmark/** | Phase 0 baseline scenario bank + runner-oriented set (no opponent, slower opponent variants, weaving, corner approach, side-by-side). |
+| **fellow_smoke/** | Fellow / traffic harness (not an ego phase): placement + optional `[FellowHarness]` readback; `fellow_runner` (default **2000** steps ≈ **20 s**). |
+| **fellow_placement_debug/** | Focused placement repro bank: commanded `_racing_st_offset` vs observed spawn/road projection; `fellow_placement_debug_runner` (supports `--repeats`). |
 | **phase1_planner/** | Phase 1 planner-to-MPC scripted handoff tests (optimal->left, left->right, right->optimal). |
 | **phase2_assessment/** | Phase 2 situation-assessment smoke scenarios + `phase2_runner` metrics (`[Phase2]` logs). |
-| **phase3_tactical/** | Phase 3 tactical planner (`tactical_planner_enabled`, FOLLOW / SETUP_*); `phase3_runner`. |
-| **phase3_on_phase0_bank/** | Same cases as Phase 0 bank but ego has `tactical_planner_enabled=True`; `phase3_on_phase0_runner` (Phase 3 × Phase 0 cross-check). |
-| **phase4_pass_shield/** | Phase 4 pass/shield (placeholder until implemented); `phase4_runner`. |
+| **phase3_tactical/** | Phase 3 tactical planner — **full bank** (same `00`–`06` layouts as **phase0_benchmark**); `phase3_runner`. Optional alias: `phase3_on_phase0_runner` (same scenarios/KPIs). |
+| **phase4_pass_shield/** | Phase 4 pass commit / abort / shield (`pass_commit_shield_enabled=True`); `phase4_runner`. Seven scenarios (`00`–`06`), same layouts as **phase0_benchmark** with tactical + pass-commit shield on ego. |
 | **phase5_segments/** | Phase 5 segment planning (placeholder); `phase5_runner`. |
 | **phase6_multi/** | Phase 6 multi-car (placeholder); `phase6_runner`. |
 
@@ -32,32 +33,57 @@ Run the full Phase 0 benchmark bank:
 python -m scenic.domains.racing.benchmarks.phase0_runner
 ```
 
-(`--time` defaults to **3000** simulation steps ≈ **30 s** at 0.01 s/step; pass `--time N` to override. Default `--inter-run-delay-s` is **15**; use `--scenario` / `--scenario-glob` to run a subset.)
+(`--time` defaults to **2000** simulation steps ≈ **20 s** at 0.01 s/step; pass `--time 3000` (~30 s) or any `N` to override. Default `--inter-run-delay-s` is **15**; use `--scenario` / `--scenario-glob` to run a subset.)
+
+Run **Phase 0 through Phase 4** in one go (same flags forwarded to each runner):
+
+```bash
+python -m scenic.domains.racing.benchmarks.run_phases_0_through_4
+```
+
+**Fellow vs TTL:** Scenario files set ``param fellowHarnessLog = True`` so logs can include ``[FellowHarness]`` readback alongside ego ``[Phase0]`` / ``[Phase2]``. ``ttlFileName`` on a fellow attaches route/polyline — it does not by itself mean the fellow "follows optimal vs left vs right TTL" as a planner; see ``examples/racing/fellow_smoke/README.md`` (**TTL files and fellow behaviors**).
+
+Run the **fellow / traffic harness** (fellow placement + optional `[FellowHarness]` metrics; not a numbered ego phase):
+
+```bash
+python -m scenic.domains.racing.benchmarks.fellow_runner
+```
+
+Default **`--time` is 2000** steps (~**20 s** at 0.01 s/step). Same CLI flags as other phase runners (`--scenario-dir`, `--scenario`, `--scenario-glob`, `--time`, `--inter-run-delay-s`, `--out-dir`). See `examples/racing/fellow_smoke/README.md`.
+
+- **Fellow placement debug runner (repro-focused):**
+```bash
+python -m scenic.domains.racing.benchmarks.fellow_placement_debug_runner
+python -m scenic.domains.racing.benchmarks.fellow_placement_debug_runner --repeats 5
+```
 
 Run all Phase 1 scripted TTL-switch validation scenarios:
 
 ```bash
-python -m scenic.domains.racing.benchmarks.phase1_runner --time 3000
+python -m scenic.domains.racing.benchmarks.phase1_runner
 ```
 
-(Same delay and filtering flags as Phase 0; see `examples/racing/phase1_planner/README.md`.)
+(Same delay and filtering flags as Phase 0; default **`--time` is 2000** steps. See `examples/racing/phase1_planner/README.md`.)
 
 Phase 2–6 use the same CLI pattern (`--scenario-dir`, `--scenario`, `--scenario-glob`, `--time`, `--inter-run-delay-s`, `--out-dir`):
 
 ```bash
-python -m scenic.domains.racing.benchmarks.phase2_runner --time 3000
-python -m scenic.domains.racing.benchmarks.phase3_runner --time 3000
-python -m scenic.domains.racing.benchmarks.phase3_on_phase0_runner --inter-run-delay-s 0
-python -m scenic.domains.racing.benchmarks.phase4_runner --time 3000
-python -m scenic.domains.racing.benchmarks.phase5_runner --time 3000
-python -m scenic.domains.racing.benchmarks.phase6_runner --time 3000
+python -m scenic.domains.racing.benchmarks.phase2_runner
+python -m scenic.domains.racing.benchmarks.phase3_runner
+python -m scenic.domains.racing.benchmarks.phase4_runner
+python -m scenic.domains.racing.benchmarks.phase5_runner
+python -m scenic.domains.racing.benchmarks.phase6_runner
 ```
 
-All of these use **3000** steps by default except where you pass `--time`; `phase0_runner` and `phase3_on_phase0_runner` match that default so you can omit `--time` for the standard ~30 s simulated horizon.
+`phase3_on_phase0_runner` is a backward-compatible alias (same bank and KPIs as `phase3_runner`; legacy `run_id_prefix`). Prefer **`phase3_runner`** for new scripts.
 
-### Phases 4–6 (not implemented yet): scenarios vs runner code
+**Default horizon:** phase runners use **2000** steps (~**20 s** at 0.01 s/step) unless you pass `--time`. Use **`--time 3000`** (~30 s) when you need a longer run (e.g. closer to a full lap or parity with older sign-off runs).
+
+### Phases 4–6: scenarios vs runner code
 
 Each phase runner uses the matching folder in this table as its default `--scenario-dir`. **Every `*.scenic` file in that folder is run automatically** (sorted by name). If you add or generate a new example (for example `examples/racing/phase4_pass_shield/02_my_case.scenic`), you do **not** need to edit `phase4_runner.py` to “register” the filename—the next full bank run will include it.
+
+**Debugging runs:** If a scenario is hard to interpret from aggregate KPIs alone, add temporary `print` lines in the relevant behavior or Python helper (for example `[Phase4Event]` / `[Phase4Tactical]` in `FollowRacingLineMPCBehavior`), re-run the same `phaseN_runner` command, and inspect the per-scenario log under `benchmarks/results/<run_id>/logs/`. Remove or gate noisy prints before merging if they spam every control tick.
 
 When you **implement** a phase and introduce new log lines or KPIs, **do** go back and update:
 
@@ -68,12 +94,10 @@ Optional: in CI or docs, pin a subset with `--scenario file.scenic` for a stable
 
 ### Sharing benchmark output (terminal / AI / logs)
 
-After **phase0**, **phase1**, **phase2–6**, or **phase3_on_phase0** runners finish, the terminal prints a single JSON line between **`BENCHMARK_AI_DIGEST_BEGIN`** and **`BENCHMARK_AI_DIGEST_END`**. That object has `schema: "benchmark_ai_digest_v1"`, `aggregate` rollups, and per-scenario `rows` (flat KPIs). Copy that whole block when sharing results, or attach `summary.json` under the path printed as `paths.run_dir` in the digest.
+After **phase0**, **phase1**, **phase2–6**, or **phase3** runners finish, the terminal prints a single JSON line between **`BENCHMARK_AI_DIGEST_BEGIN`** and **`BENCHMARK_AI_DIGEST_END`**. That object has `schema: "benchmark_ai_digest_v1"`, `aggregate` rollups, and per-scenario `rows` (flat KPIs). Copy that whole block when sharing results, or attach `summary.json` under the path printed as `paths.run_dir` in the digest.
 
-- **Phase 3 only (one tactical scenario):**  
-  `python -m scenic.domains.racing.benchmarks.phase3_runner --time 3000`
-- **Phase 3 on full Phase 0 bank (tactical on ego for all Phase 0 layouts):**  
-  `python -m scenic.domains.racing.benchmarks.phase3_on_phase0_runner --inter-run-delay-s 0`  
-  (Default **`--time` is 3000** steps; increase if a scenario needs more simulated time for a full lap. This cross-check is the same seven scenarios as `phase0_benchmark/`, with **`tactical_planner_enabled=True`** on ego.)
+- **Phase 3 tactical (full bank, same seven layouts as `phase0_benchmark/`, ego with `tactical_planner_enabled=True`):**  
+  `python -m scenic.domains.racing.benchmarks.phase3_runner`  
+  (Default **`--time` is 2000** steps; use **`--time 3000`** or higher if a scenario needs more simulated time for a full lap.)
 
-**Phase 3 sign-off (record):** A full-bank dSPACE run at **3000** steps reported **no collisions, no off-track, no near-miss** in aggregate; see `src/scenic/domains/racing/plans/phase-3-smart-follow-and-stable-ttl.md` (**Validated benchmarks**).
+**Phase 3 sign-off (record):** A full-bank dSPACE run at **3000** steps (longer horizon than the current default) reported **no collisions, no off-track, no near-miss** in aggregate; see `src/scenic/domains/racing/plans/phase-3-smart-follow-and-stable-ttl.md` (**Validated benchmarks**).

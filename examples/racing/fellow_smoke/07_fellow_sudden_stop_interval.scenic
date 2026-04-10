@@ -5,6 +5,7 @@ param control_period = 0.05
 param ttlFolder = localPath('../../../assets/ttls/LS_ENU_TTL_CSV')
 param launch_veos_ipc_client = False
 param scenic_control = True
+param fellowHarnessLog = True
 model scenic.simulators.dspace.racing_model
 
 ego = new RacingCar at (-78.86454576530903, -112.41203639782893), \
@@ -13,9 +14,12 @@ ego = new RacingCar at (-78.86454576530903, -112.41203639782893), \
     with ttlFileName 'ttl_optimal_xodr.csv', \
     with ttlFolder localPath('../../../assets/ttls/LS_ENU_TTL_CSV')
 
-ego.behavior = FollowRacingLineMPCBehavior(
-    target_speed=60,
-    manage_gears=True,
-    use_waypoints=True,
-    mpc_config_path=None
-)
+ego.behavior = FollowRacingLineMPCBehavior(target_speed=60, manage_gears=True, use_waypoints=True, mpc_config_path=None)
+
+opponent = new RacingCar with _racing_st_offset ('ahead', 40), \
+    with regionContainedIn everywhere, \
+    with raceNumber 2, \
+    with ttlFileName 'ttl_optimal_xodr.csv', \
+    with ttlFolder localPath('../../../assets/ttls/LS_ENU_TTL_CSV')
+
+opponent.behavior = FellowSuddenStopIntervalBehavior(speed_mph=60, interval=10.0, duration=3.0)

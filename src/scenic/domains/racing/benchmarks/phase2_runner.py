@@ -1,6 +1,11 @@
 """Benchmark runner for Phase 2 (situation assessment) racing scenarios."""
 
-from scenic.domains.racing.benchmarks.phase_run_common import PhaseRunnerSpec, run_phase_main
+from scenic.domains.racing.benchmarks.phase_run_common import (
+    FELLOW_HARNESS_SUMMARY_KEYS,
+    PhaseRunnerSpec,
+    run_phase_main,
+    standard_benchmark_digest_keys_with_fellow,
+)
 
 if __name__ == "__main__":
     raise SystemExit(
@@ -23,10 +28,13 @@ if __name__ == "__main__":
                     "off_track",
                     "waypoint_hits",
                     "phase0_samples",
-                ),
+                )
+                + FELLOW_HARNESS_SUMMARY_KEYS,
                 phase1_switches=False,
                 phase2_lines=True,
                 phase3_tactical=False,
+                fellow_harness=True,
+                digest_keys=tuple(standard_benchmark_digest_keys_with_fellow()),
             )
         )
     )

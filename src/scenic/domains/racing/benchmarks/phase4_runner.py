@@ -1,17 +1,18 @@
-"""Benchmark runner for Phase 4 (pass / shield) racing scenarios.
+"""Benchmark runner for Phase 4 (pass commit, abort, shield) racing scenarios.
 
-Scenarios are not listed here. ``run_phase_main`` runs every ``*.scenic`` in the
-default directory (``examples/racing/phase4_pass_shield``), sorted by name.
-Adding a new ``NN_name.scenic`` there includes it in the full bank with no
-change to this file.
+Default directory: ``examples/racing/phase4_pass_shield`` (ego typically uses
+``tactical_planner_enabled=True`` and ``pass_commit_shield_enabled=True``).
 
-When Phase 4 is implemented and logs new KPI tags, update ``PhaseRunnerSpec``
-below (``csv_fields``, parser flags) and extend
-``phase_run_common.collect_metrics_from_log``. See ``examples/racing/README.md``
-(Phases 4–6).
+``collect_metrics_from_log`` prefers ``[Phase4Event]`` lines (one per mode entry
+or shield release); legacy logs fall back to ``[Phase4Tactical]`` substrings.
 """
 
-from scenic.domains.racing.benchmarks.phase_run_common import PhaseRunnerSpec, run_phase_main
+from scenic.domains.racing.benchmarks.phase_run_common import (
+    FELLOW_HARNESS_SUMMARY_KEYS,
+    PhaseRunnerSpec,
+    run_phase_main,
+    standard_benchmark_digest_keys_with_fellow,
+)
 
 if __name__ == "__main__":
     raise SystemExit(
@@ -29,15 +30,25 @@ if __name__ == "__main__":
                     "phase1_switch_observed",
                     "phase3_ttl_switch_count",
                     "phase3_tactical_status_count",
+                    "phase4_tactical_line_count",
+                    "phase4_abort_pass_count",
+                    "phase4_emergency_avoid_count",
+                    "phase4_commit_pass_count",
+                    "phase4_event_commit_pass_left",
+                    "phase4_event_commit_pass_right",
+                    "phase4_event_shield_release",
                     "phase2_line_count",
                     "collision",
                     "off_track",
                     "waypoint_hits",
                     "phase0_samples",
-                ),
+                )
+                + FELLOW_HARNESS_SUMMARY_KEYS,
                 phase1_switches=True,
                 phase2_lines=True,
                 phase3_tactical=True,
+                fellow_harness=True,
+                digest_keys=tuple(standard_benchmark_digest_keys_with_fellow()),
             )
         )
     )

@@ -24,6 +24,31 @@ EGO_GPS_READ_PATHS = (EGO_GPS_LONGITUDE_DEG, EGO_GPS_LATITUDE_DEG, EGO_GPS_HEADI
 FELLOW_GPS_BASE = "Platform()://ASM_Traffic/Model Root/VesiInterface/VehicleSensors/ground_truth/GPS_POSITION/GPS_CALC"
 FELLOW_GPS_BASE_ALT = "Platform()://ASM_Traffic/Model Root/Vesilnterface/VehicleSensors/ground_truth/GPS_POSITION/GPS_CALC"
 
+# Fellow benchmark harness: emit [FellowHarness] every N sim steps when scene.params.fellowHarnessLog is true.
+_FELLOW_HARNESS_LOG_EVERY_STEPS = 50
+
+
+def _maybe_log_fellow_harness(sim, fellow_index: int, speed_mps: float, x: float, y: float) -> None:
+    """Periodic ``[FellowHarness]`` line when ``scene.params['fellowHarnessLog']`` is true."""
+    params = getattr(getattr(sim, "scene", None), "params", None) or {}
+    if not (params.get("fellowHarnessLog") or params.get("fellow_harness_log")):
+        return
+    ct = int(getattr(sim, "currentTime", 0) or 0)
+    if ct <= 0 or ct % _FELLOW_HARNESS_LOG_EVERY_STEPS != 0:
+        return
+    step_s = 0.01
+    try:
+        ts = params.get("time_step")
+        if ts is not None:
+            step_s = float(ts)
+    except (TypeError, ValueError):
+        pass
+    sim_t = ct * step_s
+    print(
+        f"[FellowHarness] t={sim_t:.2f}s idx={int(fellow_index)} speed_mps={float(speed_mps):.3f} "
+        f"x={float(x):.3f} y={float(y):.3f}"
+    )
+
 
 def read_ego_gps(sim):
     """Read ego GNSS (Longitude_deg, Latitude_deg, Heading_deg) from GPS_CALC. Returns (lon_deg, lat_deg, heading_deg) or (None, None, None) on failure."""
@@ -177,12 +202,15 @@ def _read_fellow_state_gnss(sim, obj, var, eff_index: int, fellow_index: int, du
                 w = w_arr[eff_index] if w_arr[eff_index] is not None else 0.0
         except Exception:
             pass
+        # dSPACE fellow plant speed readback is in km/h; normalize to m/s for Scenic state/logging.
+        v_mps = float(v) / 3.6
         obj.dspaceActor.position = Vector(x, y, float(z))
         obj.dspaceActor.heading = yaw_rad
-        obj.dspaceActor.linvel = Vector(float(v) * math.cos(yaw_rad), float(v) * math.sin(yaw_rad), 0)
+        obj.dspaceActor.linvel = Vector(v_mps * math.cos(yaw_rad), v_mps * math.sin(yaw_rad), 0)
         obj.dspaceActor.angvel = Vector(0, 0, float(w))
         if not getattr(sim, "_fellow_read_gnss_logged", False):
             sim._fellow_read_gnss_logged = True  # GNSS calibration log disabled (data already have been collected)
+        _maybe_log_fellow_harness(sim, fellow_index, v_mps, float(x), float(y))
         return True
     except Exception as e:
         print(f"[Fellow Readback] GNSS path error: {e}")
@@ -318,18 +346,20 @@ def read_fellow_state(sim, obj, dutils):
         yaw_rad_raw = float(yaw_deg) * (math.pi / 180.0)
         yaw_rad = math.atan2(math.sin(yaw_rad_raw), math.cos(yaw_rad_raw))
         
+        # dSPACE fellow plant speed readback is in km/h; normalize to m/s for Scenic state/logging.
+        v_mps = float(v) / 3.6
         obj.dspaceActor.heading = yaw_rad
         obj.dspaceActor.linvel = Vector(
-            float(v) * math.cos(yaw_rad),
-            float(v) * math.sin(yaw_rad),
+            v_mps * math.cos(yaw_rad),
+            v_mps * math.sin(yaw_rad),
             0
         )
         obj.dspaceActor.angvel = Vector(0, 0, float(w))
+        _maybe_log_fellow_harness(sim, fellow_index, v_mps, scenic_x, scenic_y)
         return True
     except Exception as e:
         msg = str(e)
         if "bounds" in msg:
             return False
         return False
-
 

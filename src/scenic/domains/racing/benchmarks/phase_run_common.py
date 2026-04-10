@@ -51,7 +51,27 @@ RE_PHASE3_TTL_SWITCH = re.compile(
 RE_PHASE3_STATUS = re.compile(
     r"\[Phase3Tactical\]\s+t=(?P<t>\d+\.?\d*)s\s+mode=(?P<mode>\S+)\s+ttl=(?P<ttl>\S+)\s+cap=(?P<cap>\S+)"
 )
+RE_PHASE4_EVENT = re.compile(
+    r"\[Phase4Event\]\s+t=(?P<t>\d+\.?\d*)s\s+event=(?P<event>\S+)"
+)
+# Fellow harness: placement from ego offset ([placement.py])
+RE_FELLOW_PLACEMENT_FROM_EGO = re.compile(
+    r"\[Placement\][^\n]*racing \(s,t\) from ego[^\n]*-> s=([\d.+-]+),\s*t=([\d.+-]+)"
+)
+# [Fellow s,t] Fellow_0: route=... xy=(...) -> s=..., t=...
+RE_FELLOW_ST_LINE = re.compile(r"\[Fellow s,t\][^\n]*-> s=([\d.+-]+),\s*t=([\d.+-]+)")
+RE_FELLOW_HARNESS_LINE = re.compile(
+    r"\[FellowHarness\]\s+t=([\d.+-]+)s\s+idx=(\d+)\s+speed_mps=([\d.eE+-]+)\s+x=([\d.eE+-]+)\s+y=([\d.eE+-]+)"
+)
+RE_PLACEMENT_COMMAND_OFFSET = re.compile(
+    r"racing \(s,t\) from ego \+ \('(?P<kind>ahead|behind|left|right)',\s*(?P<value>[\d.+-]+)\)"
+)
+RE_EGO_ST_DEBUG = re.compile(r"\[Ego debug\].*-> s=([\d.+-]+),\s*t=([\d.+-]+)")
+RE_EGO_ROAD_ID = re.compile(r"\[Ego debug\].*projected onto road_id=(\d+)")
+RE_FELLOW_ROAD_ID = re.compile(r"\[Fellow s,t\].*projected onto road_id=(\d+)")
+RE_FELLOW_DISTANCE_FROM_EGO = re.compile(r"\[Fellow s,t\].*distance_from_ego=([\d.+-]+)m")
 
+FELLOW_HARNESS_T_OUT_OF_BAND_M = 15.0
 
 JsonScalar = Union[str, int, float, bool, None]
 
@@ -79,7 +99,115 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "phase2_opponent_none_lines",
     "phase3_ttl_switch_count",
     "phase3_tactical_status_count",
+    "phase4_tactical_line_count",
+    "phase4_abort_pass_count",
+    "phase4_emergency_avoid_count",
+    "phase4_commit_pass_count",
+    "phase4_event_commit_pass_left",
+    "phase4_event_commit_pass_right",
+    "phase4_event_shield_release",
 )
+
+# Fellow traffic harness digest (see examples/racing/fellow_smoke, fellow_runner.py).
+FELLOW_HARNESS_DIGEST_KEYS: Tuple[str, ...] = (
+    "scenario",
+    "return_code",
+    "lap_completion_status",
+    "lap_time_s",
+    "waypoint_hits",
+    "collision",
+    "off_track",
+    "near_miss_count",
+    "min_opponent_distance_m",
+    "phase0_samples",
+    "phase2_line_count",
+    "phase2_assess_errors",
+    "fellow_placement_from_ego_offset_observed",
+    "fellow_st_log_present",
+    "fellow_s0",
+    "fellow_t0",
+    "fellow_t_out_of_band",
+    "fellow_harness_line_count",
+    "fellow_speed_min_mps",
+    "fellow_speed_max_mps",
+    "fellow_max_speed_step_jump_mps",
+    "fellow_speed_stuck_near_zero",
+    "fellow_position_range_m",
+)
+
+# Columns merged into phase 0–4 benchmark summaries when parsing logs (with or without fellow in scene).
+FELLOW_HARNESS_SUMMARY_KEYS: Tuple[str, ...] = (
+    "fellow_placement_from_ego_offset_observed",
+    "fellow_st_log_present",
+    "fellow_s0",
+    "fellow_t0",
+    "fellow_t_out_of_band",
+    "fellow_harness_line_count",
+    "fellow_speed_min_mps",
+    "fellow_speed_max_mps",
+    "fellow_max_speed_step_jump_mps",
+    "fellow_speed_stuck_near_zero",
+    "fellow_position_range_m",
+)
+
+FELLOW_PLACEMENT_DEBUG_SUMMARY_KEYS: Tuple[str, ...] = (
+    "placement_command_observed",
+    "placement_command_kind",
+    "requested_delta_s_m",
+    "requested_delta_t_m",
+    "ego_s0",
+    "ego_t0",
+    "fellow_s0",
+    "fellow_t0",
+    "observed_delta_s_m",
+    "observed_delta_t_m",
+    "placement_s_error_m",
+    "placement_t_error_m",
+    "ego_road_id",
+    "fellow_road_id",
+    "road_id_mismatch",
+    "unexpected_pit_projection",
+    "spawn_distance_from_ego_m",
+)
+
+FELLOW_PLACEMENT_DEBUG_DIGEST_KEYS: Tuple[str, ...] = (
+    "scenario",
+    "return_code",
+    "lap_completion_status",
+    "lap_time_s",
+    "collision",
+    "off_track",
+    "min_opponent_distance_m",
+    "fellow_placement_from_ego_offset_observed",
+    "fellow_st_log_present",
+    "fellow_harness_line_count",
+    "placement_command_observed",
+    "placement_command_kind",
+    "requested_delta_s_m",
+    "requested_delta_t_m",
+    "ego_s0",
+    "ego_t0",
+    "fellow_s0",
+    "fellow_t0",
+    "observed_delta_s_m",
+    "observed_delta_t_m",
+    "placement_s_error_m",
+    "placement_t_error_m",
+    "ego_road_id",
+    "fellow_road_id",
+    "road_id_mismatch",
+    "unexpected_pit_projection",
+    "spawn_distance_from_ego_m",
+)
+
+
+def standard_benchmark_digest_keys_with_fellow() -> List[str]:
+    """`STANDARD_BENCHMARK_DIGEST_KEYS` plus fellow-harness fields for combined digest rows."""
+    out: List[str] = list(STANDARD_BENCHMARK_DIGEST_KEYS)
+    for k in FELLOW_HARNESS_SUMMARY_KEYS:
+        if k not in out:
+            out.append(k)
+    return out
 
 
 def _default_digest_keys() -> List[str]:
@@ -213,8 +341,45 @@ def collect_metrics_from_log(
     phase3_modes: List[str] = []
     phase3_ttls: List[str] = []
 
+    phase4_line_count = 0
+    phase4_abort_pass_count = 0
+    phase4_emergency_count = 0
+    phase4_commit_count = 0
+    phase4_tac_abort = 0
+    phase4_tac_emergency = 0
+    phase4_tac_commit = 0
+    phase4_event_commit_left = 0
+    phase4_event_commit_right = 0
+    phase4_event_abort = 0
+    phase4_event_emergency = 0
+    phase4_event_shield_release = 0
+    saw_phase4_event = False
+
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
+            if "[Phase4Event]" in line:
+                pe = RE_PHASE4_EVENT.search(line)
+                if pe:
+                    saw_phase4_event = True
+                    ev = pe.group("event")
+                    if ev == "commit_pass_left":
+                        phase4_event_commit_left += 1
+                    elif ev == "commit_pass_right":
+                        phase4_event_commit_right += 1
+                    elif ev == "abort_pass":
+                        phase4_event_abort += 1
+                    elif ev == "emergency_avoid":
+                        phase4_event_emergency += 1
+                    elif ev == "shield_release":
+                        phase4_event_shield_release += 1
+            if "[Phase4Tactical]" in line:
+                phase4_line_count += 1
+                if "ABORT_PASS" in line:
+                    phase4_tac_abort += 1
+                if "EMERGENCY_AVOID" in line:
+                    phase4_tac_emergency += 1
+                if "COMMIT_PASS" in line:
+                    phase4_tac_commit += 1
             m = RE_PHASE0_LINE.search(line)
             if m:
                 ttl_seen.append(m.group("ttl"))
@@ -298,7 +463,204 @@ def collect_metrics_from_log(
         out["phase3_switches"] = phase3_switches
         out["phase3_modes_observed"] = sorted(set(phase3_modes))
         out["phase3_ttls_observed"] = sorted(set(phase3_ttls))
+    out["phase4_tactical_line_count"] = phase4_line_count
+    if saw_phase4_event:
+        out["phase4_abort_pass_count"] = phase4_event_abort
+        out["phase4_emergency_avoid_count"] = phase4_event_emergency
+        out["phase4_commit_pass_count"] = phase4_event_commit_left + phase4_event_commit_right
+        out["phase4_event_commit_pass_left"] = phase4_event_commit_left
+        out["phase4_event_commit_pass_right"] = phase4_event_commit_right
+        out["phase4_event_shield_release"] = phase4_event_shield_release
+    else:
+        # Legacy logs without [Phase4Event]: approximate from [Phase4Tactical] substrings.
+        out["phase4_abort_pass_count"] = phase4_tac_abort
+        out["phase4_emergency_avoid_count"] = phase4_tac_emergency
+        out["phase4_commit_pass_count"] = phase4_tac_commit
+        out["phase4_event_commit_pass_left"] = 0
+        out["phase4_event_commit_pass_right"] = 0
+        out["phase4_event_shield_release"] = 0
     return out
+
+
+def collect_fellow_harness_metrics_from_log(log_path: Path) -> Dict[str, Any]:
+    """Parse fellow placement lines and optional ``[FellowHarness]`` runtime samples."""
+    placement_seen = False
+    fellow_s0: Optional[float] = None
+    fellow_t0: Optional[float] = None
+    fellow_st_seen = False
+    speeds: List[float] = []
+    positions: List[Tuple[float, float]] = []
+    prev_speed: Optional[float] = None
+    max_jump = 0.0
+
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            pm = RE_FELLOW_PLACEMENT_FROM_EGO.search(line)
+            if pm:
+                placement_seen = True
+            sm = RE_FELLOW_ST_LINE.search(line)
+            if sm:
+                fellow_st_seen = True
+                try:
+                    fellow_s0 = float(sm.group(1))
+                    fellow_t0 = float(sm.group(2))
+                except (TypeError, ValueError):
+                    pass
+            hm = RE_FELLOW_HARNESS_LINE.search(line)
+            if hm:
+                try:
+                    v = float(hm.group(3))
+                    x = float(hm.group(4))
+                    y = float(hm.group(5))
+                except (TypeError, ValueError):
+                    continue
+                speeds.append(v)
+                positions.append((x, y))
+                if prev_speed is not None:
+                    max_jump = max(max_jump, abs(v - prev_speed))
+                prev_speed = v
+
+    t_oob = False
+    if fellow_t0 is not None and abs(fellow_t0) > FELLOW_HARNESS_T_OUT_OF_BAND_M:
+        t_oob = True
+
+    pos_range: Optional[float] = None
+    if len(positions) >= 2:
+        x0, y0 = positions[0]
+        pos_range = max(math.hypot(x - x0, y - y0) for x, y in positions)
+
+    v_min = min(speeds) if speeds else None
+    v_max = max(speeds) if speeds else None
+    stuck = False
+    if speeds and len(speeds) >= 10 and v_max is not None and v_max < 0.5:
+        stuck = True
+
+    return {
+        "fellow_placement_from_ego_offset_observed": placement_seen,
+        "fellow_st_log_present": fellow_st_seen,
+        "fellow_s0": fellow_s0,
+        "fellow_t0": fellow_t0,
+        "fellow_t_out_of_band": t_oob,
+        "fellow_harness_line_count": len(speeds),
+        "fellow_speed_min_mps": v_min,
+        "fellow_speed_max_mps": v_max,
+        "fellow_max_speed_step_jump_mps": max_jump if speeds else None,
+        "fellow_speed_stuck_near_zero": stuck,
+        "fellow_position_range_m": pos_range,
+    }
+
+
+def collect_fellow_placement_debug_metrics_from_log(log_path: Path) -> Dict[str, Any]:
+    """Parse spawn command/observation deltas and coarse road consistency at placement."""
+    placement_command_observed = False
+    placement_command_kind: Optional[str] = None
+    requested_delta_s_m: Optional[float] = None
+    requested_delta_t_m: Optional[float] = None
+    ego_s0: Optional[float] = None
+    ego_t0: Optional[float] = None
+    fellow_s0: Optional[float] = None
+    fellow_t0: Optional[float] = None
+    ego_road_id: Optional[int] = None
+    fellow_road_id: Optional[int] = None
+    spawn_distance_from_ego_m: Optional[float] = None
+
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            cm = RE_PLACEMENT_COMMAND_OFFSET.search(line)
+            if cm and not placement_command_observed:
+                placement_command_observed = True
+                placement_command_kind = cm.group("kind")
+                try:
+                    mag = float(cm.group("value"))
+                except (TypeError, ValueError):
+                    mag = None
+                if mag is not None:
+                    if placement_command_kind == "ahead":
+                        requested_delta_s_m = mag
+                        requested_delta_t_m = 0.0
+                    elif placement_command_kind == "behind":
+                        requested_delta_s_m = -mag
+                        requested_delta_t_m = 0.0
+                    elif placement_command_kind == "left":
+                        requested_delta_s_m = 0.0
+                        requested_delta_t_m = mag
+                    elif placement_command_kind == "right":
+                        requested_delta_s_m = 0.0
+                        requested_delta_t_m = -mag
+            em = RE_EGO_ST_DEBUG.search(line)
+            if em and ego_s0 is None and ego_t0 is None:
+                try:
+                    ego_s0 = float(em.group(1))
+                    ego_t0 = float(em.group(2))
+                except (TypeError, ValueError):
+                    pass
+            erm = RE_EGO_ROAD_ID.search(line)
+            if erm and ego_road_id is None:
+                try:
+                    ego_road_id = int(erm.group(1))
+                except (TypeError, ValueError):
+                    pass
+            fm = RE_FELLOW_ST_LINE.search(line)
+            if fm and fellow_s0 is None and fellow_t0 is None:
+                try:
+                    fellow_s0 = float(fm.group(1))
+                    fellow_t0 = float(fm.group(2))
+                except (TypeError, ValueError):
+                    pass
+            frm = RE_FELLOW_ROAD_ID.search(line)
+            if frm and fellow_road_id is None:
+                try:
+                    fellow_road_id = int(frm.group(1))
+                except (TypeError, ValueError):
+                    pass
+            dm = RE_FELLOW_DISTANCE_FROM_EGO.search(line)
+            if dm and spawn_distance_from_ego_m is None:
+                try:
+                    spawn_distance_from_ego_m = float(dm.group(1))
+                except (TypeError, ValueError):
+                    pass
+
+    observed_delta_s_m: Optional[float] = None
+    observed_delta_t_m: Optional[float] = None
+    placement_s_error_m: Optional[float] = None
+    placement_t_error_m: Optional[float] = None
+    if (ego_s0 is not None) and (fellow_s0 is not None):
+        observed_delta_s_m = float(fellow_s0 - ego_s0)
+        if requested_delta_s_m is not None:
+            placement_s_error_m = abs(observed_delta_s_m - requested_delta_s_m)
+    if (ego_t0 is not None) and (fellow_t0 is not None):
+        observed_delta_t_m = float(fellow_t0 - ego_t0)
+        if requested_delta_t_m is not None:
+            placement_t_error_m = abs(observed_delta_t_m - requested_delta_t_m)
+
+    road_id_mismatch = (
+        bool((ego_road_id is not None) and (fellow_road_id is not None) and (ego_road_id != fellow_road_id))
+    )
+    unexpected_pit_projection = bool(
+        placement_command_observed
+        and (placement_command_kind in ("ahead", "behind", "left", "right"))
+        and road_id_mismatch
+    )
+
+    return {
+        "placement_command_observed": placement_command_observed,
+        "placement_command_kind": placement_command_kind,
+        "requested_delta_s_m": requested_delta_s_m,
+        "requested_delta_t_m": requested_delta_t_m,
+        "ego_s0": ego_s0,
+        "ego_t0": ego_t0,
+        "fellow_s0": fellow_s0,
+        "fellow_t0": fellow_t0,
+        "observed_delta_s_m": observed_delta_s_m,
+        "observed_delta_t_m": observed_delta_t_m,
+        "placement_s_error_m": placement_s_error_m,
+        "placement_t_error_m": placement_t_error_m,
+        "ego_road_id": ego_road_id,
+        "fellow_road_id": fellow_road_id,
+        "road_id_mismatch": road_id_mismatch,
+        "unexpected_pit_projection": unexpected_pit_projection,
+        "spawn_distance_from_ego_m": spawn_distance_from_ego_m,
+    }
 
 
 def analyze_waypoint_timing(log_path: Path) -> Dict[str, Any]:
@@ -372,6 +734,8 @@ def run_one_scenario_with_collect(
     phase1_switches: bool = False,
     phase2_lines: bool = False,
     phase3_tactical: bool = False,
+    fellow_harness: bool = False,
+    fellow_placement_debug: bool = False,
 ) -> Dict[str, Any]:
     base = run_scenic_scenario(repo_root, scenario, out_log, sim_steps)
     base.update(
@@ -382,6 +746,10 @@ def run_one_scenario_with_collect(
             phase3_tactical=phase3_tactical,
         )
     )
+    if fellow_harness:
+        base.update(collect_fellow_harness_metrics_from_log(out_log))
+    if fellow_placement_debug:
+        base.update(collect_fellow_placement_debug_metrics_from_log(out_log))
     base.update(analyze_waypoint_timing(out_log))
     return finalize_row(base)
 
@@ -397,10 +765,13 @@ class PhaseRunnerSpec:
     runner_label: str
     run_id_prefix: str
     default_scenario_dir: str
-    default_sim_steps: int = 3000
+    default_sim_steps: int = 2000
     phase1_switches: bool = False
     phase2_lines: bool = False
     phase3_tactical: bool = False
+    fellow_harness: bool = False
+    fellow_placement_debug: bool = False
+    default_repeats: int = 1
     csv_fields: Sequence[str] = field(default_factory=tuple)
     extra_summary_keys: Sequence[str] = field(default_factory=tuple)
     digest_keys: Sequence[str] = field(default_factory=_default_digest_keys)
@@ -422,6 +793,12 @@ def run_phase_main(spec: PhaseRunnerSpec) -> int:
     parser.add_argument("--scenario-glob", default=None)
     parser.add_argument("--time", type=int, default=spec.default_sim_steps)
     parser.add_argument("--time-step-s", type=float, default=0.01)
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=int(spec.default_repeats),
+        help="Repeat each selected scenario this many times (default: 1).",
+    )
     parser.add_argument("--out-dir", default="src/scenic/domains/racing/benchmarks/results")
     parser.add_argument(
         "--inter-run-delay-s",
@@ -470,10 +847,21 @@ def run_phase_main(spec: PhaseRunnerSpec) -> int:
             f"(requested {args.inter_run_delay_s})."
         )
 
+    repeats = max(1, int(args.repeats))
+    if int(args.repeats) != repeats:
+        print(f"[{spec.runner_label}] repeats clamped to {repeats}.")
+
+    scenario_runs: List[Tuple[int, int, Path]] = []
+    for scenario in scenarios:
+        for rep in range(1, repeats + 1):
+            scenario_runs.append((rep, repeats, scenario))
+
     results: List[Dict[str, Any]] = []
-    for idx, scenario in enumerate(scenarios):
-        log_path = logs_dir / f"{scenario.stem}.log"
-        print(f"[{spec.runner_label}] Running {scenario.name} ...")
+    for idx, (rep_idx, rep_total, scenario) in enumerate(scenario_runs):
+        rep_suffix = "" if rep_total == 1 else f"__r{rep_idx:02d}"
+        log_path = logs_dir / f"{scenario.stem}{rep_suffix}.log"
+        rep_label = "" if rep_total == 1 else f" [repeat {rep_idx}/{rep_total}]"
+        print(f"[{spec.runner_label}] Running {scenario.name}{rep_label} ...")
         row = run_one_scenario_with_collect(
             root,
             scenario,
@@ -482,7 +870,13 @@ def run_phase_main(spec: PhaseRunnerSpec) -> int:
             phase1_switches=spec.phase1_switches,
             phase2_lines=spec.phase2_lines,
             phase3_tactical=spec.phase3_tactical,
+            fellow_harness=spec.fellow_harness,
+            fellow_placement_debug=spec.fellow_placement_debug,
         )
+        row["repeat_index"] = int(rep_idx)
+        row["repeat_count"] = int(rep_total)
+        if rep_total > 1:
+            row["scenario_instance"] = f"{row['scenario']}#r{rep_idx:02d}"
         results.append(row)
         approx_sim_s = args.time * max(0.0, float(args.time_step_s))
         stem = scenario.stem
@@ -496,7 +890,7 @@ def run_phase_main(spec: PhaseRunnerSpec) -> int:
             f"(steps={int(args.time)} ~= {approx_sim_s:.2f}s) "
             f"collision={row['collision']} off_track={row['off_track']}{extra}"
         )
-        if inter_run_delay_s > 0 and idx < (len(scenarios) - 1):
+        if inter_run_delay_s > 0 and idx < (len(scenario_runs) - 1):
             print(f"[{spec.runner_label}] Waiting {inter_run_delay_s:.2f}s before next scenario...")
             time.sleep(inter_run_delay_s)
 

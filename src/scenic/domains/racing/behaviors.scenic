@@ -42,6 +42,22 @@ from scenic.domains.racing.tactical_planner import (
     apply_ttl_key_to_agent,
     tactical_planner_step,
 )
+from scenic.domains.racing.pass_commit_shield import (
+    ABORT_PASS,
+    COMMIT_PASS_LEFT,
+    COMMIT_PASS_RIGHT,
+    EMERGENCY_AVOID,
+    PassShieldConfig,
+    PassShieldState,
+    pass_shield_step,
+)
+
+_PHASE4_SHIELD_MODES = (
+    COMMIT_PASS_LEFT,
+    COMMIT_PASS_RIGHT,
+    ABORT_PASS,
+    EMERGENCY_AVOID,
+)
 from scenic.simulators.dspace.ttl.loader import load_ttl_region
 
 
@@ -254,7 +270,7 @@ behavior FellowSwerveOutOfControlBehavior(
         self._fellow_plant_log_mode = mode
         wait
 
-behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False):
+behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False, pass_commit_shield_enabled=False):
     """Follow the car's TTL using MPC (Model Predictive Control) for lateral control.
     
     Primary Scenic behavior for line-following on the racing TTL. Lateral and longitudinal
@@ -272,6 +288,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         mpc_config_path: Path to MPC config YAML file (optional, uses default if None)
         tactical_planner_enabled: Phase 3 — conservative FOLLOW / SETUP_LEFT / SETUP_RIGHT using
             Phase 2 situation assessment (mutually exclusive with scripted ``planner_enabled`` schedule).
+        pass_commit_shield_enabled: Phase 4 — commit / abort / emergency shield layered on Phase 3
+            (requires ``tactical_planner_enabled=True``).
     """
     
     # SETUP & DEFAULTS
@@ -316,6 +334,11 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         except Exception:
             _phase1_speed_cap = None
     _tactical_config = TacticalPlannerConfig()
+    _pass_shield_config = PassShieldConfig()
+    _pass_shield_enabled = bool(pass_commit_shield_enabled)
+    if _pass_shield_enabled and not _tactical_planner_enabled:
+        print(f"{_fbhv} pass_commit_shield_enabled=True requires tactical_planner_enabled=True; Phase 4 shield disabled.")
+        _pass_shield_enabled = False
     if _phase1_schedule_enabled or _tactical_planner_enabled:
         try:
             _params = getattr(simulation().scene, 'params', None) or {}
@@ -338,9 +361,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 print(f"{_fbhv} Phase1 planner enabled: schedule={_phase1_schedule if _phase1_schedule else '[]'} speed_cap={_phase1_speed_cap}")
             if _tactical_planner_enabled:
                 print(f"{_fbhv} Phase3 tactical planner enabled (FREE_RUN / FOLLOW / SETUP_*) speed_cap={_phase1_speed_cap}")
+            if _pass_shield_enabled:
+                print(f"{_fbhv} Phase4 pass/commit/shield enabled (COMMIT_PASS_* / ABORT_PASS / EMERGENCY_AVOID)")
         except Exception:
             _phase1_schedule_enabled = False
             _tactical_planner_enabled = False
+            _pass_shield_enabled = False
             print(f"{_fbhv} Phase1/Phase3 TTL dynamic mode disabled due to setup error.")
 
     # Gear thresholds (m/s)
@@ -873,19 +899,79 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     pit_mode=bool(pit_mode),
                     config=_tactical_config,
                 )
-                if _ttl3 != _phase1_active_ttl and _ttl3 in _phase1_ttl_cache:
-                    if apply_ttl_key_to_agent(self, _ttl3, _phase1_ttl_cache, _PHASE1_TTL_FILE_BY_SELECTION):
+                _mode_tac = _mode3
+                _ttl_tac = _ttl3
+                _cap_tac = _cap3
+                _p4_reason = None
+                if _pass_shield_enabled:
+                    if not hasattr(self, '_phase4_shield_state'):
+                        self._phase4_shield_state = PassShieldState()
+                    _mode_tac, _ttl_tac, _cap_tac, _p4_reason = pass_shield_step(
+                        self._phase4_shield_state,
+                        _sit3,
+                        _mode3,
+                        _ttl3,
+                        _cap3,
+                        has_opponent=_nearest_o3 is not None,
+                        ego_speed_mps=float(current_speed),
+                        opponent_speed_mps=float(_nearest_vs3 or 0.0),
+                        sim_time_s=float(_sim_time_s),
+                        pit_mode=bool(pit_mode),
+                        tactical_config=_tactical_config,
+                        shield_config=_pass_shield_config,
+                    )
+                if _ttl_tac != _phase1_active_ttl and _ttl_tac in _phase1_ttl_cache:
+                    if apply_ttl_key_to_agent(self, _ttl_tac, _phase1_ttl_cache, _PHASE1_TTL_FILE_BY_SELECTION):
                         _p3 = _phase1_active_ttl
-                        _phase1_active_ttl = _ttl3
+                        _phase1_active_ttl = _ttl_tac
                         wp_last_idx = 0
                         wp_list = list(self.waypoints)
                         print(f"{_fl_mpc} [Phase3Tactical] t={_sim_time_s:.2f}s ttl_switch {_p3}->{_phase1_active_ttl} mode={_mode3}")
+                        if _pass_shield_enabled:
+                            print(f"{_fl_mpc} [Phase4Tactical] t={_sim_time_s:.2f}s ttl_switch {_p3}->{_phase1_active_ttl} eff_mode={_mode_tac} reason={_p4_reason or 'none'}")
                 self.active_ttl = _phase1_active_ttl
-                if _cap3 is not None:
-                    self._phase3_speed_cap = float(_cap3)
-                self._phase3_last_mode = _mode3
+                if _cap_tac is not None:
+                    self._phase3_speed_cap = float(_cap_tac)
+                if _pass_shield_enabled:
+                    _p4_prev_eff = getattr(self, '_phase4_prev_eff_mode', None)
+                    _rk4 = 0.0
+                    _seg4 = "none"
+                    _ov4 = "none"
+                    if _sit3 is not None:
+                        try:
+                            _rk4 = float(getattr(_sit3, "collision_risk_01", 0.0) or 0.0)
+                        except Exception:
+                            _rk4 = 0.0
+                        _seg4 = str(getattr(_sit3, "segment_context", "none") or "none")
+                        _ov4 = str(getattr(_sit3, "overlap_state", "none") or "none")
+                    if _mode_tac in _PHASE4_SHIELD_MODES and _p4_prev_eff != _mode_tac:
+                        _ev4 = None
+                        if _mode_tac == COMMIT_PASS_LEFT:
+                            _ev4 = "commit_pass_left"
+                        elif _mode_tac == COMMIT_PASS_RIGHT:
+                            _ev4 = "commit_pass_right"
+                        elif _mode_tac == ABORT_PASS:
+                            _ev4 = "abort_pass"
+                        elif _mode_tac == EMERGENCY_AVOID:
+                            _ev4 = "emergency_avoid"
+                        if _ev4 is not None:
+                            print(
+                                f"{_fl_mpc} [Phase4Event] t={_sim_time_s:.2f}s event={_ev4} mode3={_mode3} eff={_mode_tac} reason={_p4_reason or 'none'} risk_01={_rk4:.2f} seg={_seg4} overlap={_ov4}"
+                            )
+                    if (
+                        _p4_prev_eff is not None
+                        and _p4_prev_eff in _PHASE4_SHIELD_MODES
+                        and _mode_tac not in _PHASE4_SHIELD_MODES
+                    ):
+                        print(
+                            f"{_fl_mpc} [Phase4Event] t={_sim_time_s:.2f}s event=shield_release from={_p4_prev_eff} to={_mode_tac} mode3={_mode3} risk_01={_rk4:.2f} seg={_seg4} overlap={_ov4}"
+                        )
+                    self._phase4_prev_eff_mode = _mode_tac
+                self._phase3_last_mode = _mode_tac
                 if getattr(self, '_full_control_ticks', 0) % 50 == 0:
                     print(f"{_fl_mpc} [Phase3Tactical] t={_sim_time_s:.2f}s mode={_mode3} ttl={_phase1_active_ttl} cap={self._phase3_speed_cap}")
+                    if _pass_shield_enabled:
+                        print(f"{_fl_mpc} [Phase4Tactical] t={_sim_time_s:.2f}s eff_mode={_mode_tac} ttl={_phase1_active_ttl} cap={self._phase3_speed_cap} reason={_p4_reason or 'none'}")
             
             # --- Curvature-based speed gate (from suggestion.md) ---
             # Formula: v_max(s) = sqrt(a_y_max / (|κ(s)| + ε))

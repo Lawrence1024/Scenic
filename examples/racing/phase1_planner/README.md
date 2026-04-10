@@ -15,19 +15,19 @@ All scenarios use:
 Run example:
 
 ```bash
-python -m scenic examples/racing/phase1_planner/01_optimal_to_left.scenic --2d --model scenic.simulators.dspace.racing_model --simulate -b --count 1 --time 3000
+python -m scenic examples/racing/phase1_planner/01_optimal_to_left.scenic --2d --model scenic.simulators.dspace.racing_model --simulate -b --count 1 --time 2000
 ```
 
 Run all Phase 1 scripted-switch scenarios with automatic logs + summary:
 
 ```bash
-python -m scenic.domains.racing.benchmarks.phase1_runner --time 3000
+python -m scenic.domains.racing.benchmarks.phase1_runner
 ```
 
 Run one specific Phase 1 scenario with the runner:
 
 ```bash
-python -m scenic.domains.racing.benchmarks.phase1_runner --time 3000 --scenario 02_left_to_right.scenic
+python -m scenic.domains.racing.benchmarks.phase1_runner --scenario 02_left_to_right.scenic
 ```
 
 Expected runtime log marker:
