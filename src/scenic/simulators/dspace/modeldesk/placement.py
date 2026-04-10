@@ -393,6 +393,8 @@ def place_fellow(sim, obj):
 
         # 3) (s,t): racing-library semantics when _racing_st_offset is set (ahead/behind → keep t, move s; left/right → keep s, move t)
         use_racing_offset = False
+        racing_delta_s = 0.0
+        racing_delta_t = 0.0
         st_offset = getattr(obj, '_racing_st_offset', None)
         deltas = _racing_st_offset_to_deltas(st_offset) if st_offset is not None else None
         if deltas is not None:
@@ -403,6 +405,7 @@ def place_fellow(sim, obj):
                 if ego_st is not None and len(ego_st) >= 2 and ego_route is not None:
                     ego_s, ego_t = float(ego_st[0]), float(ego_st[1])
                     delta_s, delta_t = deltas
+                    racing_delta_s, racing_delta_t = float(delta_s), float(delta_t)
                     s_val = ego_s + delta_s
                     t_val = ego_t + delta_t  # e.g. ("right", 3) -> delta_t=-3 -> fellow t = ego_t - 3 (right of ego)
                     route_pref = ego_route
@@ -479,10 +482,14 @@ def place_fellow(sim, obj):
             except Exception as e:
                 print(f"[Ego debug] Could not log ego: {e}")
             sim._placement_ego_debug_logged = True
-        # Log fellow (s, t) and placement context for debugging absurd t values
+        # Log fellow (s, t) and placement context for debugging absurd t values.
+        # IMPORTANT: for ego-anchored placement (_racing_st_offset), do not use the
+        # fellow Scenic object's raw sampled xy for diagnostics; that sampled position
+        # is not the source of the final placement and can make repeat runs appear random.
         modeldesk_route = 'R2' if route_pref == 'Lap' else 'R1'
         distance_from_ego = float('nan')
         angle_from_ego_deg = float('nan')
+        road_info = ""
         try:
             ego = getattr(sim, 'scene', None) and getattr(sim.scene, 'egoObject', None)
             if ego and getattr(ego, 'position', None) is not None:
@@ -494,26 +501,46 @@ def place_fellow(sim, obj):
                         getattr(ego, 'orientation', None), 'yaw',
                         getattr(ego, 'heading', 0.0)
                     )
-                dx = scenic_x - ex
-                dy = scenic_y - ey
-                distance_from_ego = math.hypot(dx, dy)
-                # Angle of (fellow - ego) vs ego heading: 0 = ahead, 90 = right (+X), -90 = left (-X)
-                angle_world = math.atan2(dx, dy)
-                angle_from_ego_deg = math.degrees(angle_world - yaw)
-                # Normalize to [-180, 180] for readability
-                while angle_from_ego_deg > 180:
-                    angle_from_ego_deg -= 360
-                while angle_from_ego_deg < -180:
-                    angle_from_ego_deg += 360
+                if use_racing_offset:
+                    # For ego-anchor placement, distance/angle are deterministic from (ds, dt).
+                    distance_from_ego = math.hypot(racing_delta_s, racing_delta_t)
+                    # Convention in logs: 0=ahead, 90=right, -90=left.
+                    angle_from_ego_deg = math.degrees(math.atan2(-racing_delta_t, racing_delta_s))
+                    # For road diagnostics in ego-anchor mode, use ego road projection for both.
+                    if road_index_for_projection:
+                        ego_road_id = dutils.find_road_id_for_position(road_index_for_projection, ex, ey)
+                        ego_road_name = (
+                            dutils.get_road_name_for_id(road_index_for_projection, ego_road_id)
+                            if ego_road_id is not None
+                            else None
+                        )
+                        road_info = (
+                            f" | projected onto road_id={ego_road_id} ({ego_road_name or 'n/a'}) "
+                            f"[ego_anchor]"
+                        )
+                else:
+                    dx = scenic_x - ex
+                    dy = scenic_y - ey
+                    distance_from_ego = math.hypot(dx, dy)
+                    # Angle of (fellow - ego) vs ego heading: 0 = ahead, 90 = right (+X), -90 = left (-X)
+                    angle_world = math.atan2(dx, dy)
+                    angle_from_ego_deg = math.degrees(angle_world - yaw)
+                    # Normalize to [-180, 180] for readability
+                    while angle_from_ego_deg > 180:
+                        angle_from_ego_deg -= 360
+                    while angle_from_ego_deg < -180:
+                        angle_from_ego_deg += 360
         except Exception:
             pass
-        # Which road this fellow projects onto (for debugging large |t|)
-        fellow_road_id = None
-        fellow_road_name = None
-        if road_index_for_projection:
+        # Which road this fellow projects onto (for debugging large |t|) in non-anchor mode.
+        if (not road_info) and road_index_for_projection:
             fellow_road_id = dutils.find_road_id_for_position(road_index_for_projection, work_x, work_y)
-            fellow_road_name = dutils.get_road_name_for_id(road_index_for_projection, fellow_road_id) if fellow_road_id is not None else None
-        road_info = f" | projected onto road_id={fellow_road_id} ({fellow_road_name or 'n/a'})" if road_index_for_projection else ""
+            fellow_road_name = (
+                dutils.get_road_name_for_id(road_index_for_projection, fellow_road_id)
+                if fellow_road_id is not None
+                else None
+            )
+            road_info = f" | projected onto road_id={fellow_road_id} ({fellow_road_name or 'n/a'})"
         print(
             f"[Fellow s,t] {vehicle_name}: route={route_pref} ({modeldesk_route}), "
             f"xy=({scenic_x:.4f}, {scenic_y:.4f}) -> s={s_val:.4f}, t={t_val:.4f} | "

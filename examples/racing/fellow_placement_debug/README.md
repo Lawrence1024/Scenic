@@ -40,3 +40,8 @@ Like other runners, this writes:
 - `unexpected_pit_projection`
 
 These are parsed from `[Placement]`, `[Ego debug]`, and `[Fellow s,t]` lines.
+
+## Determinism notes
+
+- Ego-anchor scenarios in this bank intentionally avoid explicit opponent `at` ego-pose to prevent Scenic compile-time overlap rejection.
+- Relative placement intent is carried by `_racing_st_offset` and resolved in the dSPACE placement path at runtime.
