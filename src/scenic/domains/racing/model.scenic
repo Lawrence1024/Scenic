@@ -148,7 +148,10 @@ class RacingCar(Car):
     # Racing identification
     raceNumber: Range(1, 999)
     team: None
-    carType: "Racing Car"  # Default type
+    # IAC Dallara AV-21 / AV-24 rules footprint (192 in × 76 in); center-based OBB in eval logs.
+    carType: "Dallara IAC"
+    width: 1.9304
+    length: 4.8768
     
     # Performance characteristics (configurable)
     maxSpeed: 30.0  # ~108 km/h top speed

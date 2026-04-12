@@ -54,6 +54,18 @@ RE_PHASE3_STATUS = re.compile(
 RE_PHASE4_EVENT = re.compile(
     r"\[Phase4Event\]\s+t=(?P<t>\d+\.?\d*)s\s+event=(?P<event>\S+)"
 )
+RE_EVAL_CONTACT_EVENT = re.compile(
+    r"\[EvalEvent\]\s+t=(?P<t>\d+\.?\d*)s\s+type=eval_contact\s+severity=(?P<sev>\S+)"
+)
+RE_PHASE5_EVENT = re.compile(
+    r"\[Phase5Event\]\s+t=(?P<t>\d+\.?\d*)s\s+event=(?P<event>\S+)"
+)
+RE_PHASE5_TTL_SWITCH = re.compile(
+    r"\[Phase5Tactical\]\s+t=(?P<t>\d+\.?\d*)s\s+ttl_switch\s+(?P<from>\S+)->(?P<to>\S+)\s+mode_in=(?P<mode_in>\S+)\s+mode_out=(?P<mode_out>\S+)\s+seg=(?P<seg>\S+)\s+overlap=(?P<ov>\S+)\s+reason=(?P<reason>\S+)"
+)
+RE_PHASE5_STATUS = re.compile(
+    r"\[Phase5Tactical\]\s+t=(?P<t>\d+\.?\d*)s\s+mode_in=(?P<mode_in>\S+)\s+mode_out=(?P<mode_out>\S+)\s+ttl=(?P<ttl>\S+)\s+cap=(?P<cap>\S+)\s+seg=(?P<seg>\S+)\s+overlap=(?P<ov>\S+)\s+reason=(?P<reason>\S+)"
+)
 # Fellow harness: placement from ego offset ([placement.py])
 RE_FELLOW_PLACEMENT_FROM_EGO = re.compile(
     r"\[Placement\][^\n]*racing \(s,t\) from ego[^\n]*-> s=([\d.+-]+),\s*t=([\d.+-]+)"
@@ -106,6 +118,14 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "phase4_event_commit_pass_left",
     "phase4_event_commit_pass_right",
     "phase4_event_shield_release",
+    "phase5_tactical_line_count",
+    "phase5_ttl_switch_count",
+    "phase5_event_segment_override",
+    "phase5_event_segment_release",
+    "phase5_override_count",
+    "eval_contact_overlap_count",
+    "eval_contact_near_count",
+    "collision_eval_hull_overlap",
 )
 
 # Fellow traffic harness digest (see examples/racing/fellow_smoke, fellow_runner.py).
@@ -236,6 +256,7 @@ def benchmark_digest_aggregate(results: List[Dict[str, Any]]) -> Dict[str, JsonS
             "all_return_codes_zero": True,
             "any_collision": False,
             "any_off_track": False,
+            "any_collision_eval_hull": False,
             "max_phase3_ttl_switch_count": 0,
             "sum_near_miss_count": 0,
             "max_phase2_assess_errors": 0,
@@ -250,6 +271,7 @@ def benchmark_digest_aggregate(results: List[Dict[str, Any]]) -> Dict[str, JsonS
         ),
         "sum_near_miss_count": sum(int(r.get("near_miss_count") or 0) for r in results),
         "max_phase2_assess_errors": max(int(r.get("phase2_assess_errors") or 0) for r in results),
+        "any_collision_eval_hull": any(r.get("collision_eval_hull_overlap") for r in results),
     }
 
 
@@ -325,6 +347,7 @@ def collect_metrics_from_log(
     phase2_lines: bool = False,
     phase3_tactical: bool = False,
 ) -> Dict[str, Any]:
+    """Parse standard racing benchmark tags; does **not** read ``[EvalGT]`` / dSPACE sensor ground truth."""
     min_opp_dist: Optional[float] = None
     ttl_seen: List[str] = []
     planner_modes: List[str] = []
@@ -354,9 +377,26 @@ def collect_metrics_from_log(
     phase4_event_emergency = 0
     phase4_event_shield_release = 0
     saw_phase4_event = False
+    phase5_line_count = 0
+    phase5_ttl_switch_count = 0
+    phase5_event_segment_override = 0
+    phase5_event_segment_release = 0
+    phase5_override_count = 0
+    phase5_mode_out: List[str] = []
+    phase5_reasons: List[str] = []
+    eval_contact_overlap_count = 0
+    eval_contact_near_count = 0
 
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
+            evc = RE_EVAL_CONTACT_EVENT.search(line)
+            if evc:
+                sev = evc.group("sev")
+                if sev == "overlap":
+                    eval_contact_overlap_count += 1
+                elif sev == "near":
+                    eval_contact_near_count += 1
+                continue
             if "[Phase4Event]" in line:
                 pe = RE_PHASE4_EVENT.search(line)
                 if pe:
@@ -372,6 +412,33 @@ def collect_metrics_from_log(
                         phase4_event_emergency += 1
                     elif ev == "shield_release":
                         phase4_event_shield_release += 1
+            if "[Phase5Event]" in line:
+                p5e = RE_PHASE5_EVENT.search(line)
+                if p5e:
+                    ev5 = p5e.group("event")
+                    if ev5 == "segment_override":
+                        phase5_event_segment_override += 1
+                    elif ev5 == "segment_release":
+                        phase5_event_segment_release += 1
+            if "[Phase5Tactical]" in line:
+                phase5_line_count += 1
+                p5s = RE_PHASE5_TTL_SWITCH.search(line)
+                if p5s:
+                    phase5_ttl_switch_count += 1
+                    _mout = p5s.group("mode_out")
+                    _reason = p5s.group("reason")
+                    phase5_mode_out.append(_mout)
+                    phase5_reasons.append(_reason)
+                    if _reason != "none":
+                        phase5_override_count += 1
+                p5st = RE_PHASE5_STATUS.search(line)
+                if p5st:
+                    _mout = p5st.group("mode_out")
+                    _reason = p5st.group("reason")
+                    phase5_mode_out.append(_mout)
+                    phase5_reasons.append(_reason)
+                    if _reason != "none":
+                        phase5_override_count += 1
             if "[Phase4Tactical]" in line:
                 phase4_line_count += 1
                 if "ABORT_PASS" in line:
@@ -479,6 +546,16 @@ def collect_metrics_from_log(
         out["phase4_event_commit_pass_left"] = 0
         out["phase4_event_commit_pass_right"] = 0
         out["phase4_event_shield_release"] = 0
+    out["phase5_tactical_line_count"] = phase5_line_count
+    out["phase5_ttl_switch_count"] = phase5_ttl_switch_count
+    out["phase5_event_segment_override"] = phase5_event_segment_override
+    out["phase5_event_segment_release"] = phase5_event_segment_release
+    out["phase5_override_count"] = phase5_override_count
+    out["phase5_modes_observed"] = sorted(set(phase5_mode_out))
+    out["phase5_reasons_observed"] = sorted(set(phase5_reasons))
+    out["eval_contact_overlap_count"] = eval_contact_overlap_count
+    out["eval_contact_near_count"] = eval_contact_near_count
+    out["collision_eval_hull_overlap"] = bool(eval_contact_overlap_count > 0)
     return out
 
 
@@ -722,6 +799,8 @@ def run_scenic_scenario(repo_root: Path, scenario: Path, out_log: Path, sim_step
 def finalize_row(row: Dict[str, Any]) -> Dict[str, Any]:
     row["collision"] = bool(row.get("collision_count", 0) > 0)
     row["off_track"] = bool(row.get("off_track_count", 0) > 0)
+    if "collision_eval_hull_overlap" not in row:
+        row["collision_eval_hull_overlap"] = bool(row.get("eval_contact_overlap_count", 0) > 0)
     return row
 
 
@@ -890,6 +969,7 @@ def run_phase_main(spec: PhaseRunnerSpec) -> int:
             f"(steps={int(args.time)} ~= {approx_sim_s:.2f}s) "
             f"collision={row['collision']} off_track={row['off_track']}{extra}"
         )
+        print(f"[{spec.runner_label}] Log file: {log_path.resolve()}")
         if inter_run_delay_s > 0 and idx < (len(scenario_runs) - 1):
             print(f"[{spec.runner_label}] Waiting {inter_run_delay_s:.2f}s before next scenario...")
             time.sleep(inter_run_delay_s)

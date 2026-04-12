@@ -18,7 +18,7 @@ Scenarios for the racing domain using the dSPACE racing simulator. All examples 
 | **phase2_assessment/** | Phase 2 situation-assessment smoke scenarios + `phase2_runner` metrics (`[Phase2]` logs). |
 | **phase3_tactical/** | Phase 3 tactical planner — **full bank** (same `00`–`06` layouts as **phase0_benchmark**); `phase3_runner`. Optional alias: `phase3_on_phase0_runner` (same scenarios/KPIs). |
 | **phase4_pass_shield/** | Phase 4 pass commit / abort / shield (`pass_commit_shield_enabled=True`); `phase4_runner`. Seven scenarios (`00`–`06`), same layouts as **phase0_benchmark** with tactical + pass-commit shield on ego. |
-| **phase5_segments/** | Phase 5 segment planning (placeholder); `phase5_runner`. |
+| **phase5_segments/** | Phase 5 segment-aware tactics (`phase5_segment_tactics_enabled=True`); bank **`00`–`06`** mirrors Phase 4 layouts, plus **`07`–`08`** (TTL-derived **corner_entry** / **corner_body** poses) and **`09`–`10`** (straight-opening slow-fellow left/right symmetry); `phase5_runner`. |
 | **phase6_multi/** | Phase 6 multi-car (placeholder); `phase6_runner`. |
 
 Run with the racing model, e.g.:
@@ -35,11 +35,21 @@ python -m scenic.domains.racing.benchmarks.phase0_runner
 
 (`--time` defaults to **2000** simulation steps ≈ **20 s** at 0.01 s/step; pass `--time 3000` (~30 s) or any `N` to override. Default `--inter-run-delay-s` is **15**; use `--scenario` / `--scenario-glob` to run a subset.)
 
-Run **Phase 0 through Phase 4** in one go (same flags forwarded to each runner):
+Run the full implemented stack in one go (same flags forwarded to each runner):
 
 ```bash
-python -m scenic.domains.racing.benchmarks.run_phases_0_through_4
+python -m scenic.domains.racing.benchmarks.run_all_benchmarks_so_far
 ```
+
+Skip the fellow harnesses and Phase 0; run **Phase 1 through Phase 5** only (same forwarded flags, e.g. `--time 2000`):
+
+```bash
+python -m scenic.domains.racing.benchmarks.run_all_benchmarks_so_far --from phase1 --time 2000
+```
+
+(`--from` accepts `fellow_smoke`, `fellow_placement`, `phase0` … `phase5`, plus aliases `smoke` and `placement`.)
+
+This combined runner now executes: `fellow_runner`, `fellow_placement_debug_runner`, and `phase0_runner` through `phase5_runner` (in sequence).
 
 **Fellow vs TTL:** Scenario files set ``param fellowHarnessLog = True`` so logs can include ``[FellowHarness]`` readback alongside ego ``[Phase0]`` / ``[Phase2]``. ``ttlFileName`` on a fellow attaches route/polyline — it does not by itself mean the fellow "follows optimal vs left vs right TTL" as a planner; see ``examples/racing/fellow_smoke/README.md`` (**TTL files and fellow behaviors**).
 
@@ -96,8 +106,12 @@ Optional: in CI or docs, pin a subset with `--scenario file.scenic` for a stable
 
 After **phase0**, **phase1**, **phase2–6**, or **phase3** runners finish, the terminal prints a single JSON line between **`BENCHMARK_AI_DIGEST_BEGIN`** and **`BENCHMARK_AI_DIGEST_END`**. That object has `schema: "benchmark_ai_digest_v1"`, `aggregate` rollups, and per-scenario `rows` (flat KPIs). Copy that whole block when sharing results, or attach `summary.json` under the path printed as `paths.run_dir` in the digest.
 
+During the run, after each scenario’s one-line summary, the runner also prints **`Log file:`** with the **absolute path** to that scenario’s captured log (`benchmarks/results/<run_id>/logs/<scenario_stem>.log`), so you can open it directly while debugging.
+
 - **Phase 3 tactical (full bank, same seven layouts as `phase0_benchmark/`, ego with `tactical_planner_enabled=True`):**  
   `python -m scenic.domains.racing.benchmarks.phase3_runner`  
   (Default **`--time` is 2000** steps; use **`--time 3000`** or higher if a scenario needs more simulated time for a full lap.)
 
 **Phase 3 sign-off (record):** A full-bank dSPACE run at **3000** steps (longer horizon than the current default) reported **no collisions, no off-track, no near-miss** in aggregate; see `src/scenic/domains/racing/plans/phase-3-smart-follow-and-stable-ttl.md` (**Validated benchmarks**).
+
+**Phase 5 sign-off (record):** Full bank at **3000** steps (`phase5_runner`), **11** scenarios (`00`–`10`), recorded run id **`phase5_20260412_090949`** — all scenarios completed with **no collision / off-track** in aggregate; see `src/scenic/domains/racing/plans/phase-5-segment-aware-tactics.md` (**Validated benchmarks (record)**) for digest highlights and caveats (`05` near-miss / hull overlap proxy; high `phase3_ttl_switch_count` on `07`/`08`).

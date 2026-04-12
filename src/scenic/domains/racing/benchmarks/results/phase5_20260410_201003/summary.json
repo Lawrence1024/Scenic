@@ -1,0 +1,920 @@
+{
+  "run_id": "phase5_20260410_201003",
+  "created_utc": "2026-04-10T20:58:19.734543+00:00",
+  "scenario_dir": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\examples\\racing\\phase5_segments",
+  "sim_steps": 3000,
+  "assumed_time_step_s": 0.01,
+  "approx_requested_sim_time_s": 30.0,
+  "inter_run_delay_s": 15.0,
+  "runner": "Phase5Runner",
+  "results": [
+    {
+      "scenario": "examples\\racing\\phase5_segments\\00_no_opponent_segment_tactics.scenic",
+      "log": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\src\\scenic\\domains\\racing\\benchmarks\\results\\phase5_20260410_201003\\logs\\00_no_opponent_segment_tactics.log",
+      "return_code": 0,
+      "min_opponent_distance_m": null,
+      "phase0_samples": 12,
+      "ttls_observed": [
+        "optimal"
+      ],
+      "planner_modes_observed": [
+        "follow_mpc"
+      ],
+      "ttl_switch_count": 0,
+      "near_miss_count": 0,
+      "collision_count": 0,
+      "off_track_count": 0,
+      "phase1_switch_observed": false,
+      "phase1_switch_count": 0,
+      "phase1_switches": [],
+      "phase2_line_count": 12,
+      "phase2_opponent_none_lines": 12,
+      "phase2_assess_errors": 0,
+      "phase2_overlap_count": 0,
+      "phase2_seg_ctx_count": 0,
+      "phase2_overlaps_observed": [],
+      "phase2_seg_ctx_observed": [],
+      "phase3_ttl_switch_count": 0,
+      "phase3_tactical_status_count": 12,
+      "phase3_switches": [],
+      "phase3_modes_observed": [
+        "FREE_RUN"
+      ],
+      "phase3_ttls_observed": [
+        "optimal"
+      ],
+      "phase4_tactical_line_count": 12,
+      "phase4_abort_pass_count": 0,
+      "phase4_emergency_avoid_count": 0,
+      "phase4_commit_pass_count": 0,
+      "phase4_event_commit_pass_left": 0,
+      "phase4_event_commit_pass_right": 0,
+      "phase4_event_shield_release": 0,
+      "phase5_tactical_line_count": 12,
+      "phase5_ttl_switch_count": 0,
+      "phase5_event_segment_override": 0,
+      "phase5_event_segment_release": 0,
+      "phase5_override_count": 0,
+      "phase5_modes_observed": [
+        "FREE_RUN"
+      ],
+      "phase5_reasons_observed": [
+        "none"
+      ],
+      "fellow_placement_from_ego_offset_observed": false,
+      "fellow_st_log_present": false,
+      "fellow_s0": null,
+      "fellow_t0": null,
+      "fellow_t_out_of_band": false,
+      "fellow_harness_line_count": 0,
+      "fellow_speed_min_mps": null,
+      "fellow_speed_max_mps": null,
+      "fellow_max_speed_step_jump_mps": null,
+      "fellow_speed_stuck_near_zero": false,
+      "fellow_position_range_m": null,
+      "lap_completion_status": "completed",
+      "lap_time_s": 29.049999999999997,
+      "waypoint_hits": 546,
+      "collision": false,
+      "off_track": false,
+      "repeat_index": 1,
+      "repeat_count": 1
+    },
+    {
+      "scenario": "examples\\racing\\phase5_segments\\01_slower_opponent_optimal_segment_tactics.scenic",
+      "log": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\src\\scenic\\domains\\racing\\benchmarks\\results\\phase5_20260410_201003\\logs\\01_slower_opponent_optimal_segment_tactics.log",
+      "return_code": 0,
+      "min_opponent_distance_m": 36.3,
+      "phase0_samples": 12,
+      "ttls_observed": [
+        "optimal"
+      ],
+      "planner_modes_observed": [
+        "follow_mpc"
+      ],
+      "ttl_switch_count": 0,
+      "near_miss_count": 0,
+      "collision_count": 0,
+      "off_track_count": 0,
+      "phase1_switch_observed": false,
+      "phase1_switch_count": 0,
+      "phase1_switches": [],
+      "phase2_line_count": 12,
+      "phase2_opponent_none_lines": 0,
+      "phase2_assess_errors": 0,
+      "phase2_overlap_count": 12,
+      "phase2_seg_ctx_count": 12,
+      "phase2_overlaps_observed": [
+        "clear_ahead",
+        "closing_behind"
+      ],
+      "phase2_seg_ctx_observed": [
+        "straight"
+      ],
+      "phase3_ttl_switch_count": 5,
+      "phase3_tactical_status_count": 12,
+      "phase3_switches": [
+        {
+          "t_s": 3.25,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 3.45,
+          "from": "right",
+          "to": "left",
+          "mode": "SETUP_LEFT"
+        },
+        {
+          "t_s": 4.6,
+          "from": "left",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 6.45,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 7.35,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        }
+      ],
+      "phase3_modes_observed": [
+        "FREE_RUN"
+      ],
+      "phase3_ttls_observed": [
+        "optimal"
+      ],
+      "phase4_tactical_line_count": 17,
+      "phase4_abort_pass_count": 0,
+      "phase4_emergency_avoid_count": 0,
+      "phase4_commit_pass_count": 2,
+      "phase4_event_commit_pass_left": 1,
+      "phase4_event_commit_pass_right": 1,
+      "phase4_event_shield_release": 2,
+      "phase5_tactical_line_count": 17,
+      "phase5_ttl_switch_count": 5,
+      "phase5_event_segment_override": 0,
+      "phase5_event_segment_release": 0,
+      "phase5_override_count": 0,
+      "phase5_modes_observed": [
+        "FREE_RUN",
+        "SETUP_LEFT",
+        "SETUP_RIGHT"
+      ],
+      "phase5_reasons_observed": [
+        "none"
+      ],
+      "fellow_placement_from_ego_offset_observed": true,
+      "fellow_st_log_present": true,
+      "fellow_s0": 479.2364,
+      "fellow_t0": 0.9849,
+      "fellow_t_out_of_band": false,
+      "fellow_harness_line_count": 60,
+      "fellow_speed_min_mps": 4.618,
+      "fellow_speed_max_mps": 25.759,
+      "fellow_max_speed_step_jump_mps": 1.4659999999999993,
+      "fellow_speed_stuck_near_zero": false,
+      "fellow_position_range_m": 389.64647903965465,
+      "lap_completion_status": "completed",
+      "lap_time_s": 27.85,
+      "waypoint_hits": 104,
+      "collision": false,
+      "off_track": false,
+      "repeat_index": 1,
+      "repeat_count": 1
+    },
+    {
+      "scenario": "examples\\racing\\phase5_segments\\02_slower_opponent_left_segment_tactics.scenic",
+      "log": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\src\\scenic\\domains\\racing\\benchmarks\\results\\phase5_20260410_201003\\logs\\02_slower_opponent_left_segment_tactics.log",
+      "return_code": 0,
+      "min_opponent_distance_m": 45.38,
+      "phase0_samples": 12,
+      "ttls_observed": [
+        "optimal",
+        "right"
+      ],
+      "planner_modes_observed": [
+        "follow_mpc"
+      ],
+      "ttl_switch_count": 2,
+      "near_miss_count": 0,
+      "collision_count": 0,
+      "off_track_count": 9,
+      "phase1_switch_observed": false,
+      "phase1_switch_count": 0,
+      "phase1_switches": [],
+      "phase2_line_count": 12,
+      "phase2_opponent_none_lines": 0,
+      "phase2_assess_errors": 0,
+      "phase2_overlap_count": 12,
+      "phase2_seg_ctx_count": 12,
+      "phase2_overlaps_observed": [
+        "clear_ahead",
+        "clear_behind",
+        "closing_behind"
+      ],
+      "phase2_seg_ctx_observed": [
+        "straight"
+      ],
+      "phase3_ttl_switch_count": 2,
+      "phase3_tactical_status_count": 12,
+      "phase3_switches": [
+        {
+          "t_s": 2.1,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 3.05,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        }
+      ],
+      "phase3_modes_observed": [
+        "FREE_RUN",
+        "SETUP_RIGHT"
+      ],
+      "phase3_ttls_observed": [
+        "optimal",
+        "right"
+      ],
+      "phase4_tactical_line_count": 14,
+      "phase4_abort_pass_count": 0,
+      "phase4_emergency_avoid_count": 0,
+      "phase4_commit_pass_count": 1,
+      "phase4_event_commit_pass_left": 0,
+      "phase4_event_commit_pass_right": 1,
+      "phase4_event_shield_release": 1,
+      "phase5_tactical_line_count": 14,
+      "phase5_ttl_switch_count": 2,
+      "phase5_event_segment_override": 0,
+      "phase5_event_segment_release": 0,
+      "phase5_override_count": 0,
+      "phase5_modes_observed": [
+        "FREE_RUN",
+        "SETUP_RIGHT"
+      ],
+      "phase5_reasons_observed": [
+        "none"
+      ],
+      "fellow_placement_from_ego_offset_observed": true,
+      "fellow_st_log_present": true,
+      "fellow_s0": 479.2364,
+      "fellow_t0": 0.9849,
+      "fellow_t_out_of_band": false,
+      "fellow_harness_line_count": 60,
+      "fellow_speed_min_mps": 5.627,
+      "fellow_speed_max_mps": 25.441,
+      "fellow_max_speed_step_jump_mps": 1.338000000000001,
+      "fellow_speed_stuck_near_zero": false,
+      "fellow_position_range_m": 387.25136339333915,
+      "lap_completion_status": "completed",
+      "lap_time_s": 28.849999999999998,
+      "waypoint_hits": 37,
+      "collision": false,
+      "off_track": true,
+      "repeat_index": 1,
+      "repeat_count": 1
+    },
+    {
+      "scenario": "examples\\racing\\phase5_segments\\03_slower_opponent_right_segment_tactics.scenic",
+      "log": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\src\\scenic\\domains\\racing\\benchmarks\\results\\phase5_20260410_201003\\logs\\03_slower_opponent_right_segment_tactics.log",
+      "return_code": 0,
+      "min_opponent_distance_m": 45.37,
+      "phase0_samples": 12,
+      "ttls_observed": [
+        "optimal",
+        "right"
+      ],
+      "planner_modes_observed": [
+        "follow_mpc"
+      ],
+      "ttl_switch_count": 2,
+      "near_miss_count": 0,
+      "collision_count": 0,
+      "off_track_count": 10,
+      "phase1_switch_observed": false,
+      "phase1_switch_count": 0,
+      "phase1_switches": [],
+      "phase2_line_count": 12,
+      "phase2_opponent_none_lines": 0,
+      "phase2_assess_errors": 0,
+      "phase2_overlap_count": 12,
+      "phase2_seg_ctx_count": 12,
+      "phase2_overlaps_observed": [
+        "clear_ahead",
+        "clear_behind",
+        "closing_behind"
+      ],
+      "phase2_seg_ctx_observed": [
+        "straight"
+      ],
+      "phase3_ttl_switch_count": 2,
+      "phase3_tactical_status_count": 12,
+      "phase3_switches": [
+        {
+          "t_s": 2.3,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 3.05,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        }
+      ],
+      "phase3_modes_observed": [
+        "FREE_RUN",
+        "SETUP_RIGHT"
+      ],
+      "phase3_ttls_observed": [
+        "optimal",
+        "right"
+      ],
+      "phase4_tactical_line_count": 14,
+      "phase4_abort_pass_count": 0,
+      "phase4_emergency_avoid_count": 0,
+      "phase4_commit_pass_count": 1,
+      "phase4_event_commit_pass_left": 0,
+      "phase4_event_commit_pass_right": 1,
+      "phase4_event_shield_release": 1,
+      "phase5_tactical_line_count": 14,
+      "phase5_ttl_switch_count": 2,
+      "phase5_event_segment_override": 0,
+      "phase5_event_segment_release": 0,
+      "phase5_override_count": 0,
+      "phase5_modes_observed": [
+        "FREE_RUN",
+        "SETUP_RIGHT"
+      ],
+      "phase5_reasons_observed": [
+        "none"
+      ],
+      "fellow_placement_from_ego_offset_observed": true,
+      "fellow_st_log_present": true,
+      "fellow_s0": 479.2364,
+      "fellow_t0": 0.9849,
+      "fellow_t_out_of_band": false,
+      "fellow_harness_line_count": 60,
+      "fellow_speed_min_mps": 5.705,
+      "fellow_speed_max_mps": 25.992,
+      "fellow_max_speed_step_jump_mps": 1.110999999999997,
+      "fellow_speed_stuck_near_zero": false,
+      "fellow_position_range_m": 396.53625560974876,
+      "lap_completion_status": "completed",
+      "lap_time_s": 28.9,
+      "waypoint_hits": 35,
+      "collision": false,
+      "off_track": true,
+      "repeat_index": 1,
+      "repeat_count": 1
+    },
+    {
+      "scenario": "examples\\racing\\phase5_segments\\04_opponent_weaving_segment_tactics.scenic",
+      "log": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\src\\scenic\\domains\\racing\\benchmarks\\results\\phase5_20260410_201003\\logs\\04_opponent_weaving_segment_tactics.log",
+      "return_code": 0,
+      "min_opponent_distance_m": 38.95,
+      "phase0_samples": 12,
+      "ttls_observed": [
+        "left",
+        "optimal",
+        "right"
+      ],
+      "planner_modes_observed": [
+        "follow_mpc"
+      ],
+      "ttl_switch_count": 2,
+      "near_miss_count": 0,
+      "collision_count": 0,
+      "off_track_count": 9,
+      "phase1_switch_observed": false,
+      "phase1_switch_count": 0,
+      "phase1_switches": [],
+      "phase2_line_count": 12,
+      "phase2_opponent_none_lines": 0,
+      "phase2_assess_errors": 0,
+      "phase2_overlap_count": 12,
+      "phase2_seg_ctx_count": 12,
+      "phase2_overlaps_observed": [
+        "clear_ahead",
+        "clear_behind",
+        "closing_behind"
+      ],
+      "phase2_seg_ctx_observed": [
+        "straight"
+      ],
+      "phase3_ttl_switch_count": 3,
+      "phase3_tactical_status_count": 12,
+      "phase3_switches": [
+        {
+          "t_s": 0.02,
+          "from": "optimal",
+          "to": "left",
+          "mode": "SETUP_LEFT"
+        },
+        {
+          "t_s": 0.05,
+          "from": "left",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 3.05,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        }
+      ],
+      "phase3_modes_observed": [
+        "FREE_RUN",
+        "SETUP_RIGHT"
+      ],
+      "phase3_ttls_observed": [
+        "optimal",
+        "right"
+      ],
+      "phase4_tactical_line_count": 15,
+      "phase4_abort_pass_count": 0,
+      "phase4_emergency_avoid_count": 0,
+      "phase4_commit_pass_count": 1,
+      "phase4_event_commit_pass_left": 0,
+      "phase4_event_commit_pass_right": 1,
+      "phase4_event_shield_release": 1,
+      "phase5_tactical_line_count": 15,
+      "phase5_ttl_switch_count": 3,
+      "phase5_event_segment_override": 0,
+      "phase5_event_segment_release": 0,
+      "phase5_override_count": 0,
+      "phase5_modes_observed": [
+        "FREE_RUN",
+        "SETUP_LEFT",
+        "SETUP_RIGHT"
+      ],
+      "phase5_reasons_observed": [
+        "none"
+      ],
+      "fellow_placement_from_ego_offset_observed": true,
+      "fellow_st_log_present": true,
+      "fellow_s0": 474.2364,
+      "fellow_t0": 0.9849,
+      "fellow_t_out_of_band": false,
+      "fellow_harness_line_count": 60,
+      "fellow_speed_min_mps": -0.0,
+      "fellow_speed_max_mps": 23.789,
+      "fellow_max_speed_step_jump_mps": 7.505000000000001,
+      "fellow_speed_stuck_near_zero": false,
+      "fellow_position_range_m": 154.50600237531225,
+      "lap_completion_status": "completed",
+      "lap_time_s": 29.8,
+      "waypoint_hits": 42,
+      "collision": false,
+      "off_track": true,
+      "repeat_index": 1,
+      "repeat_count": 1
+    },
+    {
+      "scenario": "examples\\racing\\phase5_segments\\05_opponent_just_ahead_corner_segment_tactics.scenic",
+      "log": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\src\\scenic\\domains\\racing\\benchmarks\\results\\phase5_20260410_201003\\logs\\05_opponent_just_ahead_corner_segment_tactics.log",
+      "return_code": 0,
+      "min_opponent_distance_m": 10.75,
+      "phase0_samples": 12,
+      "ttls_observed": [
+        "optimal",
+        "right"
+      ],
+      "planner_modes_observed": [
+        "follow_mpc"
+      ],
+      "ttl_switch_count": 1,
+      "near_miss_count": 0,
+      "collision_count": 0,
+      "off_track_count": 9,
+      "phase1_switch_observed": false,
+      "phase1_switch_count": 0,
+      "phase1_switches": [],
+      "phase2_line_count": 12,
+      "phase2_opponent_none_lines": 0,
+      "phase2_assess_errors": 0,
+      "phase2_overlap_count": 12,
+      "phase2_seg_ctx_count": 12,
+      "phase2_overlaps_observed": [
+        "clear_behind",
+        "closing_behind",
+        "partial_overlap"
+      ],
+      "phase2_seg_ctx_observed": [
+        "straight"
+      ],
+      "phase3_ttl_switch_count": 46,
+      "phase3_tactical_status_count": 12,
+      "phase3_switches": [
+        {
+          "t_s": 0.02,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 0.15,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 0.2,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 0.25,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 0.3,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 0.35,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 0.4,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 0.45,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 0.5,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 0.55,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 0.6,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 0.65,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 0.7,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 0.75,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 0.8,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 0.85,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 0.9,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 0.95,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 1.0,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 1.05,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 1.1,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 1.15,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 1.2,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 1.25,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 1.3,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 1.35,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 1.4,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 1.45,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 1.5,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 1.55,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 1.6,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 1.65,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 1.7,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 1.75,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 1.8,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 1.85,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 1.9,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 1.95,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 2.0,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 2.05,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 2.1,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 2.15,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 2.2,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 2.25,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        },
+        {
+          "t_s": 2.3,
+          "from": "optimal",
+          "to": "right",
+          "mode": "SETUP_RIGHT"
+        },
+        {
+          "t_s": 2.35,
+          "from": "right",
+          "to": "optimal",
+          "mode": "FREE_RUN"
+        }
+      ],
+      "phase3_modes_observed": [
+        "FREE_RUN"
+      ],
+      "phase3_ttls_observed": [
+        "optimal"
+      ],
+      "phase4_tactical_line_count": 58,
+      "phase4_abort_pass_count": 0,
+      "phase4_emergency_avoid_count": 0,
+      "phase4_commit_pass_count": 0,
+      "phase4_event_commit_pass_left": 0,
+      "phase4_event_commit_pass_right": 0,
+      "phase4_event_shield_release": 0,
+      "phase5_tactical_line_count": 58,
+      "phase5_ttl_switch_count": 46,
+      "phase5_event_segment_override": 0,
+      "phase5_event_segment_release": 0,
+      "phase5_override_count": 0,
+      "phase5_modes_observed": [
+        "FREE_RUN",
+        "SETUP_RIGHT"
+      ],
+      "phase5_reasons_observed": [
+        "none"
+      ],
+      "fellow_placement_from_ego_offset_observed": true,
+      "fellow_st_log_present": true,
+      "fellow_s0": 1523.0457,
+      "fellow_t0": -1.6762,
+      "fellow_t_out_of_band": false,
+      "fellow_harness_line_count": 60,
+      "fellow_speed_min_mps": 1.003,
+      "fellow_speed_max_mps": 24.583,
+      "fellow_max_speed_step_jump_mps": 1.3249999999999993,
+      "fellow_speed_stuck_near_zero": false,
+      "fellow_position_range_m": 458.00215973289903,
+      "lap_completion_status": "completed",
+      "lap_time_s": 29.85,
+      "waypoint_hits": 89,
+      "collision": false,
+      "off_track": true,
+      "repeat_index": 1,
+      "repeat_count": 1
+    },
+    {
+      "scenario": "examples\\racing\\phase5_segments\\06_side_by_side_start_segment_tactics.scenic",
+      "log": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\src\\scenic\\domains\\racing\\benchmarks\\results\\phase5_20260410_201003\\logs\\06_side_by_side_start_segment_tactics.log",
+      "return_code": 0,
+      "min_opponent_distance_m": 947464.98,
+      "phase0_samples": 12,
+      "ttls_observed": [
+        "optimal"
+      ],
+      "planner_modes_observed": [
+        "follow_mpc"
+      ],
+      "ttl_switch_count": 0,
+      "near_miss_count": 0,
+      "collision_count": 0,
+      "off_track_count": 12,
+      "phase1_switch_observed": false,
+      "phase1_switch_count": 0,
+      "phase1_switches": [],
+      "phase2_line_count": 12,
+      "phase2_opponent_none_lines": 0,
+      "phase2_assess_errors": 0,
+      "phase2_overlap_count": 12,
+      "phase2_seg_ctx_count": 12,
+      "phase2_overlaps_observed": [
+        "clear_ahead"
+      ],
+      "phase2_seg_ctx_observed": [
+        "straight"
+      ],
+      "phase3_ttl_switch_count": 0,
+      "phase3_tactical_status_count": 12,
+      "phase3_switches": [],
+      "phase3_modes_observed": [
+        "FREE_RUN"
+      ],
+      "phase3_ttls_observed": [
+        "optimal"
+      ],
+      "phase4_tactical_line_count": 12,
+      "phase4_abort_pass_count": 0,
+      "phase4_emergency_avoid_count": 0,
+      "phase4_commit_pass_count": 0,
+      "phase4_event_commit_pass_left": 0,
+      "phase4_event_commit_pass_right": 0,
+      "phase4_event_shield_release": 0,
+      "phase5_tactical_line_count": 12,
+      "phase5_ttl_switch_count": 0,
+      "phase5_event_segment_override": 0,
+      "phase5_event_segment_release": 0,
+      "phase5_override_count": 0,
+      "phase5_modes_observed": [
+        "FREE_RUN"
+      ],
+      "phase5_reasons_observed": [
+        "none"
+      ],
+      "fellow_placement_from_ego_offset_observed": true,
+      "fellow_st_log_present": true,
+      "fellow_s0": 3046.6304,
+      "fellow_t0": -1.6024,
+      "fellow_t_out_of_band": false,
+      "fellow_harness_line_count": 60,
+      "fellow_speed_min_mps": 4.957,
+      "fellow_speed_max_mps": 23.326,
+      "fellow_max_speed_step_jump_mps": 1.8599999999999994,
+      "fellow_speed_stuck_near_zero": false,
+      "fellow_position_range_m": 354.26460159745005,
+      "lap_completion_status": "no_waypoint_events",
+      "lap_time_s": null,
+      "waypoint_hits": 0,
+      "collision": false,
+      "off_track": true,
+      "repeat_index": 1,
+      "repeat_count": 1
+    }
+  ]
+}

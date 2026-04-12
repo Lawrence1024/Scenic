@@ -51,6 +51,11 @@ from scenic.domains.racing.pass_commit_shield import (
     PassShieldState,
     pass_shield_step,
 )
+from scenic.domains.racing.phase5_segment_tactics import (
+    Phase5SegmentTacticsConfig,
+    Phase5SegmentTacticsState,
+    phase5_segment_tactics_step,
+)
 
 _PHASE4_SHIELD_MODES = (
     COMMIT_PASS_LEFT,
@@ -59,6 +64,17 @@ _PHASE4_SHIELD_MODES = (
     EMERGENCY_AVOID,
 )
 from scenic.simulators.dspace.ttl.loader import load_ttl_region
+from scenic.simulators.dspace.controldesk.readback import read_eval_gt_dist_object_1_m
+from scenic.domains.racing.eval_geometry import (
+    EVAL_DEFAULT_HULL_NEAR_M,
+    EVAL_DEFAULT_OBB_OVERLAP_EPS_M,
+    EVAL_DEFAULT_SENSOR_CLOSE_M,
+    classify_eval_contact,
+    eval_dspace_dist_object_1_valid,
+    eval_heading_rad,
+    eval_vehicle_length_width_m,
+    obb_separation_distance_m,
+)
 
 
 _PHASE1_TTL_FILE_BY_SELECTION = {
@@ -270,7 +286,7 @@ behavior FellowSwerveOutOfControlBehavior(
         self._fellow_plant_log_mode = mode
         wait
 
-behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False, pass_commit_shield_enabled=False):
+behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False, pass_commit_shield_enabled=False, phase5_segment_tactics_enabled=False):
     """Follow the car's TTL using MPC (Model Predictive Control) for lateral control.
     
     Primary Scenic behavior for line-following on the racing TTL. Lateral and longitudinal
@@ -290,6 +306,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             Phase 2 situation assessment (mutually exclusive with scripted ``planner_enabled`` schedule).
         pass_commit_shield_enabled: Phase 4 — commit / abort / emergency shield layered on Phase 3
             (requires ``tactical_planner_enabled=True``).
+        phase5_segment_tactics_enabled: Phase 5 — segment-aware shaping of tactical setup decisions
+            (requires ``tactical_planner_enabled=True``; runs before Phase 4 shield).
     """
     
     # SETUP & DEFAULTS
@@ -334,8 +352,17 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         except Exception:
             _phase1_speed_cap = None
     _tactical_config = TacticalPlannerConfig()
+    _phase5_config = Phase5SegmentTacticsConfig()
     _pass_shield_config = PassShieldConfig()
+    _phase5_enabled = bool(phase5_segment_tactics_enabled)
     _pass_shield_enabled = bool(pass_commit_shield_enabled)
+    if _phase5_enabled and not _tactical_planner_enabled:
+        print(f"{_fbhv} phase5_segment_tactics_enabled=True requires tactical_planner_enabled=True; Phase 5 segment tactics disabled.")
+        _phase5_enabled = False
+    if _phase5_enabled:
+        # Let Phase 5 own segment gating: allow setup candidates outside straights,
+        # then explicitly override in corner_entry/corner_body via Phase5 layer.
+        _tactical_config.pass_requires_straight = False
     if _pass_shield_enabled and not _tactical_planner_enabled:
         print(f"{_fbhv} pass_commit_shield_enabled=True requires tactical_planner_enabled=True; Phase 4 shield disabled.")
         _pass_shield_enabled = False
@@ -361,11 +388,14 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 print(f"{_fbhv} Phase1 planner enabled: schedule={_phase1_schedule if _phase1_schedule else '[]'} speed_cap={_phase1_speed_cap}")
             if _tactical_planner_enabled:
                 print(f"{_fbhv} Phase3 tactical planner enabled (FREE_RUN / FOLLOW / SETUP_*) speed_cap={_phase1_speed_cap}")
+            if _phase5_enabled:
+                print(f"{_fbhv} Phase5 segment-aware tactics enabled (entry/body setup shaping)")
             if _pass_shield_enabled:
                 print(f"{_fbhv} Phase4 pass/commit/shield enabled (COMMIT_PASS_* / ABORT_PASS / EMERGENCY_AVOID)")
         except Exception:
             _phase1_schedule_enabled = False
             _tactical_planner_enabled = False
+            _phase5_enabled = False
             _pass_shield_enabled = False
             print(f"{_fbhv} Phase1/Phase3 TTL dynamic mode disabled due to setup error.")
 
@@ -902,6 +932,43 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 _mode_tac = _mode3
                 _ttl_tac = _ttl3
                 _cap_tac = _cap3
+                _mode5 = _mode3
+                _ttl5 = _ttl3
+                _cap5 = _cap3
+                _p5_reason = None
+                if _phase5_enabled:
+                    if not hasattr(self, '_phase5_tactics_state'):
+                        self._phase5_tactics_state = Phase5SegmentTacticsState()
+                    _mode5, _ttl5, _cap5, _p5_reason = phase5_segment_tactics_step(
+                        self._phase5_tactics_state,
+                        _sit3,
+                        _mode3,
+                        _ttl3,
+                        _cap3,
+                        has_opponent=_nearest_o3 is not None,
+                        pit_mode=bool(pit_mode),
+                        opponent_speed_mps=float(_nearest_vs3 or 0.0),
+                        tactical_config=_tactical_config,
+                        phase5_config=_phase5_config,
+                    )
+                    if (_mode5 != _mode3) or (_ttl5 != _ttl3):
+                        _seg5 = str(getattr(_sit3, "segment_context", "none") or "none") if _sit3 is not None else "none"
+                        _ov5 = str(getattr(_sit3, "overlap_state", "none") or "none") if _sit3 is not None else "none"
+                        print(
+                            f"{_fl_mpc} [Phase5Event] t={_sim_time_s:.2f}s event=segment_override from={_mode3}:{_ttl3} to={_mode5}:{_ttl5} seg={_seg5} overlap={_ov5} reason={_p5_reason or 'none'}"
+                        )
+                    _p5_prev_override = bool(getattr(self, "_phase5_prev_override_active", False))
+                    _p5_override_now = bool((_mode5 != _mode3) or (_ttl5 != _ttl3))
+                    if _p5_prev_override and (not _p5_override_now):
+                        _seg5 = str(getattr(_sit3, "segment_context", "none") or "none") if _sit3 is not None else "none"
+                        _ov5 = str(getattr(_sit3, "overlap_state", "none") or "none") if _sit3 is not None else "none"
+                        print(
+                            f"{_fl_mpc} [Phase5Event] t={_sim_time_s:.2f}s event=segment_release from={_mode3}:{_ttl3} to={_mode5}:{_ttl5} seg={_seg5} overlap={_ov5}"
+                        )
+                    self._phase5_prev_override_active = _p5_override_now
+                    _mode_tac = _mode5
+                    _ttl_tac = _ttl5
+                    _cap_tac = _cap5
                 _p4_reason = None
                 if _pass_shield_enabled:
                     if not hasattr(self, '_phase4_shield_state'):
@@ -927,6 +994,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         wp_last_idx = 0
                         wp_list = list(self.waypoints)
                         print(f"{_fl_mpc} [Phase3Tactical] t={_sim_time_s:.2f}s ttl_switch {_p3}->{_phase1_active_ttl} mode={_mode3}")
+                        if _phase5_enabled:
+                            _seg5 = str(getattr(_sit3, "segment_context", "none") or "none") if _sit3 is not None else "none"
+                            _ov5 = str(getattr(_sit3, "overlap_state", "none") or "none") if _sit3 is not None else "none"
+                            print(f"{_fl_mpc} [Phase5Tactical] t={_sim_time_s:.2f}s ttl_switch {_p3}->{_phase1_active_ttl} mode_in={_mode3} mode_out={_mode5} seg={_seg5} overlap={_ov5} reason={_p5_reason or 'none'}")
                         if _pass_shield_enabled:
                             print(f"{_fl_mpc} [Phase4Tactical] t={_sim_time_s:.2f}s ttl_switch {_p3}->{_phase1_active_ttl} eff_mode={_mode_tac} reason={_p4_reason or 'none'}")
                 self.active_ttl = _phase1_active_ttl
@@ -970,6 +1041,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 self._phase3_last_mode = _mode_tac
                 if getattr(self, '_full_control_ticks', 0) % 50 == 0:
                     print(f"{_fl_mpc} [Phase3Tactical] t={_sim_time_s:.2f}s mode={_mode3} ttl={_phase1_active_ttl} cap={self._phase3_speed_cap}")
+                    if _phase5_enabled:
+                        _seg5 = str(getattr(_sit3, "segment_context", "none") or "none") if _sit3 is not None else "none"
+                        _ov5 = str(getattr(_sit3, "overlap_state", "none") or "none") if _sit3 is not None else "none"
+                        print(f"{_fl_mpc} [Phase5Tactical] t={_sim_time_s:.2f}s mode_in={_mode3} mode_out={_mode5} ttl={_phase1_active_ttl} cap={self._phase3_speed_cap} seg={_seg5} overlap={_ov5} reason={_p5_reason or 'none'}")
                     if _pass_shield_enabled:
                         print(f"{_fl_mpc} [Phase4Tactical] t={_sim_time_s:.2f}s eff_mode={_mode_tac} ttl={_phase1_active_ttl} cap={self._phase3_speed_cap} reason={_p4_reason or 'none'}")
             
@@ -1965,6 +2040,77 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 f"ego_s={_ego_s_s} ego_speed={current_speed:.2f} "
                 f"nearest_opp_ds={_opp_rel_s_s} nearest_opp_rel_speed={_opp_rel_v_s} nearest_opp_dist={_opp_dist_s}"
             )
+            # Evaluation-only: dSPACE Object_Sensor_3D + IAC OBB gap (not used for control).
+            _p0 = getattr(simulation().scene, "params", None) or {}
+            if _p0.get("eval_gt_dist_log", True):
+                _gt_d = read_eval_gt_dist_object_1_m(sim)
+                _gt_valid = eval_dspace_dist_object_1_valid(_gt_d)
+                _obb_sep = None
+                _center_minus_obb = None
+                _obb_minus_gt = None
+                _oeps = float(_p0.get("eval_obb_overlap_eps_m", EVAL_DEFAULT_OBB_OVERLAP_EPS_M))
+                _hnear = float(_p0.get("eval_hull_near_m", EVAL_DEFAULT_HULL_NEAR_M))
+                _sclose = float(_p0.get("eval_sensor_close_m", EVAL_DEFAULT_SENSOR_CLOSE_M))
+                try:
+                    if nearest_obj is not None and car_heading is not None:
+                        _oh = eval_heading_rad(nearest_obj)
+                        if _oh is not None:
+                            _eL, _eW = eval_vehicle_length_width_m(self)
+                            _oL, _oW = eval_vehicle_length_width_m(nearest_obj)
+                            _obb_sep = obb_separation_distance_m(
+                                float(px),
+                                float(py),
+                                float(car_heading),
+                                _eL,
+                                _eW,
+                                float(nearest_obj.position.x),
+                                float(nearest_obj.position.y),
+                                float(_oh),
+                                _oL,
+                                _oW,
+                            )
+                            if nearest_dist is not None:
+                                _center_minus_obb = float(nearest_dist) - float(_obb_sep)
+                            if _gt_valid and _obb_sep is not None:
+                                _obb_minus_gt = float(_obb_sep) - float(_gt_d)
+                except Exception:
+                    pass
+                _risk, _cflags = classify_eval_contact(
+                    _obb_sep,
+                    _gt_d,
+                    overlap_eps_m=_oeps,
+                    hull_near_m=_hnear,
+                    sensor_close_m=_sclose,
+                )
+                _os = f"{_obb_sep:.3f}" if _obb_sep is not None else "na"
+                _cmo = f"{_center_minus_obb:.3f}" if _center_minus_obb is not None else "na"
+                _omg = f"{_obb_minus_gt:.3f}" if _obb_minus_gt is not None else "na"
+                _gtr = f"{_gt_d:.3f}" if _gt_d is not None else "na"
+                _dcmg = "na"
+                if nearest_dist is not None and _gt_valid:
+                    _dcmg = f"{float(nearest_dist) - float(_gt_d):.3f}"
+                elif nearest_dist is not None and not _gt_valid:
+                    _dcmg = "na(invalid_gt)"
+                _nds = f"{nearest_dist:.3f}" if nearest_dist is not None else "na"
+                print(
+                    f"[EvalGT] t={t_log:.2f}s dspace_obj1_raw_m={_gtr} dspace_valid={1 if _gt_valid else 0} "
+                    f"bbox_gap_m={_os} nearest_opp_center_dist_m={_nds} "
+                    f"center_minus_bbox_m={_cmo} center_minus_gt_m={_dcmg} bbox_minus_gt_m={_omg}"
+                )
+                print(
+                    f"[EvalContact] t={t_log:.2f}s risk={_risk} "
+                    f"bbox_gap_m={_os} dspace_valid={1 if _gt_valid else 0} "
+                    f"overlap_hull={1 if _cflags['overlap_obb'] else 0} "
+                    f"overlap_sensor={1 if _cflags['overlap_sensor'] else 0} "
+                    f"near_hull={1 if _cflags['near_obb'] else 0} "
+                    f"near_sensor={1 if _cflags['near_sensor'] else 0}"
+                )
+                if _risk == "overlap" or _risk == "near":
+                    _ds_show = f"{float(_gt_d):.3f}" if _gt_valid else "na"
+                    print(
+                        f"[EvalEvent] t={t_log:.2f}s type=eval_contact severity={_risk} "
+                        f"bbox_gap_m={_os} dspace_obj1_m={_ds_show} dspace_valid={1 if _gt_valid else 0}"
+                    )
             # Phase 2: race-semantics opponent state (planner inputs; same cadence as Phase 0 line).
             try:
                 if nearest_obj is not None and car_heading is not None:
@@ -2001,11 +2147,20 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     print(f"[Phase2] t={t_log:.2f}s opponent=none")
             except Exception as _e_p2:
                 print(f"[Phase2] t={t_log:.2f}s assess_error={_e_p2}")
-            # Event thresholds for baseline KPI extraction.
-            if nearest_dist is not None and nearest_dist <= 3.0:
-                print(f"[Phase0Event] t={t_log:.2f}s type=near_miss distance_m={nearest_dist:.2f}")
-            if nearest_dist is not None and nearest_dist <= 1.0:
-                print(f"[Phase0Event] t={t_log:.2f}s type=collision distance_m={nearest_dist:.2f}")
+            # Legacy center-distance KPIs (often optimistic vs hull contact). Prefer [EvalContact]/[EvalEvent].
+            _p0_legacy = getattr(simulation().scene, "params", None) or {}
+            _log_center_legacy = _p0_legacy.get("phase0_log_legacy_center_contact_events", True)
+            if _log_center_legacy:
+                if nearest_dist is not None and nearest_dist <= 3.0:
+                    print(
+                        f"[Phase0Event] t={t_log:.2f}s type=near_miss distance_m={nearest_dist:.2f} "
+                        f"source=center_distance_legacy"
+                    )
+                if nearest_dist is not None and nearest_dist <= 1.0:
+                    print(
+                        f"[Phase0Event] t={t_log:.2f}s type=collision distance_m={nearest_dist:.2f} "
+                        f"source=center_distance_legacy"
+                    )
             if cte is not None and abs(float(cte)) >= 10.0:
                 print(f"[Phase0Event] t={t_log:.2f}s type=off_track cte_m={float(cte):.3f}")
             # Ref continuity / gate logging (todo1: match_dist, gate ACCEPT/REJECT, s_ref/dS_ref/s_jump_flag, segment_prev->new, stick_blocked, e_y_mpc vs cte_behavior)

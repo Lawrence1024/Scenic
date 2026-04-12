@@ -20,6 +20,12 @@ EGO_GPS_LATITUDE_DEG = f"{EGO_GPS_BASE}/Latitude_deg"
 EGO_GPS_HEADING_DEG = f"{EGO_GPS_BASE}/Heading_deg"
 EGO_GPS_READ_PATHS = (EGO_GPS_LONGITUDE_DEG, EGO_GPS_LATITUDE_DEG, EGO_GPS_HEADING_DEG)
 
+# Object_Sensor_3D: distance to first classified object (evaluation / ground-truth logging only — do not use for control).
+EVAL_GT_DIST_OBJECT_1_M_PATH = (
+    "Platform()://ASM_Traffic/Model Root/Environment/Sensors/UserInterface/DISP_Plant/"
+    "Object_Sensor_3D/IdxSelect_3DSensor/Dist_Object_1[m]/Out1"
+)
+
 # GNSS (GPS) paths for Fellows - VehicleSensors/ground_truth/GPS_POSITION/GPS_CALC (indexed [i]). Use VesiInterface or Vesilnterface to match your ASM_Traffic model.
 FELLOW_GPS_BASE = "Platform()://ASM_Traffic/Model Root/VesiInterface/VehicleSensors/ground_truth/GPS_POSITION/GPS_CALC"
 FELLOW_GPS_BASE_ALT = "Platform()://ASM_Traffic/Model Root/Vesilnterface/VehicleSensors/ground_truth/GPS_POSITION/GPS_CALC"
@@ -48,6 +54,25 @@ def _maybe_log_fellow_harness(sim, fellow_index: int, speed_mps: float, x: float
         f"[FellowHarness] t={sim_t:.2f}s idx={int(fellow_index)} speed_mps={float(speed_mps):.3f} "
         f"x={float(x):.3f} y={float(y):.3f}"
     )
+
+
+def read_eval_gt_dist_object_1_m(sim):
+    """Read dSPACE ``Dist_Object_1`` (m) from Object_Sensor_3D.
+
+    Intended for **offline evaluation and log comparison** against Scenic center-to-center
+    opponent distance. Must **not** be used in planner, MPC, shield, or any control path.
+    Returns ``None`` if the simulator has no variable backend or read fails.
+    """
+    var = getattr(sim, "_var_access", None) or getattr(sim, "_cd", None)
+    if not var:
+        return None
+    try:
+        v = var.get_var(EVAL_GT_DIST_OBJECT_1_M_PATH)
+        if v is None:
+            return None
+        return float(v)
+    except Exception:
+        return None
 
 
 def read_ego_gps(sim):

@@ -5,6 +5,11 @@ Default directory: ``examples/racing/phase4_pass_shield`` (ego typically uses
 
 ``collect_metrics_from_log`` prefers ``[Phase4Event]`` lines (one per mode entry
 or shield release); legacy logs fall back to ``[Phase4Tactical]`` substrings.
+
+**Contract:** Pass/fail summaries use **on-board Scenic telemetry** only (e.g.
+``[Phase0]`` center-to-center gap, ``[Phase0Event]`` collision/near-miss,
+``[Phase2]``/``[Phase3]``/``[Phase4]`` lines). Optional ``[EvalGT]`` dSPACE sensor
+lines are for **offline comparison** and are **not** ingested into these metrics.
 """
 
 from scenic.domains.racing.benchmarks.phase_run_common import (
@@ -37,6 +42,9 @@ if __name__ == "__main__":
                     "phase4_event_commit_pass_left",
                     "phase4_event_commit_pass_right",
                     "phase4_event_shield_release",
+                    "eval_contact_overlap_count",
+                    "eval_contact_near_count",
+                    "collision_eval_hull_overlap",
                     "phase2_line_count",
                     "collision",
                     "off_track",

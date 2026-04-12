@@ -9,6 +9,7 @@ This folder breaks the master roadmap in `overall_plan.md` into actionable per-p
 - **Phase 2** — complete (situation assessment module, snapshot tests, `[Phase2]` logs).
 - **Phase 3** — complete (tactical planner + `tactical_planner_enabled`; Phase 0–aligned bank via `phase3_runner` on `examples/racing/phase3_tactical/`, `BENCHMARK_AI_DIGEST` / `summary.json`). See [Phase 3 plan](./phase-3-smart-follow-and-stable-ttl.md#validated-benchmarks-dspace).
 - **Phase 4** — complete (pass commit/abort/shield in `pass_commit_shield.py` + `pass_commit_shield_enabled`; seven-scenario bank in `examples/racing/phase4_pass_shield/` validated via `phase4_runner`); [plan](./phase-4-pass-commit-abort-and-shield.md).
+- **Phase 5** — complete (segment-aware shaping in `phase5_segment_tactics.py` + `phase5_segment_tactics_enabled`; benchmark bank `examples/racing/phase5_segments/` including `07`–`08` corner cases and `09`–`10` straight-opening symmetry; `phase5_runner` + digest KPIs). Validated run record and follow-ups: [Phase 5 plan](./phase-5-segment-aware-tactics.md#validated-benchmarks-record).
 
 ## Phase Plans
 
@@ -26,7 +27,7 @@ This folder breaks the master roadmap in `overall_plan.md` into actionable per-p
 - [Success definition](./success-definition.md)
 - Fellow / traffic harness (placement + `[FellowHarness]` readback, `fellow_runner`): see [fellow_smoke README](../../../../../examples/racing/fellow_smoke/README.md).
 
-**Benchmark runners:** New `*.scenic` files under each phase’s example folder are picked up automatically by that phase’s runner (no filename list in code). Runners print a **`BENCHMARK_AI_DIGEST_*`** JSON block plus `summary.json` / `summary.csv` under `benchmarks/results/<run_id>/`. Default simulation length is **2000** steps (~20 s at 0.01 s/step) unless overridden (pass ``--time 3000`` for ~30 s). When implementing phases 4–6, revisit the runner and `phase_run_common.collect_metrics_from_log` for new KPI columns and log parsers—see [Racing examples README](../../../../../examples/racing/README.md) (sections **Sharing benchmark output** and **Phases 4–6**).
+**Benchmark runners:** New `*.scenic` files under each phase’s example folder are picked up automatically by that phase’s runner (no filename list in code). Runners print a **`BENCHMARK_AI_DIGEST_*`** JSON block plus `summary.json` / `summary.csv` under `benchmarks/results/<run_id>/`, and after each scenario a **`Log file:`** line with the absolute path to that run’s captured stdout/stderr (under `results/<run_id>/logs/<stem>.log`). Default simulation length is **2000** steps (~20 s at 0.01 s/step) unless overridden (pass ``--time 3000`` for ~30 s). When implementing phases 4–6, revisit the runner and `phase_run_common.collect_metrics_from_log` for new KPI columns and log parsers—see [Racing examples README](../../../../../examples/racing/README.md) (sections **Sharing benchmark output** and **Phases 4–6**).
 
 ## Execution Order Checklist
 
@@ -35,7 +36,7 @@ This folder breaks the master roadmap in `overall_plan.md` into actionable per-p
 - [x] Complete Phase 2 opponent-state interpreter.
 - [x] Complete Phase 3 conservative tactical behavior (code, unit tests, and Phase 0 bank cross-check on dSPACE).
 - [x] Complete Phase 4 commit/abort overtaking with safety shield (logic, scenario bank, and dSPACE sign-off run completed).
-- [ ] Complete Phase 5 segment-aware tactical improvements.
+- [x] Complete Phase 5 segment-aware tactical improvements (implementation + Phase 5 bank; see [Phase 5 validated record](./phase-5-segment-aware-tactics.md#validated-benchmarks-record)).
 - [ ] Complete Phase 6 multi-opponent and long-run robustness.
 
 ## Notes

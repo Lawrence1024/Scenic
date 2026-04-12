@@ -269,6 +269,8 @@ Compare against Phase 4 on mixed scenarios:
 
 **Success =** planner becomes strategically smarter, not just reactive.
 
+**Status (implementation):** Segment-aware tactics, benchmark bank (`examples/racing/phase5_segments/`, **`00`–`10`**), `phase5_runner`, and digest KPIs are in place; validated run record and comparison vs the Phase 4 layout set are documented in `src/scenic/domains/racing/plans/phase-5-segment-aware-tactics.md`.
+
 ---
 
 ## Phase 6 — Multi-opponent robustness and long-run stability

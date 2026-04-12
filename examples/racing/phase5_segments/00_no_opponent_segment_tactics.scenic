@@ -1,3 +1,5 @@
+# Phase 5 benchmark: segment-aware tactical shaping over Phase 4 stack.
+# Fellow (v,d) comes from behavior; ttlFileName attaches polyline/route.
 param map = localPath('../../../assets/maps/dSPACE/LagunaSeca.xodr')
 param use2DMap = True
 param time_step = 0.01
@@ -5,6 +7,7 @@ param control_period = 0.05
 param ttlFolder = localPath('../../../assets/ttls/LS_ENU_TTL_CSV')
 param launch_veos_ipc_client = False
 param scenic_control = True
+param fellowHarnessLog = True
 model scenic.simulators.dspace.racing_model
 
 ego = new RacingCar at (-78.86454576530903, -112.41203639782893), \
@@ -17,5 +20,8 @@ ego.behavior = FollowRacingLineMPCBehavior(
     target_speed=60,
     manage_gears=True,
     use_waypoints=True,
-    mpc_config_path=None
+    mpc_config_path=None,
+    tactical_planner_enabled=True,
+    pass_commit_shield_enabled=True,
+    phase5_segment_tactics_enabled=True,
 )
