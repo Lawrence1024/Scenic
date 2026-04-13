@@ -19,7 +19,6 @@ Scenarios for the racing domain using the dSPACE racing simulator. All examples 
 | **phase3_tactical/** | Phase 3 tactical planner — **full bank** (same `00`–`06` layouts as **phase0_benchmark**); `phase3_runner`. Optional alias: `phase3_on_phase0_runner` (same scenarios/KPIs). |
 | **phase4_pass_shield/** | Phase 4 pass commit / abort / shield (`pass_commit_shield_enabled=True`); `phase4_runner`. Seven scenarios (`00`–`06`), same layouts as **phase0_benchmark** with tactical + pass-commit shield on ego. |
 | **phase5_segments/** | Phase 5 segment-aware tactics (`phase5_segment_tactics_enabled=True`); bank **`00`–`06`** mirrors Phase 4 layouts, plus **`07`–`08`** (TTL-derived **corner_entry** / **corner_body** poses) and **`09`–`10`** (straight-opening slow-fellow left/right symmetry); `phase5_runner`. |
-| **phase6_multi/** | Phase 6 multi-car (placeholder); `phase6_runner`. |
 
 Run with the racing model, e.g.:
 
@@ -51,6 +50,20 @@ python -m scenic.domains.racing.benchmarks.run_all_benchmarks_so_far --from phas
 
 This combined runner now executes: `fellow_runner`, `fellow_placement_debug_runner`, and `phase0_runner` through `phase5_runner` (in sequence).
 
+**Validation full-stack runner** (post–Phase 5 stress / regression campaign): runs **phase0 → phase5 → fellow** in one parent results folder, merges every child `summary.json` into **`merged_summary.json`**, and prints a **single** combined `BENCHMARK_AI_DIGEST_*` (rows include `source_child` and `child_run_id`). Plan: `src/scenic/domains/racing/plans/comprehensive-planner-validation-runner.md`.
+
+```bash
+python -m scenic.domains.racing.benchmarks.validation_full_stack_runner
+python -m scenic.domains.racing.benchmarks.validation_full_stack_runner --time 3000
+python -m scenic.domains.racing.benchmarks.validation_full_stack_runner --suite phases_only
+python -m scenic.domains.racing.benchmarks.validation_full_stack_runner --suite minimal --time 2000
+python -m scenic.domains.racing.benchmarks.validation_full_stack_runner --continue-on-failure --skip-placement
+```
+
+- **`--suite`:** `all` (default: phases + fellow_smoke + fellow_placement), `phases_only`, `minimal` (phase0 + phase5 + fellow_smoke), `fellow_only`.
+- Other flags (`--time`, `--inter-run-delay-s`, `--scenario`, **`--repeats`**, …) are **forwarded** to each child runner. **`--repeats 3`** runs every scenario three times (phase0/phase1 now support this; phase2+ already did).
+- Output: `benchmarks/results/validation_full_stack_<timestamp>/merged_summary.json` plus per-child subfolders.
+
 **Fellow vs TTL:** Scenario files set ``param fellowHarnessLog = True`` so logs can include ``[FellowHarness]`` readback alongside ego ``[Phase0]`` / ``[Phase2]``. ``ttlFileName`` on a fellow attaches route/polyline — it does not by itself mean the fellow "follows optimal vs left vs right TTL" as a planner; see ``examples/racing/fellow_smoke/README.md`` (**TTL files and fellow behaviors**).
 
 Run the **fellow / traffic harness** (fellow placement + optional `[FellowHarness]` metrics; not a numbered ego phase):
@@ -75,21 +88,20 @@ python -m scenic.domains.racing.benchmarks.phase1_runner
 
 (Same delay and filtering flags as Phase 0; default **`--time` is 2000** steps. See `examples/racing/phase1_planner/README.md`.)
 
-Phase 2–6 use the same CLI pattern (`--scenario-dir`, `--scenario`, `--scenario-glob`, `--time`, `--inter-run-delay-s`, `--out-dir`):
+Phase 2–5 use the same CLI pattern (`--scenario-dir`, `--scenario`, `--scenario-glob`, `--time`, `--inter-run-delay-s`, `--out-dir`):
 
 ```bash
 python -m scenic.domains.racing.benchmarks.phase2_runner
 python -m scenic.domains.racing.benchmarks.phase3_runner
 python -m scenic.domains.racing.benchmarks.phase4_runner
 python -m scenic.domains.racing.benchmarks.phase5_runner
-python -m scenic.domains.racing.benchmarks.phase6_runner
 ```
 
 `phase3_on_phase0_runner` is a backward-compatible alias (same bank and KPIs as `phase3_runner`; legacy `run_id_prefix`). Prefer **`phase3_runner`** for new scripts.
 
 **Default horizon:** phase runners use **2000** steps (~**20 s** at 0.01 s/step) unless you pass `--time`. Use **`--time 3000`** (~30 s) when you need a longer run (e.g. closer to a full lap or parity with older sign-off runs).
 
-### Phases 4–6: scenarios vs runner code
+### Phases 4–5: scenarios vs runner code
 
 Each phase runner uses the matching folder in this table as its default `--scenario-dir`. **Every `*.scenic` file in that folder is run automatically** (sorted by name). If you add or generate a new example (for example `examples/racing/phase4_pass_shield/02_my_case.scenic`), you do **not** need to edit `phase4_runner.py` to “register” the filename—the next full bank run will include it.
 
@@ -104,7 +116,7 @@ Optional: in CI or docs, pin a subset with `--scenario file.scenic` for a stable
 
 ### Sharing benchmark output (terminal / AI / logs)
 
-After **phase0**, **phase1**, **phase2–6**, or **phase3** runners finish, the terminal prints a single JSON line between **`BENCHMARK_AI_DIGEST_BEGIN`** and **`BENCHMARK_AI_DIGEST_END`**. That object has `schema: "benchmark_ai_digest_v1"`, `aggregate` rollups, and per-scenario `rows` (flat KPIs). Copy that whole block when sharing results, or attach `summary.json` under the path printed as `paths.run_dir` in the digest.
+After **phase0**, **phase1**, **phase2–5**, or **phase3** runners finish, the terminal prints a single JSON line between **`BENCHMARK_AI_DIGEST_BEGIN`** and **`BENCHMARK_AI_DIGEST_END`**. That object has `schema: "benchmark_ai_digest_v1"`, `aggregate` rollups, and per-scenario `rows` (flat KPIs). Copy that whole block when sharing results, or attach `summary.json` under the path printed as `paths.run_dir` in the digest.
 
 During the run, after each scenario’s one-line summary, the runner also prints **`Log file:`** with the **absolute path** to that scenario’s captured log (`benchmarks/results/<run_id>/logs/<scenario_stem>.log`), so you can open it directly while debugging.
 

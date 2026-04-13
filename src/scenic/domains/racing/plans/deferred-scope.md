@@ -2,6 +2,7 @@
 
 The following items are explicitly out of scope for the current planner implementation:
 
+- multi-opponent threat modeling and racing (planner targets **one** dynamic opponent; multiple simultaneous opponents are future work)
 - redesigning pit route detection
 - pit entry commitment logic
 - pit exit merge planner

@@ -1,7 +1,7 @@
-"""Tests for Phase 4 benchmark log parsing ([Phase4Event] vs legacy [Phase4Tactical]).
+"""Tests for benchmark log parsing with canonical event signals.
 
 **Full dSPACE Phase 4 runs** should show ego shield / tactical evidence via
-``[Phase4Event]`` (preferred) or legacy ``[Phase4Tactical]``, plus ego situation
+``[Phase4Event]`` plus ego situation
 assessment ``[Phase2]`` and baseline ``[Phase0]`` when those log lines are enabled.
 With ``param fellowHarnessLog = True``, logs also include ``[FellowHarness]`` samples;
 **fellow pose/speed** supports whether the traffic car is present in readback — not
@@ -27,7 +27,7 @@ def test_collect_metrics_phase4_events_preferred(tmp_path: Path) -> None:
         "[Phase4Event] t=1.00s event=commit_pass_right mode3=SETUP_RIGHT eff=COMMIT_PASS_RIGHT reason=commit_dwell_right risk_01=0.10 seg=straight overlap=clear_ahead\n"
         "[Phase4Event] t=2.00s event=abort_pass mode3=SETUP_RIGHT eff=ABORT_PASS reason=setup_risk risk_01=0.70 seg=straight overlap=clear_ahead\n"
         "[Phase4Event] t=3.00s event=shield_release from=ABORT_PASS to=FOLLOW mode3=FOLLOW risk_01=0.20 seg=straight overlap=clear_ahead\n"
-        "[Phase4Tactical] t=1.00s eff_mode=COMMIT_PASS_RIGHT ttl=right cap=30.0 reason=none\n",
+        ,
         encoding="utf-8",
     )
     m = collect_metrics_from_log(log)
@@ -37,22 +37,6 @@ def test_collect_metrics_phase4_events_preferred(tmp_path: Path) -> None:
     assert m["phase4_abort_pass_count"] == 1
     assert m["phase4_emergency_avoid_count"] == 0
     assert m["phase4_event_shield_release"] == 1
-    assert m["phase4_tactical_line_count"] == 1
-
-
-def test_collect_metrics_phase4_legacy_tac_fallback(tmp_path: Path) -> None:
-    log = tmp_path / "legacy.log"
-    log.write_text(
-        "[Phase4Tactical] t=1.00s eff_mode=COMMIT_PASS_LEFT ttl=left cap=30.0 reason=none\n"
-        "[Phase4Tactical] t=1.00s eff_mode=ABORT_PASS ttl=optimal cap=25.0 reason=setup_risk\n",
-        encoding="utf-8",
-    )
-    m = collect_metrics_from_log(log)
-    assert m["phase4_commit_pass_count"] == 1
-    assert m["phase4_abort_pass_count"] == 1
-    assert m["phase4_event_commit_pass_left"] == 0
-    assert m["phase4_event_shield_release"] == 0
-    assert m["phase4_tactical_line_count"] == 2
 
 
 def test_collect_metrics_ignores_eval_gt_and_sensor_strings(tmp_path: Path) -> None:
@@ -85,14 +69,17 @@ def test_collect_metrics_eval_contact_events(tmp_path: Path) -> None:
     assert m["eval_contact_near_count"] == 1
     assert m["eval_contact_overlap_count"] == 1
     assert m["collision_eval_hull_overlap"] is True
+    assert m["collision_count"] == 1
+    assert m["collision"] is True
+    assert m["near_miss_count"] == 1
 
 
 def test_phase0_collision_and_near_miss_events_finalize_row(tmp_path: Path) -> None:
-    """``[Phase0Event]`` collision / near_miss drive ``finalize_row`` safety flags."""
+    """Eval contact events drive canonical collision/near-miss safety flags."""
     log = tmp_path / "events.log"
     log.write_text(
-        "[Phase0Event] t=1.00s type=near_miss distance_m=2.50 source=center_distance_legacy\n"
-        "[Phase0Event] t=2.00s type=collision distance_m=0.80 source=center_distance_legacy\n",
+        "[EvalEvent] t=1.00s type=eval_contact severity=near bbox_gap_m=0.80 dspace_obj1_m=1.20 dspace_valid=1\n"
+        "[EvalEvent] t=2.00s type=eval_contact severity=overlap bbox_gap_m=0.000 dspace_obj1_m=na dspace_valid=0\n",
         encoding="utf-8",
     )
     m = collect_metrics_from_log(log)

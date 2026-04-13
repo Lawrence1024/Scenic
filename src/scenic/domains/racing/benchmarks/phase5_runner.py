@@ -23,7 +23,6 @@ if __name__ == "__main__":
                     "phase1_switch_observed",
                     "phase3_ttl_switch_count",
                     "phase3_tactical_status_count",
-                    "phase4_tactical_line_count",
                     "phase4_abort_pass_count",
                     "phase4_emergency_avoid_count",
                     "phase4_commit_pass_count",

@@ -1,14 +1,14 @@
-"""Shared helpers for phase benchmark runners (phase0–phase6).
+"""Shared helpers for benchmark runners (phase0–phase5 + fellow harness).
 
 Scenario discovery for `run_phase_main`: every ``*.scenic`` in the chosen
 ``--scenario-dir`` (default from `PhaseRunnerSpec.default_scenario_dir`) is run,
 in sorted filename order. Adding a new benchmark file under that directory does
 not require editing the phase runner module.
 
-When a planned phase (4–6) is implemented, update that phase's `PhaseRunnerSpec`
-in ``phase4_runner.py`` / ``phase5_runner.py`` / ``phase6_runner.py`` (CSV
+When a planned phase (4–5) is implemented, update that phase's `PhaseRunnerSpec`
+in ``phase4_runner.py`` / ``phase5_runner.py`` (CSV
 columns, log-parser flags) and extend `collect_metrics_from_log` here if new log
-tags need KPIs. See ``examples/racing/README.md`` (Phases 4–6).
+tags need KPIs. See ``examples/racing/README.md`` (Phases 4–5).
 
 Runners print a ``BENCHMARK_AI_DIGEST_*`` JSON block for copy-paste summaries.
 """
@@ -111,7 +111,6 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "phase2_opponent_none_lines",
     "phase3_ttl_switch_count",
     "phase3_tactical_status_count",
-    "phase4_tactical_line_count",
     "phase4_abort_pass_count",
     "phase4_emergency_avoid_count",
     "phase4_commit_pass_count",
@@ -364,19 +363,14 @@ def collect_metrics_from_log(
     phase3_modes: List[str] = []
     phase3_ttls: List[str] = []
 
-    phase4_line_count = 0
     phase4_abort_pass_count = 0
     phase4_emergency_count = 0
     phase4_commit_count = 0
-    phase4_tac_abort = 0
-    phase4_tac_emergency = 0
-    phase4_tac_commit = 0
     phase4_event_commit_left = 0
     phase4_event_commit_right = 0
     phase4_event_abort = 0
     phase4_event_emergency = 0
     phase4_event_shield_release = 0
-    saw_phase4_event = False
     phase5_line_count = 0
     phase5_ttl_switch_count = 0
     phase5_event_segment_override = 0
@@ -400,7 +394,6 @@ def collect_metrics_from_log(
             if "[Phase4Event]" in line:
                 pe = RE_PHASE4_EVENT.search(line)
                 if pe:
-                    saw_phase4_event = True
                     ev = pe.group("event")
                     if ev == "commit_pass_left":
                         phase4_event_commit_left += 1
@@ -439,14 +432,6 @@ def collect_metrics_from_log(
                     phase5_reasons.append(_reason)
                     if _reason != "none":
                         phase5_override_count += 1
-            if "[Phase4Tactical]" in line:
-                phase4_line_count += 1
-                if "ABORT_PASS" in line:
-                    phase4_tac_abort += 1
-                if "EMERGENCY_AVOID" in line:
-                    phase4_tac_emergency += 1
-                if "COMMIT_PASS" in line:
-                    phase4_tac_commit += 1
             m = RE_PHASE0_LINE.search(line)
             if m:
                 ttl_seen.append(m.group("ttl"))
@@ -530,22 +515,12 @@ def collect_metrics_from_log(
         out["phase3_switches"] = phase3_switches
         out["phase3_modes_observed"] = sorted(set(phase3_modes))
         out["phase3_ttls_observed"] = sorted(set(phase3_ttls))
-    out["phase4_tactical_line_count"] = phase4_line_count
-    if saw_phase4_event:
-        out["phase4_abort_pass_count"] = phase4_event_abort
-        out["phase4_emergency_avoid_count"] = phase4_event_emergency
-        out["phase4_commit_pass_count"] = phase4_event_commit_left + phase4_event_commit_right
-        out["phase4_event_commit_pass_left"] = phase4_event_commit_left
-        out["phase4_event_commit_pass_right"] = phase4_event_commit_right
-        out["phase4_event_shield_release"] = phase4_event_shield_release
-    else:
-        # Legacy logs without [Phase4Event]: approximate from [Phase4Tactical] substrings.
-        out["phase4_abort_pass_count"] = phase4_tac_abort
-        out["phase4_emergency_avoid_count"] = phase4_tac_emergency
-        out["phase4_commit_pass_count"] = phase4_tac_commit
-        out["phase4_event_commit_pass_left"] = 0
-        out["phase4_event_commit_pass_right"] = 0
-        out["phase4_event_shield_release"] = 0
+    out["phase4_abort_pass_count"] = phase4_event_abort
+    out["phase4_emergency_avoid_count"] = phase4_event_emergency
+    out["phase4_commit_pass_count"] = phase4_event_commit_left + phase4_event_commit_right
+    out["phase4_event_commit_pass_left"] = phase4_event_commit_left
+    out["phase4_event_commit_pass_right"] = phase4_event_commit_right
+    out["phase4_event_shield_release"] = phase4_event_shield_release
     out["phase5_tactical_line_count"] = phase5_line_count
     out["phase5_ttl_switch_count"] = phase5_ttl_switch_count
     out["phase5_event_segment_override"] = phase5_event_segment_override
@@ -797,10 +772,16 @@ def run_scenic_scenario(repo_root: Path, scenario: Path, out_log: Path, sim_step
 
 
 def finalize_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize safety metrics using eval-contact as canonical source."""
+
+    eval_overlap = int(row.get("eval_contact_overlap_count", 0) or 0)
+    eval_near = int(row.get("eval_contact_near_count", 0) or 0)
+
+    row["collision_count"] = eval_overlap
+    row["near_miss_count"] = eval_near
     row["collision"] = bool(row.get("collision_count", 0) > 0)
     row["off_track"] = bool(row.get("off_track_count", 0) > 0)
-    if "collision_eval_hull_overlap" not in row:
-        row["collision_eval_hull_overlap"] = bool(row.get("eval_contact_overlap_count", 0) > 0)
+    row["collision_eval_hull_overlap"] = bool(eval_overlap > 0)
     return row
 
 
@@ -835,7 +816,7 @@ def run_one_scenario_with_collect(
 
 @dataclass
 class PhaseRunnerSpec:
-    """Configuration for `run_phase_main` (phases 2–6).
+    """Configuration for `run_phase_main` (phase and fellow benchmark runners).
 
     ``default_scenario_dir`` is the folder whose ``*.scenic`` files form the
     default benchmark bank; filenames are not listed in code.
@@ -857,7 +838,7 @@ class PhaseRunnerSpec:
 
 
 def run_phase_main(spec: PhaseRunnerSpec) -> int:
-    """CLI entry for phase 2–6 benchmark runners (same flags as phase1).
+    """CLI entry for benchmark runners sharing the common runner flow.
 
     Runs all ``*.scenic`` files in the scenario directory (after optional
     ``--scenario`` / ``--scenario-glob`` filters). New scenario files are picked

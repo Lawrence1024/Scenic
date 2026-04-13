@@ -2,6 +2,8 @@ The revised project goal is:
 
 **Build an opponent-aware ego planner that chooses among `optimal / left / right` TTLs and feeds the existing ego MPC, while letting the current pit handling remain as-is.**
 
+**Current scope:** the planner and benchmarks assume **one** dynamic opponent vehicle at a time (plus ego). Multi-opponent racing is **not** an active target; see `plans/deferred-scope.md`.
+
 That means:
 
 * we do **not** redesign pit routing yet
@@ -271,34 +273,7 @@ Compare against Phase 4 on mixed scenarios:
 
 **Status (implementation):** Segment-aware tactics, benchmark bank (`examples/racing/phase5_segments/`, **`00`–`10`**), `phase5_runner`, and digest KPIs are in place; validated run record and comparison vs the Phase 4 layout set are documented in `src/scenic/domains/racing/plans/phase-5-segment-aware-tactics.md`.
 
----
-
-## Phase 6 — Multi-opponent robustness and long-run stability
-
-### What to build
-
-Generalize the logic beyond one opponent.
-
-Add:
-
-* nearest-threat selection
-* front threat vs side threat handling
-* “do not switch into another car”
-* long-run consistency over many laps
-
-This is where the planner stops being a demo and starts becoming usable in race scenarios.
-
-### Success criteria
-
-In multi-car scenarios:
-
-* ego still completes laps without planner instability
-* threat selection remains sensible
-* no left/right switching into adjacent occupied corridors
-* lap-time degradation in traffic remains acceptable
-* planner remains stable over long runs
-
-**Success =** behavior still works when the environment is not clean and simple.
+The roadmap **ends here for the current project**: tactical and pass-shield behavior are defined for **one opponent** at a time. Multi-opponent generalization is listed under [Deferred scope](./plans/deferred-scope.md), not as a numbered phase in active development.
 
 ---
 
@@ -327,9 +302,8 @@ If you want the most efficient build order, do it like this:
 4. **Phase 3**: safe follow + stable setup-left/setup-right
 5. **Phase 4**: commit/abort overtaking + safety shield
 6. **Phase 5**: segment-aware tactical intelligence
-7. **Phase 6**: multi-opponent robustness
 
-That ordering gives you usable behavior early and avoids premature pit complexity.
+That ordering gives you usable behavior early and avoids premature pit complexity. Further work (multi-opponent traffic, pit redesign) is **deferred** — see `plans/deferred-scope.md`.
 
 ---
 
@@ -351,9 +325,9 @@ I would define project success in three levels:
 
 ### Full smart-driving success
 
-* ego handles multi-car traffic robustly over long runs
+* ego handles **single-opponent** traffic robustly (follow, setup, pass, abort) over representative benchmark horizons
 * tactics improve both safety and race performance
-* planner is mature enough that pit integration becomes the next logical step rather than a rewrite
+* planner is mature enough that pit integration or multi-opponent extensions become the next logical steps rather than a rewrite
 
 ---
 

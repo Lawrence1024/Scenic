@@ -1,0 +1,20 @@
+{
+  "run_id": "validation_full_stack_20260412_123423",
+  "created_utc": "2026-04-12T12:34:25.022000+00:00",
+  "runner": "ValidationFullStackRunner",
+  "suite": "all",
+  "base_out_dir": "src/scenic/domains/racing/benchmarks/results",
+  "parent_dir": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\src\\scenic\\domains\\racing\\benchmarks\\results\\validation_full_stack_20260412_123423",
+  "continue_on_failure": false,
+  "children": [
+    {
+      "label": "phase0",
+      "module": "scenic.domains.racing.benchmarks.phase0_runner",
+      "return_code": 2,
+      "child_bundle_dir": "C:\\Users\\bklfh\\Documents\\Scenic\\Scenic\\src\\scenic\\domains\\racing\\benchmarks\\results\\validation_full_stack_20260412_123423\\phase0",
+      "summary_json": null,
+      "scenario_count": 0
+    }
+  ],
+  "results": []
+}

@@ -998,8 +998,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                             _seg5 = str(getattr(_sit3, "segment_context", "none") or "none") if _sit3 is not None else "none"
                             _ov5 = str(getattr(_sit3, "overlap_state", "none") or "none") if _sit3 is not None else "none"
                             print(f"{_fl_mpc} [Phase5Tactical] t={_sim_time_s:.2f}s ttl_switch {_p3}->{_phase1_active_ttl} mode_in={_mode3} mode_out={_mode5} seg={_seg5} overlap={_ov5} reason={_p5_reason or 'none'}")
-                        if _pass_shield_enabled:
-                            print(f"{_fl_mpc} [Phase4Tactical] t={_sim_time_s:.2f}s ttl_switch {_p3}->{_phase1_active_ttl} eff_mode={_mode_tac} reason={_p4_reason or 'none'}")
                 self.active_ttl = _phase1_active_ttl
                 if _cap_tac is not None:
                     self._phase3_speed_cap = float(_cap_tac)
@@ -1045,8 +1043,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         _seg5 = str(getattr(_sit3, "segment_context", "none") or "none") if _sit3 is not None else "none"
                         _ov5 = str(getattr(_sit3, "overlap_state", "none") or "none") if _sit3 is not None else "none"
                         print(f"{_fl_mpc} [Phase5Tactical] t={_sim_time_s:.2f}s mode_in={_mode3} mode_out={_mode5} ttl={_phase1_active_ttl} cap={self._phase3_speed_cap} seg={_seg5} overlap={_ov5} reason={_p5_reason or 'none'}")
-                    if _pass_shield_enabled:
-                        print(f"{_fl_mpc} [Phase4Tactical] t={_sim_time_s:.2f}s eff_mode={_mode_tac} ttl={_phase1_active_ttl} cap={self._phase3_speed_cap} reason={_p4_reason or 'none'}")
             
             # --- Curvature-based speed gate (from suggestion.md) ---
             # Formula: v_max(s) = sqrt(a_y_max / (|κ(s)| + ε))
@@ -1955,6 +1951,93 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         
         gear_val = getattr(self, 'gear', 0)
         self._last_final_gear = gear_val if gear_val >= 1 else 1
+        # Per-step opponent/contact tracking (ego + fellow assumption): detect
+        # overlap/near at control cadence, not only in the 50-step summary block.
+        nearest_obj = None
+        nearest_dist = None
+        nearest_rel_speed = None
+        nearest_rel_longitudinal = None
+        try:
+            _objs = getattr(simulation().scene, 'objects', [])
+            _ego_h = car_heading if car_heading is not None else 0.0
+            _ego_fx = math.cos(_ego_h)
+            _ego_fy = math.sin(_ego_h)
+            _ego_speed = float(current_speed if current_speed is not None else 0.0)
+            _ego_race = getattr(self, "raceNumber", None)
+            _best_d2 = None
+            for _obj in _objs:
+                if _obj is self:
+                    continue
+                if not hasattr(_obj, 'position') or _obj.position is None:
+                    continue
+                _obj_race = getattr(_obj, "raceNumber", None)
+                # In benchmark scenes, treat race-numbered peer cars as valid opponents.
+                # This avoids accidental nearest-object selection from non-vehicle objects.
+                if _ego_race is not None:
+                    if _obj_race is None:
+                        continue
+                    if _obj_race == _ego_race:
+                        continue
+                _ox = float(_obj.position.x)
+                _oy = float(_obj.position.y)
+                _dx = _ox - px
+                _dy = _oy - py
+                _d2 = _dx * _dx + _dy * _dy
+                if _best_d2 is None or _d2 < _best_d2:
+                    _best_d2 = _d2
+                    nearest_obj = _obj
+                    nearest_dist = _d2 ** 0.5
+                    _ov = float(getattr(_obj, 'speed', 0.0) or 0.0)
+                    nearest_rel_speed = _ov - _ego_speed
+                    nearest_rel_longitudinal = _dx * _ego_fx + _dy * _ego_fy
+        except Exception:
+            nearest_obj = None
+            nearest_dist = None
+            nearest_rel_speed = None
+            nearest_rel_longitudinal = None
+
+        _p0_eval = getattr(simulation().scene, "params", None) or {}
+        if _p0_eval.get("eval_gt_dist_log", True):
+            _gt_d_step = read_eval_gt_dist_object_1_m(simulation())
+            _oeps_step = float(_p0_eval.get("eval_obb_overlap_eps_m", EVAL_DEFAULT_OBB_OVERLAP_EPS_M))
+            _hnear_step = float(_p0_eval.get("eval_hull_near_m", EVAL_DEFAULT_HULL_NEAR_M))
+            _sclose_step = float(_p0_eval.get("eval_sensor_close_m", EVAL_DEFAULT_SENSOR_CLOSE_M))
+            _obb_sep_step = None
+            try:
+                if nearest_obj is not None and car_heading is not None:
+                    _oh_step = eval_heading_rad(nearest_obj)
+                    if _oh_step is not None:
+                        _eL_step, _eW_step = eval_vehicle_length_width_m(self)
+                        _oL_step, _oW_step = eval_vehicle_length_width_m(nearest_obj)
+                        _obb_sep_step = obb_separation_distance_m(
+                            float(px),
+                            float(py),
+                            float(car_heading),
+                            _eL_step,
+                            _eW_step,
+                            float(nearest_obj.position.x),
+                            float(nearest_obj.position.y),
+                            float(_oh_step),
+                            _oL_step,
+                            _oW_step,
+                        )
+            except Exception:
+                _obb_sep_step = None
+            _risk_step, _cflags_step = classify_eval_contact(
+                _obb_sep_step,
+                _gt_d_step,
+                overlap_eps_m=_oeps_step,
+                hull_near_m=_hnear_step,
+                sensor_close_m=_sclose_step,
+            )
+            if _risk_step == "overlap" or _risk_step == "near":
+                _os_step = f"{_obb_sep_step:.3f}" if _obb_sep_step is not None else "na"
+                _ds_step = f"{float(_gt_d_step):.3f}" if eval_dspace_dist_object_1_valid(_gt_d_step) else "na"
+                print(
+                    f"[EvalEvent] t={t_log:.2f}s type=eval_contact severity={_risk_step} "
+                    f"bbox_gap_m={_os_step} dspace_obj1_m={_ds_step} "
+                    f"dspace_valid={1 if _cflags_step.get('dspace_valid', False) else 0}"
+                )
         # Log step summary every 50 steps; include t= and OpenDRIVE-based segment for segment performance analysis
         if self._behavior_step_count % 50 == 0:
             sim = simulation()
@@ -1998,38 +2081,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             elif _last_ttl_label != _ttl_label:
                 print(f"[Phase0Event] t={t_log:.2f}s type=ttl_switch from={_last_ttl_label} to={_ttl_label}")
                 self._phase0_last_ttl_label = _ttl_label
-
-            # Nearest-opponent visibility.
-            nearest_obj = None
-            nearest_dist = None
-            nearest_rel_speed = None
-            nearest_rel_longitudinal = None
-            try:
-                _objs = getattr(simulation().scene, 'objects', [])
-                _ego_h = car_heading if car_heading is not None else 0.0
-                _ego_fx = math.cos(_ego_h)
-                _ego_fy = math.sin(_ego_h)
-                _ego_speed = float(current_speed if current_speed is not None else 0.0)
-                _best_d2 = None
-                for _obj in _objs:
-                    if _obj is self:
-                        continue
-                    if not hasattr(_obj, 'position') or _obj.position is None:
-                        continue
-                    _ox = float(_obj.position.x); _oy = float(_obj.position.y)
-                    _dx = _ox - px
-                    _dy = _oy - py
-                    _d2 = _dx*_dx + _dy*_dy
-                    if _best_d2 is None or _d2 < _best_d2:
-                        _best_d2 = _d2
-                        nearest_obj = _obj
-                        nearest_dist = _d2 ** 0.5
-                        _ov = float(getattr(_obj, 'speed', 0.0) or 0.0)
-                        nearest_rel_speed = _ov - _ego_speed
-                        # Positive means opponent is ahead along ego heading.
-                        nearest_rel_longitudinal = _dx * _ego_fx + _dy * _ego_fy
-            except Exception:
-                nearest_obj = None
 
             _opp_dist_s = f"{nearest_dist:.2f}" if nearest_dist is not None else "na"
             _opp_rel_v_s = f"{nearest_rel_speed:.2f}" if nearest_rel_speed is not None else "na"
@@ -2105,12 +2156,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     f"near_hull={1 if _cflags['near_obb'] else 0} "
                     f"near_sensor={1 if _cflags['near_sensor'] else 0}"
                 )
-                if _risk == "overlap" or _risk == "near":
-                    _ds_show = f"{float(_gt_d):.3f}" if _gt_valid else "na"
-                    print(
-                        f"[EvalEvent] t={t_log:.2f}s type=eval_contact severity={_risk} "
-                        f"bbox_gap_m={_os} dspace_obj1_m={_ds_show} dspace_valid={1 if _gt_valid else 0}"
-                    )
             # Phase 2: race-semantics opponent state (planner inputs; same cadence as Phase 0 line).
             try:
                 if nearest_obj is not None and car_heading is not None:
@@ -2147,20 +2192,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     print(f"[Phase2] t={t_log:.2f}s opponent=none")
             except Exception as _e_p2:
                 print(f"[Phase2] t={t_log:.2f}s assess_error={_e_p2}")
-            # Legacy center-distance KPIs (often optimistic vs hull contact). Prefer [EvalContact]/[EvalEvent].
-            _p0_legacy = getattr(simulation().scene, "params", None) or {}
-            _log_center_legacy = _p0_legacy.get("phase0_log_legacy_center_contact_events", True)
-            if _log_center_legacy:
-                if nearest_dist is not None and nearest_dist <= 3.0:
-                    print(
-                        f"[Phase0Event] t={t_log:.2f}s type=near_miss distance_m={nearest_dist:.2f} "
-                        f"source=center_distance_legacy"
-                    )
-                if nearest_dist is not None and nearest_dist <= 1.0:
-                    print(
-                        f"[Phase0Event] t={t_log:.2f}s type=collision distance_m={nearest_dist:.2f} "
-                        f"source=center_distance_legacy"
-                    )
             if cte is not None and abs(float(cte)) >= 10.0:
                 print(f"[Phase0Event] t={t_log:.2f}s type=off_track cte_m={float(cte):.3f}")
             # Ref continuity / gate logging (todo1: match_dist, gate ACCEPT/REJECT, s_ref/dS_ref/s_jump_flag, segment_prev->new, stick_blocked, e_y_mpc vs cte_behavior)
@@ -2182,8 +2213,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _seg_s = f"{_sp}->{_sn}" if _sp is not None else f"->{_sn}"
             _ey_s = f"{_ey:.3f}" if _ey is not None else "?"
             cte_b = float(cte) if cte is not None else 0.0
-            _legacy_s = f"{getattr(self, '_legacy_cte_this_tick', 0):.3f}" if getattr(self, '_legacy_cte_this_tick', None) is not None else "?"
-            print(f"{_fl_mpc} ref_log match_dist_m={_md_s} gate={_gs}{_gr_s} s_ref={_sr_s} dS_ref={_ds_s} s_jump_flag={1 if _sj else 0} seg={_seg_s} stick={1 if _st else 0} e_y_mpc={_ey_s} cte_behavior={cte_b:.3f} legacy_cte={_legacy_s}")
+            print(f"{_fl_mpc} ref_log match_dist_m={_md_s} gate={_gs}{_gr_s} s_ref={_sr_s} dS_ref={_ds_s} s_jump_flag={1 if _sj else 0} seg={_seg_s} stick={1 if _st else 0} e_y_mpc={_ey_s} cte_behavior={cte_b:.3f}")
             # Task 4: Quick projection check — match_dist_m, proj_xy, ego_xy, segment_id progression (stuck = segment_id stops advancing or match_dist spikes at left-right transition)
             _rp = getattr(_lc, '_log_ref_point', None)
             _ego = getattr(_lc, '_log_ego', None)

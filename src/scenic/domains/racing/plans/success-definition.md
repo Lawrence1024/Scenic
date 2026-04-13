@@ -14,6 +14,6 @@
 
 ## Full Smart-Driving Success
 
-- ego handles multi-car traffic robustly over long runs
+- ego handles **single-opponent** traffic robustly over representative benchmark runs (follow, setup, pass, abort)
 - tactics improve both safety and race performance
-- planner maturity makes pit integration the next step, not a rewrite
+- planner maturity makes pit integration or future multi-opponent work the next step, not a rewrite

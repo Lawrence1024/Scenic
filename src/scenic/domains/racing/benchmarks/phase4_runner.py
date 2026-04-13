@@ -3,8 +3,8 @@
 Default directory: ``examples/racing/phase4_pass_shield`` (ego typically uses
 ``tactical_planner_enabled=True`` and ``pass_commit_shield_enabled=True``).
 
-``collect_metrics_from_log`` prefers ``[Phase4Event]`` lines (one per mode entry
-or shield release); legacy logs fall back to ``[Phase4Tactical]`` substrings.
+``collect_metrics_from_log`` uses ``[Phase4Event]`` lines (one per mode entry
+or shield release) as the canonical Phase 4 signal.
 
 **Contract:** Pass/fail summaries use **on-board Scenic telemetry** only (e.g.
 ``[Phase0]`` center-to-center gap, ``[Phase0Event]`` collision/near-miss,
@@ -35,7 +35,6 @@ if __name__ == "__main__":
                     "phase1_switch_observed",
                     "phase3_ttl_switch_count",
                     "phase3_tactical_status_count",
-                    "phase4_tactical_line_count",
                     "phase4_abort_pass_count",
                     "phase4_emergency_avoid_count",
                     "phase4_commit_pass_count",
