@@ -30,6 +30,9 @@ class TacticalPlannerConfig:
     follow_speed_margin_mps: float = 2.5
     follow_tight_gap_m: float = 14.0
     follow_tight_cap_scale: float = 0.92
+    setup_min_distance_m: float = 9.0
+    setup_partial_overlap_lateral_m: float = 1.8
+    setup_reentry_cooldown_s: float = 0.9
 
 
 @dataclass
@@ -37,6 +40,7 @@ class TacticalPlannerState:
     mode: str = FREE_RUN
     last_setup_side: str = "left"
     last_flip_sim_time_s: float = -1.0e9
+    last_setup_exit_sim_time_s: float = -1.0e9
 
 
 def apply_ttl_key_to_agent(agent, ttl_key: str, ttl_cache: dict, file_by_sel: Dict[str, str]) -> bool:
@@ -83,10 +87,14 @@ def tactical_planner_step(
         return FREE_RUN, "optimal", None
 
     if sit.distance_m > config.relevance_dist_m:
+        if state.mode in (SETUP_LEFT, SETUP_RIGHT):
+            state.last_setup_exit_sim_time_s = float(sim_time_s)
         state.mode = FREE_RUN
         return FREE_RUN, "optimal", None
 
     if not sit.ahead:
+        if state.mode in (SETUP_LEFT, SETUP_RIGHT):
+            state.last_setup_exit_sim_time_s = float(sim_time_s)
         state.mode = FREE_RUN
         return FREE_RUN, "optimal", None
 
@@ -96,17 +104,32 @@ def tactical_planner_step(
         and sit.distance_m < config.blocked_distance_m
     )
     if not blocked:
+        if state.mode in (SETUP_LEFT, SETUP_RIGHT):
+            state.last_setup_exit_sim_time_s = float(sim_time_s)
         state.mode = FREE_RUN
         return FREE_RUN, "optimal", None
 
     straight_ok = (not config.pass_requires_straight) or (sit.segment_context == "straight")
+    overlap_side = sit.overlap_state == "side_by_side"
+    overlap_partial_unsafe = (
+        sit.overlap_state == "partial_overlap"
+        and (
+            sit.distance_m < config.setup_min_distance_m
+            or abs(float(sit.lateral_m)) < config.setup_partial_overlap_lateral_m
+        )
+    )
+    overlap_unsafe_for_setup = overlap_side or overlap_partial_unsafe
+    close_for_setup = sit.distance_m < config.setup_min_distance_m
     pass_safe = (
         straight_ok
         and sit.collision_risk_01 <= config.pass_safe_risk_max
-        and sit.overlap_state != "side_by_side"
+        and not overlap_unsafe_for_setup
+        and not (close_for_setup and sit.overlap_state == "side_by_side")
     )
 
     if not pass_safe:
+        if state.mode in (SETUP_LEFT, SETUP_RIGHT):
+            state.last_setup_exit_sim_time_s = float(sim_time_s)
         state.mode = FOLLOW
         cap = float(opponent_speed_mps) + config.follow_speed_margin_mps
         if sit.distance_m < config.follow_tight_gap_m:
@@ -116,6 +139,20 @@ def tactical_planner_step(
             )
         cap = max(3.0, cap)
         return FOLLOW, "optimal", cap
+
+    # Avoid setup chatter: once we exit SETUP due to unsafe/blocked geometry,
+    # hold FOLLOW briefly before allowing a fresh setup entry.
+    if state.mode not in (SETUP_LEFT, SETUP_RIGHT):
+        if float(sim_time_s) - float(state.last_setup_exit_sim_time_s) < config.setup_reentry_cooldown_s:
+            state.mode = FOLLOW
+            cap = float(opponent_speed_mps) + config.follow_speed_margin_mps
+            if sit.distance_m < config.follow_tight_gap_m:
+                cap = min(
+                    cap,
+                    float(opponent_speed_mps) * config.follow_tight_cap_scale + 0.5,
+                )
+            cap = max(3.0, cap)
+            return FOLLOW, "optimal", cap
 
     if sit.lateral_relation == "left":
         target_side = "right"

@@ -64,6 +64,35 @@ python -m scenic.domains.racing.benchmarks.validation_full_stack_runner --contin
 - Other flags (`--time`, `--inter-run-delay-s`, `--scenario`, **`--repeats`**, …) are **forwarded** to each child runner. **`--repeats 3`** runs every scenario three times (phase0/phase1 now support this; phase2+ already did).
 - Output: `benchmarks/results/validation_full_stack_<timestamp>/merged_summary.json` plus per-child subfolders.
 
+### Known hard regression cases (priority stress set)
+
+Recent full-stack campaigns have repeatedly exposed a small set of high-risk
+corner/overlap interactions that should be treated as **must-check** regression
+cases whenever tactical or safety logic changes:
+
+- `phase3_tactical/05_opponent_just_ahead_corner.scenic`
+- `phase4_pass_shield/05_opponent_just_ahead_corner_pass_shield.scenic`
+- `phase5_segments/05_opponent_just_ahead_corner_segment_tactics.scenic`
+- `phase5_segments/08_corner_body_clear_ahead_phase5.scenic`
+
+Why these matter:
+
+- they combine short headway + corner geometry where overlap can emerge quickly;
+- they stress mode transitions (`SETUP_*`, `FOLLOW`, shield emergency/abort);
+- they are the most likely to reveal TTL switch chatter or late shield release.
+
+Recommended targeted loop before broad reruns:
+
+```bash
+python -m scenic.domains.racing.benchmarks.phase3_runner --scenario 05_opponent_just_ahead_corner.scenic --time 2000
+python -m scenic.domains.racing.benchmarks.phase4_runner --scenario 05_opponent_just_ahead_corner_pass_shield.scenic --time 2000
+python -m scenic.domains.racing.benchmarks.phase5_runner --scenario 05_opponent_just_ahead_corner_segment_tactics.scenic --time 2000
+python -m scenic.domains.racing.benchmarks.phase5_runner --scenario 08_corner_body_clear_ahead_phase5.scenic --time 2000
+```
+
+Use these as acceptance checks in addition to aggregate `--suite phases_only`
+validation runs.
+
 **Fellow vs TTL:** Scenario files set ``param fellowHarnessLog = True`` so logs can include ``[FellowHarness]`` readback alongside ego ``[Phase0]`` / ``[Phase2]``. ``ttlFileName`` on a fellow attaches route/polyline — it does not by itself mean the fellow "follows optimal vs left vs right TTL" as a planner; see ``examples/racing/fellow_smoke/README.md`` (**TTL files and fellow behaviors**).
 
 Run the **fellow / traffic harness** (fellow placement + optional `[FellowHarness]` metrics; not a numbered ego phase):

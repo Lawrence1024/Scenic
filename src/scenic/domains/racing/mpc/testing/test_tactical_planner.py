@@ -108,3 +108,51 @@ def test_setup_flip_cooldown():
     )
     assert m == SETUP_LEFT
     assert ttl == "left"
+
+
+def test_partial_overlap_forces_follow_even_when_risk_low():
+    st = TacticalPlannerState()
+    s = _sit(
+        overlap_state="partial_overlap",
+        collision_risk_01=0.05,
+        segment_context="straight",
+        distance_m=20.0,
+        longitudinal_m=18.0,
+    )
+    m, ttl, cap = tactical_planner_step(
+        st, s, has_opponent=True, ego_speed_mps=28.0, opponent_speed_mps=24.0,
+        sim_time_s=1.0, pit_mode=False, config=TacticalPlannerConfig(),
+    )
+    assert m == FOLLOW and ttl == "optimal" and cap is not None
+
+
+def test_setup_reentry_cooldown_after_setup_exit():
+    st = TacticalPlannerState(mode=SETUP_RIGHT)
+    cfg = TacticalPlannerConfig(setup_reentry_cooldown_s=2.0)
+    # First call: unsafe overlap kicks us out of setup and records setup exit.
+    s_bad = _sit(
+        overlap_state="partial_overlap",
+        collision_risk_01=0.2,
+        segment_context="straight",
+        distance_m=10.0,
+        longitudinal_m=9.0,
+    )
+    m0, ttl0, cap0 = tactical_planner_step(
+        st, s_bad, has_opponent=True, ego_speed_mps=26.0, opponent_speed_mps=22.0,
+        sim_time_s=5.0, pit_mode=False, config=cfg,
+    )
+    assert m0 == FOLLOW and ttl0 == "optimal" and cap0 is not None
+    # Second call: conditions are now pass-safe, but cooldown should still hold FOLLOW.
+    s_good = _sit(
+        overlap_state="clear_ahead",
+        collision_risk_01=0.05,
+        segment_context="straight",
+        distance_m=24.0,
+        longitudinal_m=22.0,
+        lateral_relation="right",
+    )
+    m1, ttl1, cap1 = tactical_planner_step(
+        st, s_good, has_opponent=True, ego_speed_mps=26.0, opponent_speed_mps=22.0,
+        sim_time_s=6.0, pit_mode=False, config=cfg,
+    )
+    assert m1 == FOLLOW and ttl1 == "optimal" and cap1 is not None

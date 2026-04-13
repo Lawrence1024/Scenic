@@ -225,6 +225,179 @@ def test_abort_committed_partial_overlap():
     assert m == ABORT_PASS and reason == "overlap"
 
 
+def test_abort_committed_side_by_side_close_even_at_low_risk():
+    st = PassShieldState()
+    st.commit_active = True
+    st.commit_side = "right"
+    tac = TacticalPlannerConfig()
+    s = _sit(
+        collision_risk_01=0.20,
+        segment_context="straight",
+        overlap_state="side_by_side",
+        distance_m=5.0,
+        closing_speed_mps=0.0,
+    )
+    m, ttl, cap, reason = pass_shield_step(
+        st,
+        s,
+        SETUP_RIGHT,
+        "right",
+        None,
+        has_opponent=True,
+        ego_speed_mps=20.0,
+        opponent_speed_mps=18.0,
+        sim_time_s=4.0,
+        pit_mode=False,
+        tactical_config=tac,
+        shield_config=PassShieldConfig(),
+    )
+    assert m == ABORT_PASS and ttl == "optimal" and cap is not None and reason == "overlap_side_by_side"
+
+
+def test_release_guard_prevents_direct_commit_to_follow_drop_while_overlapping():
+    st = PassShieldState()
+    st.commit_active = True
+    st.commit_side = "right"
+    tac = TacticalPlannerConfig()
+    s = _sit(
+        collision_risk_01=0.15,
+        overlap_state="side_by_side",
+        distance_m=5.0,
+    )
+    m, ttl, cap, reason = pass_shield_step(
+        st,
+        s,
+        FOLLOW,
+        "optimal",
+        20.0,
+        has_opponent=True,
+        ego_speed_mps=18.0,
+        opponent_speed_mps=16.0,
+        sim_time_s=3.0,
+        pit_mode=False,
+        tactical_config=tac,
+        shield_config=PassShieldConfig(),
+    )
+    assert m == ABORT_PASS and ttl == "optimal" and cap is not None and reason == "release_overlap_guard"
+
+
+def test_abort_setup_when_overlap_close_even_if_risk_low():
+    st = PassShieldState()
+    tac = TacticalPlannerConfig()
+    s = _sit(
+        collision_risk_01=0.10,
+        overlap_state="partial_overlap",
+        distance_m=7.5,
+    )
+    m, ttl, cap, reason = pass_shield_step(
+        st,
+        s,
+        SETUP_RIGHT,
+        "right",
+        None,
+        has_opponent=True,
+        ego_speed_mps=18.0,
+        opponent_speed_mps=16.0,
+        sim_time_s=1.0,
+        pit_mode=False,
+        tactical_config=tac,
+        shield_config=PassShieldConfig(),
+    )
+    assert m == ABORT_PASS and ttl == "optimal" and cap is not None and reason == "setup_overlap"
+
+
+def test_commit_requires_clear_ahead_and_min_distance():
+    st = PassShieldState()
+    cfg = PassShieldConfig(commit_dwell_s=0.1, commit_max_risk_01=0.5, commit_min_distance_m=10.0)
+    tac = TacticalPlannerConfig()
+    s0 = _sit(collision_risk_01=0.1, overlap_state="clear_ahead", distance_m=9.0)
+    pass_shield_step(
+        st,
+        s0,
+        SETUP_RIGHT,
+        "right",
+        None,
+        has_opponent=True,
+        ego_speed_mps=30.0,
+        opponent_speed_mps=25.0,
+        sim_time_s=0.0,
+        pit_mode=False,
+        tactical_config=tac,
+        shield_config=cfg,
+    )
+    s1 = _sit(collision_risk_01=0.1, overlap_state="clear_ahead", distance_m=9.0)
+    m1, _, _, _ = pass_shield_step(
+        st,
+        s1,
+        SETUP_RIGHT,
+        "right",
+        None,
+        has_opponent=True,
+        ego_speed_mps=30.0,
+        opponent_speed_mps=25.0,
+        sim_time_s=0.5,
+        pit_mode=False,
+        tactical_config=tac,
+        shield_config=cfg,
+    )
+    assert m1 != COMMIT_PASS_RIGHT
+
+
+def test_emergency_hold_until_overlap_clears():
+    st = PassShieldState()
+    cfg = PassShieldConfig(
+        emergency_overlap_distance_m=4.0,
+        emergency_overlap_closing_mps=0.2,
+        emergency_release_risk_01=0.50,
+        emergency_release_distance_m=8.0,
+    )
+    tac = TacticalPlannerConfig()
+    # Trigger emergency via overlap geometry.
+    s0 = _sit(
+        overlap_state="side_by_side",
+        distance_m=3.5,
+        closing_speed_mps=0.5,
+        collision_risk_01=0.2,
+    )
+    m0, ttl0, cap0, r0 = pass_shield_step(
+        st,
+        s0,
+        FOLLOW,
+        "optimal",
+        20.0,
+        has_opponent=True,
+        ego_speed_mps=18.0,
+        opponent_speed_mps=16.0,
+        sim_time_s=1.0,
+        pit_mode=False,
+        tactical_config=tac,
+        shield_config=cfg,
+    )
+    assert m0 == EMERGENCY_AVOID and ttl0 == "optimal" and cap0 is not None and r0 == "emergency_overlap"
+    # Keep emergency while still side-by-side and inside release envelope.
+    s1 = _sit(
+        overlap_state="side_by_side",
+        distance_m=5.5,
+        closing_speed_mps=0.1,
+        collision_risk_01=0.3,
+    )
+    m1, ttl1, cap1, r1 = pass_shield_step(
+        st,
+        s1,
+        FREE_RUN,
+        "optimal",
+        None,
+        has_opponent=True,
+        ego_speed_mps=17.0,
+        opponent_speed_mps=16.0,
+        sim_time_s=1.2,
+        pit_mode=False,
+        tactical_config=tac,
+        shield_config=cfg,
+    )
+    assert m1 == EMERGENCY_AVOID and ttl1 == "optimal" and cap1 is not None and r1 == "emergency_hold"
+
+
 def test_hold_commit_right():
     st = PassShieldState()
     cfg = PassShieldConfig(commit_dwell_s=0.05, commit_max_risk_01=0.5)

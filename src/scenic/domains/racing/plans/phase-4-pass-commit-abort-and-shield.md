@@ -53,6 +53,28 @@ Suggested targets:
 - **Benchmarks:** `phase4_runner` parses `[Phase4Tactical]` lines into `phase4_*` counts in `summary.csv` / digest.
 - **Example:** `examples/racing/phase4_pass_shield/01_slower_opponent_pass_shield.scenic`.
 
+### 2026-04 Safety hardening update
+
+To address close-range corner/overlap failures (notably case `05`), Phase 4 now
+adds stricter **Phase 4-only** guards in `pass_shield_step`:
+
+- prevent releasing from committed shield state directly to free/follow behavior
+  while overlap is still close (`release_overlap_guard`);
+- abort committed pass on close `side_by_side` states even when scalar risk
+  underestimates danger (`overlap_side_by_side`);
+- abort setup before commit when overlap is already close (`setup_overlap`);
+- require commit preconditions to be conservative (`clear_ahead` and minimum
+  standoff distance) instead of committing while partially overlapped;
+- add an emergency branch for overlap-driven geometry risk (`emergency_overlap`)
+  so response is not only tied to the scalar risk threshold.
+
+Compatibility intent:
+
+- these rules are scoped to **Phase 4 pass/shield** only;
+- Phase 3 tactical semantics remain the same;
+- Phase 5 segment tactics can still override Phase 3 intent, but Phase 4 safety
+  guardrails remain active on the effective mode.
+
 ## Exit Checklist
 
 - [x] Commit and abort transitions are explicit and unit-tested (`test_pass_commit_shield.py`); on-track benchmarks optional.
