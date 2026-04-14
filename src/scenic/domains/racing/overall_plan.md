@@ -273,7 +273,12 @@ Compare against Phase 4 on mixed scenarios:
 
 **Status (implementation):** Segment-aware tactics, benchmark bank (`examples/racing/phase5_segments/`, **`00`–`10`**), `phase5_runner`, and digest KPIs are in place; validated run record and comparison vs the Phase 4 layout set are documented in `src/scenic/domains/racing/plans/phase-5-segment-aware-tactics.md`.
 
-The roadmap **ends here for the current project**: tactical and pass-shield behavior are defined for **one opponent** at a time. Multi-opponent generalization is listed under [Deferred scope](./plans/deferred-scope.md), not as a numbered phase in active development.
+The original roadmap delivered through Phase 5. A follow-on planning chain for
+architecture and tactical maturation now exists as a separate pack:
+`src/scenic/domains/racing/plans/phase-6-12-master-rollout.md` plus
+`phase-6-...` through `phase-12-...` documents under `plans/`.
+Scope remains **one opponent**; multi-opponent expansion is still listed under
+[Deferred scope](./plans/deferred-scope.md).
 
 ---
 
@@ -302,6 +307,9 @@ If you want the most efficient build order, do it like this:
 4. **Phase 3**: safe follow + stable setup-left/setup-right
 5. **Phase 4**: commit/abort overtaking + safety shield
 6. **Phase 5**: segment-aware tactical intelligence
+7. **Phase 6-12 planning pack**: architecture extraction, prediction, assessment,
+   tactical v1, stability guard, commit/abort maturation, and segment-aware timing
+   under `src/scenic/domains/racing/plans/phase-6-12-master-rollout.md`
 
 That ordering gives you usable behavior early and avoids premature pit complexity. Further work (multi-opponent traffic, pit redesign) is **deferred** — see `plans/deferred-scope.md`.
 

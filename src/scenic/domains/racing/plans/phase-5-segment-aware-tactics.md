@@ -141,3 +141,10 @@ python -m scenic.domains.racing.benchmarks.phase5_runner --time 3000
 - [x] Safety is not regressed while tactical quality improves (recorded full-bank run: no aggregate collision/off-track; see **Validated benchmarks** for `05` caveat).
 - [x] Runner digest includes Phase 5-specific explainability metrics (`phase5_tactical_line_count`, `phase5_ttl_switch_count`, `phase5_event_segment_override`, `phase5_event_segment_release`, `phase5_override_count`, plus fellow harness columns when applicable).
 - [x] `07` / `08` show non-zero **`phase5_event_segment_override`** / **`phase5_override_count`** on the recorded run; confirm **`[Phase5Event]`** / **`[Phase5Tactical]`** reason strings (`entry_conservative`, `body_no_new_setup`) in per-scenario logs under `results/<run_id>/logs/`.
+
+## Handoff to Phase 6+
+
+Phase 5 closes the original baseline roadmap. Continue post-Phase-5 expansion using:
+
+- [Phase 6-12 master rollout](./phase-6-12-master-rollout.md)
+- [Phase 6: Architecture skeleton and observability](./phase-6-architecture-skeleton-and-observability.md)

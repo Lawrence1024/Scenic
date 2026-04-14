@@ -56,6 +56,15 @@ from scenic.domains.racing.phase5_segment_tactics import (
     Phase5SegmentTacticsState,
     phase5_segment_tactics_step,
 )
+from scenic.domains.racing.phase6_runtime import (
+    build_phase6_state_snapshot,
+    format_phase6_executor_log_line,
+    format_phase6_guard_log_line,
+    format_phase6_planner_log_line,
+    format_phase6_state_log_line,
+    phase6_guard_step,
+    phase6_planner_step,
+)
 
 _PHASE4_SHIELD_MODES = (
     COMMIT_PASS_LEFT,
@@ -286,7 +295,7 @@ behavior FellowSwerveOutOfControlBehavior(
         self._fellow_plant_log_mode = mode
         wait
 
-behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False, pass_commit_shield_enabled=False, phase5_segment_tactics_enabled=False):
+behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False, pass_commit_shield_enabled=False, phase5_segment_tactics_enabled=False, phase6_orchestration_enabled=False):
     """Follow the car's TTL using MPC (Model Predictive Control) for lateral control.
     
     Primary Scenic behavior for line-following on the racing TTL. Lateral and longitudinal
@@ -308,6 +317,9 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             (requires ``tactical_planner_enabled=True``).
         phase5_segment_tactics_enabled: Phase 5 — segment-aware shaping of tactical setup decisions
             (requires ``tactical_planner_enabled=True``; runs before Phase 4 shield).
+        phase6_orchestration_enabled: Phase 6 — enable layered state/planner/guard shells
+            with per-cycle ``[Phase6State]`` / ``[Phase6Planner]`` / ``[Phase6Guard]`` /
+            ``[Phase6Executor]`` observability.
     """
     
     # SETUP & DEFAULTS
@@ -356,6 +368,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
     _pass_shield_config = PassShieldConfig()
     _phase5_enabled = bool(phase5_segment_tactics_enabled)
     _pass_shield_enabled = bool(pass_commit_shield_enabled)
+    _phase6_enabled = bool(phase6_orchestration_enabled)
     if _phase5_enabled and not _tactical_planner_enabled:
         print(f"{_fbhv} phase5_segment_tactics_enabled=True requires tactical_planner_enabled=True; Phase 5 segment tactics disabled.")
         _phase5_enabled = False
@@ -392,11 +405,14 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 print(f"{_fbhv} Phase5 segment-aware tactics enabled (entry/body setup shaping)")
             if _pass_shield_enabled:
                 print(f"{_fbhv} Phase4 pass/commit/shield enabled (COMMIT_PASS_* / ABORT_PASS / EMERGENCY_AVOID)")
+            if _phase6_enabled:
+                print(f"{_fbhv} Phase6 orchestration enabled (state/planner/guard/executor logs)")
         except Exception:
             _phase1_schedule_enabled = False
             _tactical_planner_enabled = False
             _phase5_enabled = False
             _pass_shield_enabled = False
+            _phase6_enabled = False
             print(f"{_fbhv} Phase1/Phase3 TTL dynamic mode disabled due to setup error.")
 
     # Gear thresholds (m/s)
@@ -550,6 +566,21 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     final_throttle = 0.0
                 else:
                     final_throttle = min(final_throttle, 0.5)
+            if _phase6_enabled and self is getattr(simulation().scene, 'egoObject', None):
+                _p6_state = str(getattr(self, "_phase6_planner_state", "FREE_RUN") or "FREE_RUN")
+                _p6_ttl = str(getattr(self, "_phase6_active_ttl", _phase1_active_ttl) or _phase1_active_ttl)
+                _p6_reason = str(getattr(self, "_phase6_decision_reason", "fastpath_reuse") or "fastpath_reuse")
+                print(
+                    format_phase6_executor_log_line(
+                        _sim_time_s,
+                        active_ttl=_p6_ttl,
+                        planner_state=_p6_state,
+                        decision_reason=_p6_reason,
+                        final_steer=float(final_steer),
+                        final_throttle=float(final_throttle),
+                        final_brake=float(final_brake),
+                    )
+                )
             _fast_actions = [SetSteerAction(final_steer), SetThrottleAction(final_throttle), SetBrakeAction(final_brake)]
             take _fast_actions
             wait
@@ -857,9 +888,94 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             # Pit mode for speed limit and throttle: segment-based only (pit road = pit limit; main = no limit)
             pit_mode = in_pit_by_segment
             self._in_pit_by_segment = pit_mode
+
+            # --- Phase 6 orchestration shells (state -> planner -> guard) ---
+            self._phase3_speed_cap = None
+            _p6_guard = None
+            if _phase6_enabled and self is getattr(simulation().scene, 'egoObject', None):
+                _nearest_o6 = None
+                _nearest_d6 = None
+                _nearest_vs6 = 0.0
+                try:
+                    _objs6 = getattr(simulation().scene, 'objects', [])
+                    _best62 = None
+                    for _ob6 in _objs6:
+                        if _ob6 is self:
+                            continue
+                        if not hasattr(_ob6, 'position') or _ob6.position is None:
+                            continue
+                        _ox6 = float(_ob6.position.x)
+                        _oy6 = float(_ob6.position.y)
+                        _dx6 = _ox6 - px
+                        _dy6 = _oy6 - py
+                        _d62 = _dx6 * _dx6 + _dy6 * _dy6
+                        if _best62 is None or _d62 < _best62:
+                            _best62 = _d62
+                            _nearest_o6 = _ob6
+                            _nearest_d6 = _d62 ** 0.5
+                            _nearest_vs6 = float(getattr(_ob6, 'speed', 0.0) or 0.0)
+                except Exception:
+                    _nearest_o6 = None
+                    _nearest_d6 = None
+                    _nearest_vs6 = 0.0
+
+                _sit6 = None
+                if _nearest_o6 is not None and car_heading is not None:
+                    _ox6 = float(_nearest_o6.position.x)
+                    _oy6 = float(_nearest_o6.position.y)
+                    _prog6 = getattr(self, '_waypoint_progress', None)
+                    _smap6 = getattr(self, '_waypoint_segment_map', None)
+                    _sid6 = getattr(self, '_last_valid_segment_id', None)
+                    _snm6 = getattr(self, '_last_valid_segment_name', '') or ''
+                    _Lap6 = None
+                    if use_waypoints and wp_list is not None and len(wp_list) >= 2:
+                        _Lap6 = polyline_lap_length_m(wp_list)
+                    _prev_ov6 = getattr(self, '_phase2_overlap_state', 'clear_ahead')
+                    _sit6, _new_ov6 = assess_nearest_opponent(
+                        (px, py),
+                        float(car_heading),
+                        float(current_speed),
+                        (_ox6, _oy6),
+                        _nearest_vs6,
+                        ego_progress_s_m=_prog6,
+                        waypoints=wp_list if use_waypoints else None,
+                        lap_length_m=_Lap6,
+                        segment_map=_smap6,
+                        ego_wp_idx=wp_last_idx,
+                        segment_id=_sid6,
+                        segment_name=_snm6,
+                        curvature_ahead_max=float(getattr(self, "_last_curvature_ahead_for_tactical", 0.0) or 0.0),
+                        previous_overlap_state=_prev_ov6,
+                    )
+                    self._phase2_overlap_state = _new_ov6
+
+                _state6 = build_phase6_state_snapshot(
+                    has_opponent=(_nearest_o6 is not None),
+                    pit_mode=bool(pit_mode),
+                    current_ttl=_phase1_active_ttl,
+                    ego_speed_mps=float(current_speed),
+                    opponent_speed_mps=float(_nearest_vs6) if _nearest_o6 is not None else None,
+                    opponent_distance_m=float(_nearest_d6) if _nearest_d6 is not None else None,
+                    overlap_state=getattr(_sit6, "overlap_state", "none") if _sit6 is not None else "none",
+                    segment_context=getattr(_sit6, "segment_context", "none") if _sit6 is not None else "none",
+                    ahead_flag=getattr(_sit6, "ahead", False) if _sit6 is not None else False,
+                )
+                _decision6 = phase6_planner_step(
+                    _state6,
+                    target_speed_mps=float(target_speed),
+                    speed_cap_mps=_phase1_speed_cap,
+                )
+                _p6_guard = phase6_guard_step(_decision6)
+                self._phase6_planner_state = _p6_guard.planner_state
+                self._phase6_active_ttl = _p6_guard.active_ttl
+                self._phase6_decision_reason = _p6_guard.decision_reason
+                if _p6_guard.target_speed_cap_mps is not None:
+                    self._phase3_speed_cap = float(_p6_guard.target_speed_cap_mps)
+                print(format_phase6_state_log_line(_sim_time_s, _state6))
+                print(format_phase6_planner_log_line(_sim_time_s, _decision6))
+                print(format_phase6_guard_log_line(_sim_time_s, _p6_guard))
             
             # --- Phase 3 tactical planner (TTL + follow cap; uses prior-step curvature lookahead) ---
-            self._phase3_speed_cap = None
             if _tactical_planner_enabled and self is getattr(simulation().scene, 'egoObject', None):
                 if not hasattr(self, '_phase3_tp_state'):
                     self._phase3_tp_state = TacticalPlannerState()
@@ -1901,6 +2017,21 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             SetThrottleAction(final_throttle), 
             SetBrakeAction(final_brake)
         ]
+        if _phase6_enabled and self is getattr(simulation().scene, 'egoObject', None):
+            _p6_state = str(getattr(self, "_phase6_planner_state", "FREE_RUN") or "FREE_RUN")
+            _p6_ttl = str(getattr(self, "_phase6_active_ttl", _phase1_active_ttl) or _phase1_active_ttl)
+            _p6_reason = str(getattr(self, "_phase6_decision_reason", "none") or "none")
+            print(
+                format_phase6_executor_log_line(
+                    _sim_time_s,
+                    active_ttl=_p6_ttl,
+                    planner_state=_p6_state,
+                    decision_reason=_p6_reason,
+                    final_steer=float(final_steer),
+                    final_throttle=float(final_throttle),
+                    final_brake=float(final_brake),
+                )
+            )
 
         # Gear Logic: proactive downshift before turns + speed-based shifts
         gear_changed = False

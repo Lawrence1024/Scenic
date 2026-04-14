@@ -19,6 +19,7 @@ Scenarios for the racing domain using the dSPACE racing simulator. All examples 
 | **phase3_tactical/** | Phase 3 tactical planner — **full bank** (same `00`–`06` layouts as **phase0_benchmark**); `phase3_runner`. Optional alias: `phase3_on_phase0_runner` (same scenarios/KPIs). |
 | **phase4_pass_shield/** | Phase 4 pass commit / abort / shield (`pass_commit_shield_enabled=True`); `phase4_runner`. Seven scenarios (`00`–`06`), same layouts as **phase0_benchmark** with tactical + pass-commit shield on ego. |
 | **phase5_segments/** | Phase 5 segment-aware tactics (`phase5_segment_tactics_enabled=True`); bank **`00`–`06`** mirrors Phase 4 layouts, plus **`07`–`08`** (TTL-derived **corner_entry** / **corner_body** poses) and **`09`–`10`** (straight-opening slow-fellow left/right symmetry); `phase5_runner`. |
+| **f_shared/** | Shared F-scenario bank (`F0`..`F8`) for post-Phase-5 work; avoids cloning nearly identical phase test folders and is reusable across runners. |
 
 Run with the racing model, e.g.:
 
@@ -40,15 +41,15 @@ Run the full implemented stack in one go (same flags forwarded to each runner):
 python -m scenic.domains.racing.benchmarks.run_all_benchmarks_so_far
 ```
 
-Skip the fellow harnesses and Phase 0; run **Phase 1 through Phase 5** only (same forwarded flags, e.g. `--time 2000`):
+Skip the fellow harnesses and Phase 0; run **Phase 1 through Phase 6** only (same forwarded flags, e.g. `--time 2000`):
 
 ```bash
 python -m scenic.domains.racing.benchmarks.run_all_benchmarks_so_far --from phase1 --time 2000
 ```
 
-(`--from` accepts `fellow_smoke`, `fellow_placement`, `phase0` … `phase5`, plus aliases `smoke` and `placement`.)
+(`--from` accepts `fellow_smoke`, `fellow_placement`, `phase0` … `phase6`, plus aliases `smoke` and `placement`.)
 
-This combined runner now executes: `fellow_runner`, `fellow_placement_debug_runner`, and `phase0_runner` through `phase5_runner` (in sequence).
+This combined runner now executes: `fellow_runner`, `fellow_placement_debug_runner`, and `phase0_runner` through `phase6_runner` (in sequence).
 
 **Validation full-stack runner** (post–Phase 5 stress / regression campaign): runs **phase0 → phase5 → fellow** in one parent results folder, merges every child `summary.json` into **`merged_summary.json`**, and prints a **single** combined `BENCHMARK_AI_DIGEST_*` (rows include `source_child` and `child_run_id`). Plan: `src/scenic/domains/racing/plans/comprehensive-planner-validation-runner.md`.
 
@@ -117,13 +118,14 @@ python -m scenic.domains.racing.benchmarks.phase1_runner
 
 (Same delay and filtering flags as Phase 0; default **`--time` is 2000** steps. See `examples/racing/phase1_planner/README.md`.)
 
-Phase 2–5 use the same CLI pattern (`--scenario-dir`, `--scenario`, `--scenario-glob`, `--time`, `--inter-run-delay-s`, `--out-dir`):
+Phase 2–6 use the same CLI pattern (`--scenario-dir`, `--scenario`, `--scenario-glob`, `--time`, `--inter-run-delay-s`, `--out-dir`):
 
 ```bash
 python -m scenic.domains.racing.benchmarks.phase2_runner
 python -m scenic.domains.racing.benchmarks.phase3_runner
 python -m scenic.domains.racing.benchmarks.phase4_runner
 python -m scenic.domains.racing.benchmarks.phase5_runner
+python -m scenic.domains.racing.benchmarks.phase6_runner
 ```
 
 `phase3_on_phase0_runner` is a backward-compatible alias (same bank and KPIs as `phase3_runner`; legacy `run_id_prefix`). Prefer **`phase3_runner`** for new scripts.

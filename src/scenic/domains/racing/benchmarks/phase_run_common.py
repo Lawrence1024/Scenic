@@ -66,6 +66,18 @@ RE_PHASE5_TTL_SWITCH = re.compile(
 RE_PHASE5_STATUS = re.compile(
     r"\[Phase5Tactical\]\s+t=(?P<t>\d+\.?\d*)s\s+mode_in=(?P<mode_in>\S+)\s+mode_out=(?P<mode_out>\S+)\s+ttl=(?P<ttl>\S+)\s+cap=(?P<cap>\S+)\s+seg=(?P<seg>\S+)\s+overlap=(?P<ov>\S+)\s+reason=(?P<reason>\S+)"
 )
+RE_PHASE6_STATE = re.compile(
+    r"\[Phase6State\]\s+t=(?P<t>\d+\.?\d*)s\s+has_opponent=(?P<opp>[01])\s+pit_mode=(?P<pit>[01])\s+ttl=(?P<ttl>\S+)\s+ego_speed=(?P<ego_v>\S+)\s+opp_speed=(?P<opp_v>\S+)\s+opp_dist=(?P<opp_d>\S+)\s+overlap=(?P<ov>\S+)\s+seg=(?P<seg>\S+)\s+ahead=(?P<ahead>[01])"
+)
+RE_PHASE6_PLANNER = re.compile(
+    r"\[Phase6Planner\]\s+t=(?P<t>\d+\.?\d*)s\s+planner_state=(?P<state>\S+)\s+active_ttl=(?P<ttl>\S+)\s+target_speed_cap=(?P<cap>\S+)\s+decision_reason=(?P<reason>\S+)"
+)
+RE_PHASE6_GUARD = re.compile(
+    r"\[Phase6Guard\]\s+t=(?P<t>\d+\.?\d*)s\s+guard_active=(?P<active>[01])\s+guard_reason=(?P<reason>\S+)\s+steer_limited=(?P<steer>[01])\s+brake_limited=(?P<brake>[01])\s+ttl_switch_blocked=(?P<ttl_block>[01])\s+emergency_stable_mode=(?P<emerg>[01])"
+)
+RE_PHASE6_EXECUTOR = re.compile(
+    r"\[Phase6Executor\]\s+t=(?P<t>\d+\.?\d*)s\s+executor_call=(?P<call>[01])\s+planner_state=(?P<state>\S+)\s+active_ttl=(?P<ttl>\S+)\s+decision_reason=(?P<reason>\S+)\s+steer=(?P<steer>\S+)\s+throttle=(?P<throttle>\S+)\s+brake=(?P<brake>\S+)"
+)
 # Fellow harness: placement from ego offset ([placement.py])
 RE_FELLOW_PLACEMENT_FROM_EGO = re.compile(
     r"\[Placement\][^\n]*racing \(s,t\) from ego[^\n]*-> s=([\d.+-]+),\s*t=([\d.+-]+)"
@@ -122,6 +134,11 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "phase5_event_segment_override",
     "phase5_event_segment_release",
     "phase5_override_count",
+    "phase6_state_line_count",
+    "phase6_planner_line_count",
+    "phase6_guard_line_count",
+    "phase6_executor_line_count",
+    "phase6_guard_active_count",
     "eval_contact_overlap_count",
     "eval_contact_near_count",
     "collision_eval_hull_overlap",
@@ -378,11 +395,41 @@ def collect_metrics_from_log(
     phase5_override_count = 0
     phase5_mode_out: List[str] = []
     phase5_reasons: List[str] = []
+    phase6_state_line_count = 0
+    phase6_planner_line_count = 0
+    phase6_guard_line_count = 0
+    phase6_executor_line_count = 0
+    phase6_guard_active_count = 0
+    phase6_states: List[str] = []
+    phase6_ttls: List[str] = []
+    phase6_reasons: List[str] = []
     eval_contact_overlap_count = 0
     eval_contact_near_count = 0
 
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
+            if "[Phase6State]" in line:
+                p6s = RE_PHASE6_STATE.search(line)
+                if p6s:
+                    phase6_state_line_count += 1
+                    phase6_ttls.append(p6s.group("ttl"))
+            if "[Phase6Planner]" in line:
+                p6p = RE_PHASE6_PLANNER.search(line)
+                if p6p:
+                    phase6_planner_line_count += 1
+                    phase6_states.append(p6p.group("state"))
+                    phase6_ttls.append(p6p.group("ttl"))
+                    phase6_reasons.append(p6p.group("reason"))
+            if "[Phase6Guard]" in line:
+                p6g = RE_PHASE6_GUARD.search(line)
+                if p6g:
+                    phase6_guard_line_count += 1
+                    if p6g.group("active") == "1":
+                        phase6_guard_active_count += 1
+            if "[Phase6Executor]" in line:
+                p6e = RE_PHASE6_EXECUTOR.search(line)
+                if p6e:
+                    phase6_executor_line_count += 1
             evc = RE_EVAL_CONTACT_EVENT.search(line)
             if evc:
                 sev = evc.group("sev")
@@ -528,6 +575,14 @@ def collect_metrics_from_log(
     out["phase5_override_count"] = phase5_override_count
     out["phase5_modes_observed"] = sorted(set(phase5_mode_out))
     out["phase5_reasons_observed"] = sorted(set(phase5_reasons))
+    out["phase6_state_line_count"] = phase6_state_line_count
+    out["phase6_planner_line_count"] = phase6_planner_line_count
+    out["phase6_guard_line_count"] = phase6_guard_line_count
+    out["phase6_executor_line_count"] = phase6_executor_line_count
+    out["phase6_guard_active_count"] = phase6_guard_active_count
+    out["phase6_states_observed"] = sorted(set(phase6_states))
+    out["phase6_ttls_observed"] = sorted(set(phase6_ttls))
+    out["phase6_reasons_observed"] = sorted(set(phase6_reasons))
     out["eval_contact_overlap_count"] = eval_contact_overlap_count
     out["eval_contact_near_count"] = eval_contact_near_count
     out["collision_eval_hull_overlap"] = bool(eval_contact_overlap_count > 0)
@@ -826,6 +881,7 @@ class PhaseRunnerSpec:
     run_id_prefix: str
     default_scenario_dir: str
     default_sim_steps: int = 2000
+    default_scenario_names: Sequence[str] = field(default_factory=tuple)
     phase1_switches: bool = False
     phase2_lines: bool = False
     phase3_tactical: bool = False
@@ -878,6 +934,16 @@ def run_phase_main(spec: PhaseRunnerSpec) -> int:
     if not scenarios:
         print(f"No .scenic files found in {scenario_dir}", file=sys.stderr)
         return 2
+
+    if spec.default_scenario_names:
+        wanted_default = set(spec.default_scenario_names)
+        scenarios = [s for s in scenarios if s.name in wanted_default]
+        missing_default = sorted(wanted_default - {s.name for s in scenarios})
+        if missing_default:
+            print(
+                f"Warning: default scenarios missing in {scenario_dir}: {', '.join(missing_default)}",
+                file=sys.stderr,
+            )
 
     if args.scenario:
         wanted = set(args.scenario)
