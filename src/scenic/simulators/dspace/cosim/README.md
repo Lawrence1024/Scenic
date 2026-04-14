@@ -168,7 +168,13 @@ That means Scenic is ready for the VEOS IPC client.
 
 #### VEOS side
 
-**Automatic (Scenic):** set `launch_veos_ipc_client=True` on `DSpaceSimulator` (or `param launch_veos_ipc_client = True` in `model.scenic`). That enables the full CoSim path: Scenic starts `SyncStepBridge`, spawns `VeosCoSimTestClientIpc.exe`, and waits for the connection. If `launch_veos_ipc_client=False`, Scenic does **not** start the bridge or any CoSim resources (ControlDesk stepping only). See `simulator.py` and `model.scenic`.
+**Automatic (Scenic):** set `launch_veos_ipc_client=True` on `DSpaceSimulator` (or `param launch_veos_ipc_client = True` in `model.scenic`). That enables the full CoSim path: Scenic starts a localhost bridge, spawns `VeosCoSimTestClientIpc.exe`, and waits for the connection. If `launch_veos_ipc_client=False`, Scenic does **not** start the bridge or any CoSim resources (ControlDesk stepping only). See `simulator.py` and `model.scenic`.
+
+Bridge modes:
+
+- `cosim_bridge_mode="sync_step"` (default): lock-step pacing (`STEP` reply; one Scenic step == one VEOS step).
+- `cosim_bridge_mode="print_time_callbacks"`: emulates `python_listener/print_time_callbacks.py` behavior (`ACK` replies, optional delay).
+- `cosim_time_trigger_ack_delay_s`: delay before ACK in `print_time_callbacks` mode (default: `3.0`).
 
 **Manual:** launch the IPC-enabled client in a separate terminal:
 

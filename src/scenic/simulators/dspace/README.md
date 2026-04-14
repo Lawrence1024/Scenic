@@ -227,9 +227,16 @@ param launch_veos_ipc_client = True
 
 During `setup()`, Scenic will:
 
-1. Start `SyncStepBridge` on `127.0.0.1:50555` (override with `sync_bridge_host` / `sync_bridge_port`).
+1. Start the CoSim bridge on `127.0.0.1:50555` (override with `sync_bridge_host` / `sync_bridge_port`).
 2. Spawn `VeosCoSimTestClientIpc.exe` from `cosim/veos_cosim_ipc_bridge/client/build/` (override with `veos_ipc_client_exe`).
-3. Wait until the client connects, then continue (VEOS host/name: `veos_host`, `veos_cosim_server_name`).
+3. Wait until the client connects (VEOS host/name: `veos_host`, `veos_cosim_server_name`).
+4. Only then proceed with ModelDesk scenario setup (`SaveAs` / placement / `Download`).
+
+Bridge behavior is selectable:
+
+- `cosim_bridge_mode="sync_step"` (default): Scenic-paced lock-step (`STEP` reply on each blocked `TIME_TRIGGER`).
+- `cosim_bridge_mode="print_time_callbacks"`: emulate `print_time_callbacks.py` behavior (reply `ACK` after optional delay).
+- `cosim_time_trigger_ack_delay_s` controls the delay used by `print_time_callbacks` mode (default `3.0` seconds).
 
 You should see:
 

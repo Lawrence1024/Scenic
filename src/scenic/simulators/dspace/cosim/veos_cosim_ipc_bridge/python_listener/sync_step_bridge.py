@@ -141,3 +141,96 @@ class SyncStepBridge:
                     else:
                         # Logs / other messages do not control stepping.
                         conn.sendall(b"ACK\n")
+
+
+class PrintTimeCallbacksBridge:
+    """Listener compatible with the old ``print_time_callbacks.py`` behavior.
+
+    This bridge does not enforce Scenic-paced step release. It acknowledges each
+    ``TIME_TRIGGER`` after an optional delay (default: 3s) so the VEOS IPC client
+    can continue without waiting for Scenic ``step()`` to call ``release_step``.
+    """
+
+    def __init__(self, host="127.0.0.1", port=50555, time_trigger_ack_delay_s=3.0):
+        self.host = host
+        self.port = int(port)
+        self.time_trigger_ack_delay_s = max(0.0, float(time_trigger_ack_delay_s))
+
+        self._server = None
+        self._conn = None
+        self._thread = None
+        self._closed = False
+
+        self._cv = threading.Condition()
+        self._connected = False
+
+    def start(self):
+        self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._server.bind((self.host, self.port))
+        self._server.listen(1)
+
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def close(self):
+        with self._cv:
+            self._closed = True
+            self._cv.notify_all()
+        try:
+            if self._conn:
+                self._conn.close()
+        except Exception:
+            pass
+        try:
+            if self._server:
+                self._server.close()
+        except Exception:
+            pass
+
+    def wait_connected(self, timeout=None):
+        end = None if timeout is None else time.time() + timeout
+        with self._cv:
+            while not self._connected and not self._closed:
+                remaining = None if end is None else max(0.0, end - time.time())
+                if remaining == 0.0:
+                    raise TimeoutError("PrintTimeCallbacksBridge: wait_connected timed out")
+                self._cv.wait(remaining)
+            if not self._connected:
+                raise RuntimeError("PrintTimeCallbacksBridge closed before connection")
+
+    def _run(self):
+        conn, _addr = self._server.accept()
+        with self._cv:
+            self._conn = conn
+            self._connected = True
+            self._cv.notify_all()
+
+        buf = b""
+        with conn:
+            while not self._closed:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    text = line.decode("utf-8", errors="replace")
+                    try:
+                        obj = json.loads(text)
+                    except json.JSONDecodeError:
+                        conn.sendall(b"ACK\n")
+                        continue
+
+                    event = obj.get("event")
+                    if event == "TIME_TRIGGER":
+                        if self.time_trigger_ack_delay_s > 0.0:
+                            time.sleep(self.time_trigger_ack_delay_s)
+                        conn.sendall(b"ACK\n")
+                    else:
+                        conn.sendall(b"ACK\n")
