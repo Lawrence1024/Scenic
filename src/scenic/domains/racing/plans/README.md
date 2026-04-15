@@ -14,7 +14,7 @@ This folder breaks the master roadmap in `overall_plan.md` into actionable per-p
 - **Phase 5** — complete (segment-aware shaping in `phase5_segment_tactics.py` + `phase5_segment_tactics_enabled`; benchmark bank `examples/racing/phase5_segments/` including `07`–`08` corner cases and `09`–`10` straight-opening symmetry; `phase5_runner` + digest KPIs). Validated run record and follow-ups: [Phase 5 plan](./phase-5-segment-aware-tactics.md#validated-benchmarks-record).
 - **Phase 6** — implemented (phase6 orchestration shells + per-cycle `[Phase6*]` logs, shared F-bank `examples/racing/f_shared/`, `phase6_runner`; validation/sign-off pending).
 - **Phase 7** — complete (recency-weighted one-step fellow prediction + prediction-error benchmarking, startup-filtered analysis default `t>=1.0s`).
-- **Phase 8** — planned (situation assessment expansion + dynamic safe-gap policy).
+- **Phase 8** — complete (assessment + dynamic-gap telemetry ready for tactical-planner handoff; residual caveats documented in Phase 8 plan).
 - **Phase 9** — planned (tactical planner v1: `FREE_RUN`, `FOLLOW`, `SETUP_PASS_LEFT`, `SETUP_PASS_RIGHT`).
 - **Phase 10** — planned (stability guard + anti-swerve / emergency policy).
 - **Phase 11** — planned (explicit pass commit / abort lifecycle).
@@ -56,7 +56,7 @@ This folder breaks the master roadmap in `overall_plan.md` into actionable per-p
 - [x] Complete Phase 5 segment-aware tactical improvements (implementation + Phase 5 bank; see [Phase 5 validated record](./phase-5-segment-aware-tactics.md#validated-benchmarks-record)).
 - [x] Phase 6: layer extraction and per-cycle observability path active (`phase6_orchestration_enabled`, `[Phase6State]/[Phase6Planner]/[Phase6Guard]/[Phase6Executor]`, shared `f_shared` bank + `phase6_runner`).
 - [x] Phase 7: next-step fellow prediction with bounded and benchmarked error.
-- [ ] Phase 8: stable tactical assessment outputs and dynamic safe gap.
+- [x] Phase 8: stable tactical assessment outputs and dynamic safe gap.
 - [ ] Phase 9: tactical planner v1 setup-pass behavior with bounded switching.
 - [ ] Phase 10: guard-driven stability controls and emergency handling.
 - [ ] Phase 11: commit/abort lifecycle with deterministic success/abort evidence.

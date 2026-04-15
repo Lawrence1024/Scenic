@@ -1,4 +1,4 @@
-"""Shared helpers for benchmark runners (phase0–phase7 + fellow harness).
+"""Shared helpers for benchmark runners (phase0–phase8 + fellow harness).
 
 Scenario discovery for `run_phase_main`: every ``*.scenic`` in the chosen
 ``--scenario-dir`` (default from `PhaseRunnerSpec.default_scenario_dir`) is run,
@@ -86,6 +86,13 @@ RE_PHASE7_PREDICTION = re.compile(
     r"prediction_error_zero_motion=(?P<e0>\S+)\s+"
     r"prediction_error_hold_last=(?P<eh>\S+)"
 )
+RE_PHASE8_ASSESSMENT = re.compile(
+    r"\[Phase8Assessment\]\s+t=(?P<t>\d+\.?\d*)s\s+"
+    r"fellow_relation=(?P<rel>\S+)\s+closing_flag=(?P<closing>[01])\s+"
+    r"actual_gap=(?P<actual>\S+)\s+safe_gap=(?P<safe>\S+)\s+gap_ok=(?P<gap_ok>[01])\s+"
+    r"optimal_open=(?P<opt>[01])\s+left_open=(?P<left>[01])\s+right_open=(?P<right>[01])\s+"
+    r"overlap_flag=(?P<ov>[01])\s+emergency_risk_01=(?P<risk>\S+)\s+source=(?P<src>\S+)"
+)
 RE_LOG_TIME_S = re.compile(r"\bt=(?P<t>\d+\.?\d*)s\b")
 # Fellow harness: placement from ego offset ([placement.py])
 RE_FELLOW_PLACEMENT_FROM_EGO = re.compile(
@@ -161,6 +168,17 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "phase7_prediction_gain_vs_zero_mean",
     "phase7_prediction_regret_vs_hold_mean",
     "phase7_prediction_ratio_vs_hold_mean",
+    "phase8_assessment_line_count",
+    "phase8_fellow_relation_ahead_count",
+    "phase8_fellow_relation_behind_count",
+    "phase8_gap_ok_rate",
+    "phase8_safe_gap_mean",
+    "phase8_actual_gap_mean",
+    "phase8_optimal_open_rate",
+    "phase8_left_open_rate",
+    "phase8_right_open_rate",
+    "phase8_closing_flag_rate",
+    "phase8_emergency_risk_mean",
 )
 
 # Fellow traffic harness digest (see examples/racing/fellow_smoke, fellow_runner.py).
@@ -431,6 +449,17 @@ def collect_metrics_from_log(
     phase7_err_next: List[float] = []
     phase7_err_zero: List[float] = []
     phase7_err_hold: List[float] = []
+    phase8_line_count = 0
+    phase8_rel_ahead_count = 0
+    phase8_rel_behind_count = 0
+    phase8_gap_ok_count = 0
+    phase8_opt_open_count = 0
+    phase8_left_open_count = 0
+    phase8_right_open_count = 0
+    phase8_closing_count = 0
+    phase8_safe_gap_vals: List[float] = []
+    phase8_actual_gap_vals: List[float] = []
+    phase8_risk_vals: List[float] = []
 
     _ignore_before = max(0.0, float(ignore_before_s))
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
@@ -476,6 +505,34 @@ def collect_metrics_from_log(
                         phase7_err_zero.append(_ez)
                     if _eh is not None:
                         phase7_err_hold.append(_eh)
+            if "[Phase8Assessment]" in line:
+                p8 = RE_PHASE8_ASSESSMENT.search(line)
+                if p8:
+                    phase8_line_count += 1
+                    _rel = str(p8.group("rel") or "")
+                    if _rel == "ahead":
+                        phase8_rel_ahead_count += 1
+                    elif _rel == "behind":
+                        phase8_rel_behind_count += 1
+                    if p8.group("gap_ok") == "1":
+                        phase8_gap_ok_count += 1
+                    if p8.group("opt") == "1":
+                        phase8_opt_open_count += 1
+                    if p8.group("left") == "1":
+                        phase8_left_open_count += 1
+                    if p8.group("right") == "1":
+                        phase8_right_open_count += 1
+                    if p8.group("closing") == "1":
+                        phase8_closing_count += 1
+                    _safe = parse_float_or_none(p8.group("safe"))
+                    _actual = parse_float_or_none(p8.group("actual"))
+                    _risk = parse_float_or_none(p8.group("risk"))
+                    if _safe is not None:
+                        phase8_safe_gap_vals.append(_safe)
+                    if _actual is not None:
+                        phase8_actual_gap_vals.append(_actual)
+                    if _risk is not None:
+                        phase8_risk_vals.append(_risk)
             evc = RE_EVAL_CONTACT_EVENT.search(line)
             if evc:
                 sev = evc.group("sev")
@@ -665,6 +722,33 @@ def collect_metrics_from_log(
     else:
         out["phase7_prediction_regret_vs_hold_mean"] = None
         out["phase7_prediction_ratio_vs_hold_mean"] = None
+    out["phase8_assessment_line_count"] = phase8_line_count
+    out["phase8_fellow_relation_ahead_count"] = phase8_rel_ahead_count
+    out["phase8_fellow_relation_behind_count"] = phase8_rel_behind_count
+    out["phase8_gap_ok_rate"] = (
+        (float(phase8_gap_ok_count) / float(phase8_line_count)) if phase8_line_count > 0 else None
+    )
+    out["phase8_safe_gap_mean"] = (
+        (sum(phase8_safe_gap_vals) / len(phase8_safe_gap_vals)) if phase8_safe_gap_vals else None
+    )
+    out["phase8_actual_gap_mean"] = (
+        (sum(phase8_actual_gap_vals) / len(phase8_actual_gap_vals)) if phase8_actual_gap_vals else None
+    )
+    out["phase8_optimal_open_rate"] = (
+        (float(phase8_opt_open_count) / float(phase8_line_count)) if phase8_line_count > 0 else None
+    )
+    out["phase8_left_open_rate"] = (
+        (float(phase8_left_open_count) / float(phase8_line_count)) if phase8_line_count > 0 else None
+    )
+    out["phase8_right_open_rate"] = (
+        (float(phase8_right_open_count) / float(phase8_line_count)) if phase8_line_count > 0 else None
+    )
+    out["phase8_closing_flag_rate"] = (
+        (float(phase8_closing_count) / float(phase8_line_count)) if phase8_line_count > 0 else None
+    )
+    out["phase8_emergency_risk_mean"] = (
+        (sum(phase8_risk_vals) / len(phase8_risk_vals)) if phase8_risk_vals else None
+    )
     return out
 
 

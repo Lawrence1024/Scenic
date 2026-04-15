@@ -14,7 +14,7 @@ Usage (repo root)::
 
 Order (default start is ``fellow_smoke``):
 fellow_runner -> fellow_placement_debug_runner ->
-phase0_runner -> phase1_runner -> phase2_runner -> phase3_runner -> phase4_runner -> phase5_runner -> phase6_runner -> phase7_runner.
+phase0_runner -> phase1_runner -> phase2_runner -> phase3_runner -> phase4_runner -> phase5_runner -> phase6_runner -> phase7_runner -> phase8_runner.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ _RUNNERS_ORDERED: Tuple[Tuple[str, str], ...] = (
     ("phase5", "scenic.domains.racing.benchmarks.phase5_runner"),
     ("phase6", "scenic.domains.racing.benchmarks.phase6_runner"),
     ("phase7", "scenic.domains.racing.benchmarks.phase7_runner"),
+    ("phase8", "scenic.domains.racing.benchmarks.phase8_runner"),
 )
 
 _START_LABELS = tuple(label for label, _mod in _RUNNERS_ORDERED)
@@ -78,7 +79,7 @@ def main() -> int:
             "First runner to execute (inclusive); skips all earlier runners in the stack. "
             f"Choices: {', '.join(_START_LABELS)}. "
             "Aliases: smoke -> fellow_smoke, placement -> fellow_placement. "
-            "Example: --from phase1 runs phase1 through phase7 only."
+            "Example: --from phase1 runs phase1 through phase8 only."
         ),
     )
     args, forwarded = parser.parse_known_args()
