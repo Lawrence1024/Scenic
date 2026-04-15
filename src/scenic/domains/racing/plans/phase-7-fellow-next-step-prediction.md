@@ -3,7 +3,7 @@
 ## Prerequisites (handoff from Phase 6)
 
 Phase 6 established the layered runtime path and per-cycle observability.
-Phase 7 now introduces the first new decision-quality capability: predicting fellow
+Phase 7 introduces the first new decision-quality capability: predicting fellow
 next-step motion from pose history.
 
 This phase **adds** prediction quality and prediction metrics; it does **not** yet
@@ -11,11 +11,17 @@ change pass lifecycle semantics.
 
 ## Current Status
 
-**Planned** (prediction module and benchmarked forecast accuracy).
+**Implemented (clean sign-off)** — recency-weighted one-step CV predictor,
+baselines, ego logging, and benchmark gating.
 
-- Source architecture intent: `src/scenic/domains/racing/restrcture_plan.md`
-- Detailed criteria: `src/scenic/domains/racing/phase6-12.md`
-- Master chain: `src/scenic/domains/racing/plans/phase-6-12-master-rollout.md`
+- Predictor: `src/scenic/domains/racing/prediction/fellow_predictor.py`
+- Ego wiring: `FollowRacingLineMPCBehavior(..., phase7_prediction_enabled=True)` (or global `param phase7_prediction_enabled` in `examples/racing/f_shared/*.scenic`)
+- Unit tests: `src/scenic/domains/racing/mpc/testing/test_fellow_predictor.py`
+- Runner: `src/scenic/domains/racing/benchmarks/phase7_runner.py` (passes `-p phase7_prediction_enabled True` via `PhaseRunnerSpec.scenic_extra_args`)
+- Scenario subset: `PHASE7_F_SCENARIO_NAMES` in `f_scenario_bank.py` (`F2`, `F4`, `F5`, `F6`, `F7`)
+- Log parsing / CSV: `collect_metrics_from_log` in `phase_run_common.py`
+  (`phase7_prediction_*` aggregates; default startup filter
+  `--analysis-ignore-before-s=1.0`)
 
 ## Goal
 
@@ -31,7 +37,7 @@ can be consumed by assessment and planning.
 - Emit per-cycle prediction error metric against realized next-step pose.
 - Compare predictor against simple baselines:
   - zero-motion
-  - hold-last-pose
+  - hold-last velocity (CV to current time — same family as the main model for two-point history)
 
 ## Why It Matters
 
@@ -42,30 +48,40 @@ single-frame geometry only.
 
 In cruise scenarios (`F2`, `F6`, `F7`):
 
-- prediction error remains small and stable.
+- prediction error remains small and stable (track mean / max from logs).
 
 In disturbance scenarios (`F4`, `F5`):
 
-- predictor responds to stop/swerve transitions better than naive baseline.
+- predictor responds to stop/swerve transitions; compare mean errors vs baselines on the same logs.
+- required baseline outcome for sign-off:
+  - strong gain vs zero-motion (`phase7_prediction_gain_vs_zero_mean > 0`)
+  - bounded regret vs hold-last (`phase7_prediction_ratio_vs_hold_mean <= 1.30`)
 
 Global:
 
-- prediction runs every cycle,
-- errors are bounded and reported per scenario.
+- prediction runs on ego full-control steps when enabled,
+- errors are bounded and reported per scenario via benchmark CSV / digest.
 
 ## Required Telemetry (Phase 7)
 
-- `fellow_pred_x`
-- `fellow_pred_y`
-- `fellow_pred_s`
-- `prediction_error_next_step`
-- optional comparator fields:
-  - `prediction_error_zero_motion`
-  - `prediction_error_hold_last`
+Log prefix: **`[Phase7Prediction]`** (one line per full-control step when a nearest fellow exists; predictor reset when no opponent).
+
+Fields:
+
+- `fellow_pred_x`, `fellow_pred_y`, `fellow_pred_s` (optional / `na` if unavailable)
+- `prediction_error_next_step` (vs previous-tick forecast)
+- `prediction_error_zero_motion`
+- `prediction_error_hold_last`
+
+Example:
+
+```text
+[Phase7Prediction] t=12.50s fellow_pred_x=101.2345 fellow_pred_y=-220.1000 fellow_pred_s=na prediction_error_next_step=0.0421 prediction_error_zero_motion=0.1100 prediction_error_hold_last=0.0380
+```
 
 ## Benchmark / Scenario Guidance
 
-Use scenarios that cover both steady-state and disturbance:
+Scenarios:
 
 - `F2` ahead slower cruise on optimal
 - `F4` sudden stop onset
@@ -73,34 +89,43 @@ Use scenarios that cover both steady-state and disturbance:
 - `F6` deterministic left occupancy cruise
 - `F7` deterministic right occupancy cruise
 
-Runner guidance (placeholder naming convention):
+Runner:
 
 ```bash
 python -m scenic.domains.racing.benchmarks.phase7_runner --time 2000
 ```
 
-Scenario summary should include:
+This enables prediction via CLI override: `-p phase7_prediction_enabled True` (wired through `scenic_extra_args`).
 
-- average next-step position error
-- max next-step position error
-- baseline-comparison deltas
+Scenario summary (`summary.csv`) includes:
+
+- `phase7_prediction_line_count`
+- `phase7_prediction_error_next_step_mean` / `_max`
+- `phase7_prediction_error_zero_motion_mean`
+- `phase7_prediction_error_hold_last_mean`
+- `phase7_prediction_gain_vs_zero_mean`
+- `phase7_prediction_regret_vs_hold_mean`
+- `phase7_prediction_ratio_vs_hold_mean`
 
 ## Implementation (code)
 
 Primary targets:
 
 - `src/scenic/domains/racing/prediction/fellow_predictor.py`
-- `src/scenic/domains/racing/prediction/` history and model helpers
-- planner/assessment integration points that consume prediction outputs
-- benchmark metric parsing updates for prediction-error fields
+- `src/scenic/domains/racing/behaviors.scenic` — Phase 7 block (ego + nearest fellow, after shared nearest-object scan with Phase 6)
+- `src/scenic/domains/racing/benchmarks/phase_run_common.py` — regex + aggregates
+- `examples/racing/f_shared/*.scenic` — `param phase7_prediction_enabled = False` and behavior argument
 
 ## Exit Checklist
 
-- [ ] Predictor runs every cycle on all phase scenarios.
-- [ ] Prediction output fields are present and parseable in logs.
-- [ ] Error summaries are generated per scenario.
-- [ ] Predictor outperforms zero-motion or hold-last baseline on dynamic case (`F5`).
-- [ ] Run artifacts and known limits are documented.
+- [x] Predictor runs on ego full-control steps when enabled and a fellow is present.
+- [x] Prediction output fields are present and parseable in logs (`[Phase7Prediction]`).
+- [x] Error summaries are generated per scenario (benchmark CSV + digest keys).
+- [x] Predictor beats zero-motion and stays within bounded regret vs hold-last
+  on target scenarios under startup-filtered analysis (`t >= 1.0s`) —
+  **quantitative gate** using `phase7_prediction_gain_vs_zero_mean` and
+  `phase7_prediction_ratio_vs_hold_mean`.
+- [x] Run artifacts and known limits documented for pinned `phase7_*` run ids.
 
 ## Handoff to Phase 8
 

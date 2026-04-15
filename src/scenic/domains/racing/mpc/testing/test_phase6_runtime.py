@@ -43,7 +43,26 @@ def test_phase6_planner_follow_when_opponent_ahead_and_close():
     assert decision.planner_state == FOLLOW
     assert decision.active_ttl == "optimal"
     assert decision.target_speed_cap_mps is not None
-    assert decision.target_speed_cap_mps <= 23.0
+    assert decision.decision_reason == "opponent_ahead_follow_band"
+    assert decision.target_speed_cap_mps <= 21.5
+
+
+def test_phase6_planner_far_opponent_not_blocking():
+    state = build_phase6_state_snapshot(
+        has_opponent=True,
+        pit_mode=False,
+        current_ttl="optimal",
+        ego_speed_mps=30.0,
+        opponent_speed_mps=20.0,
+        opponent_distance_m=80.0,
+        overlap_state="clear_ahead",
+        segment_context="straight",
+        ahead_flag=True,
+    )
+    decision = phase6_planner_step(state, target_speed_mps=35.0, speed_cap_mps=None)
+    assert decision.planner_state == FREE_RUN
+    assert decision.decision_reason == "opponent_not_blocking"
+    assert decision.target_speed_cap_mps == 35.0
 
 
 def test_phase6_guard_is_pass_through_default():

@@ -7,6 +7,7 @@ param ttlFolder = localPath('../../../assets/ttls/LS_ENU_TTL_CSV')
 param launch_veos_ipc_client = False
 param scenic_control = True
 param fellowHarnessLog = True
+param phase7_prediction_enabled = False
 model scenic.simulators.dspace.racing_model
 
 ego = new RacingCar at (-78.86454576530903, -112.41203639782893), \
@@ -15,7 +16,7 @@ ego = new RacingCar at (-78.86454576530903, -112.41203639782893), \
     with ttlFileName 'ttl_optimal_xodr.csv', \
     with ttlFolder localPath('../../../assets/ttls/LS_ENU_TTL_CSV')
 
-ego.behavior = FollowRacingLineMPCBehavior(target_speed=60, manage_gears=True, use_waypoints=True, mpc_config_path=None, phase6_orchestration_enabled=True)
+ego.behavior = FollowRacingLineMPCBehavior(target_speed=60, manage_gears=True, use_waypoints=True, mpc_config_path=None, phase6_orchestration_enabled=True, phase7_prediction_enabled=globalParameters.phase7_prediction_enabled)
 
 opponent = new RacingCar with _racing_st_offset ('behind', 60), \
     with regionContainedIn everywhere, \

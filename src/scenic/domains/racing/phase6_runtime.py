@@ -10,6 +10,17 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+def _headway_distance_m(speed_mps: float, time_headway_s: float, floor_m: float) -> float:
+    """Minimum distance implied by time headway at ``speed_mps`` (Phase 8-style dynamic gap).
+
+    ``floor_m`` is a low-speed physical floor so near-stationary ego still keeps a real gap.
+    Aligns with ``phase-8-situation-assessment-and-dynamic-gap.md`` (time-headway baseline).
+    """
+
+    v = max(0.0, float(speed_mps))
+    return max(float(floor_m), v * float(time_headway_s))
+
+
 FREE_RUN = "FREE_RUN"
 FOLLOW = "FOLLOW"
 PIT_YIELD = "PIT_YIELD"
@@ -112,12 +123,15 @@ def phase6_planner_step(
             decision_reason=NO_OPPONENT,
         )
 
-    # Minimal follow trigger for Phase 6: if opponent is ahead and within dynamic lookahead.
-    follow_trigger_m = max(20.0, 1.2 * max(0.0, state.ego_speed_mps))
+    # Keep Phase 6 planner simple: single speed-scaled follow band (headway + floor).
+    # Detailed overlap/close-gap shaping is deferred to Phase 8+ assessment/planner layers.
+    follow_trigger_m = _headway_distance_m(
+        float(state.ego_speed_mps), time_headway_s=1.35, floor_m=32.0
+    )
     if state.ahead_flag and state.opponent_distance_m is not None and state.opponent_distance_m <= follow_trigger_m:
         capped = base_cap
         if state.opponent_speed_mps is not None:
-            capped = min(capped, max(8.0, float(state.opponent_speed_mps) + 3.0))
+            capped = min(capped, max(6.0, float(state.opponent_speed_mps) + 1.5))
         return Phase6PlannerDecision(
             planner_state=FOLLOW,
             active_ttl=state.current_ttl,

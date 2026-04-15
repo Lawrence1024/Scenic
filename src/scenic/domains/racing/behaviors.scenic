@@ -65,6 +65,7 @@ from scenic.domains.racing.phase6_runtime import (
     phase6_guard_step,
     phase6_planner_step,
 )
+from scenic.domains.racing.prediction import FellowPredictor, format_phase7_prediction_log_line
 
 _PHASE4_SHIELD_MODES = (
     COMMIT_PASS_LEFT,
@@ -295,7 +296,7 @@ behavior FellowSwerveOutOfControlBehavior(
         self._fellow_plant_log_mode = mode
         wait
 
-behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False, pass_commit_shield_enabled=False, phase5_segment_tactics_enabled=False, phase6_orchestration_enabled=False):
+behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False, pass_commit_shield_enabled=False, phase5_segment_tactics_enabled=False, phase6_orchestration_enabled=False, phase7_prediction_enabled=False):
     """Follow the car's TTL using MPC (Model Predictive Control) for lateral control.
     
     Primary Scenic behavior for line-following on the racing TTL. Lateral and longitudinal
@@ -320,6 +321,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         phase6_orchestration_enabled: Phase 6 — enable layered state/planner/guard shells
             with per-cycle ``[Phase6State]`` / ``[Phase6Planner]`` / ``[Phase6Guard]`` /
             ``[Phase6Executor]`` observability.
+        phase7_prediction_enabled: Phase 7 — log ``[Phase7Prediction]`` for the nearest fellow
+            (ego only; constant-velocity next-step estimate and error vs realized pose).
     """
     
     # SETUP & DEFAULTS
@@ -369,6 +372,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
     _phase5_enabled = bool(phase5_segment_tactics_enabled)
     _pass_shield_enabled = bool(pass_commit_shield_enabled)
     _phase6_enabled = bool(phase6_orchestration_enabled)
+    _phase7_requested = bool(phase7_prediction_enabled)
     if _phase5_enabled and not _tactical_planner_enabled:
         print(f"{_fbhv} phase5_segment_tactics_enabled=True requires tactical_planner_enabled=True; Phase 5 segment tactics disabled.")
         _phase5_enabled = False
@@ -407,6 +411,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 print(f"{_fbhv} Phase4 pass/commit/shield enabled (COMMIT_PASS_* / ABORT_PASS / EMERGENCY_AVOID)")
             if _phase6_enabled:
                 print(f"{_fbhv} Phase6 orchestration enabled (state/planner/guard/executor logs)")
+            if _phase7_requested:
+                print(f"{_fbhv} Phase7 fellow prediction enabled ([Phase7Prediction] on full-control steps)")
         except Exception:
             _phase1_schedule_enabled = False
             _tactical_planner_enabled = False
@@ -517,6 +523,11 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         if _dt_sim is None or _dt_sim <= 0:
             _dt_sim = float(getattr(_sim, 'control_period', 0.05) or 0.05)
         _sim_time_s = float(getattr(_sim, 'currentTime', 0)) * float(_dt_sim)
+        _ctrl_dt = getattr(_sim, 'control_dt', None)
+        if _ctrl_dt is None or _ctrl_dt <= 0:
+            _ctrl_dt = getattr(_sim, 'control_period', None)
+        if _ctrl_dt is None or _ctrl_dt <= 0:
+            _ctrl_dt = float(_dt_sim)
         if _phase1_schedule_enabled:
             _desired_ttl = _phase1_active_ttl
             for _t_switch, _ttl_sel in _phase1_schedule:
@@ -890,9 +901,11 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             self._in_pit_by_segment = pit_mode
 
             # --- Phase 6 orchestration shells (state -> planner -> guard) ---
+            # --- Phase 7 fellow next-step prediction (ego + nearest fellow) ---
             self._phase3_speed_cap = None
             _p6_guard = None
-            if _phase6_enabled and self is getattr(simulation().scene, 'egoObject', None):
+            _ego_scene = getattr(simulation().scene, 'egoObject', None)
+            if (self is _ego_scene) and (_phase6_enabled or _phase7_requested):
                 _nearest_o6 = None
                 _nearest_d6 = None
                 _nearest_vs6 = 0.0
@@ -919,61 +932,84 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     _nearest_d6 = None
                     _nearest_vs6 = 0.0
 
-                _sit6 = None
-                if _nearest_o6 is not None and car_heading is not None:
-                    _ox6 = float(_nearest_o6.position.x)
-                    _oy6 = float(_nearest_o6.position.y)
-                    _prog6 = getattr(self, '_waypoint_progress', None)
-                    _smap6 = getattr(self, '_waypoint_segment_map', None)
-                    _sid6 = getattr(self, '_last_valid_segment_id', None)
-                    _snm6 = getattr(self, '_last_valid_segment_name', '') or ''
-                    _Lap6 = None
-                    if use_waypoints and wp_list is not None and len(wp_list) >= 2:
-                        _Lap6 = polyline_lap_length_m(wp_list)
-                    _prev_ov6 = getattr(self, '_phase2_overlap_state', 'clear_ahead')
-                    _sit6, _new_ov6 = assess_nearest_opponent(
-                        (px, py),
-                        float(car_heading),
-                        float(current_speed),
-                        (_ox6, _oy6),
-                        _nearest_vs6,
-                        ego_progress_s_m=_prog6,
-                        waypoints=wp_list if use_waypoints else None,
-                        lap_length_m=_Lap6,
-                        segment_map=_smap6,
-                        ego_wp_idx=wp_last_idx,
-                        segment_id=_sid6,
-                        segment_name=_snm6,
-                        curvature_ahead_max=float(getattr(self, "_last_curvature_ahead_for_tactical", 0.0) or 0.0),
-                        previous_overlap_state=_prev_ov6,
-                    )
-                    self._phase2_overlap_state = _new_ov6
+                if _phase6_enabled:
+                    _sit6 = None
+                    if _nearest_o6 is not None and car_heading is not None:
+                        _ox6 = float(_nearest_o6.position.x)
+                        _oy6 = float(_nearest_o6.position.y)
+                        _prog6 = getattr(self, '_waypoint_progress', None)
+                        _smap6 = getattr(self, '_waypoint_segment_map', None)
+                        _sid6 = getattr(self, '_last_valid_segment_id', None)
+                        _snm6 = getattr(self, '_last_valid_segment_name', '') or ''
+                        _Lap6 = None
+                        if use_waypoints and wp_list is not None and len(wp_list) >= 2:
+                            _Lap6 = polyline_lap_length_m(wp_list)
+                        _prev_ov6 = getattr(self, '_phase2_overlap_state', 'clear_ahead')
+                        _sit6, _new_ov6 = assess_nearest_opponent(
+                            (px, py),
+                            float(car_heading),
+                            float(current_speed),
+                            (_ox6, _oy6),
+                            _nearest_vs6,
+                            ego_progress_s_m=_prog6,
+                            waypoints=wp_list if use_waypoints else None,
+                            lap_length_m=_Lap6,
+                            segment_map=_smap6,
+                            ego_wp_idx=wp_last_idx,
+                            segment_id=_sid6,
+                            segment_name=_snm6,
+                            curvature_ahead_max=float(getattr(self, "_last_curvature_ahead_for_tactical", 0.0) or 0.0),
+                            previous_overlap_state=_prev_ov6,
+                        )
+                        self._phase2_overlap_state = _new_ov6
 
-                _state6 = build_phase6_state_snapshot(
-                    has_opponent=(_nearest_o6 is not None),
-                    pit_mode=bool(pit_mode),
-                    current_ttl=_phase1_active_ttl,
-                    ego_speed_mps=float(current_speed),
-                    opponent_speed_mps=float(_nearest_vs6) if _nearest_o6 is not None else None,
-                    opponent_distance_m=float(_nearest_d6) if _nearest_d6 is not None else None,
-                    overlap_state=getattr(_sit6, "overlap_state", "none") if _sit6 is not None else "none",
-                    segment_context=getattr(_sit6, "segment_context", "none") if _sit6 is not None else "none",
-                    ahead_flag=getattr(_sit6, "ahead", False) if _sit6 is not None else False,
-                )
-                _decision6 = phase6_planner_step(
-                    _state6,
-                    target_speed_mps=float(target_speed),
-                    speed_cap_mps=_phase1_speed_cap,
-                )
-                _p6_guard = phase6_guard_step(_decision6)
-                self._phase6_planner_state = _p6_guard.planner_state
-                self._phase6_active_ttl = _p6_guard.active_ttl
-                self._phase6_decision_reason = _p6_guard.decision_reason
-                if _p6_guard.target_speed_cap_mps is not None:
-                    self._phase3_speed_cap = float(_p6_guard.target_speed_cap_mps)
-                print(format_phase6_state_log_line(_sim_time_s, _state6))
-                print(format_phase6_planner_log_line(_sim_time_s, _decision6))
-                print(format_phase6_guard_log_line(_sim_time_s, _p6_guard))
+                    _state6 = build_phase6_state_snapshot(
+                        has_opponent=(_nearest_o6 is not None),
+                        pit_mode=bool(pit_mode),
+                        current_ttl=_phase1_active_ttl,
+                        ego_speed_mps=float(current_speed),
+                        opponent_speed_mps=float(_nearest_vs6) if _nearest_o6 is not None else None,
+                        opponent_distance_m=float(_nearest_d6) if _nearest_d6 is not None else None,
+                        overlap_state=getattr(_sit6, "overlap_state", "none") if _sit6 is not None else "none",
+                        segment_context=getattr(_sit6, "segment_context", "none") if _sit6 is not None else "none",
+                        ahead_flag=getattr(_sit6, "ahead", False) if _sit6 is not None else False,
+                    )
+                    _decision6 = phase6_planner_step(
+                        _state6,
+                        target_speed_mps=float(target_speed),
+                        speed_cap_mps=_phase1_speed_cap,
+                    )
+                    _p6_guard = phase6_guard_step(_decision6)
+                    self._phase6_planner_state = _p6_guard.planner_state
+                    self._phase6_active_ttl = _p6_guard.active_ttl
+                    self._phase6_decision_reason = _p6_guard.decision_reason
+                    if _p6_guard.target_speed_cap_mps is not None:
+                        self._phase3_speed_cap = float(_p6_guard.target_speed_cap_mps)
+                    print(format_phase6_state_log_line(_sim_time_s, _state6))
+                    print(format_phase6_planner_log_line(_sim_time_s, _decision6))
+                    print(format_phase6_guard_log_line(_sim_time_s, _p6_guard))
+
+                if _phase7_requested:
+                    if _nearest_o6 is None:
+                        if hasattr(self, '_phase7_fellow_predictor'):
+                            self._phase7_fellow_predictor.reset()
+                    else:
+                        if not hasattr(self, '_phase7_fellow_predictor'):
+                            self._phase7_fellow_predictor = FellowPredictor()
+                        _fpx7 = float(_nearest_o6.position.x)
+                        _fpy7 = float(_nearest_o6.position.y)
+                        _fprog7 = getattr(_nearest_o6, '_waypoint_progress', None)
+                        try:
+                            _p7r = self._phase7_fellow_predictor.step(
+                                _sim_time_s,
+                                _fpx7,
+                                _fpy7,
+                                fellow_progress_s_m=_fprog7,
+                                dt_pred_s=float(_ctrl_dt),
+                            )
+                            print(format_phase7_prediction_log_line(_sim_time_s, _p7r))
+                        except Exception as _e_p7:
+                            print(f"{_fbhv} Phase7 prediction step failed: {_e_p7}")
             
             # --- Phase 3 tactical planner (TTL + follow cap; uses prior-step curvature lookahead) ---
             if _tactical_planner_enabled and self is getattr(simulation().scene, 'egoObject', None):
@@ -2164,10 +2200,27 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             if _risk_step == "overlap" or _risk_step == "near":
                 _os_step = f"{_obb_sep_step:.3f}" if _obb_sep_step is not None else "na"
                 _ds_step = f"{float(_gt_d_step):.3f}" if eval_dspace_dist_object_1_valid(_gt_d_step) else "na"
+                _opp_d_step = f"{nearest_dist:.3f}" if nearest_dist is not None else "na"
+                _opp_rel_v_step = f"{nearest_rel_speed:.3f}" if nearest_rel_speed is not None else "na"
+                _opp_rel_s_step = (
+                    f"{nearest_rel_longitudinal:.3f}" if nearest_rel_longitudinal is not None else "na"
+                )
+                _ov_dbg = str(getattr(self, "_phase2_overlap_state", "unknown"))
+                _seg_dbg = str(getattr(self, "_last_valid_segment_name", "") or "unknown")
+                _ahead_dbg = (
+                    1 if (nearest_rel_longitudinal is not None and nearest_rel_longitudinal > 0.0) else 0
+                )
                 print(
                     f"[EvalEvent] t={t_log:.2f}s type=eval_contact severity={_risk_step} "
                     f"bbox_gap_m={_os_step} dspace_obj1_m={_ds_step} "
                     f"dspace_valid={1 if _cflags_step.get('dspace_valid', False) else 0}"
+                )
+                print(
+                    f"[EvalEventDiag] t={t_log:.2f}s severity={_risk_step} "
+                    f"ego_speed_mps={float(current_speed):.3f} opp_center_dist_m={_opp_d_step} "
+                    f"rel_speed_mps={_opp_rel_v_step} rel_longitudinal_m={_opp_rel_s_step} "
+                    f"overlap_state={_ov_dbg} seg={_seg_dbg} ahead_hint={_ahead_dbg} "
+                    f"bbox_gap_m={_os_step} dspace_obj1_m={_ds_step}"
                 )
         # Log step summary every 50 steps; include t= and OpenDRIVE-based segment for segment performance analysis
         if self._behavior_step_count % 50 == 0:

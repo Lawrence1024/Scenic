@@ -141,6 +141,12 @@ At every step, keep low-level MPC executor as a stable sink for chosen reference
 
 ## Risk register (cross-phase)
 
+- **Fixed-meter safety thresholds:** follow and proximity rules must scale with speed
+  (time-headway style: `distance ≥ max(floor_m, τ · speed)`), not “magic constant”
+  meters only. Phase 8 makes this explicit (`safe_gap`); Phase 6–7 interim caps should
+  use the same principle so faster ego demands larger clearance.
+  - Mitigation: shared helpers (e.g. headway distance in `phase6_runtime.py`) and
+    review any new `<= N` meter cutoffs in planner/guard code.
 - **Integration drift:** layers exist but are bypassed at runtime.
   - Mitigation: explicit per-cycle layer-call logs in Phase 6 and CI checks.
 - **Decision chatter:** state flips from noisy labels.

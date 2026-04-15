@@ -1,4 +1,4 @@
-"""Shared helpers for benchmark runners (phase0–phase5 + fellow harness).
+"""Shared helpers for benchmark runners (phase0–phase7 + fellow harness).
 
 Scenario discovery for `run_phase_main`: every ``*.scenic`` in the chosen
 ``--scenario-dir`` (default from `PhaseRunnerSpec.default_scenario_dir`) is run,
@@ -55,7 +55,8 @@ RE_PHASE4_EVENT = re.compile(
     r"\[Phase4Event\]\s+t=(?P<t>\d+\.?\d*)s\s+event=(?P<event>\S+)"
 )
 RE_EVAL_CONTACT_EVENT = re.compile(
-    r"\[EvalEvent\]\s+t=(?P<t>\d+\.?\d*)s\s+type=eval_contact\s+severity=(?P<sev>\S+)"
+    r"\[EvalEvent\]\s+t=(?P<t>\d+\.?\d*)s\s+type=eval_contact\s+severity=(?P<sev>\S+)\s+"
+    r"bbox_gap_m=(?P<bbox>\S+)\s+dspace_obj1_m=(?P<ds>\S+)\s+dspace_valid=(?P<dsv>[01])"
 )
 RE_PHASE5_EVENT = re.compile(
     r"\[Phase5Event\]\s+t=(?P<t>\d+\.?\d*)s\s+event=(?P<event>\S+)"
@@ -78,6 +79,14 @@ RE_PHASE6_GUARD = re.compile(
 RE_PHASE6_EXECUTOR = re.compile(
     r"\[Phase6Executor\]\s+t=(?P<t>\d+\.?\d*)s\s+executor_call=(?P<call>[01])\s+planner_state=(?P<state>\S+)\s+active_ttl=(?P<ttl>\S+)\s+decision_reason=(?P<reason>\S+)\s+steer=(?P<steer>\S+)\s+throttle=(?P<throttle>\S+)\s+brake=(?P<brake>\S+)"
 )
+RE_PHASE7_PREDICTION = re.compile(
+    r"\[Phase7Prediction\]\s+t=(?P<t>\d+\.?\d*)s\s+"
+    r"fellow_pred_x=(?P<fpx>\S+)\s+fellow_pred_y=(?P<fpy>\S+)\s+fellow_pred_s=(?P<fps>\S+)\s+"
+    r"prediction_error_next_step=(?P<e_next>\S+)\s+"
+    r"prediction_error_zero_motion=(?P<e0>\S+)\s+"
+    r"prediction_error_hold_last=(?P<eh>\S+)"
+)
+RE_LOG_TIME_S = re.compile(r"\bt=(?P<t>\d+\.?\d*)s\b")
 # Fellow harness: placement from ego offset ([placement.py])
 RE_FELLOW_PLACEMENT_FROM_EGO = re.compile(
     r"\[Placement\][^\n]*racing \(s,t\) from ego[^\n]*-> s=([\d.+-]+),\s*t=([\d.+-]+)"
@@ -141,7 +150,17 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "phase6_guard_active_count",
     "eval_contact_overlap_count",
     "eval_contact_near_count",
+    "eval_contact_overlap_dspace_invalid_count",
+    "eval_contact_near_dspace_invalid_count",
     "collision_eval_hull_overlap",
+    "phase7_prediction_line_count",
+    "phase7_prediction_error_next_step_mean",
+    "phase7_prediction_error_next_step_max",
+    "phase7_prediction_error_zero_motion_mean",
+    "phase7_prediction_error_hold_last_mean",
+    "phase7_prediction_gain_vs_zero_mean",
+    "phase7_prediction_regret_vs_hold_mean",
+    "phase7_prediction_ratio_vs_hold_mean",
 )
 
 # Fellow traffic harness digest (see examples/racing/fellow_smoke, fellow_runner.py).
@@ -362,6 +381,7 @@ def collect_metrics_from_log(
     phase1_switches: bool = False,
     phase2_lines: bool = False,
     phase3_tactical: bool = False,
+    ignore_before_s: float = 1.0,
 ) -> Dict[str, Any]:
     """Parse standard racing benchmark tags; does **not** read ``[EvalGT]`` / dSPACE sensor ground truth."""
     min_opp_dist: Optional[float] = None
@@ -405,9 +425,22 @@ def collect_metrics_from_log(
     phase6_reasons: List[str] = []
     eval_contact_overlap_count = 0
     eval_contact_near_count = 0
+    eval_contact_overlap_dspace_invalid_count = 0
+    eval_contact_near_dspace_invalid_count = 0
+    phase7_line_count = 0
+    phase7_err_next: List[float] = []
+    phase7_err_zero: List[float] = []
+    phase7_err_hold: List[float] = []
 
+    _ignore_before = max(0.0, float(ignore_before_s))
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
+            _line_t: Optional[float] = None
+            _tm = RE_LOG_TIME_S.search(line)
+            if _tm:
+                _line_t = parse_float_or_none(_tm.group("t"))
+            if _line_t is not None and _line_t < _ignore_before:
+                continue
             if "[Phase6State]" in line:
                 p6s = RE_PHASE6_STATE.search(line)
                 if p6s:
@@ -430,13 +463,31 @@ def collect_metrics_from_log(
                 p6e = RE_PHASE6_EXECUTOR.search(line)
                 if p6e:
                     phase6_executor_line_count += 1
+            if "[Phase7Prediction]" in line:
+                p7 = RE_PHASE7_PREDICTION.search(line)
+                if p7:
+                    phase7_line_count += 1
+                    _en = parse_float_or_none(p7.group("e_next"))
+                    _ez = parse_float_or_none(p7.group("e0"))
+                    _eh = parse_float_or_none(p7.group("eh"))
+                    if _en is not None:
+                        phase7_err_next.append(_en)
+                    if _ez is not None:
+                        phase7_err_zero.append(_ez)
+                    if _eh is not None:
+                        phase7_err_hold.append(_eh)
             evc = RE_EVAL_CONTACT_EVENT.search(line)
             if evc:
                 sev = evc.group("sev")
+                dsv = evc.group("dsv")
                 if sev == "overlap":
                     eval_contact_overlap_count += 1
+                    if dsv == "0":
+                        eval_contact_overlap_dspace_invalid_count += 1
                 elif sev == "near":
                     eval_contact_near_count += 1
+                    if dsv == "0":
+                        eval_contact_near_dspace_invalid_count += 1
                 continue
             if "[Phase4Event]" in line:
                 pe = RE_PHASE4_EVENT.search(line)
@@ -585,7 +636,35 @@ def collect_metrics_from_log(
     out["phase6_reasons_observed"] = sorted(set(phase6_reasons))
     out["eval_contact_overlap_count"] = eval_contact_overlap_count
     out["eval_contact_near_count"] = eval_contact_near_count
+    out["eval_contact_overlap_dspace_invalid_count"] = eval_contact_overlap_dspace_invalid_count
+    out["eval_contact_near_dspace_invalid_count"] = eval_contact_near_dspace_invalid_count
     out["collision_eval_hull_overlap"] = bool(eval_contact_overlap_count > 0)
+    out["phase7_prediction_line_count"] = phase7_line_count
+    out["phase7_prediction_error_next_step_mean"] = (
+        (sum(phase7_err_next) / len(phase7_err_next)) if phase7_err_next else None
+    )
+    out["phase7_prediction_error_next_step_max"] = max(phase7_err_next) if phase7_err_next else None
+    out["phase7_prediction_error_zero_motion_mean"] = (
+        (sum(phase7_err_zero) / len(phase7_err_zero)) if phase7_err_zero else None
+    )
+    out["phase7_prediction_error_hold_last_mean"] = (
+        (sum(phase7_err_hold) / len(phase7_err_hold)) if phase7_err_hold else None
+    )
+    if out["phase7_prediction_error_next_step_mean"] is not None and out["phase7_prediction_error_zero_motion_mean"] is not None:
+        out["phase7_prediction_gain_vs_zero_mean"] = (
+            float(out["phase7_prediction_error_zero_motion_mean"])
+            - float(out["phase7_prediction_error_next_step_mean"])
+        )
+    else:
+        out["phase7_prediction_gain_vs_zero_mean"] = None
+    if out["phase7_prediction_error_next_step_mean"] is not None and out["phase7_prediction_error_hold_last_mean"] is not None:
+        _next_m = float(out["phase7_prediction_error_next_step_mean"])
+        _hold_m = float(out["phase7_prediction_error_hold_last_mean"])
+        out["phase7_prediction_regret_vs_hold_mean"] = _next_m - _hold_m
+        out["phase7_prediction_ratio_vs_hold_mean"] = (_next_m / _hold_m) if _hold_m > 1e-12 else None
+    else:
+        out["phase7_prediction_regret_vs_hold_mean"] = None
+        out["phase7_prediction_ratio_vs_hold_mean"] = None
     return out
 
 
@@ -794,7 +873,14 @@ def analyze_waypoint_timing(log_path: Path) -> Dict[str, Any]:
     }
 
 
-def run_scenic_scenario(repo_root: Path, scenario: Path, out_log: Path, sim_steps: int) -> Dict[str, Any]:
+def run_scenic_scenario(
+    repo_root: Path,
+    scenario: Path,
+    out_log: Path,
+    sim_steps: int,
+    *,
+    scenic_extra_args: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
     cmd = [
         sys.executable,
         "-m",
@@ -810,6 +896,8 @@ def run_scenic_scenario(repo_root: Path, scenario: Path, out_log: Path, sim_step
         "--time",
         str(int(sim_steps)),
     ]
+    if scenic_extra_args:
+        cmd.extend(list(scenic_extra_args))
     out_log.parent.mkdir(parents=True, exist_ok=True)
     with open(out_log, "w", encoding="utf-8") as f:
         proc = subprocess.run(
@@ -851,14 +939,19 @@ def run_one_scenario_with_collect(
     phase3_tactical: bool = False,
     fellow_harness: bool = False,
     fellow_placement_debug: bool = False,
+    scenic_extra_args: Optional[Sequence[str]] = None,
+    analysis_ignore_before_s: float = 1.0,
 ) -> Dict[str, Any]:
-    base = run_scenic_scenario(repo_root, scenario, out_log, sim_steps)
+    base = run_scenic_scenario(
+        repo_root, scenario, out_log, sim_steps, scenic_extra_args=scenic_extra_args
+    )
     base.update(
         collect_metrics_from_log(
             out_log,
             phase1_switches=phase1_switches,
             phase2_lines=phase2_lines,
             phase3_tactical=phase3_tactical,
+            ignore_before_s=analysis_ignore_before_s,
         )
     )
     if fellow_harness:
@@ -887,6 +980,7 @@ class PhaseRunnerSpec:
     phase3_tactical: bool = False
     fellow_harness: bool = False
     fellow_placement_debug: bool = False
+    scenic_extra_args: Tuple[str, ...] = ()
     default_repeats: int = 1
     csv_fields: Sequence[str] = field(default_factory=tuple)
     extra_summary_keys: Sequence[str] = field(default_factory=tuple)
@@ -909,6 +1003,12 @@ def run_phase_main(spec: PhaseRunnerSpec) -> int:
     parser.add_argument("--scenario-glob", default=None)
     parser.add_argument("--time", type=int, default=spec.default_sim_steps)
     parser.add_argument("--time-step-s", type=float, default=0.01)
+    parser.add_argument(
+        "--analysis-ignore-before-s",
+        type=float,
+        default=1.0,
+        help="Ignore parsed log metrics before this sim time (startup transient filter).",
+    )
     parser.add_argument(
         "--repeats",
         type=int,
@@ -998,6 +1098,8 @@ def run_phase_main(spec: PhaseRunnerSpec) -> int:
             phase3_tactical=spec.phase3_tactical,
             fellow_harness=spec.fellow_harness,
             fellow_placement_debug=spec.fellow_placement_debug,
+            scenic_extra_args=spec.scenic_extra_args or None,
+            analysis_ignore_before_s=float(args.analysis_ignore_before_s),
         )
         row["repeat_index"] = int(rep_idx)
         row["repeat_count"] = int(rep_total)
@@ -1029,6 +1131,7 @@ def run_phase_main(spec: PhaseRunnerSpec) -> int:
         "assumed_time_step_s": args.time_step_s,
         "approx_requested_sim_time_s": args.time * max(0.0, float(args.time_step_s)),
         "inter_run_delay_s": inter_run_delay_s,
+        "analysis_ignore_before_s": float(max(0.0, float(args.analysis_ignore_before_s))),
         "runner": spec.runner_label,
         "results": results,
     }

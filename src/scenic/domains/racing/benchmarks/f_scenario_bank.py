@@ -24,6 +24,15 @@ PHASE6_F_SCENARIO_NAMES: Tuple[str, ...] = (
     "F2_fellow_ahead_optimal_slower.scenic",
 )
 
+PHASE7_F_SCENARIO_NAMES: Tuple[str, ...] = (
+    "F2_fellow_ahead_optimal_slower.scenic",
+    "F4_fellow_ahead_sudden_stop.scenic",
+    "F5_fellow_ahead_swerve_out_of_control.scenic",
+    "F6_fellow_left_occupied_deterministic.scenic",
+    "F7_fellow_right_occupied_deterministic.scenic",
+)
+
 PHASE_TO_DEFAULT_F_SCENARIO_NAMES: Dict[int, Tuple[str, ...]] = {
     6: PHASE6_F_SCENARIO_NAMES,
+    7: PHASE7_F_SCENARIO_NAMES,
 }

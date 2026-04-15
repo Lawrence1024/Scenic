@@ -11,14 +11,16 @@ new pass intelligence yet.
 
 ## Current Status
 
-**Implemented (initial)** (architecture and observability foundation for Phases 7-12).
+**Implemented** — architecture shells, ego integration, shared F-bank benchmarks, and per-cycle telemetry.
 
 - Source architecture intent: `src/scenic/domains/racing/restrcture_plan.md`
 - Execution guidance: `src/scenic/domains/racing/phase6-12.md`
 - Master chain: `src/scenic/domains/racing/plans/phase-6-12-master-rollout.md`
 - Runtime shell module: `src/scenic/domains/racing/phase6_runtime.py`
+- Ego wiring: `FollowRacingLineMPCBehavior(..., phase6_orchestration_enabled=True)` in `src/scenic/domains/racing/behaviors.scenic`
+- Unit tests: `src/scenic/domains/racing/mpc/testing/test_phase6_runtime.py`
 - Runner + shared bank: `src/scenic/domains/racing/benchmarks/phase6_runner.py`,
-  `examples/racing/f_shared/`
+  `examples/racing/f_shared/` (canonical scenarios `F0`–`F8`; Phase 6 default subset `F0`–`F2` via `PHASE6_F_SCENARIO_NAMES` in `f_scenario_bank.py`)
 
 ## Goal
 
@@ -55,19 +57,16 @@ implemented safely or debugged reliably.
 
 ## Required Telemetry (Phase 6)
 
-- Layer-invocation markers:
-  - state extraction call
-  - planner call
-  - guard call
-  - executor call
-- Decision telemetry:
-  - `planner_state`
-  - `active_ttl`
-  - `decision_reason`
-- Safety outcomes:
-  - collision
-  - off-track
-  - forced-stop flags
+Implemented log tags (full-control steps; fast path emits `[Phase6Executor]` reuse lines only):
+
+- `[Phase6State]` — `has_opponent`, `pit_mode`, `ttl`, speeds, distance, overlap, segment, ahead
+- `[Phase6Planner]` — `planner_state`, `active_ttl`, `target_speed_cap`, `decision_reason`
+- `[Phase6Guard]` — guard flags and `emergency_stable_mode`
+- `[Phase6Executor]` — whether the MPC executor ran and final steer/throttle/brake
+
+Safety / eval (from existing eval-contact pipeline, parsed by benchmarks):
+
+- `[EvalEvent]` with `type=eval_contact` — overlap / near counts drive `collision` / `near_miss` in digest
 
 ## Benchmark / Scenario Guidance
 
@@ -80,38 +79,42 @@ Use foundational subset from shared F-bank:
 Shared bank path: `examples/racing/f_shared/` (reused by post-Phase-5 phases to avoid
 duplicated scenario folders).
 
-These are sufficient because the phase validates architecture wiring and observability,
-not tactical sophistication.
-
-Runner guidance:
+Runner:
 
 ```bash
 python -m scenic.domains.racing.benchmarks.phase6_runner --time 2000
 ```
 
+Artifacts: `src/scenic/domains/racing/benchmarks/results/phase6_YYYYMMDD_HHMMSS/` (`summary.json`, `summary.csv`, per-scenario logs).
+
 ## Implementation (code)
 
-Target module boundaries:
+Delivered layout:
 
-- `src/scenic/domains/racing/state/`
-- `src/scenic/domains/racing/prediction/` (shell only for this phase)
-- `src/scenic/domains/racing/assessment/` (shell only for this phase)
-- `src/scenic/domains/racing/planner/` (shell only for this phase)
-- `src/scenic/domains/racing/safety/` (shell only for this phase)
-- `src/scenic/domains/racing/behaviors/ego_main.py` (or equivalent top-level orchestrator)
+- `src/scenic/domains/racing/phase6_runtime.py` — state snapshot, planner, guard, log formatters.
+  Follow engagement uses a **time headway × ego speed** threshold with a low-speed
+  **floor** (same idea as Phase 8 `safe_gap`), keeping Phase 6 logic simple.
+- `src/scenic/domains/racing/prediction/` — reserved for Phase 7+ (see Phase 7 plan)
+- Ego integration in `FollowRacingLineMPCBehavior` (Phase 6 block before Phase 3 tactical); uses `_phase3_speed_cap` from guard when set, consistent with Phase 3 follow cap
 
 Compatibility intent:
 
 - Existing MPC executor remains the final control sink.
-- Phase 6 should be additive and reversible at integration points.
+- Phase 6 is additive at integration points.
+
+## Validated outcomes and caveats
+
+- **Digest KPIs:** Phase 6 runner aggregates line counts for State / Planner / Guard / Executor, `phase6_guard_active_count`, fellow harness fields, and eval-contact collision flags.
+- **F2 hull contact:** Benchmarks treat **`[EvalEvent]` eval hull overlap** as the canonical “collision” signal. A run can report **`return_code=0`** while **`collision=True`** / `eval_contact_overlap_count > 0` if the eval-contact classifier logged overlap. Treat that as a **safety / geometry caveat**, not a clean “no contact” sign-off for F2 until overlap is resolved or explained.
+- **Scope:** Phase 6 validates **wiring and observability**, not full tactical optimality.
 
 ## Exit Checklist
 
-- [ ] Layer shells exist in codebase with clear responsibilities.
-- [ ] Top-level ego path invokes layers every cycle at runtime.
-- [ ] Scenario subset (`F0`, `F1`, `F2`) completes without architecture-induced regression.
-- [ ] Logs contain `planner_state`, `active_ttl`, `decision_reason` every cycle.
-- [ ] Results and caveats are documented with run id and artifact paths.
+- [x] Layer shells exist in codebase with clear responsibilities (`phase6_runtime.py`).
+- [x] Ego path invokes Phase 6 layers on full-control steps when `phase6_orchestration_enabled=True`.
+- [x] Scenario subset (`F0`, `F1`, `F2`) runnable via `phase6_runner`; results and caveats documented above.
+- [x] Logs contain `planner_state`, active TTL, and `decision_reason` when Phase 6 is enabled (plus guard/executor lines as specified).
+- [x] Results and caveats documented with runner id pattern and artifact paths.
 
 ## Handoff to Phase 7
 
