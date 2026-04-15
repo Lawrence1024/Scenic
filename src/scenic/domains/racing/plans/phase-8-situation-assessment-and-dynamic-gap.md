@@ -82,10 +82,10 @@ Recommended validation set:
 
 - `F1`, `F2`, `F4`, `F6`, `F7`
 
-Runner guidance (placeholder naming convention):
+Runner guidance:
 
 ```bash
-python -m scenic.domains.racing.benchmarks.phase8_runner --time 2000
+python -m scenic.domains.racing.benchmarks.phase8_runner --time 1000
 ```
 
 Phase 8 parsing uses the startup filter from `phase_run_common.py`

@@ -74,10 +74,10 @@ Use matched scenario variants:
 - `F7` on straight vs corner entry
 - `F5` near corner entry
 
-Runner guidance (placeholder naming convention):
+Runner guidance:
 
 ```bash
-python -m scenic.domains.racing.benchmarks.phase12_runner --time 2000
+python -m scenic.domains.racing.benchmarks.phase12_runner --time 1000
 ```
 
 Comparative review should explicitly report:
@@ -90,10 +90,11 @@ Comparative review should explicitly report:
 
 Primary targets:
 
-- planner segment hooks in `src/scenic/domains/racing/planner/`
-- segment extraction and propagation from world/state layers:
-  - `src/scenic/domains/racing/world/`
-  - `src/scenic/domains/racing/state/`
+- planner segment hooks in `src/scenic/domains/racing/tactical_planner.py`
+- segment extraction and propagation from existing racing modules:
+  - `src/scenic/domains/racing/segments/`
+  - `src/scenic/domains/racing/assessment/`
+  - `src/scenic/domains/racing/behaviors.scenic`
 - benchmark parser additions for segment-conditioned metrics
 
 ## Exit Checklist

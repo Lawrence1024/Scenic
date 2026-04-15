@@ -82,8 +82,13 @@ duplicated scenario folders).
 Runner:
 
 ```bash
-python -m scenic.domains.racing.benchmarks.phase6_runner --time 2000
+python -m scenic.domains.racing.benchmarks.phase6_runner --time 1000
 ```
+
+Runtime policy:
+
+- Use **10 s default** (`--time 1000`) for iteration.
+- Use **15 s max** (`--time 1500`) for confirmation.
 
 Artifacts: `src/scenic/domains/racing/benchmarks/results/phase6_YYYYMMDD_HHMMSS/` (`summary.json`, `summary.csv`, per-scenario logs).
 

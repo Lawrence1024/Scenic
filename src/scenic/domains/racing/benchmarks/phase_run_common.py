@@ -1,4 +1,4 @@
-"""Shared helpers for benchmark runners (phase0–phase8 + fellow harness).
+"""Shared helpers for benchmark runners (phase0–phase10 + fellow harness).
 
 Scenario discovery for `run_phase_main`: every ``*.scenic`` in the chosen
 ``--scenario-dir`` (default from `PhaseRunnerSpec.default_scenario_dir`) is run,
@@ -93,6 +93,20 @@ RE_PHASE8_ASSESSMENT = re.compile(
     r"optimal_open=(?P<opt>[01])\s+left_open=(?P<left>[01])\s+right_open=(?P<right>[01])\s+"
     r"overlap_flag=(?P<ov>[01])\s+emergency_risk_01=(?P<risk>\S+)\s+source=(?P<src>\S+)"
 )
+RE_PHASE9_PLANNER = re.compile(
+    r"\[Phase9Planner\]\s+t=(?P<t>\d+\.?\d*)s\s+planner_state=(?P<state>\S+)\s+"
+    r"chosen_ttl=(?P<ttl>\S+)\s+target_speed_cap=(?P<cap>\S+)\s+decision_reason=(?P<reason>\S+)\s+"
+    r"assessment_relation=(?P<arel>\S+)\s+assessment_gap_ok=(?P<agap>\S+)\s+"
+    r"assessment_optimal_open=(?P<aopt>\S+)\s+assessment_left_open=(?P<aleft>\S+)\s+assessment_right_open=(?P<aright>\S+)"
+)
+RE_PHASE10_GUARD = re.compile(
+    r"\[Phase10Guard\]\s+t=(?P<t>\d+\.?\d*)s\s+guard_active=(?P<active>[01])\s+"
+    r"guard_reason=(?P<reason>\S+)\s+steer_limited=(?P<steer>[01])\s+"
+    r"brake_limited=(?P<brake>[01])\s+ttl_switch_blocked=(?P<ttl_block>[01])\s+"
+    r"emergency_stable_mode=(?P<emerg>[01])\s+planner_state=(?P<state>\S+)\s+"
+    r"active_ttl=(?P<ttl>\S+)\s+decision_reason=(?P<dec>\S+)\s+"
+    r"steer=(?P<cmd_steer>\S+)\s+throttle=(?P<cmd_thr>\S+)\s+brake=(?P<cmd_brk>\S+)"
+)
 RE_LOG_TIME_S = re.compile(r"\bt=(?P<t>\d+\.?\d*)s\b")
 # Fellow harness: placement from ego offset ([placement.py])
 RE_FELLOW_PLACEMENT_FROM_EGO = re.compile(
@@ -179,6 +193,19 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "phase8_right_open_rate",
     "phase8_closing_flag_rate",
     "phase8_emergency_risk_mean",
+    "phase9_planner_line_count",
+    "phase9_free_run_count",
+    "phase9_follow_count",
+    "phase9_setup_pass_left_count",
+    "phase9_setup_pass_right_count",
+    "phase9_state_change_count",
+    "phase9_gap_ok_rate",
+    "phase10_guard_line_count",
+    "phase10_guard_active_count",
+    "phase10_steer_limited_count",
+    "phase10_brake_limited_count",
+    "phase10_ttl_switch_blocked_count",
+    "phase10_emergency_stable_count",
 )
 
 # Fellow traffic harness digest (see examples/racing/fellow_smoke, fellow_runner.py).
@@ -460,6 +487,18 @@ def collect_metrics_from_log(
     phase8_safe_gap_vals: List[float] = []
     phase8_actual_gap_vals: List[float] = []
     phase8_risk_vals: List[float] = []
+    phase9_line_count = 0
+    phase9_states: List[str] = []
+    phase9_ttls: List[str] = []
+    phase9_reasons: List[str] = []
+    phase9_gap_ok_count = 0
+    phase9_gap_ok_known = 0
+    phase10_guard_line_count = 0
+    phase10_guard_active_count = 0
+    phase10_steer_limited_count = 0
+    phase10_brake_limited_count = 0
+    phase10_ttl_switch_blocked_count = 0
+    phase10_emergency_stable_count = 0
 
     _ignore_before = max(0.0, float(ignore_before_s))
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
@@ -533,6 +572,32 @@ def collect_metrics_from_log(
                         phase8_actual_gap_vals.append(_actual)
                     if _risk is not None:
                         phase8_risk_vals.append(_risk)
+            if "[Phase9Planner]" in line:
+                p9 = RE_PHASE9_PLANNER.search(line)
+                if p9:
+                    phase9_line_count += 1
+                    phase9_states.append(p9.group("state"))
+                    phase9_ttls.append(p9.group("ttl"))
+                    phase9_reasons.append(p9.group("reason"))
+                    _ag = str(p9.group("agap") or "na").lower()
+                    if _ag in ("0", "1"):
+                        phase9_gap_ok_known += 1
+                        if _ag == "1":
+                            phase9_gap_ok_count += 1
+            if "[Phase10Guard]" in line:
+                p10 = RE_PHASE10_GUARD.search(line)
+                if p10:
+                    phase10_guard_line_count += 1
+                    if p10.group("active") == "1":
+                        phase10_guard_active_count += 1
+                    if p10.group("steer") == "1":
+                        phase10_steer_limited_count += 1
+                    if p10.group("brake") == "1":
+                        phase10_brake_limited_count += 1
+                    if p10.group("ttl_block") == "1":
+                        phase10_ttl_switch_blocked_count += 1
+                    if p10.group("emerg") == "1":
+                        phase10_emergency_stable_count += 1
             evc = RE_EVAL_CONTACT_EVENT.search(line)
             if evc:
                 sev = evc.group("sev")
@@ -749,6 +814,34 @@ def collect_metrics_from_log(
     out["phase8_emergency_risk_mean"] = (
         (sum(phase8_risk_vals) / len(phase8_risk_vals)) if phase8_risk_vals else None
     )
+    out["phase9_planner_line_count"] = phase9_line_count
+    out["phase9_free_run_count"] = sum(1 for s in phase9_states if s == "FREE_RUN")
+    out["phase9_follow_count"] = sum(1 for s in phase9_states if s == "FOLLOW")
+    out["phase9_setup_pass_left_count"] = sum(
+        1 for s in phase9_states if s in ("SETUP_LEFT", "SETUP_PASS_LEFT")
+    )
+    out["phase9_setup_pass_right_count"] = sum(
+        1 for s in phase9_states if s in ("SETUP_RIGHT", "SETUP_PASS_RIGHT")
+    )
+    _changes = 0
+    for i in range(1, len(phase9_states)):
+        if phase9_states[i] != phase9_states[i - 1]:
+            _changes += 1
+    out["phase9_state_change_count"] = _changes
+    out["phase9_states_observed"] = sorted(set(phase9_states))
+    out["phase9_ttls_observed"] = sorted(set(phase9_ttls))
+    out["phase9_reasons_observed"] = sorted(set(phase9_reasons))
+    out["phase9_gap_ok_rate"] = (
+        (float(phase9_gap_ok_count) / float(phase9_gap_ok_known))
+        if phase9_gap_ok_known > 0
+        else None
+    )
+    out["phase10_guard_line_count"] = phase10_guard_line_count
+    out["phase10_guard_active_count"] = phase10_guard_active_count
+    out["phase10_steer_limited_count"] = phase10_steer_limited_count
+    out["phase10_brake_limited_count"] = phase10_brake_limited_count
+    out["phase10_ttl_switch_blocked_count"] = phase10_ttl_switch_blocked_count
+    out["phase10_emergency_stable_count"] = phase10_emergency_stable_count
     return out
 
 
@@ -1119,7 +1212,9 @@ def run_phase_main(spec: PhaseRunnerSpec) -> int:
         print(f"No .scenic files found in {scenario_dir}", file=sys.stderr)
         return 2
 
-    if spec.default_scenario_names:
+    # Apply phase-default scenario subsets only when the caller did not
+    # explicitly request scenarios/globs. Explicit CLI filters must win.
+    if spec.default_scenario_names and (not args.scenario) and (not args.scenario_glob):
         wanted_default = set(spec.default_scenario_names)
         scenarios = [s for s in scenarios if s.name in wanted_default]
         missing_default = sorted(wanted_default - {s.name for s in scenarios})

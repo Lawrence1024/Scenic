@@ -92,8 +92,13 @@ Scenarios:
 Runner:
 
 ```bash
-python -m scenic.domains.racing.benchmarks.phase7_runner --time 2000
+python -m scenic.domains.racing.benchmarks.phase7_runner --time 1000
 ```
+
+Runtime policy:
+
+- Use **10 s default** (`--time 1000`) for iteration.
+- Use **15 s max** (`--time 1500`) for confirmation.
 
 This enables prediction via CLI override: `-p phase7_prediction_enabled True` (wired through `scenic_extra_args`).
 

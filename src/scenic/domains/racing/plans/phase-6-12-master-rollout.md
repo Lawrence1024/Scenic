@@ -7,6 +7,15 @@ It is derived from:
 - `src/scenic/domains/racing/restrcture_plan.md` (architecture intent)
 - `src/scenic/domains/racing/phase6-12.md` (phase-specific execution guidance)
 
+## Current rollout checkpoint
+
+- Phase 6: implemented shell/observability baseline.
+- Phase 7: complete (next-step prediction baseline).
+- Phase 8: complete (stateful assessment + dynamic gap baseline).
+- Phase 9: complete as tactical baseline (setup/follow/opening logic).
+- Phase 10: complete as stability baseline (guard + emergency containment).
+- Phase 11-12: planned and not yet implemented.
+
 ## Scope and assumptions
 
 - Scope remains **single dynamic opponent** plus ego.
@@ -117,12 +126,12 @@ Every phase must show:
 
 | Phase | Primary capability | Primary modules (target) | Bench focus |
 |------|---------------------|--------------------------|-------------|
-| 6 | Layered skeleton + orchestration wiring | `racing/state/`, `racing/assessment/`, `racing/planner/`, `racing/safety/`, `racing/behaviors/ego_main.py` | `F0`, `F1`, `F2` |
-| 7 | Fellow next-step predictor | `racing/prediction/fellow_predictor.py` | `F2`, `F4`, `F5`, `F6`, `F7` |
-| 8 | Situation assessment + dynamic safe gap | `racing/assessment/race_situation.py` | `F1`, `F2`, `F4`, `F6`, `F7` |
-| 9 | Tactical planner v1 | `racing/planner/tactical_planner.py` | `F0`, `F1`, `F2`, `F6`, `F7` |
-| 10 | Stability guard and anti-swerve policy | `racing/safety/stability_guard.py` | `F4`, `F5`, tight-gap `F2`, aggressive `F6`/`F7` |
-| 11 | Commit/abort pass lifecycle | `racing/planner/tactical_planner.py` + pass lifecycle helpers | `F2`, `F4`, `F5`, `F6`, `F7` |
+| 6 | Layered skeleton + orchestration wiring | `src/scenic/domains/racing/behaviors.scenic`, `src/scenic/domains/racing/phase6_runtime.py` | `F0`, `F1`, `F2` |
+| 7 | Fellow next-step predictor | `src/scenic/domains/racing/prediction/fellow_predictor.py` | `F2`, `F4`, `F5`, `F6`, `F7` |
+| 8 | Situation assessment + dynamic safe gap | `src/scenic/domains/racing/assessment/race_situation.py` | `F1`, `F2`, `F4`, `F6`, `F7` |
+| 9 | Tactical planner v1 | `src/scenic/domains/racing/tactical_planner.py` | `F0`, `F1`, `F2`, `F6`, `F7` |
+| 10 | Stability guard and anti-swerve policy | `src/scenic/domains/racing/safety/stability_guard.py` | `F4`, `F5`, tight-gap `F2`, aggressive `F6`/`F7` |
+| 11 | Commit/abort pass lifecycle | `src/scenic/domains/racing/tactical_planner.py` + pass lifecycle helpers | `F2`, `F4`, `F5`, `F6`, `F7` |
 | 12 | Segment-aware tactical intelligence | planner + segment context integration | Straight vs corner-entry variants of `F2`/`F6`/`F7`, plus `F5` near corner entry |
 
 ## Migration guidance (no big-bang rewrite)

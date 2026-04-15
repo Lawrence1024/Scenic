@@ -79,10 +79,10 @@ Recommended set:
 
 - `F2`, `F4`, `F5`, `F6`, `F7`
 
-Runner guidance (placeholder naming convention):
+Runner guidance:
 
 ```bash
-python -m scenic.domains.racing.benchmarks.phase11_runner --time 2000
+python -m scenic.domains.racing.benchmarks.phase11_runner --time 1000
 ```
 
 Expected chain examples:
@@ -94,8 +94,9 @@ Expected chain examples:
 
 Primary targets:
 
-- `src/scenic/domains/racing/planner/tactical_planner.py` (state extensions)
-- pass lifecycle helper logic under `src/scenic/domains/racing/planner/`
+- `src/scenic/domains/racing/tactical_planner.py` (state extensions)
+- pass lifecycle helper logic under `src/scenic/domains/racing/`
+- `src/scenic/domains/racing/behaviors.scenic` (planner/guard execution integration)
 - guard/planner integration for forced abort and emergency fallback
 - benchmark parsing for commit/abort KPIs
 
