@@ -22,6 +22,7 @@ def _sit(**kwargs):
         distance_m=18.0,
         longitudinal_m=15.0,
         lateral_m=1.0,
+        opponent_speed_mps=20.0,
     )
     defaults.update(kwargs)
     return OpponentSituation(**defaults)

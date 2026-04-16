@@ -17,6 +17,7 @@ def _sit(
     closing_mps: float,
     overlap: str = "clear_ahead",
     risk: float = 0.1,
+    opponent_speed_mps: float = 20.0,
 ) -> OpponentSituation:
     return OpponentSituation(
         ahead=ahead,
@@ -30,6 +31,7 @@ def _sit(
         distance_m=abs(delta_s_m),
         longitudinal_m=long_m,
         lateral_m=lateral_m,
+        opponent_speed_mps=opponent_speed_mps,
     )
 
 
@@ -94,6 +96,104 @@ def test_stateful_relation_hysteresis_holds_near_zero_delta_s():
     )
     assert a.fellow_relation == "ahead"
     assert st2.previous_relation == "ahead"
+
+
+def test_flyby_lateral_offset_damps_longitudinal_gap_pressure_at_speed():
+    """Side-by-side with adequate along-track slot: do not max rear-end pressure just because ego is fast.
+
+    Requires ``actual_gap >= safe_gap`` so fly-by damping applies; inside safe envelope it is disabled.
+    """
+    a, _st = assess_phase8_situation_stateful(
+        sit=_sit(
+            ahead=True,
+            delta_s_m=42.0,
+            lateral_m=2.4,
+            long_m=42.0,
+            closing_mps=12.0,
+            overlap="partial_overlap",
+            risk=0.08,
+            opponent_speed_mps=22.0,
+        ),
+        ego_speed_mps=28.0,
+        ego_xy=(0.0, 0.0),
+        ego_heading_rad=0.0,
+        predicted_opp_xy=(42.0, 2.4),
+        state=Phase8AssessmentState(),
+    )
+    assert a.fellow_relation == "ahead"
+    assert a.gap_ok is True
+    assert a.emergency_risk_01 < 0.72
+
+
+def test_flyby_damp_disabled_when_gap_below_safe_gap():
+    """Short longitudinal headway: no fly-by discount — rear-end / stop risk stays visible."""
+    a, _st = assess_phase8_situation_stateful(
+        sit=_sit(
+            ahead=True,
+            delta_s_m=12.0,
+            lateral_m=2.6,
+            long_m=12.0,
+            closing_mps=10.0,
+            overlap="partial_overlap",
+            risk=0.08,
+            opponent_speed_mps=18.0,
+        ),
+        ego_speed_mps=24.0,
+        ego_xy=(0.0, 0.0),
+        ego_heading_rad=0.0,
+        predicted_opp_xy=(12.0, 2.6),
+        state=Phase8AssessmentState(),
+    )
+    assert a.fellow_relation == "ahead"
+    assert a.gap_ok is False
+    assert a.emergency_risk_01 >= 0.35
+
+
+def test_co_linear_close_range_preserves_nonzero_risk_from_gap_and_closing():
+    """Near co-linear and closing still yields meaningful risk without extra speed-only term."""
+    a, _st = assess_phase8_situation_stateful(
+        sit=_sit(
+            ahead=True,
+            delta_s_m=18.0,
+            lateral_m=0.35,
+            long_m=18.0,
+            closing_mps=8.0,
+            overlap="clear_ahead",
+            risk=0.05,
+            opponent_speed_mps=20.0,
+        ),
+        ego_speed_mps=32.0,
+        ego_xy=(0.0, 0.0),
+        ego_heading_rad=0.0,
+        predicted_opp_xy=(18.0, 0.35),
+        state=Phase8AssessmentState(),
+    )
+    assert a.fellow_relation == "ahead"
+    assert a.emergency_risk_01 >= 0.20
+
+
+def test_roadside_stationary_partial_overlap_does_not_max_out_emergency_risk():
+    """Shoulder-parked obstacle: large |lateral| must not trigger overlap=0.9 panic."""
+    a, _st = assess_phase8_situation_stateful(
+        sit=_sit(
+            ahead=True,
+            delta_s_m=22.0,
+            lateral_m=-3.8,
+            long_m=22.0,
+            closing_mps=18.0,
+            overlap="partial_overlap",
+            risk=0.12,
+            opponent_speed_mps=0.0,
+        ),
+        ego_speed_mps=22.0,
+        ego_xy=(0.0, 0.0),
+        ego_heading_rad=0.0,
+        predicted_opp_xy=(22.0, -3.8),
+        state=Phase8AssessmentState(),
+    )
+    assert a.fellow_relation == "ahead"
+    assert a.overlap_flag is False
+    assert a.emergency_risk_01 < 0.55
 
 
 def test_stateful_emergency_risk_emphasizes_overlap_and_closing_gap():

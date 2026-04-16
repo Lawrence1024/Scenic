@@ -135,7 +135,7 @@ def _classify_overlap_raw(
     long_side: float = 5.5,
     lat_side: float = 3.8,
     long_partial_lon: float = 14.0,
-    lat_partial_lat: float = 6.0,
+    lat_partial_lat: float = 2.0,
     closing_behind_speed: float = 0.8,
 ) -> str:
     """Rule-based overlap bucket (before hysteresis)."""
@@ -212,6 +212,7 @@ class OpponentSituation:
     distance_m: float
     longitudinal_m: float
     lateral_m: float
+    opponent_speed_mps: float = 0.0
 
 
 def _lateral_relation_from_lateral_m(lateral_m: float, eps: float = 0.35) -> str:
@@ -236,14 +237,21 @@ def collision_risk_short_horizon(
     lateral_sep_m: float,
     ttc_horizon_s: float = 4.0,
     lat_scale_m: float = 4.0,
+    *,
+    longitudinal_m: Optional[float] = None,
 ) -> float:
-    """Heuristic [0,1]: higher when close, closing fast, and aligned laterally."""
+    """Heuristic [0,1]: higher when close, closing fast, and aligned laterally.
+
+    When ``longitudinal_m`` is set, along-track separation drives closing / TTC; lateral
+    separation modulates severity (narrow lateral + speed matters more than Euclidean blend).
+    """
+    along_m = abs(float(longitudinal_m)) if longitudinal_m is not None else float(distance_m)
     if distance_m <= 0:
         return 1.0
     if closing_speed_mps <= 0.05:
-        base = max(0.0, 1.0 - distance_m / 35.0)
+        base = max(0.0, 1.0 - along_m / 35.0)
     else:
-        ttc = distance_m / closing_speed_mps
+        ttc = along_m / closing_speed_mps
         base = max(0.0, 1.0 - min(ttc, ttc_horizon_s) / ttc_horizon_s)
     lat_factor = max(0.2, 1.0 - min(abs(lateral_sep_m), lat_scale_m) / lat_scale_m)
     return min(1.0, base * lat_factor)
@@ -312,7 +320,9 @@ def assess_nearest_opponent(
     )
     overlap = stabilize_overlap_state(previous_overlap_state, raw_overlap, longitudinal_m, lateral_m)
 
-    risk = collision_risk_short_horizon(dist, close_spd, lateral_m)
+    risk = collision_risk_short_horizon(
+        dist, close_spd, lateral_m, longitudinal_m=longitudinal_m
+    )
 
     sit = OpponentSituation(
         ahead=ahead,
@@ -326,6 +336,7 @@ def assess_nearest_opponent(
         distance_m=float(dist),
         longitudinal_m=float(longitudinal_m),
         lateral_m=float(lateral_m),
+        opponent_speed_mps=float(opp_speed_mps),
     )
     return sit, overlap
 

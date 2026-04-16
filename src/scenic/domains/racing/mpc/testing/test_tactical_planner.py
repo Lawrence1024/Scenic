@@ -2,6 +2,8 @@
 
 from scenic.domains.racing.situation_assessment import OpponentSituation
 from scenic.domains.racing.tactical_planner import (
+    ABORT_PASS,
+    COMMIT_PASS_LEFT,
     FOLLOW,
     FREE_RUN,
     SETUP_LEFT,
@@ -26,6 +28,7 @@ def _sit(**kwargs):
         distance_m=18.0,
         longitudinal_m=15.0,
         lateral_m=1.0,
+        opponent_speed_mps=20.0,
     )
     defaults.update(kwargs)
     return OpponentSituation(**defaults)
@@ -741,3 +744,282 @@ def test_lateral_path_lock_holds_setup_during_protected_follow():
     )
     assert m == SETUP_LEFT and ttl == "left" and cap is None
     assert reason == "lateral_path_lock_left_hold"
+
+
+def test_phase11_commit_from_setup_chain_left():
+    st = TacticalPlannerState(mode=SETUP_LEFT, last_setup_side="left")
+    cfg = TacticalPlannerConfig(
+        phase11_commit_abort_enabled=True,
+        phase11_commit_entry_cycles=1,
+        setup_commit_entry_cycles=1,
+        pass_intent_entry_cycles=1,
+        setup_reentry_cooldown_s=0.0,
+        follow_tight_headway_s=0.5,
+    )
+    s = _sit(
+        lateral_relation="right",
+        overlap_state="clear_ahead",
+        collision_risk_01=0.08,
+        distance_m=26.0,
+        longitudinal_m=22.0,
+        closing_speed_mps=1.4,
+        ahead=True,
+    )
+    m, ttl, cap, reason = tactical_planner_step_v1(
+        st,
+        s,
+        has_opponent=True,
+        ego_speed_mps=30.0,
+        opponent_speed_mps=24.0,
+        sim_time_s=0.0,
+        pit_mode=False,
+        config=cfg,
+        assessment_relation="ahead",
+        assessment_gap_ok=True,
+        assessment_optimal_open=False,
+        assessment_left_open=True,
+        assessment_right_open=False,
+        assessment_closing_flag=False,
+        assessment_emergency_risk_01=0.08,
+    )
+    assert m == COMMIT_PASS_LEFT and ttl == "left" and cap is None
+    assert reason == "phase11_commit_pass_left"
+    assert st.phase11_commit_trigger == "setup_chain_commit_left"
+    assert st.phase11_post_event_state == COMMIT_PASS_LEFT
+
+
+def test_phase11_abort_on_commit_hazard():
+    st = TacticalPlannerState(mode=COMMIT_PASS_LEFT, last_setup_side="left")
+    cfg = TacticalPlannerConfig(phase11_commit_abort_enabled=True)
+    s = _sit(
+        lateral_relation="right",
+        overlap_state="side_by_side",
+        collision_risk_01=0.6,
+        distance_m=11.0,
+        longitudinal_m=2.5,
+        closing_speed_mps=2.5,
+        ahead=True,
+    )
+    m, ttl, cap, reason = tactical_planner_step_v1(
+        st,
+        s,
+        has_opponent=True,
+        ego_speed_mps=31.0,
+        opponent_speed_mps=24.0,
+        sim_time_s=1.0,
+        pit_mode=False,
+        config=cfg,
+        assessment_relation="ahead",
+        assessment_gap_ok=False,
+        assessment_optimal_open=False,
+        assessment_left_open=True,
+        assessment_right_open=False,
+        assessment_closing_flag=True,
+        assessment_emergency_risk_01=0.7,
+    )
+    assert m == ABORT_PASS and ttl == "optimal" and cap is None
+    assert reason == "phase11_abort_commit_invalidated"
+    assert st.phase11_abort_trigger == "commit_invalidated_hazard"
+    assert st.phase11_post_event_state == ABORT_PASS
+
+
+def test_phase11_commit_does_not_abort_on_stationary_offaxis_overlap():
+    st = TacticalPlannerState(mode=COMMIT_PASS_LEFT, last_setup_side="left")
+    cfg = TacticalPlannerConfig(
+        phase11_commit_abort_enabled=True,
+        phase11_stationary_overlap_relief_enabled=True,
+    )
+    s = _sit(
+        ahead=True,
+        overlap_state="partial_overlap",
+        collision_risk_01=0.10,
+        distance_m=20.0,
+        longitudinal_m=6.0,
+        lateral_m=3.6,
+        closing_speed_mps=0.0,
+    )
+    m, ttl, cap, reason = tactical_planner_step_v1(
+        st,
+        s,
+        has_opponent=True,
+        ego_speed_mps=30.0,
+        opponent_speed_mps=0.0,
+        sim_time_s=1.0,
+        pit_mode=False,
+        config=cfg,
+        assessment_relation="ahead",
+        assessment_gap_ok=True,
+        assessment_optimal_open=True,
+        assessment_left_open=True,
+        assessment_right_open=False,
+        assessment_closing_flag=False,
+        assessment_emergency_risk_01=0.05,
+    )
+    assert m == COMMIT_PASS_LEFT and ttl == "left" and cap is None
+    assert reason == "phase11_commit_pass_left_hold"
+    assert st.phase11_abort_trigger == "none"
+
+
+def test_phase11_pass_success_returns_free_run():
+    st = TacticalPlannerState(mode=COMMIT_PASS_LEFT, last_setup_side="left")
+    cfg = TacticalPlannerConfig(phase11_commit_abort_enabled=True)
+    s = _sit(
+        ahead=False,
+        lateral_relation="right",
+        overlap_state="clear_ahead",
+        collision_risk_01=0.05,
+        distance_m=35.0,
+        longitudinal_m=-6.0,
+        closing_speed_mps=0.0,
+    )
+    m, ttl, cap, reason = tactical_planner_step_v1(
+        st,
+        s,
+        has_opponent=True,
+        ego_speed_mps=30.0,
+        opponent_speed_mps=24.0,
+        sim_time_s=2.0,
+        pit_mode=False,
+        config=cfg,
+        assessment_relation="behind",
+        assessment_gap_ok=True,
+        assessment_optimal_open=True,
+        assessment_left_open=True,
+        assessment_right_open=True,
+        assessment_closing_flag=False,
+        assessment_emergency_risk_01=0.05,
+    )
+    assert m == FREE_RUN and ttl == "optimal" and cap is None
+    assert reason == "phase11_pass_success_free_run"
+    assert st.phase11_pass_success is True
+    assert st.phase11_post_event_state == FREE_RUN
+
+
+def test_phase11_abort_success_recovers_to_follow_when_pressure_clears():
+    st = TacticalPlannerState(
+        mode=ABORT_PASS,
+        phase11_abort_until_s=0.0,
+    )
+    cfg = TacticalPlannerConfig(phase11_commit_abort_enabled=True)
+    s = _sit(
+        ahead=True,
+        lateral_relation="right",
+        overlap_state="clear_ahead",
+        collision_risk_01=0.1,
+        distance_m=30.0,
+        longitudinal_m=20.0,
+        closing_speed_mps=0.2,
+    )
+    m, ttl, cap, reason = tactical_planner_step_v1(
+        st,
+        s,
+        has_opponent=True,
+        ego_speed_mps=28.0,
+        opponent_speed_mps=24.0,
+        sim_time_s=1.0,
+        pit_mode=False,
+        config=cfg,
+        assessment_relation="ahead",
+        assessment_gap_ok=True,
+        assessment_optimal_open=True,
+        assessment_left_open=True,
+        assessment_right_open=False,
+        assessment_closing_flag=False,
+        assessment_emergency_risk_01=0.1,
+    )
+    assert m == FOLLOW and ttl == "optimal" and cap is not None
+    assert reason == "phase11_abort_success_follow"
+    assert st.phase11_abort_success is True
+    assert st.phase11_post_event_state == FOLLOW
+
+
+def test_phase11_does_not_free_run_on_large_gap_while_still_ahead_if_closing():
+    st = TacticalPlannerState()
+    cfg_on = TacticalPlannerConfig(phase11_commit_abort_enabled=True, follow_tight_headway_s=0.5)
+    s = _sit(
+        ahead=True,
+        lateral_relation="right",
+        overlap_state="clear_ahead",
+        collision_risk_01=0.1,
+        distance_m=95.0,
+        longitudinal_m=25.0,
+        closing_speed_mps=0.5,
+        segment_context="straight",
+    )
+    m_on, _ttl_on, _cap_on, reason_on = tactical_planner_step_v1(
+        st,
+        s,
+        has_opponent=True,
+        ego_speed_mps=30.0,
+        opponent_speed_mps=24.0,
+        sim_time_s=1.0,
+        pit_mode=False,
+        config=cfg_on,
+        assessment_relation="ahead",
+        assessment_gap_ok=True,
+        assessment_optimal_open=True,
+        assessment_left_open=True,
+        assessment_right_open=False,
+        assessment_closing_flag=True,
+        assessment_emergency_risk_01=0.1,
+    )
+    assert reason_on != "opponent_not_blocking"
+
+    st2 = TacticalPlannerState()
+    cfg_off = TacticalPlannerConfig(phase11_commit_abort_enabled=False)
+    m_off, _ttl_off, _cap_off, reason_off = tactical_planner_step_v1(
+        st2,
+        s,
+        has_opponent=True,
+        ego_speed_mps=30.0,
+        opponent_speed_mps=24.0,
+        sim_time_s=1.0,
+        pit_mode=False,
+        config=cfg_off,
+        assessment_relation="ahead",
+        assessment_gap_ok=True,
+        assessment_optimal_open=True,
+        assessment_left_open=True,
+        assessment_right_open=False,
+        assessment_closing_flag=False,
+        assessment_emergency_risk_01=0.1,
+    )
+    assert m_off == FREE_RUN and reason_off == "opponent_not_blocking"
+
+
+def test_phase11_relaxes_to_free_run_when_far_nonclosing_low_risk():
+    st = TacticalPlannerState()
+    cfg_on = TacticalPlannerConfig(
+        phase11_commit_abort_enabled=True,
+        phase11_ahead_relax_free_run_enabled=True,
+        phase11_ahead_relax_min_gap_m=30.0,
+        phase11_ahead_relax_max_risk_01=0.15,
+    )
+    s = _sit(
+        ahead=True,
+        overlap_state="clear_ahead",
+        collision_risk_01=0.05,
+        distance_m=95.0,
+        longitudinal_m=25.0,
+        closing_speed_mps=0.2,
+        segment_context="straight",
+    )
+    m_on, _ttl_on, _cap_on, reason_on = tactical_planner_step_v1(
+        st,
+        s,
+        has_opponent=True,
+        ego_speed_mps=30.0,
+        opponent_speed_mps=24.0,
+        sim_time_s=1.0,
+        pit_mode=False,
+        config=cfg_on,
+        assessment_relation="ahead",
+        assessment_gap_ok=True,
+        assessment_optimal_open=True,
+        assessment_left_open=True,
+        assessment_right_open=True,
+        assessment_closing_flag=False,
+        assessment_emergency_risk_01=0.06,
+    )
+    assert m_on == FREE_RUN
+    assert reason_on == "opponent_not_blocking"

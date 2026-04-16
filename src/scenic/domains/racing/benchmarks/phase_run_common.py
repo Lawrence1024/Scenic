@@ -1,4 +1,4 @@
-"""Shared helpers for benchmark runners (phase0–phase10 + fellow harness).
+"""Shared helpers for benchmark runners (phase0–phase11 + fellow harness).
 
 Scenario discovery for `run_phase_main`: every ``*.scenic`` in the chosen
 ``--scenario-dir`` (default from `PhaseRunnerSpec.default_scenario_dir`) is run,
@@ -107,6 +107,13 @@ RE_PHASE10_GUARD = re.compile(
     r"active_ttl=(?P<ttl>\S+)\s+decision_reason=(?P<dec>\S+)\s+"
     r"steer=(?P<cmd_steer>\S+)\s+throttle=(?P<cmd_thr>\S+)\s+brake=(?P<cmd_brk>\S+)"
 )
+RE_PHASE11_PLANNER = re.compile(
+    r"\[Phase11Planner\]\s+t=(?P<t>\d+\.?\d*)s\s+planner_state=(?P<state>\S+)\s+"
+    r"chosen_ttl=(?P<ttl>\S+)\s+decision_reason=(?P<reason>\S+)\s+"
+    r"commit_trigger=(?P<commit>\S+)\s+abort_trigger=(?P<abort>\S+)\s+"
+    r"pass_success=(?P<pass>[01])\s+abort_success=(?P<abort_ok>[01])\s+"
+    r"post_event_state=(?P<post>\S+)"
+)
 RE_LOG_TIME_S = re.compile(r"\bt=(?P<t>\d+\.?\d*)s\b")
 # Fellow harness: placement from ego offset ([placement.py])
 RE_FELLOW_PLACEMENT_FROM_EGO = re.compile(
@@ -206,6 +213,14 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "phase10_brake_limited_count",
     "phase10_ttl_switch_blocked_count",
     "phase10_emergency_stable_count",
+    "phase11_planner_line_count",
+    "phase11_commit_trigger_count",
+    "phase11_abort_trigger_count",
+    "phase11_pass_success_count",
+    "phase11_abort_success_count",
+    "phase11_commit_pass_left_count",
+    "phase11_commit_pass_right_count",
+    "phase11_abort_pass_count",
 )
 
 # Fellow traffic harness digest (see examples/racing/fellow_smoke, fellow_runner.py).
@@ -499,6 +514,14 @@ def collect_metrics_from_log(
     phase10_brake_limited_count = 0
     phase10_ttl_switch_blocked_count = 0
     phase10_emergency_stable_count = 0
+    phase11_planner_line_count = 0
+    phase11_commit_trigger_count = 0
+    phase11_abort_trigger_count = 0
+    phase11_pass_success_count = 0
+    phase11_abort_success_count = 0
+    phase11_commit_pass_left_count = 0
+    phase11_commit_pass_right_count = 0
+    phase11_abort_pass_count = 0
 
     _ignore_before = max(0.0, float(ignore_before_s))
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
@@ -598,6 +621,25 @@ def collect_metrics_from_log(
                         phase10_ttl_switch_blocked_count += 1
                     if p10.group("emerg") == "1":
                         phase10_emergency_stable_count += 1
+            if "[Phase11Planner]" in line:
+                p11 = RE_PHASE11_PLANNER.search(line)
+                if p11:
+                    phase11_planner_line_count += 1
+                    if p11.group("commit") != "none":
+                        phase11_commit_trigger_count += 1
+                    if p11.group("abort") != "none":
+                        phase11_abort_trigger_count += 1
+                    if p11.group("pass") == "1":
+                        phase11_pass_success_count += 1
+                    if p11.group("abort_ok") == "1":
+                        phase11_abort_success_count += 1
+                    _p11_state = str(p11.group("state") or "")
+                    if _p11_state == "COMMIT_PASS_LEFT":
+                        phase11_commit_pass_left_count += 1
+                    elif _p11_state == "COMMIT_PASS_RIGHT":
+                        phase11_commit_pass_right_count += 1
+                    elif _p11_state == "ABORT_PASS":
+                        phase11_abort_pass_count += 1
             evc = RE_EVAL_CONTACT_EVENT.search(line)
             if evc:
                 sev = evc.group("sev")
@@ -842,6 +884,14 @@ def collect_metrics_from_log(
     out["phase10_brake_limited_count"] = phase10_brake_limited_count
     out["phase10_ttl_switch_blocked_count"] = phase10_ttl_switch_blocked_count
     out["phase10_emergency_stable_count"] = phase10_emergency_stable_count
+    out["phase11_planner_line_count"] = phase11_planner_line_count
+    out["phase11_commit_trigger_count"] = phase11_commit_trigger_count
+    out["phase11_abort_trigger_count"] = phase11_abort_trigger_count
+    out["phase11_pass_success_count"] = phase11_pass_success_count
+    out["phase11_abort_success_count"] = phase11_abort_success_count
+    out["phase11_commit_pass_left_count"] = phase11_commit_pass_left_count
+    out["phase11_commit_pass_right_count"] = phase11_commit_pass_right_count
+    out["phase11_abort_pass_count"] = phase11_abort_pass_count
     return out
 
 

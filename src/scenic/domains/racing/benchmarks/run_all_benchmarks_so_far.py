@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run all implemented racing benchmark runners sequentially (single command).
 
-Forwards all other CLI arguments to each runner (e.g. ``--time 2000``, ``--out-dir``,
+Forwards all other CLI arguments to each runner (e.g. ``--time 1000``, ``--out-dir``,
 ``--scenario``, ``--inter-run-delay-s``). Stops at the first non-zero exit code.
 
 This module consumes ``--from START`` itself; that flag is not passed to child runners.
@@ -9,12 +9,12 @@ This module consumes ``--from START`` itself; that flag is not passed to child r
 Usage (repo root)::
 
     python -m scenic.domains.racing.benchmarks.run_all_benchmarks_so_far
-    python -m scenic.domains.racing.benchmarks.run_all_benchmarks_so_far --time 2000 --inter-run-delay-s 5
-    python -m scenic.domains.racing.benchmarks.run_all_benchmarks_so_far --from phase1 --time 2000
+    python -m scenic.domains.racing.benchmarks.run_all_benchmarks_so_far --time 1000 --inter-run-delay-s 5
+    python -m scenic.domains.racing.benchmarks.run_all_benchmarks_so_far --from phase1 --time 1000
 
 Order (default start is ``fellow_smoke``):
 fellow_runner -> fellow_placement_debug_runner ->
-phase0_runner -> phase1_runner -> phase2_runner -> phase3_runner -> phase4_runner -> phase5_runner -> phase6_runner -> phase7_runner -> phase8_runner -> phase9_runner -> phase10_runner.
+phase0_runner -> phase1_runner -> phase2_runner -> phase3_runner -> phase4_runner -> phase5_runner -> phase6_runner -> phase7_runner -> phase8_runner -> phase9_runner -> phase10_runner -> phase11_runner.
 """
 
 from __future__ import annotations
@@ -40,6 +40,7 @@ _RUNNERS_ORDERED: Tuple[Tuple[str, str], ...] = (
     ("phase8", "scenic.domains.racing.benchmarks.phase8_runner"),
     ("phase9", "scenic.domains.racing.benchmarks.phase9_runner"),
     ("phase10", "scenic.domains.racing.benchmarks.phase10_runner"),
+    ("phase11", "scenic.domains.racing.benchmarks.phase11_runner"),
 )
 
 _START_LABELS = tuple(label for label, _mod in _RUNNERS_ORDERED)
@@ -81,7 +82,7 @@ def main() -> int:
             "First runner to execute (inclusive); skips all earlier runners in the stack. "
             f"Choices: {', '.join(_START_LABELS)}. "
             "Aliases: smoke -> fellow_smoke, placement -> fellow_placement. "
-            "Example: --from phase1 runs phase1 through phase10 only."
+            "Example: --from phase1 runs phase1 through phase11 only."
         ),
     )
     args, forwarded = parser.parse_known_args()

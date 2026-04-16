@@ -8,6 +8,16 @@ from typing import Optional, Tuple
 
 from scenic.domains.racing.situation_assessment import OpponentSituation
 
+# Large lateral: partial_overlap / side_by_side should not imply 0.9 emergency pressure.
+PHASE8_OVERLAP_LAT_RELIEF_M = 2.0
+# Below this speed, opponent is treated as a static obstacle for Phase-8 risk/closing.
+PHASE8_STATIONARY_OPP_SPEED_MPS = 1.5
+
+# Longitudinal vs lateral: fly-by geometry — damp rear-end style gap/TTC when lateral offset
+# exists and along-track slot is adequate (speed should not dominate that decision).
+PHASE8_FLYBY_LAT_MIN_M = 1.15
+PHASE8_FLYBY_MIN_LONG_SLOT_M = 7.5
+
 
 @dataclass(frozen=True)
 class Phase8Assessment:
@@ -119,6 +129,35 @@ def _compute_corridor_open_flags(
     return optimal_open, left_open, right_open
 
 
+def _longitudinal_opening_dampen(
+    pred_lat_m: float,
+    actual_gap_m: float,
+    safe_gap_m: float,
+    ego_speed_mps: float,
+) -> float:
+    """Reduce gap/TTC pressure when lateral offset + along-track slot support a fly-by.
+
+    Longitudinal distance supplies the "opening"; once it clears a modest slot, ego speed
+    should not inflate rear-end style fear the way it does when opponents are co-linear.
+    """
+    lat_abs = abs(float(pred_lat_m))
+    if lat_abs < float(PHASE8_FLYBY_LAT_MIN_M):
+        return 1.0
+    along = max(0.0, float(actual_gap_m))
+    slot_req = max(
+        float(PHASE8_FLYBY_MIN_LONG_SLOT_M),
+        0.55 * float(safe_gap_m),
+        5.5 + 0.06 * max(0.0, float(ego_speed_mps)),
+    )
+    if along >= slot_req:
+        return 0.32
+    if lat_abs >= float(PHASE8_OVERLAP_LAT_RELIEF_M):
+        return 0.58
+    if lat_abs >= 1.6:
+        return 0.72
+    return 0.88
+
+
 def _compute_emergency_risk(
     *,
     sit: OpponentSituation,
@@ -127,20 +166,44 @@ def _compute_emergency_risk(
     safe_gap_m: float,
     actual_gap_m: Optional[float],
     overlap_flag: bool,
+    pred_lat_m: float,
+    opponent_speed_mps: float,
+    ego_speed_mps: float,
 ) -> float:
     """Design-level risk decomposition (not single additive tweak)."""
 
     base = _clamp01(float(sit.collision_risk_01))
     gap_pressure = 0.0
     ttc_pressure = 0.0
+    lat_abs = abs(float(pred_lat_m))
+    lateral_clear = lat_abs >= float(PHASE8_OVERLAP_LAT_RELIEF_M)
+    stationary_opp = float(opponent_speed_mps) < float(PHASE8_STATIONARY_OPP_SPEED_MPS)
     if relation == "ahead" and actual_gap_m is not None:
         gap_pressure = _clamp01((float(safe_gap_m) - float(actual_gap_m)) / max(1e-6, float(safe_gap_m)))
         if closing_flag and float(sit.closing_speed_mps) > 1e-6:
             ttc_s = max(0.0, float(actual_gap_m)) / float(sit.closing_speed_mps)
             ttc_pressure = _clamp01((4.0 - ttc_s) / 4.0)
-    overlap_pressure = 0.90 if overlap_flag else 0.0
+        if stationary_opp and lateral_clear:
+            gap_pressure *= 0.35
+            ttc_pressure *= 0.35
+        flyby_d = _longitudinal_opening_dampen(
+            pred_lat_m, float(actual_gap_m), float(safe_gap_m), float(ego_speed_mps)
+        )
+        # Fly-by damping assumes adequate longitudinal headway. Inside the safe-gap envelope,
+        # keep full rear-end / closing pressure (e.g. sudden stop while still "gap_ok" false).
+        if float(actual_gap_m) < float(safe_gap_m):
+            flyby_d = 1.0
+        gap_pressure *= flyby_d
+        ttc_pressure *= flyby_d
+    # Shoulder / roadside: do not apply full overlap spike when the car is clearly off-axis.
+    overlap_pressure = 0.90 if overlap_flag and (not lateral_clear) else 0.0
     # Use max to reflect "any severe mode should dominate".
-    return max(base, gap_pressure, ttc_pressure, overlap_pressure)
+    return max(
+        base,
+        gap_pressure,
+        ttc_pressure,
+        overlap_pressure,
+    )
 
 
 def assess_phase8_situation_stateful(
@@ -185,7 +248,6 @@ def assess_phase8_situation_stateful(
         if str(sit.delta_s_source or "") == "polyline"
         else ("ahead" if bool(sit.ahead) else "behind")
     )
-    closing_flag = bool(relation == "ahead" and float(sit.closing_speed_mps) > 0.30)
     overlap_flag = str(sit.overlap_state or "").lower() in {"side_by_side", "partial_overlap"}
     actual_gap_m = max(0.0, float(sit.delta_s_m)) if relation == "ahead" else None
     gap_ok = True if actual_gap_m is None else bool(actual_gap_m >= safe_gap_m)
@@ -197,6 +259,15 @@ def assess_phase8_situation_stateful(
         fallback_long_m=float(sit.longitudinal_m),
         fallback_lat_m=float(sit.lateral_m),
     )
+    closing_flag = bool(relation == "ahead" and float(sit.closing_speed_mps) > 0.30)
+    if (
+        relation == "ahead"
+        and float(getattr(sit, "opponent_speed_mps", 0.0)) < float(PHASE8_STATIONARY_OPP_SPEED_MPS)
+        and abs(float(pred_lat)) >= float(PHASE8_OVERLAP_LAT_RELIEF_M)
+    ):
+        closing_flag = False
+        # Stationary and clearly off-axis: do not propagate overlap to guard/emergency logic.
+        overlap_flag = False
     optimal_open, left_open, right_open = _compute_corridor_open_flags(
         relation=relation,
         pred_long_m=pred_long,
@@ -211,6 +282,9 @@ def assess_phase8_situation_stateful(
         safe_gap_m=safe_gap_m,
         actual_gap_m=actual_gap_m,
         overlap_flag=overlap_flag,
+        pred_lat_m=pred_lat,
+        opponent_speed_mps=float(getattr(sit, "opponent_speed_mps", 0.0)),
+        ego_speed_mps=float(ego_speed_mps),
     )
     latch_steps = int(st.emergency_latch_steps)
     if risk_now >= 0.70:

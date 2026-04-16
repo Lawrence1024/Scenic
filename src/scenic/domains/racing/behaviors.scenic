@@ -310,7 +310,7 @@ behavior FellowSwerveOutOfControlBehavior(
         self._fellow_plant_log_mode = mode
         wait
 
-behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False, pass_commit_shield_enabled=False, phase5_segment_tactics_enabled=False, phase6_orchestration_enabled=False, phase7_prediction_enabled=False, phase8_assessment_enabled=False, phase10_stability_guard_enabled=False):
+behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False, pass_commit_shield_enabled=False, phase5_segment_tactics_enabled=False, phase6_orchestration_enabled=False, phase7_prediction_enabled=False, phase8_assessment_enabled=False, phase10_stability_guard_enabled=False, phase11_commit_abort_enabled=False):
     """Follow the car's TTL using MPC (Model Predictive Control) for lateral control.
     
     Primary Scenic behavior for line-following on the racing TTL. Lateral and longitudinal
@@ -341,6 +341,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             (`fellow_relation`, `safe_gap`, `gap_ok`, corridor openness) from current/predicted fellow state.
         phase10_stability_guard_enabled: Phase 10 — enforce stability guard constraints
             (steer slew, brake-steer coupling, emergency-stable containment, TTL switch rate-limiting).
+        phase11_commit_abort_enabled: Phase 11 — enable explicit pass lifecycle states
+            (`COMMIT_PASS_LEFT`, `COMMIT_PASS_RIGHT`, `ABORT_PASS`) in tactical planner output.
     """
     
     # SETUP & DEFAULTS
@@ -398,6 +400,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
     _phase7_requested = bool(phase7_prediction_enabled)
     _phase8_requested = bool(phase8_assessment_enabled)
     _phase10_guard_enabled = bool(phase10_stability_guard_enabled)
+    _phase11_enabled = bool(phase11_commit_abort_enabled)
     if not _phase8_requested:
         try:
             _phase8_requested = bool((getattr(simulation().scene, 'params', None) or {}).get("phase8_assessment_enabled", False))
@@ -408,6 +411,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _phase10_guard_enabled = bool((getattr(simulation().scene, 'params', None) or {}).get("phase10_stability_guard_enabled", False))
         except Exception:
             _phase10_guard_enabled = False
+    if not _phase11_enabled:
+        try:
+            _phase11_enabled = bool((getattr(simulation().scene, 'params', None) or {}).get("phase11_commit_abort_enabled", False))
+        except Exception:
+            _phase11_enabled = False
+    _tactical_config.phase11_commit_abort_enabled = bool(_phase11_enabled)
     _phase10_guard_config = Phase10StabilityGuardConfig()
     if _phase5_enabled and not _tactical_planner_enabled:
         print(f"{_fbhv} phase5_segment_tactics_enabled=True requires tactical_planner_enabled=True; Phase 5 segment tactics disabled.")
@@ -1370,6 +1379,19 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     f"assessment_relation={_arel9} assessment_gap_ok={_agap9} "
                     f"assessment_optimal_open={_aopt9} assessment_left_open={_alft9} assessment_right_open={_argt9}"
                 )
+                if _phase11_enabled:
+                    _p11_commit_trigger = str(getattr(self._phase3_tp_state, "phase11_commit_trigger", "none") or "none")
+                    _p11_abort_trigger = str(getattr(self._phase3_tp_state, "phase11_abort_trigger", "none") or "none")
+                    _p11_pass_success = bool(getattr(self._phase3_tp_state, "phase11_pass_success", False))
+                    _p11_abort_success = bool(getattr(self._phase3_tp_state, "phase11_abort_success", False))
+                    _p11_post_state = str(getattr(self._phase3_tp_state, "phase11_post_event_state", "none") or "none")
+                    print(
+                        f"{_fl_mpc} [Phase11Planner] t={_sim_time_s:.2f}s planner_state={_canonical_mode(_mode3)} "
+                        f"chosen_ttl={_phase1_active_ttl} decision_reason={_reason3} "
+                        f"commit_trigger={_p11_commit_trigger} abort_trigger={_p11_abort_trigger} "
+                        f"pass_success={1 if _p11_pass_success else 0} abort_success={1 if _p11_abort_success else 0} "
+                        f"post_event_state={_p11_post_state}"
+                    )
                 if getattr(self, '_full_control_ticks', 0) % 50 == 0:
                     print(f"{_fl_mpc} [Phase3Tactical] t={_sim_time_s:.2f}s mode={_mode3} ttl={_phase1_active_ttl} cap={self._phase3_speed_cap}")
                     if _phase5_enabled:

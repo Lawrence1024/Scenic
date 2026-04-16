@@ -17,6 +17,9 @@ SETUP_LEFT = "SETUP_LEFT"
 SETUP_RIGHT = "SETUP_RIGHT"
 SETUP_PASS_LEFT = "SETUP_PASS_LEFT"
 SETUP_PASS_RIGHT = "SETUP_PASS_RIGHT"
+COMMIT_PASS_LEFT = "COMMIT_PASS_LEFT"
+COMMIT_PASS_RIGHT = "COMMIT_PASS_RIGHT"
+ABORT_PASS = "ABORT_PASS"
 
 
 @dataclass
@@ -48,6 +51,18 @@ class TacticalPlannerConfig:
     pass_intent_entry_cycles: int = 2
     pass_intent_hold_s: float = 1.6
     lateral_path_lock_hold_s: float = 1.6
+    phase11_commit_abort_enabled: bool = False
+    phase11_commit_entry_cycles: int = 2
+    phase11_commit_hold_s: float = 1.2
+    phase11_abort_hold_s: float = 0.9
+    phase11_abort_risk_01: float = 0.55
+    phase11_abort_ttc_s: float = 1.2
+    phase11_ahead_relax_free_run_enabled: bool = True
+    phase11_ahead_relax_min_gap_m: float = 32.0
+    phase11_ahead_relax_max_risk_01: float = 0.12
+    phase11_stationary_overlap_relief_enabled: bool = True
+    phase11_stationary_opp_speed_mps: float = 1.5
+    phase11_stationary_overlap_relief_lateral_m: float = 2.0
 
 
 @dataclass
@@ -70,6 +85,15 @@ class TacticalPlannerState:
     pass_intent_until_s: float = -1.0e9
     lateral_path_lock_side: str = ""
     lateral_path_lock_until_s: float = -1.0e9
+    phase11_commit_side: str = ""
+    phase11_commit_candidate_count: int = 0
+    phase11_commit_until_s: float = -1.0e9
+    phase11_abort_until_s: float = -1.0e9
+    phase11_commit_trigger: str = "none"
+    phase11_abort_trigger: str = "none"
+    phase11_pass_success: bool = False
+    phase11_abort_success: bool = False
+    phase11_post_event_state: str = "none"
 
 
 def apply_ttl_key_to_agent(agent, ttl_key: str, ttl_cache: dict, file_by_sel: Dict[str, str]) -> bool:
@@ -200,6 +224,32 @@ def tactical_planner_step_v1(
         state.lateral_path_lock_side = ""
         state.lateral_path_lock_until_s = -1.0e9
 
+    def _clear_phase11_lifecycle() -> None:
+        state.phase11_commit_side = ""
+        state.phase11_commit_candidate_count = 0
+        state.phase11_commit_until_s = -1.0e9
+        state.phase11_abort_until_s = -1.0e9
+
+    def _phase11_reset_cycle_flags() -> None:
+        state.phase11_commit_trigger = "none"
+        state.phase11_abort_trigger = "none"
+        state.phase11_pass_success = False
+        state.phase11_abort_success = False
+        state.phase11_post_event_state = "none"
+
+    def _phase11_commit_result(side: str, reason: str) -> Tuple[str, str, Optional[float], str]:
+        if side == "left":
+            state.mode = COMMIT_PASS_LEFT
+            return COMMIT_PASS_LEFT, "left", None, reason
+        state.mode = COMMIT_PASS_RIGHT
+        return COMMIT_PASS_RIGHT, "right", None, reason
+
+    def _phase11_abort_result(reason: str) -> Tuple[str, str, Optional[float], str]:
+        state.mode = ABORT_PASS
+        return ABORT_PASS, "optimal", None, reason
+
+    _phase11_reset_cycle_flags()
+
     def _is_proximity_hazard() -> bool:
         if sit is None:
             return False
@@ -234,6 +284,7 @@ def tactical_planner_step_v1(
         _clear_setup_commit()
         _clear_pass_intent()
         _clear_lateral_lock()
+        _clear_phase11_lifecycle()
         return FREE_RUN, "optimal", None, "pit_mode_guard"
 
     if not has_opponent or sit is None:
@@ -245,6 +296,7 @@ def tactical_planner_step_v1(
         _clear_setup_commit()
         _clear_pass_intent()
         _clear_lateral_lock()
+        _clear_phase11_lifecycle()
         return FREE_RUN, "optimal", None, "no_opponent"
 
     if sit.distance_m > config.relevance_dist_m:
@@ -258,6 +310,7 @@ def tactical_planner_step_v1(
         _clear_setup_commit()
         _clear_pass_intent()
         _clear_lateral_lock()
+        _clear_phase11_lifecycle()
         return FREE_RUN, "optimal", None, "opponent_far_free_run"
 
     relation_ahead = bool(sit.ahead)
@@ -266,7 +319,23 @@ def tactical_planner_step_v1(
             relation_ahead = True
         elif assessment_relation == "behind":
             relation_ahead = False
-    overlap_hazard_now = sit.overlap_state in ("partial_overlap", "side_by_side")
+    left_open_now = True if assessment_left_open is None else bool(assessment_left_open)
+    right_open_now = True if assessment_right_open is None else bool(assessment_right_open)
+    opening_any = bool(left_open_now or right_open_now)
+    overlap_hazard_raw = sit.overlap_state in ("partial_overlap", "side_by_side")
+    stationary_overlap_relief = bool(
+        bool(getattr(config, "phase11_stationary_overlap_relief_enabled", True))
+        and overlap_hazard_raw
+        and relation_ahead
+        and opening_any
+        and (not bool(assessment_closing_flag))
+        and (opponent_speed_mps <= float(getattr(config, "phase11_stationary_opp_speed_mps", 1.5)))
+        and (
+            abs(float(sit.lateral_m))
+            >= float(getattr(config, "phase11_stationary_overlap_relief_lateral_m", 2.0))
+        )
+    )
+    overlap_hazard_now = bool(overlap_hazard_raw and (not stationary_overlap_relief))
     if overlap_hazard_now:
         state.recovery_hold_until_s = max(
             float(state.recovery_hold_until_s),
@@ -279,8 +348,6 @@ def tactical_planner_step_v1(
         assessment_emergency_risk_01 is not None
         and float(assessment_emergency_risk_01) >= float(config.pass_safe_risk_max)
     )
-    left_open_now = True if assessment_left_open is None else bool(assessment_left_open)
-    right_open_now = True if assessment_right_open is None else bool(assessment_right_open)
     asymmetric_opening = bool(left_open_now) ^ bool(right_open_now)
     ref_speed_mps = max(0.0, float(ego_speed_mps), float(opponent_speed_mps))
     dynamic_tight_gap_m = max(
@@ -331,6 +398,82 @@ def tactical_planner_step_v1(
         or (sit.distance_m < dynamic_tight_gap_m)
         or (ttc_s < float(config.hard_ttc_s))
     )
+    phase11_enabled = bool(getattr(config, "phase11_commit_abort_enabled", False))
+    phase11_hard_abort_hazard = bool(
+        in_recovery_hold
+        or overlap_hazard_now
+        or emergency_risk_high
+        or (ttc_s < float(config.phase11_abort_ttc_s))
+        or (
+            assessment_emergency_risk_01 is not None
+            and float(assessment_emergency_risk_01) >= float(config.phase11_abort_risk_01)
+        )
+    )
+    phase11_soft_abort_pressure = bool(
+        (assessment_gap_ok is False)
+        and bool(assessment_closing_flag)
+        and (not opening_window_available)
+    )
+
+    if phase11_enabled and state.mode in (COMMIT_PASS_LEFT, COMMIT_PASS_RIGHT):
+        commit_side = "left" if state.mode == COMMIT_PASS_LEFT else "right"
+        state.phase11_commit_side = commit_side
+        if float(state.phase11_commit_until_s) <= float(sim_time_s):
+            state.phase11_commit_until_s = float(sim_time_s) + float(config.phase11_commit_hold_s)
+        commit_hold_active = bool(float(sim_time_s) < float(state.phase11_commit_until_s))
+        if phase11_hard_abort_hazard or (phase11_soft_abort_pressure and (not commit_hold_active)):
+            state.phase11_abort_until_s = max(
+                float(state.phase11_abort_until_s),
+                float(sim_time_s) + float(config.phase11_abort_hold_s),
+            )
+            state.phase11_abort_trigger = "commit_invalidated_hazard"
+            state.phase11_post_event_state = ABORT_PASS
+            _clear_setup_commit()
+            _clear_pass_intent()
+            _clear_lateral_lock()
+            return _phase11_abort_result("phase11_abort_commit_invalidated")
+        if (not relation_ahead) and (not _is_release_hazard()) and (not in_recovery_hold):
+            state.phase11_pass_success = True
+            state.phase11_post_event_state = FREE_RUN
+            _clear_setup_commit()
+            _clear_pass_intent()
+            _clear_lateral_lock()
+            _clear_phase11_lifecycle()
+            state.mode = FREE_RUN
+            return FREE_RUN, "optimal", None, "phase11_pass_success_free_run"
+        if commit_side == "left":
+            return _phase11_commit_result("left", "phase11_commit_pass_left_hold")
+        return _phase11_commit_result("right", "phase11_commit_pass_right_hold")
+
+    if phase11_enabled and state.mode == ABORT_PASS:
+        if phase11_hard_abort_hazard:
+            state.phase11_abort_until_s = max(
+                float(state.phase11_abort_until_s),
+                float(sim_time_s) + float(config.phase11_abort_hold_s),
+            )
+        if float(sim_time_s) < float(state.phase11_abort_until_s):
+            state.phase11_post_event_state = ABORT_PASS
+            return _phase11_abort_result("phase11_abort_hold")
+        if (not relation_ahead) and (not _is_release_hazard()) and (not in_recovery_hold):
+            state.phase11_abort_success = True
+            state.phase11_post_event_state = FREE_RUN
+            _clear_setup_commit()
+            _clear_pass_intent()
+            _clear_lateral_lock()
+            _clear_phase11_lifecycle()
+            state.mode = FREE_RUN
+            return FREE_RUN, "optimal", None, "phase11_abort_recovered_free_run"
+        if (not phase11_hard_abort_hazard) and (
+            (assessment_gap_ok is True)
+            or (opening_window_available and (not bool(assessment_closing_flag)))
+        ):
+            state.phase11_abort_success = True
+            state.phase11_post_event_state = FOLLOW
+            _clear_phase11_lifecycle()
+            return _follow_result("phase11_abort_success_follow")
+        state.phase11_post_event_state = FOLLOW
+        _clear_phase11_lifecycle()
+        return _follow_result("phase11_abort_recover_follow")
 
     if relation_ahead and safety_pressure:
         state.protected_follow_active = True
@@ -357,12 +500,14 @@ def tactical_planner_step_v1(
             state.protected_follow_clear_count = 0
 
     if in_recovery_hold:
+        _clear_phase11_lifecycle()
         state.setup_candidate_side = ""
         state.setup_candidate_count = 0
         state.follow_pressure_count += 1
         return _follow_result("contact_recovery_hold")
 
     if state.protected_follow_active:
+        _clear_phase11_lifecycle()
         _commit_side_pre = str(state.setup_commit_side or "")
         _intent_side_pre = str(state.pass_intent_side or "")
         _lock_side_pre = str(state.lateral_path_lock_side or "")
@@ -388,6 +533,7 @@ def tactical_planner_step_v1(
         return _follow_result("protected_follow_envelope")
 
     if not relation_ahead:
+        _clear_phase11_lifecycle()
         if _is_proximity_hazard():
             state.setup_candidate_side = ""
             state.setup_candidate_count = 0
@@ -414,6 +560,34 @@ def tactical_planner_step_v1(
     )
     if assessment_gap_ok is False:
         blocked = True
+    # Phase 11: do not drop to FREE_RUN on "large gap" alone while assessment still
+    # has the fellow ahead. Otherwise ego stays on optimal at cruise, loses pass/follow
+    # discipline, and can run off-track in opponent-aware scenarios (F4/F6/F7).
+    if (not blocked) and phase11_enabled and relation_ahead:
+        # Phase 11 relaxation: if the fellow is clearly ahead, non-closing, low-risk, and
+        # there is a large opening, allow FREE_RUN instead of forcing conservative FOLLOW.
+        # This prevents slow startup lock-in against far / roadside opponents (e.g. F9).
+        opening_available = bool(
+            (assessment_optimal_open is True)
+            or (assessment_left_open is True)
+            or (assessment_right_open is True)
+        )
+        relax_to_free_run = bool(
+            bool(getattr(config, "phase11_ahead_relax_free_run_enabled", True))
+            and (assessment_gap_ok is True)
+            and (assessment_closing_flag is False)
+            and opening_available
+            and (sit.distance_m >= float(getattr(config, "phase11_ahead_relax_min_gap_m", 32.0)))
+            and (
+                (assessment_emergency_risk_01 is not None)
+                and (
+                    float(assessment_emergency_risk_01)
+                    <= float(getattr(config, "phase11_ahead_relax_max_risk_01", 0.12))
+                )
+            )
+        )
+        if not relax_to_free_run:
+            blocked = True
     if not blocked:
         if state.mode in (SETUP_LEFT, SETUP_RIGHT):
             state.last_setup_exit_sim_time_s = float(sim_time_s)
@@ -424,6 +598,7 @@ def tactical_planner_step_v1(
         _clear_setup_commit()
         _clear_pass_intent()
         _clear_lateral_lock()
+        _clear_phase11_lifecycle()
         return FREE_RUN, "optimal", None, "opponent_not_blocking"
 
     straight_ok = (not config.pass_requires_straight) or (sit.segment_context == "straight")
@@ -554,9 +729,45 @@ def tactical_planner_step_v1(
                 float(state.lateral_path_lock_until_s),
                 float(sim_time_s) + float(config.lateral_path_lock_hold_s),
             )
+            if phase11_enabled:
+                side_open = bool(left_open if side == "left" else right_open)
+                commit_candidate_ok = bool(
+                    side_open
+                    and pass_safe
+                    and opening_window_available
+                    and (not phase11_hard_abort_hazard)
+                    and (not in_recovery_hold)
+                )
+                if commit_candidate_ok:
+                    if state.phase11_commit_side != side:
+                        state.phase11_commit_side = side
+                        state.phase11_commit_candidate_count = 1
+                    else:
+                        state.phase11_commit_candidate_count += 1
+                else:
+                    state.phase11_commit_candidate_count = 0
+                if state.phase11_commit_candidate_count >= int(config.phase11_commit_entry_cycles):
+                    state.phase11_commit_trigger = f"setup_chain_commit_{side}"
+                    state.phase11_post_event_state = COMMIT_PASS_LEFT if side == "left" else COMMIT_PASS_RIGHT
+                    state.phase11_commit_until_s = max(
+                        float(state.phase11_commit_until_s),
+                        float(sim_time_s) + float(config.phase11_commit_hold_s),
+                    )
+                    return _phase11_commit_result(side, f"phase11_commit_pass_{side}")
             return _setup_result(side, f"setup_commit_{side}_hold")
 
     if not pass_safe:
+        if phase11_enabled and state.mode in (COMMIT_PASS_LEFT, COMMIT_PASS_RIGHT):
+            state.phase11_abort_trigger = "pass_safe_lost"
+            state.phase11_post_event_state = ABORT_PASS
+            state.phase11_abort_until_s = max(
+                float(state.phase11_abort_until_s),
+                float(sim_time_s) + float(config.phase11_abort_hold_s),
+            )
+            _clear_setup_commit()
+            _clear_pass_intent()
+            _clear_lateral_lock()
+            return _phase11_abort_result("phase11_abort_pass_safe_lost")
         if state.mode in (SETUP_LEFT, SETUP_RIGHT):
             state.last_setup_exit_sim_time_s = float(sim_time_s)
             _clear_setup_commit()
@@ -649,6 +860,9 @@ __all__ = [
     "SETUP_RIGHT",
     "SETUP_PASS_LEFT",
     "SETUP_PASS_RIGHT",
+    "COMMIT_PASS_LEFT",
+    "COMMIT_PASS_RIGHT",
+    "ABORT_PASS",
     "TacticalPlannerConfig",
     "TacticalPlannerState",
     "_canonical_mode",

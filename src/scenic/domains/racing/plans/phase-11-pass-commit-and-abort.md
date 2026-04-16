@@ -11,7 +11,8 @@ stability protections.
 
 ## Current Status
 
-**Planned** (explicit overtake lifecycle with deterministic success/abort evidence).
+**Implemented (initial slice)** — explicit commit/abort lifecycle states and
+Phase-11 telemetry are wired; scenario sign-off pending.
 
 - Architecture source: `src/scenic/domains/racing/restrcture_plan.md`
 - Detailed scenario intent: `src/scenic/domains/racing/phase6-12.md`
@@ -85,6 +86,12 @@ Runner guidance:
 python -m scenic.domains.racing.benchmarks.phase11_runner --time 1000
 ```
 
+Runtime policy for this phase:
+
+- Use **10 s default** (`--time 1000`) for iteration.
+- Use **15 s max** (`--time 1500`) for confirmation.
+- Do not run 20 s+ unless explicitly justified and documented.
+
 Expected chain examples:
 
 - `F6`: `FOLLOW -> SETUP_PASS_RIGHT -> COMMIT_PASS_RIGHT -> FREE_RUN`
@@ -99,6 +106,33 @@ Primary targets:
 - `src/scenic/domains/racing/behaviors.scenic` (planner/guard execution integration)
 - guard/planner integration for forced abort and emergency fallback
 - benchmark parsing for commit/abort KPIs
+
+Initial implementation delivered:
+
+- Added Phase 11 tactical lifecycle states in planner:
+  - `COMMIT_PASS_LEFT`
+  - `COMMIT_PASS_RIGHT`
+  - `ABORT_PASS`
+- Added lifecycle transition mechanics in `tactical_planner.py`:
+  - setup-to-commit trigger gating (`phase11_commit_*`),
+  - hazard-driven commit invalidation into abort,
+  - abort hold/recovery logic,
+  - pass-success / abort-success event flags.
+- Added behavior telemetry:
+  - `[Phase11Planner]` per-cycle line with
+    `commit_trigger`, `abort_trigger`, `pass_success`, `abort_success`, `post_event_state`.
+- Added benchmark parsing KPIs in `phase_run_common.py`:
+  - `phase11_planner_line_count`,
+  - `phase11_commit_trigger_count`,
+  - `phase11_abort_trigger_count`,
+  - `phase11_pass_success_count`,
+  - `phase11_abort_success_count`,
+  - `phase11_commit_pass_left_count`,
+  - `phase11_commit_pass_right_count`,
+  - `phase11_abort_pass_count`.
+- Added `phase11_runner.py` and scenario defaults in `f_scenario_bank.py`.
+- Added/updated unit tests in `test_tactical_planner.py` for
+  commit entry, commit invalidation -> abort, and pass-success recovery paths.
 
 ## Exit Checklist
 

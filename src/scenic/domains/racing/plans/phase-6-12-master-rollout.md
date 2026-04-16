@@ -14,7 +14,8 @@ It is derived from:
 - Phase 8: complete (stateful assessment + dynamic gap baseline).
 - Phase 9: complete as tactical baseline (setup/follow/opening logic).
 - Phase 10: complete as stability baseline (guard + emergency containment).
-- Phase 11-12: planned and not yet implemented.
+- Phase 11: implemented (initial commit/abort slice; validation pending).
+- Phase 12: planned and not yet implemented.
 
 ## Scope and assumptions
 
