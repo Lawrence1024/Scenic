@@ -268,10 +268,15 @@ def assess_phase8_situation_stateful(
         closing_flag = False
         # Stationary and clearly off-axis: do not propagate overlap to guard/emergency logic.
         overlap_flag = False
+    # Use current measured lateral (sit.lateral_m) for corridor side occupancy.
+    # The Phase-7 predicted position introduces heading-noise at low speed and
+    # oscillates around the 0.8 m threshold, causing left_open/right_open to
+    # flip every cycle. Current lateral is stable because it uses actual measured
+    # position; longitudinal (pred_long) still comes from prediction for gap calc.
     optimal_open, left_open, right_open = _compute_corridor_open_flags(
         relation=relation,
         pred_long_m=pred_long,
-        pred_lat_m=pred_lat,
+        pred_lat_m=float(sit.lateral_m),
         overlap_flag=overlap_flag,
     )
 

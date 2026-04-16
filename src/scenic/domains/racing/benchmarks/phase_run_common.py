@@ -114,6 +114,14 @@ RE_PHASE11_PLANNER = re.compile(
     r"pass_success=(?P<pass>[01])\s+abort_success=(?P<abort_ok>[01])\s+"
     r"post_event_state=(?P<post>\S+)"
 )
+RE_PHASE12_PLANNER = re.compile(
+    r"\[Phase11Planner\]\s+t=(?P<t>\d+\.?\d*)s\s+planner_state=(?P<state>\S+)\s+"
+    r"chosen_ttl=(?P<ttl>\S+)\s+decision_reason=(?P<reason>\S+)\s+"
+    r"commit_trigger=(?P<commit>\S+)\s+abort_trigger=(?P<abort>\S+)\s+"
+    r"pass_success=(?P<pass>[01])\s+abort_success=(?P<abort_ok>[01])\s+"
+    r"post_event_state=(?P<post>\S+)"
+    r".*seg_ctx=(?P<seg_ctx>\S+)\s+seg_modifier=(?P<seg_modifier>\S+)"
+)
 RE_LOG_TIME_S = re.compile(r"\bt=(?P<t>\d+\.?\d*)s\b")
 # Fellow harness: placement from ego offset ([placement.py])
 RE_FELLOW_PLACEMENT_FROM_EGO = re.compile(
@@ -221,6 +229,12 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "phase11_commit_pass_left_count",
     "phase11_commit_pass_right_count",
     "phase11_abort_pass_count",
+    "phase12_seg_straight_count",
+    "phase12_seg_corner_entry_count",
+    "phase12_seg_corner_body_count",
+    "phase12_seg_corner_exit_count",
+    "phase12_seg_modifier_blocked_count",
+    "phase12_seg_modifier_conservative_count",
 )
 
 # Fellow traffic harness digest (see examples/racing/fellow_smoke, fellow_runner.py).
@@ -522,6 +536,12 @@ def collect_metrics_from_log(
     phase11_commit_pass_left_count = 0
     phase11_commit_pass_right_count = 0
     phase11_abort_pass_count = 0
+    phase12_seg_straight_count = 0
+    phase12_seg_corner_entry_count = 0
+    phase12_seg_corner_body_count = 0
+    phase12_seg_corner_exit_count = 0
+    phase12_seg_modifier_blocked_count = 0
+    phase12_seg_modifier_conservative_count = 0
 
     _ignore_before = max(0.0, float(ignore_before_s))
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
@@ -640,6 +660,22 @@ def collect_metrics_from_log(
                         phase11_commit_pass_right_count += 1
                     elif _p11_state == "ABORT_PASS":
                         phase11_abort_pass_count += 1
+                p12 = RE_PHASE12_PLANNER.search(line)
+                if p12:
+                    _seg_ctx = str(p12.group("seg_ctx") or "none")
+                    _seg_mod = str(p12.group("seg_modifier") or "normal")
+                    if _seg_ctx == "straight":
+                        phase12_seg_straight_count += 1
+                    elif _seg_ctx == "corner_entry":
+                        phase12_seg_corner_entry_count += 1
+                    elif _seg_ctx == "corner_body":
+                        phase12_seg_corner_body_count += 1
+                    elif _seg_ctx == "corner_exit":
+                        phase12_seg_corner_exit_count += 1
+                    if _seg_mod == "blocked":
+                        phase12_seg_modifier_blocked_count += 1
+                    elif _seg_mod == "conservative":
+                        phase12_seg_modifier_conservative_count += 1
             evc = RE_EVAL_CONTACT_EVENT.search(line)
             if evc:
                 sev = evc.group("sev")
@@ -892,6 +928,12 @@ def collect_metrics_from_log(
     out["phase11_commit_pass_left_count"] = phase11_commit_pass_left_count
     out["phase11_commit_pass_right_count"] = phase11_commit_pass_right_count
     out["phase11_abort_pass_count"] = phase11_abort_pass_count
+    out["phase12_seg_straight_count"] = phase12_seg_straight_count
+    out["phase12_seg_corner_entry_count"] = phase12_seg_corner_entry_count
+    out["phase12_seg_corner_body_count"] = phase12_seg_corner_body_count
+    out["phase12_seg_corner_exit_count"] = phase12_seg_corner_exit_count
+    out["phase12_seg_modifier_blocked_count"] = phase12_seg_modifier_blocked_count
+    out["phase12_seg_modifier_conservative_count"] = phase12_seg_modifier_conservative_count
     return out
 
 

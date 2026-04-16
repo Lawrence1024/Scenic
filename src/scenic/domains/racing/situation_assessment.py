@@ -135,10 +135,15 @@ def _classify_overlap_raw(
     long_side: float = 5.5,
     lat_side: float = 3.8,
     long_partial_lon: float = 14.0,
-    lat_partial_lat: float = 2.0,
+    lat_partial_lat: float = 0.8,
     closing_behind_speed: float = 0.8,
 ) -> str:
-    """Rule-based overlap bucket (before hysteresis)."""
+    """Rule-based overlap bucket (before hysteresis).
+
+    lat_partial_lat reduced from 2.0 → 0.8 m: a fellow on a parallel TTL (~1 m
+    lateral) must NOT trigger partial_overlap, which would lock _is_release_hazard()
+    and prevent protected_follow from clearing after a successful pass.
+    """
     al = abs(longitudinal_m)
     atl = abs(lateral_m)
     behind = not ahead

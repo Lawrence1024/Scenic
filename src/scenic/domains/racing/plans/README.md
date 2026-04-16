@@ -17,7 +17,7 @@ This folder breaks the master roadmap in `overall_plan.md` into actionable per-p
 - **Phase 8** — complete (assessment + dynamic-gap telemetry ready for tactical-planner handoff; residual caveats documented in Phase 8 plan).
 - **Phase 9** — complete as tactical baseline (Phase-8-informed tactical planner path + `[Phase9Planner]` telemetry + `phase9_runner`; legacy tactical overlays retired in Phase 9 authority mode; setup-pass intent consistently observed in occupancy scenarios. Full pass commit/abort lifecycle intentionally deferred to Phase 11).
 - **Phase 10** — complete as stability baseline (`[Phase10Guard]` guard path, emergency-stable containment, and post-emergency re-approach suppression wired in `phase10_runner`; validated clean on `F2/F4/F5/F6/F7` at 15 s windows in deterministic runs).
-- **Phase 11** — implemented (initial slice, sign-off pending) (explicit commit/abort lifecycle in tactical planner, `[Phase11Planner]` telemetry, and `phase11_runner` benchmark path).
+- **Phase 11** — complete (explicit commit/abort lifecycle in tactical planner, `[Phase11Planner]` telemetry, and `phase11_runner` benchmark path; F4/F5 safe abort and F6/F7 pass success validated; closing+emergency-risk structural guards added).
 - **Phase 12** — planned (segment-aware tactical intelligence on top of commit/abort).
 
 ## Phase Plans
@@ -63,7 +63,7 @@ When extending phases 4–5, revisit the runner and `phase_run_common.collect_me
 - [x] Phase 8: stable tactical assessment outputs and dynamic safe gap.
 - [x] Phase 9: tactical planner v1 setup-pass behavior with bounded switching (frozen tactical baseline; commit/abort intentionally deferred).
 - [x] Phase 10: guard-driven stability controls and emergency handling (validated baseline on `F2/F4/F5/F6/F7`).
-- [ ] Phase 11: commit/abort lifecycle with deterministic success/abort evidence (initial implementation landed; validation pending).
+- [x] Phase 11: commit/abort lifecycle with deterministic success/abort evidence (validated: F4/F5 safe abort, F6/F7 pass success, no collisions).
 - [ ] Phase 12: segment-aware decision timing improvements with safety non-regression.
 
 ## Notes

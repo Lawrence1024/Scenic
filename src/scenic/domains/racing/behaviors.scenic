@@ -310,7 +310,7 @@ behavior FellowSwerveOutOfControlBehavior(
         self._fellow_plant_log_mode = mode
         wait
 
-behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False, pass_commit_shield_enabled=False, phase5_segment_tactics_enabled=False, phase6_orchestration_enabled=False, phase7_prediction_enabled=False, phase8_assessment_enabled=False, phase10_stability_guard_enabled=False, phase11_commit_abort_enabled=False):
+behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False, pass_commit_shield_enabled=False, phase5_segment_tactics_enabled=False, phase6_orchestration_enabled=False, phase7_prediction_enabled=False, phase8_assessment_enabled=False, phase10_stability_guard_enabled=False, phase11_commit_abort_enabled=False, phase12_segment_aware_enabled=False):
     """Follow the car's TTL using MPC (Model Predictive Control) for lateral control.
     
     Primary Scenic behavior for line-following on the racing TTL. Lateral and longitudinal
@@ -417,6 +417,17 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         except Exception:
             _phase11_enabled = False
     _tactical_config.phase11_commit_abort_enabled = bool(_phase11_enabled)
+    _phase12_seg_aware_enabled = bool(phase12_segment_aware_enabled)
+    if not _phase12_seg_aware_enabled:
+        try:
+            _phase12_seg_aware_enabled = bool((getattr(simulation().scene, 'params', None) or {}).get("phase12_segment_aware_enabled", False))
+        except Exception:
+            _phase12_seg_aware_enabled = False
+    _tactical_config.phase12_segment_aware_enabled = bool(_phase12_seg_aware_enabled)
+    if _phase12_seg_aware_enabled:
+        # Phase 12 owns segment gating via fine-grained modifiers;
+        # disable the legacy straight-only blanket gate so corner passes are possible.
+        _tactical_config.pass_requires_straight = False
     _phase10_guard_config = Phase10StabilityGuardConfig()
     if _phase5_enabled and not _tactical_planner_enabled:
         print(f"{_fbhv} phase5_segment_tactics_enabled=True requires tactical_planner_enabled=True; Phase 5 segment tactics disabled.")
@@ -1078,8 +1089,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     self._phase_effective_ttl = str(_p6_guard.active_ttl or _phase1_active_ttl)
                     self._phase_effective_reason = str(_p6_guard.decision_reason or "none")
                     print(format_phase6_state_log_line(_sim_time_s, _state6))
-                    print(format_phase6_planner_log_line(_sim_time_s, _decision6))
-                    print(format_phase6_guard_log_line(_sim_time_s, _p6_guard))
 
                 if _phase7_requested:
                     if _nearest_o6 is None:
@@ -1385,12 +1394,18 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     _p11_pass_success = bool(getattr(self._phase3_tp_state, "phase11_pass_success", False))
                     _p11_abort_success = bool(getattr(self._phase3_tp_state, "phase11_abort_success", False))
                     _p11_post_state = str(getattr(self._phase3_tp_state, "phase11_post_event_state", "none") or "none")
+                    _p11_commit_cand = int(getattr(self._phase3_tp_state, "phase11_commit_candidate_count", 0))
+                    _p11_protected_follow = bool(getattr(self._phase3_tp_state, "protected_follow_active", False))
+                    _p12_seg_ctx = str(getattr(_sit3, "segment_context", "none") or "none") if _sit3 is not None else "none"
+                    _p12_seg_modifier = str(getattr(self._phase3_tp_state, "phase12_segment_modifier", "normal") or "normal")
                     print(
                         f"{_fl_mpc} [Phase11Planner] t={_sim_time_s:.2f}s planner_state={_canonical_mode(_mode3)} "
                         f"chosen_ttl={_phase1_active_ttl} decision_reason={_reason3} "
                         f"commit_trigger={_p11_commit_trigger} abort_trigger={_p11_abort_trigger} "
                         f"pass_success={1 if _p11_pass_success else 0} abort_success={1 if _p11_abort_success else 0} "
-                        f"post_event_state={_p11_post_state}"
+                        f"post_event_state={_p11_post_state} "
+                        f"commit_cand_count={_p11_commit_cand} protected_follow={1 if _p11_protected_follow else 0} "
+                        f"seg_ctx={_p12_seg_ctx} seg_modifier={_p12_seg_modifier}"
                     )
                 if getattr(self, '_full_control_ticks', 0) % 50 == 0:
                     print(f"{_fl_mpc} [Phase3Tactical] t={_sim_time_s:.2f}s mode={_mode3} ttl={_phase1_active_ttl} cap={self._phase3_speed_cap}")
@@ -1570,7 +1585,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 # When CTE is large, allow faster slew-down so the CTE speed cap takes effect quickly (generic run-off fix).
                 dt_slew = _lon_controller.config.mpc_prediction_dt if hasattr(_lon_controller, 'config') else 0.05
                 slew_down_ms = 12.0 if cte_mag_for_speed >= 3.0 else 7.0   # faster ramp-down when off-line
-                slew_up_ms = 5.0     # max speed increase per second
+                _in_commit_pass = str(getattr(self, '_phase_effective_planner_state', '')) in (COMMIT_PASS_LEFT, COMMIT_PASS_RIGHT)
+                slew_up_ms = 12.0 if _in_commit_pass else 5.0  # accelerate harder during pass commit
                 if not hasattr(self, '_last_effective_target_speed'):
                     self._last_effective_target_speed = float(effective_target_speed)
                 last_eff = float(self._last_effective_target_speed)

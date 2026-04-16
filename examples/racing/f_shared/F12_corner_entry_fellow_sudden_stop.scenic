@@ -1,4 +1,6 @@
-# Shared F-bank scenario F2: fellow ahead on optimal, slower cruise.
+# Phase 12 scenario: corner-entry spawn with fellow ahead on optimal, sudden stop disturbance.
+# Paired with F4 (straight spawn, same fellow script) to compare segment-conditioned safety behavior.
+# Validates that corner_body/corner_entry blocks prevent dangerous commit into a decelerating fellow.
 param map = localPath('../../../assets/maps/dSPACE/LagunaSeca.xodr')
 param use2DMap = True
 param time_step = 0.01
@@ -10,7 +12,7 @@ param fellowHarnessLog = True
 param phase7_prediction_enabled = False
 model scenic.simulators.dspace.racing_model
 
-ego = new RacingCar at (-78.86454576530903, -112.41203639782893), \
+ego = new RacingCar at (146.6773, -311.8879), \
     with regionContainedIn everywhere, \
     with raceNumber 1, \
     with ttlFileName 'ttl_optimal_xodr.csv', \
@@ -24,4 +26,4 @@ opponent = new RacingCar with _racing_st_offset ('ahead', 35), \
     with ttlFileName 'ttl_optimal_xodr.csv', \
     with ttlFolder localPath('../../../assets/ttls/LS_ENU_TTL_CSV')
 
-opponent.behavior = FellowFollowTTLGeometricBehavior(speed_mph=20)
+opponent.behavior = FellowSuddenStopIntervalBehavior(speed_mph=60, interval=8.0, duration=3.0)
