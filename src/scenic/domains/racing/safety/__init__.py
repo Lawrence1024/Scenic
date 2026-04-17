@@ -1,6 +1,13 @@
-"""Phase 10 safety guard package."""
+"""Stability guard package."""
 
 from scenic.domains.racing.safety.stability_guard import (
+    StabilityGuardConfig,
+    StabilityGuardDecision,
+    StabilityGuardState,
+    format_stability_guard_log_line,
+    stability_guard_step,
+    stability_guard_handle_ttl_switch,
+    # Backward-compatibility aliases
     Phase10StabilityGuardConfig,
     Phase10StabilityGuardDecision,
     Phase10StabilityGuardState,
@@ -10,6 +17,13 @@ from scenic.domains.racing.safety.stability_guard import (
 )
 
 __all__ = [
+    "StabilityGuardConfig",
+    "StabilityGuardDecision",
+    "StabilityGuardState",
+    "format_stability_guard_log_line",
+    "stability_guard_step",
+    "stability_guard_handle_ttl_switch",
+    # Backward-compatibility aliases
     "Phase10StabilityGuardConfig",
     "Phase10StabilityGuardDecision",
     "Phase10StabilityGuardState",

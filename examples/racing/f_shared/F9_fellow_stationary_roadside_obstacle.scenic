@@ -19,7 +19,7 @@ ego = new RacingCar at (-78.86454576530903, -112.41203639782893), \
     with ttlFileName 'ttl_optimal_xodr.csv', \
     with ttlFolder localPath('../../../assets/ttls/LS_ENU_TTL_CSV')
 
-ego.behavior = FollowRacingLineMPCBehavior(target_speed=60, manage_gears=True, use_waypoints=True, mpc_config_path=None, phase6_orchestration_enabled=True, phase7_prediction_enabled=globalParameters.phase7_prediction_enabled)
+ego.behavior = FollowRacingLineMPCBehavior(target_speed=60, manage_gears=True, use_waypoints=True, mpc_config_path=None, phase7_prediction_enabled=globalParameters.phase7_prediction_enabled)
 
 # (delta_s, delta_t): ~32 m ahead along route, ~4.5 m right of centerline (shoulder).
 opponent = new RacingCar with _racing_st_offset (32, -4.5), \

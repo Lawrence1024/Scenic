@@ -1,4 +1,4 @@
-"""Phase 10 stability guard (anti-swerve / anti-chatter / emergency-stable)."""
+"""Stability guard — anti-swerve / anti-chatter / emergency-stable command filter."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 
 @dataclass
-class Phase10StabilityGuardConfig:
+class StabilityGuardConfig:
     max_steer_rate_rad_per_s: float = 2.8
     high_steer_abs_rad: float = 0.20
     max_brake_when_high_steer: float = 0.35
@@ -26,7 +26,7 @@ class Phase10StabilityGuardConfig:
 
 
 @dataclass
-class Phase10StabilityGuardState:
+class StabilityGuardState:
     last_steer_cmd_rad: float = 0.0
     last_ttl: str = "optimal"
     last_ttl_switch_sim_time_s: float = -1.0e9
@@ -35,7 +35,7 @@ class Phase10StabilityGuardState:
 
 
 @dataclass
-class Phase10StabilityGuardDecision:
+class StabilityGuardDecision:
     planner_state: str
     active_ttl: str
     decision_reason: str
@@ -50,10 +50,16 @@ class Phase10StabilityGuardDecision:
     emergency_stable_mode: bool
 
 
-def phase10_handle_ttl_switch(
-    state: Phase10StabilityGuardState,
+# Backward-compatibility aliases
+Phase10StabilityGuardConfig = StabilityGuardConfig
+Phase10StabilityGuardState = StabilityGuardState
+Phase10StabilityGuardDecision = StabilityGuardDecision
+
+
+def stability_guard_handle_ttl_switch(
+    state: StabilityGuardState,
     *,
-    config: Phase10StabilityGuardConfig,
+    config: StabilityGuardConfig,
     sim_time_s: float,
     current_ttl: str,
     requested_ttl: str,
@@ -75,10 +81,14 @@ def phase10_handle_ttl_switch(
     return req, False
 
 
-def phase10_guard_step(
-    state: Phase10StabilityGuardState,
+# Backward-compatibility alias
+phase10_handle_ttl_switch = stability_guard_handle_ttl_switch
+
+
+def stability_guard_step(
+    state: StabilityGuardState,
     *,
-    config: Phase10StabilityGuardConfig,
+    config: StabilityGuardConfig,
     sim_time_s: float,
     control_dt_s: float,
     planner_state: str,
@@ -88,12 +98,12 @@ def phase10_guard_step(
     throttle_cmd: float,
     brake_cmd: float,
     pit_mode: bool,
-    phase8_gap_ok: bool,
-    phase8_overlap_flag: bool,
-    phase8_closing_flag: bool,
-    phase8_emergency_risk_01: float,
+    gap_ok: bool,
+    overlap_flag: bool,
+    closing_flag: bool,
+    emergency_risk_01: float,
     ttl_switch_blocked: bool,
-) -> Phase10StabilityGuardDecision:
+) -> StabilityGuardDecision:
     """Apply command-level stability constraints and emergency containment."""
     steer = float(steer_cmd_rad)
     throttle = max(0.0, min(1.0, float(throttle_cmd)))
@@ -123,13 +133,13 @@ def phase10_guard_step(
         guard_active = True
         guard_reason = "brake_steer_coupled"
 
-    risk = max(0.0, min(1.0, float(phase8_emergency_risk_01)))
+    risk = max(0.0, min(1.0, float(emergency_risk_01)))
     emergency_trigger = bool(
         (not pit_mode)
         and (
-            bool(phase8_overlap_flag)
+            bool(overlap_flag)
             or risk >= float(config.emergency_risk_enter_01)
-            or ((not bool(phase8_gap_ok)) and bool(phase8_closing_flag) and risk >= 0.50)
+            or ((not bool(gap_ok)) and bool(closing_flag) and risk >= 0.50)
         )
     )
     if emergency_trigger:
@@ -143,10 +153,10 @@ def phase10_guard_step(
         )
     emergency_latched = float(sim_time_s) < float(state.emergency_latch_until_s)
     emergency_exit_ok = bool(
-        bool(phase8_gap_ok)
-        and (not bool(phase8_overlap_flag))
+        bool(gap_ok)
+        and (not bool(overlap_flag))
         and risk <= float(config.emergency_risk_exit_01)
-        and (not bool(phase8_closing_flag))
+        and (not bool(closing_flag))
     )
     if emergency_latched and emergency_exit_ok:
         state.emergency_latch_until_s = min(float(state.emergency_latch_until_s), float(sim_time_s))
@@ -157,11 +167,11 @@ def phase10_guard_step(
         guard_active = True
         guard_reason = "emergency_stable"
         mode = "EMERGENCY_STABLE"
-        reason = "phase10_emergency_stable"
+        reason = "stability_guard_emergency_stable"
         throttle = 0.0
-        if bool(phase8_overlap_flag):
+        if bool(overlap_flag):
             brake = max(brake, float(config.emergency_overlap_brake_floor))
-        elif (not bool(phase8_gap_ok)) and bool(phase8_closing_flag):
+        elif (not bool(gap_ok)) and bool(closing_flag):
             brake = max(brake, float(config.emergency_closing_brake_floor))
         else:
             brake = max(brake, float(config.emergency_brake_floor))
@@ -170,8 +180,8 @@ def phase10_guard_step(
             steer_limited = True
     elif (not pit_mode):
         retrigger = bool(
-            bool(phase8_overlap_flag)
-            or ((not bool(phase8_gap_ok)) and bool(phase8_closing_flag))
+            bool(overlap_flag)
+            or ((not bool(gap_ok)) and bool(closing_flag))
             or (risk >= float(config.reapproach_retrigger_risk_01))
         )
         if retrigger:
@@ -181,9 +191,9 @@ def phase10_guard_step(
             )
         recovery_latched = bool(float(sim_time_s) < float(state.recovery_hold_until_s))
         recovery_release_ok = bool(
-            bool(phase8_gap_ok)
-            and (not bool(phase8_overlap_flag))
-            and (not bool(phase8_closing_flag))
+            bool(gap_ok)
+            and (not bool(overlap_flag))
+            and (not bool(closing_flag))
             and (risk <= float(config.reapproach_release_risk_01))
         )
         if recovery_latched and recovery_release_ok:
@@ -194,7 +204,7 @@ def phase10_guard_step(
             if guard_reason == "none":
                 guard_reason = "reapproach_hold"
             throttle = min(throttle, float(config.reapproach_max_throttle))
-            if (not bool(phase8_gap_ok)) or bool(phase8_closing_flag):
+            if (not bool(gap_ok)) or bool(closing_flag):
                 brake = max(brake, float(config.reapproach_brake_floor))
 
     if ttl_switch_blocked:
@@ -204,7 +214,7 @@ def phase10_guard_step(
 
     state.last_steer_cmd_rad = float(steer)
     state.last_ttl = str(ttl or state.last_ttl or "optimal")
-    return Phase10StabilityGuardDecision(
+    return StabilityGuardDecision(
         planner_state=mode,
         active_ttl=ttl,
         decision_reason=reason,
@@ -220,10 +230,14 @@ def phase10_guard_step(
     )
 
 
-def format_phase10_guard_log_line(sim_time_s: float, decision: Phase10StabilityGuardDecision) -> str:
-    """Structured telemetry for Phase 10 guard parse."""
+# Backward-compatibility alias
+phase10_guard_step = stability_guard_step
+
+
+def format_stability_guard_log_line(sim_time_s: float, decision: StabilityGuardDecision) -> str:
+    """Structured telemetry for guard log parse."""
     return (
-        f"[Phase10Guard] t={sim_time_s:.2f}s guard_active={1 if decision.guard_active else 0} "
+        f"[Guard] t={sim_time_s:.2f}s guard_active={1 if decision.guard_active else 0} "
         f"guard_reason={decision.guard_reason} steer_limited={1 if decision.steer_limited else 0} "
         f"brake_limited={1 if decision.brake_limited else 0} ttl_switch_blocked={1 if decision.ttl_switch_blocked else 0} "
         f"emergency_stable_mode={1 if decision.emergency_stable_mode else 0} "
@@ -232,3 +246,6 @@ def format_phase10_guard_log_line(sim_time_s: float, decision: Phase10StabilityG
         f"throttle={decision.throttle_cmd:.3f} brake={decision.brake_cmd:.3f}"
     )
 
+
+# Backward-compatibility alias
+format_phase10_guard_log_line = format_stability_guard_log_line

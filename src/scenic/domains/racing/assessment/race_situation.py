@@ -1,4 +1,4 @@
-"""Phase 8: tactical facts + speed-sensitive safe-gap assessment."""
+"""Tactical facts + speed-sensitive safe-gap assessment."""
 
 from __future__ import annotations
 
@@ -9,18 +9,24 @@ from typing import Optional, Tuple
 from scenic.domains.racing.situation_assessment import OpponentSituation
 
 # Large lateral: partial_overlap / side_by_side should not imply 0.9 emergency pressure.
-PHASE8_OVERLAP_LAT_RELIEF_M = 2.0
-# Below this speed, opponent is treated as a static obstacle for Phase-8 risk/closing.
-PHASE8_STATIONARY_OPP_SPEED_MPS = 1.5
+OVERLAP_LAT_RELIEF_M = 2.0
+# Below this speed, opponent is treated as a static obstacle for risk/closing.
+STATIONARY_OPP_SPEED_MPS = 1.5
 
 # Longitudinal vs lateral: fly-by geometry — damp rear-end style gap/TTC when lateral offset
 # exists and along-track slot is adequate (speed should not dominate that decision).
-PHASE8_FLYBY_LAT_MIN_M = 1.15
-PHASE8_FLYBY_MIN_LONG_SLOT_M = 7.5
+FLYBY_LAT_MIN_M = 1.15
+FLYBY_MIN_LONG_SLOT_M = 7.5
+
+# Backward-compatibility aliases (deprecated — use the non-prefixed names above)
+PHASE8_OVERLAP_LAT_RELIEF_M = OVERLAP_LAT_RELIEF_M
+PHASE8_STATIONARY_OPP_SPEED_MPS = STATIONARY_OPP_SPEED_MPS
+PHASE8_FLYBY_LAT_MIN_M = FLYBY_LAT_MIN_M
+PHASE8_FLYBY_MIN_LONG_SLOT_M = FLYBY_MIN_LONG_SLOT_M
 
 
 @dataclass(frozen=True)
-class Phase8Assessment:
+class RaceSituationAssessment:
     fellow_relation: str
     closing_flag: bool
     actual_gap_m: Optional[float]
@@ -35,12 +41,17 @@ class Phase8Assessment:
 
 
 @dataclass(frozen=True)
-class Phase8AssessmentState:
+class RaceSituationState:
     """Small state carrier to stabilize relation/risk labels across cycles."""
 
     previous_relation: str = "none"
     emergency_latch_steps: int = 0
     last_emergency_risk_01: float = 0.0
+
+
+# Backward-compatibility aliases
+Phase8Assessment = RaceSituationAssessment
+Phase8AssessmentState = RaceSituationState
 
 
 def _clamp01(x: float) -> float:
@@ -54,7 +65,7 @@ def compute_dynamic_safe_gap_m(
     base_gap_m: float = 6.0,
     max_gap_m: float = 70.0,
 ) -> float:
-    """Simple Phase 8 safe-gap baseline: base margin + speed*time-headway."""
+    """Simple safe-gap baseline: base margin + speed*time-headway."""
 
     v = max(0.0, float(ego_speed_mps))
     gap = float(base_gap_m) + v * float(time_headway_s)
@@ -106,7 +117,7 @@ def _compute_corridor_open_flags(
     pred_lat_m: float,
     overlap_flag: bool,
 ) -> Tuple[bool, bool, bool]:
-    """Phase 8 corridor occupancy semantics from projected relative pose."""
+    """Corridor occupancy semantics from projected relative pose."""
 
     optimal_open = True
     left_open = True
@@ -141,17 +152,17 @@ def _longitudinal_opening_dampen(
     should not inflate rear-end style fear the way it does when opponents are co-linear.
     """
     lat_abs = abs(float(pred_lat_m))
-    if lat_abs < float(PHASE8_FLYBY_LAT_MIN_M):
+    if lat_abs < float(FLYBY_LAT_MIN_M):
         return 1.0
     along = max(0.0, float(actual_gap_m))
     slot_req = max(
-        float(PHASE8_FLYBY_MIN_LONG_SLOT_M),
+        float(FLYBY_MIN_LONG_SLOT_M),
         0.55 * float(safe_gap_m),
         5.5 + 0.06 * max(0.0, float(ego_speed_mps)),
     )
     if along >= slot_req:
         return 0.32
-    if lat_abs >= float(PHASE8_OVERLAP_LAT_RELIEF_M):
+    if lat_abs >= float(OVERLAP_LAT_RELIEF_M):
         return 0.58
     if lat_abs >= 1.6:
         return 0.72
@@ -176,8 +187,8 @@ def _compute_emergency_risk(
     gap_pressure = 0.0
     ttc_pressure = 0.0
     lat_abs = abs(float(pred_lat_m))
-    lateral_clear = lat_abs >= float(PHASE8_OVERLAP_LAT_RELIEF_M)
-    stationary_opp = float(opponent_speed_mps) < float(PHASE8_STATIONARY_OPP_SPEED_MPS)
+    lateral_clear = lat_abs >= float(OVERLAP_LAT_RELIEF_M)
+    stationary_opp = float(opponent_speed_mps) < float(STATIONARY_OPP_SPEED_MPS)
     if relation == "ahead" and actual_gap_m is not None:
         gap_pressure = _clamp01((float(safe_gap_m) - float(actual_gap_m)) / max(1e-6, float(safe_gap_m)))
         if closing_flag and float(sit.closing_speed_mps) > 1e-6:
@@ -206,21 +217,21 @@ def _compute_emergency_risk(
     )
 
 
-def assess_phase8_situation_stateful(
+def assess_race_situation(
     *,
     sit: Optional[OpponentSituation],
     ego_speed_mps: float,
     ego_xy: Tuple[float, float],
     ego_heading_rad: float,
     predicted_opp_xy: Optional[Tuple[float, float]] = None,
-    state: Optional[Phase8AssessmentState] = None,
-) -> Tuple[Phase8Assessment, Phase8AssessmentState]:
-    """Stateful assessment for stable Phase-8 relation/corridor/risk semantics."""
+    state: Optional[RaceSituationState] = None,
+) -> Tuple[RaceSituationAssessment, RaceSituationState]:
+    """Stateful assessment for stable relation/corridor/risk semantics."""
 
-    st = state if state is not None else Phase8AssessmentState()
+    st = state if state is not None else RaceSituationState()
     safe_gap_m = compute_dynamic_safe_gap_m(float(ego_speed_mps))
     if sit is None:
-        a_none = Phase8Assessment(
+        a_none = RaceSituationAssessment(
             fellow_relation="none",
             closing_flag=False,
             actual_gap_m=None,
@@ -233,7 +244,7 @@ def assess_phase8_situation_stateful(
             emergency_risk_01=0.0,
             source="none",
         )
-        return a_none, Phase8AssessmentState(
+        return a_none, RaceSituationState(
             previous_relation="none",
             emergency_latch_steps=max(0, int(st.emergency_latch_steps) - 1),
             last_emergency_risk_01=0.0,
@@ -262,17 +273,16 @@ def assess_phase8_situation_stateful(
     closing_flag = bool(relation == "ahead" and float(sit.closing_speed_mps) > 0.30)
     if (
         relation == "ahead"
-        and float(getattr(sit, "opponent_speed_mps", 0.0)) < float(PHASE8_STATIONARY_OPP_SPEED_MPS)
-        and abs(float(pred_lat)) >= float(PHASE8_OVERLAP_LAT_RELIEF_M)
+        and float(getattr(sit, "opponent_speed_mps", 0.0)) < float(STATIONARY_OPP_SPEED_MPS)
+        and abs(float(pred_lat)) >= float(OVERLAP_LAT_RELIEF_M)
     ):
         closing_flag = False
         # Stationary and clearly off-axis: do not propagate overlap to guard/emergency logic.
         overlap_flag = False
     # Use current measured lateral (sit.lateral_m) for corridor side occupancy.
-    # The Phase-7 predicted position introduces heading-noise at low speed and
-    # oscillates around the 0.8 m threshold, causing left_open/right_open to
-    # flip every cycle. Current lateral is stable because it uses actual measured
-    # position; longitudinal (pred_long) still comes from prediction for gap calc.
+    # The predicted position introduces heading-noise at low speed and oscillates around the
+    # 0.8 m threshold, causing left_open/right_open to flip every cycle. Current lateral is
+    # stable; longitudinal (pred_long) still comes from prediction for gap calc.
     optimal_open, left_open, right_open = _compute_corridor_open_flags(
         relation=relation,
         pred_long_m=pred_long,
@@ -299,7 +309,7 @@ def assess_phase8_situation_stateful(
     risk_out = max(risk_now, float(st.last_emergency_risk_01) * 0.80) if latch_steps > 0 else risk_now
     risk_out = _clamp01(risk_out)
 
-    assessment = Phase8Assessment(
+    assessment = RaceSituationAssessment(
         fellow_relation=relation,
         closing_flag=closing_flag,
         actual_gap_m=actual_gap_m,
@@ -312,7 +322,7 @@ def assess_phase8_situation_stateful(
         emergency_risk_01=risk_out,
         source=source,
     )
-    next_state = Phase8AssessmentState(
+    next_state = RaceSituationState(
         previous_relation=relation,
         emergency_latch_steps=latch_steps,
         last_emergency_risk_01=risk_out,
@@ -320,10 +330,14 @@ def assess_phase8_situation_stateful(
     return assessment, next_state
 
 
-def format_phase8_assessment_log_line(sim_time_s: float, a: Phase8Assessment) -> str:
+# Backward-compatibility alias
+assess_phase8_situation_stateful = assess_race_situation
+
+
+def format_assessment_log_line(sim_time_s: float, a: RaceSituationAssessment) -> str:
     ag = f"{a.actual_gap_m:.3f}" if a.actual_gap_m is not None else "na"
     return (
-        f"[Phase8Assessment] t={sim_time_s:.2f}s fellow_relation={a.fellow_relation} "
+        f"[Assessment] t={sim_time_s:.2f}s fellow_relation={a.fellow_relation} "
         f"closing_flag={1 if a.closing_flag else 0} actual_gap={ag} safe_gap={a.safe_gap_m:.3f} "
         f"gap_ok={1 if a.gap_ok else 0} optimal_open={1 if a.optimal_open else 0} "
         f"left_open={1 if a.left_open else 0} right_open={1 if a.right_open else 0} "
@@ -331,3 +345,6 @@ def format_phase8_assessment_log_line(sim_time_s: float, a: Phase8Assessment) ->
         f"source={a.source}"
     )
 
+
+# Backward-compatibility alias
+format_phase8_assessment_log_line = format_assessment_log_line

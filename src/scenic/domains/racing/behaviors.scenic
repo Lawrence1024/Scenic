@@ -43,31 +43,11 @@ from scenic.domains.racing.tactical_planner import (
     apply_ttl_key_to_agent,
     tactical_planner_step,
     tactical_planner_step_v1,
-)
-from scenic.domains.racing.pass_commit_shield import (
     ABORT_PASS,
     COMMIT_PASS_LEFT,
     COMMIT_PASS_RIGHT,
-    EMERGENCY_AVOID,
-    PassShieldConfig,
-    PassShieldState,
-    pass_shield_step,
 )
-from scenic.domains.racing.phase5_segment_tactics import (
-    Phase5SegmentTacticsConfig,
-    Phase5SegmentTacticsState,
-    phase5_segment_tactics_step,
-)
-from scenic.domains.racing.phase6_runtime import (
-    build_phase6_state_snapshot,
-    format_phase6_executor_log_line,
-    format_phase6_guard_log_line,
-    format_phase6_planner_log_line,
-    format_phase6_state_log_line,
-    phase6_guard_step,
-    phase6_planner_step,
-)
-from scenic.domains.racing.prediction import FellowPredictor, format_phase7_prediction_log_line
+from scenic.domains.racing.prediction import FellowPredictor, format_prediction_log_line
 from scenic.domains.racing.assessment import (
     Phase8AssessmentState,
     assess_phase8_situation_stateful,
@@ -81,12 +61,6 @@ from scenic.domains.racing.safety import (
     phase10_handle_ttl_switch,
 )
 
-_PHASE4_SHIELD_MODES = (
-    COMMIT_PASS_LEFT,
-    COMMIT_PASS_RIGHT,
-    ABORT_PASS,
-    EMERGENCY_AVOID,
-)
 from scenic.simulators.dspace.ttl.loader import load_ttl_region
 from scenic.simulators.dspace.controldesk.readback import read_eval_gt_dist_object_1_m
 from scenic.domains.racing.eval_geometry import (
@@ -310,7 +284,7 @@ behavior FellowSwerveOutOfControlBehavior(
         self._fellow_plant_log_mode = mode
         wait
 
-behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False, pass_commit_shield_enabled=False, phase5_segment_tactics_enabled=False, phase6_orchestration_enabled=False, phase7_prediction_enabled=False, phase8_assessment_enabled=False, phase10_stability_guard_enabled=False, phase11_commit_abort_enabled=False, phase12_segment_aware_enabled=False):
+behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False, phase7_prediction_enabled=False, phase8_assessment_enabled=False, phase10_stability_guard_enabled=False, phase11_commit_abort_enabled=False, phase12_segment_aware_enabled=False):
     """Follow the car's TTL using MPC (Model Predictive Control) for lateral control.
     
     Primary Scenic behavior for line-following on the racing TTL. Lateral and longitudinal
@@ -328,20 +302,13 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         mpc_config_path: Path to MPC config YAML file (optional, uses default if None)
         tactical_planner_enabled: Phase 3 — conservative FOLLOW / SETUP_LEFT / SETUP_RIGHT using
             Phase 2 situation assessment (mutually exclusive with scripted ``planner_enabled`` schedule).
-        pass_commit_shield_enabled: Phase 4 — commit / abort / emergency shield layered on Phase 3
-            (requires ``tactical_planner_enabled=True``).
-        phase5_segment_tactics_enabled: Phase 5 — segment-aware shaping of tactical setup decisions
-            (requires ``tactical_planner_enabled=True``; runs before Phase 4 shield).
-        phase6_orchestration_enabled: Phase 6 — enable layered state/planner/guard shells
-            with per-cycle ``[Phase6State]`` / ``[Phase6Planner]`` / ``[Phase6Guard]`` /
-            ``[Phase6Executor]`` observability.
-        phase7_prediction_enabled: Phase 7 — log ``[Phase7Prediction]`` for the nearest fellow
+        phase7_prediction_enabled: Log ``[Prediction]`` for the nearest fellow
             (ego only; constant-velocity next-step estimate and error vs realized pose).
-        phase8_assessment_enabled: Phase 8 — log ``[Phase8Assessment]`` tactical facts
+        phase8_assessment_enabled: Log ``[Assessment]`` tactical facts
             (`fellow_relation`, `safe_gap`, `gap_ok`, corridor openness) from current/predicted fellow state.
-        phase10_stability_guard_enabled: Phase 10 — enforce stability guard constraints
+        phase10_stability_guard_enabled: Enforce stability guard constraints
             (steer slew, brake-steer coupling, emergency-stable containment, TTL switch rate-limiting).
-        phase11_commit_abort_enabled: Phase 11 — enable explicit pass lifecycle states
+        phase11_commit_abort_enabled: Enable explicit pass lifecycle states
             (`COMMIT_PASS_LEFT`, `COMMIT_PASS_RIGHT`, `ABORT_PASS`) in tactical planner output.
     """
     
@@ -392,64 +359,42 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         except Exception:
             _tactical_planner_enabled = False
     _tactical_config = TacticalPlannerConfig()
-    _phase5_config = Phase5SegmentTacticsConfig()
-    _pass_shield_config = PassShieldConfig()
-    _phase5_enabled = bool(phase5_segment_tactics_enabled)
-    _pass_shield_enabled = bool(pass_commit_shield_enabled)
-    _phase6_enabled = bool(phase6_orchestration_enabled)
     _phase7_requested = bool(phase7_prediction_enabled)
-    _phase8_requested = bool(phase8_assessment_enabled)
-    _phase10_guard_enabled = bool(phase10_stability_guard_enabled)
-    _phase11_enabled = bool(phase11_commit_abort_enabled)
-    if not _phase8_requested:
+    _assessment_enabled = bool(phase8_assessment_enabled)
+    _stability_guard_enabled = bool(phase10_stability_guard_enabled)
+    _commit_enabled = bool(phase11_commit_abort_enabled)
+    if not _assessment_enabled:
         try:
-            _phase8_requested = bool((getattr(simulation().scene, 'params', None) or {}).get("phase8_assessment_enabled", False))
+            _p = (getattr(simulation().scene, 'params', None) or {})
+            _assessment_enabled = bool(_p.get("assessment_enabled") or _p.get("phase8_assessment_enabled", False))
         except Exception:
-            _phase8_requested = False
-    if not _phase10_guard_enabled:
+            _assessment_enabled = False
+    if not _stability_guard_enabled:
         try:
-            _phase10_guard_enabled = bool((getattr(simulation().scene, 'params', None) or {}).get("phase10_stability_guard_enabled", False))
+            _p = (getattr(simulation().scene, 'params', None) or {})
+            _stability_guard_enabled = bool(_p.get("stability_guard_enabled") or _p.get("phase10_stability_guard_enabled", False))
         except Exception:
-            _phase10_guard_enabled = False
-    if not _phase11_enabled:
+            _stability_guard_enabled = False
+    if not _commit_enabled:
         try:
-            _phase11_enabled = bool((getattr(simulation().scene, 'params', None) or {}).get("phase11_commit_abort_enabled", False))
+            _p = (getattr(simulation().scene, 'params', None) or {})
+            _commit_enabled = bool(_p.get("commit_abort_enabled") or _p.get("phase11_commit_abort_enabled", False))
         except Exception:
-            _phase11_enabled = False
-    _tactical_config.phase11_commit_abort_enabled = bool(_phase11_enabled)
-    _phase12_seg_aware_enabled = bool(phase12_segment_aware_enabled)
-    if not _phase12_seg_aware_enabled:
+            _commit_enabled = False
+    _tactical_config.commit_abort_enabled = bool(_commit_enabled)
+    _segment_aware_enabled = bool(phase12_segment_aware_enabled)
+    if not _segment_aware_enabled:
         try:
-            _phase12_seg_aware_enabled = bool((getattr(simulation().scene, 'params', None) or {}).get("phase12_segment_aware_enabled", False))
+            _p = (getattr(simulation().scene, 'params', None) or {})
+            _segment_aware_enabled = bool(_p.get("segment_aware_enabled") or _p.get("phase12_segment_aware_enabled", False))
         except Exception:
-            _phase12_seg_aware_enabled = False
-    _tactical_config.phase12_segment_aware_enabled = bool(_phase12_seg_aware_enabled)
-    if _phase12_seg_aware_enabled:
+            _segment_aware_enabled = False
+    _tactical_config.segment_aware_enabled = bool(_segment_aware_enabled)
+    if _segment_aware_enabled:
         # Phase 12 owns segment gating via fine-grained modifiers;
         # disable the legacy straight-only blanket gate so corner passes are possible.
         _tactical_config.pass_requires_straight = False
     _phase10_guard_config = Phase10StabilityGuardConfig()
-    if _phase5_enabled and not _tactical_planner_enabled:
-        print(f"{_fbhv} phase5_segment_tactics_enabled=True requires tactical_planner_enabled=True; Phase 5 segment tactics disabled.")
-        _phase5_enabled = False
-    if _phase5_enabled:
-        # Let Phase 5 own segment gating: allow setup candidates outside straights,
-        # then explicitly override in corner_entry/corner_body via Phase5 layer.
-        _tactical_config.pass_requires_straight = False
-    if _pass_shield_enabled and not _tactical_planner_enabled:
-        print(f"{_fbhv} pass_commit_shield_enabled=True requires tactical_planner_enabled=True; Phase 4 shield disabled.")
-        _pass_shield_enabled = False
-    # Phase 9 authority cutover:
-    # when Phase 8 assessment + tactical planner are active, retire legacy Phase 4/5
-    # tactical overlays so they cannot silently override Phase 9 decisions.
-    if _tactical_planner_enabled and _phase8_requested:
-        if _phase5_enabled or _pass_shield_enabled:
-            print(
-                f"{_fbhv} Phase9 authority mode: disabling legacy Phase4/5 tactical overlays "
-                f"(pass_commit_shield_enabled={int(_pass_shield_enabled)}, phase5_segment_tactics_enabled={int(_phase5_enabled)})."
-            )
-        _phase5_enabled = False
-        _pass_shield_enabled = False
     if _phase1_schedule_enabled or _tactical_planner_enabled:
         try:
             _params = getattr(simulation().scene, 'params', None) or {}
@@ -472,23 +417,14 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 print(f"{_fbhv} Phase1 planner enabled: schedule={_phase1_schedule if _phase1_schedule else '[]'} speed_cap={_phase1_speed_cap}")
             if _tactical_planner_enabled:
                 print(f"{_fbhv} Phase3 tactical planner enabled (FREE_RUN / FOLLOW / SETUP_*) speed_cap={_phase1_speed_cap}")
-            if _phase5_enabled:
-                print(f"{_fbhv} Phase5 segment-aware tactics enabled (entry/body setup shaping)")
-            if _pass_shield_enabled:
-                print(f"{_fbhv} Phase4 pass/commit/shield enabled (COMMIT_PASS_* / ABORT_PASS / EMERGENCY_AVOID)")
-            if _phase6_enabled:
-                print(f"{_fbhv} Phase6 orchestration enabled (state/planner/guard/executor logs)")
             if _phase7_requested:
-                print(f"{_fbhv} Phase7 fellow prediction enabled ([Phase7Prediction] on full-control steps)")
-            if _phase10_guard_enabled:
-                print(f"{_fbhv} Phase10 stability guard enabled ([Phase10Guard] command safety telemetry)")
+                print(f"{_fbhv} Fellow prediction enabled ([Prediction] on full-control steps)")
+            if _stability_guard_enabled:
+                print(f"{_fbhv} Stability guard enabled ([Guard] command safety telemetry)")
         except Exception:
             _phase1_schedule_enabled = False
             _tactical_planner_enabled = False
-            _phase5_enabled = False
-            _pass_shield_enabled = False
-            _phase6_enabled = False
-            _phase10_guard_enabled = False
+            _stability_guard_enabled = False
             print(f"{_fbhv} Phase1/Phase3 TTL dynamic mode disabled due to setup error.")
 
     # Gear thresholds (m/s)
@@ -651,42 +587,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             if _hz_floor_fast > 0.0:
                 final_throttle = 0.0
                 final_brake = max(float(final_brake), _hz_floor_fast)
-            if _phase6_enabled and self is getattr(simulation().scene, 'egoObject', None):
-                _p6_state = str(
-                    getattr(
-                        self,
-                        "_phase_effective_planner_state",
-                        getattr(self, "_phase6_planner_state", "FREE_RUN"),
-                    )
-                    or "FREE_RUN"
-                )
-                _p6_ttl = str(
-                    getattr(
-                        self,
-                        "_phase_effective_ttl",
-                        getattr(self, "_phase6_active_ttl", _phase1_active_ttl),
-                    )
-                    or _phase1_active_ttl
-                )
-                _p6_reason = str(
-                    getattr(
-                        self,
-                        "_phase_effective_reason",
-                        getattr(self, "_phase6_decision_reason", "fastpath_reuse"),
-                    )
-                    or "fastpath_reuse"
-                )
-                print(
-                    format_phase6_executor_log_line(
-                        _sim_time_s,
-                        active_ttl=_p6_ttl,
-                        planner_state=_p6_state,
-                        decision_reason=_p6_reason,
-                        final_steer=float(final_steer),
-                        final_throttle=float(final_throttle),
-                        final_brake=float(final_brake),
-                    )
-                )
             _fast_actions = [SetSteerAction(final_steer), SetThrottleAction(final_throttle), SetBrakeAction(final_brake)]
             take _fast_actions
             wait
@@ -999,9 +899,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             # --- Phase 7 fellow next-step prediction (ego + nearest fellow) ---
             # --- Phase 8 assessment + dynamic gap (current/predicted fellow state) ---
             self._phase3_speed_cap = None
-            _p6_guard = None
             _ego_scene = getattr(simulation().scene, 'egoObject', None)
-            if (self is _ego_scene) and (_phase6_enabled or _phase7_requested or _phase8_requested):
+            if (self is _ego_scene) and (_phase7_requested or _assessment_enabled):
                 _nearest_o6 = None
                 _nearest_d6 = None
                 _nearest_vs6 = 0.0
@@ -1060,36 +959,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     )
                     self._phase2_overlap_state = _new_ov6
 
-                if _phase6_enabled:
-                    _state6 = build_phase6_state_snapshot(
-                        has_opponent=(_nearest_o6 is not None),
-                        pit_mode=bool(pit_mode),
-                        current_ttl=_phase1_active_ttl,
-                        ego_speed_mps=float(current_speed),
-                        opponent_speed_mps=float(_nearest_vs6) if _nearest_o6 is not None else None,
-                        opponent_distance_m=float(_nearest_d6) if _nearest_d6 is not None else None,
-                        overlap_state=getattr(_sit6, "overlap_state", "none") if _sit6 is not None else "none",
-                        segment_context=getattr(_sit6, "segment_context", "none") if _sit6 is not None else "none",
-                        ahead_flag=getattr(_sit6, "ahead", False) if _sit6 is not None else False,
-                    )
-                    _decision6 = phase6_planner_step(
-                        _state6,
-                        target_speed_mps=float(target_speed),
-                        speed_cap_mps=_phase1_speed_cap,
-                    )
-                    _p6_guard = phase6_guard_step(_decision6)
-                    self._phase6_planner_state = _p6_guard.planner_state
-                    self._phase6_active_ttl = _p6_guard.active_ttl
-                    self._phase6_decision_reason = _p6_guard.decision_reason
-                    # In pure Phase 6 mode, Phase 6 may set speed cap.
-                    # In Phase 9 authority mode, tactical/assessment path owns cap.
-                    if (not _tactical_planner_enabled) and _p6_guard.target_speed_cap_mps is not None:
-                        self._phase3_speed_cap = float(_p6_guard.target_speed_cap_mps)
-                    self._phase_effective_planner_state = str(_p6_guard.planner_state or "FREE_RUN")
-                    self._phase_effective_ttl = str(_p6_guard.active_ttl or _phase1_active_ttl)
-                    self._phase_effective_reason = str(_p6_guard.decision_reason or "none")
-                    print(format_phase6_state_log_line(_sim_time_s, _state6))
-
                 if _phase7_requested:
                     if _nearest_o6 is None:
                         if hasattr(self, '_phase7_fellow_predictor'):
@@ -1108,12 +977,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                                 fellow_progress_s_m=_fprog7,
                                 dt_pred_s=float(_ctrl_dt),
                             )
-                            print(format_phase7_prediction_log_line(_sim_time_s, _p7r))
+                            print(format_prediction_log_line(_sim_time_s, _p7r))
                         except Exception as _e_p7:
-                            print(f"{_fbhv} Phase7 prediction step failed: {_e_p7}")
+                            print(f"{_fbhv} Prediction step failed: {_e_p7}")
                             _p7r = None
 
-                if _phase8_requested and car_heading is not None:
+                if _assessment_enabled and car_heading is not None:
                     if not hasattr(self, '_phase8_assessment_state'):
                         self._phase8_assessment_state = Phase8AssessmentState()
                     _pred_xy8 = None
@@ -1142,7 +1011,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             if _tactical_planner_enabled and self is getattr(simulation().scene, 'egoObject', None):
                 if not hasattr(self, '_phase3_tp_state'):
                     self._phase3_tp_state = TacticalPlannerState()
-                if _phase10_guard_enabled and not hasattr(self, '_phase10_guard_state'):
+                if _stability_guard_enabled and not hasattr(self, '_phase10_guard_state'):
                     self._phase10_guard_state = Phase10StabilityGuardState(
                         last_ttl=str(_phase1_active_ttl or "optimal")
                     )
@@ -1229,62 +1098,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 _mode_tac = _mode3
                 _ttl_tac = _ttl3
                 _cap_tac = _cap3
-                _mode5 = _mode3
-                _ttl5 = _ttl3
-                _cap5 = _cap3
-                _p5_reason = None
-                if _phase5_enabled:
-                    if not hasattr(self, '_phase5_tactics_state'):
-                        self._phase5_tactics_state = Phase5SegmentTacticsState()
-                    _mode5, _ttl5, _cap5, _p5_reason = phase5_segment_tactics_step(
-                        self._phase5_tactics_state,
-                        _sit3,
-                        _mode3,
-                        _ttl3,
-                        _cap3,
-                        has_opponent=_nearest_o3 is not None,
-                        pit_mode=bool(pit_mode),
-                        opponent_speed_mps=float(_nearest_vs3 or 0.0),
-                        tactical_config=_tactical_config,
-                        phase5_config=_phase5_config,
-                    )
-                    if (_mode5 != _mode3) or (_ttl5 != _ttl3):
-                        _seg5 = str(getattr(_sit3, "segment_context", "none") or "none") if _sit3 is not None else "none"
-                        _ov5 = str(getattr(_sit3, "overlap_state", "none") or "none") if _sit3 is not None else "none"
-                        print(
-                            f"{_fl_mpc} [Phase5Event] t={_sim_time_s:.2f}s event=segment_override from={_mode3}:{_ttl3} to={_mode5}:{_ttl5} seg={_seg5} overlap={_ov5} reason={_p5_reason or 'none'}"
-                        )
-                    _p5_prev_override = bool(getattr(self, "_phase5_prev_override_active", False))
-                    _p5_override_now = bool((_mode5 != _mode3) or (_ttl5 != _ttl3))
-                    if _p5_prev_override and (not _p5_override_now):
-                        _seg5 = str(getattr(_sit3, "segment_context", "none") or "none") if _sit3 is not None else "none"
-                        _ov5 = str(getattr(_sit3, "overlap_state", "none") or "none") if _sit3 is not None else "none"
-                        print(
-                            f"{_fl_mpc} [Phase5Event] t={_sim_time_s:.2f}s event=segment_release from={_mode3}:{_ttl3} to={_mode5}:{_ttl5} seg={_seg5} overlap={_ov5}"
-                        )
-                    self._phase5_prev_override_active = _p5_override_now
-                    _mode_tac = _mode5
-                    _ttl_tac = _ttl5
-                    _cap_tac = _cap5
-                _p4_reason = None
-                if _pass_shield_enabled:
-                    if not hasattr(self, '_phase4_shield_state'):
-                        self._phase4_shield_state = PassShieldState()
-                    _mode_tac, _ttl_tac, _cap_tac, _p4_reason = pass_shield_step(
-                        self._phase4_shield_state,
-                        _sit3,
-                        _mode3,
-                        _ttl3,
-                        _cap3,
-                        has_opponent=_nearest_o3 is not None,
-                        ego_speed_mps=float(current_speed),
-                        opponent_speed_mps=float(_nearest_vs3 or 0.0),
-                        sim_time_s=float(_sim_time_s),
-                        pit_mode=bool(pit_mode),
-                        tactical_config=_tactical_config,
-                        shield_config=_pass_shield_config,
-                    )
-                if _phase10_guard_enabled and _ttl_tac in _phase1_ttl_cache:
+                if _stability_guard_enabled and _ttl_tac in _phase1_ttl_cache:
                     _ttl_guard_state = getattr(self, "_phase10_guard_state", None)
                     if _ttl_guard_state is None:
                         _ttl_guard_state = Phase10StabilityGuardState(last_ttl=str(_phase1_active_ttl or "optimal"))
@@ -1306,54 +1120,11 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         wp_last_idx = 0
                         wp_list = list(self.waypoints)
                         print(f"{_fl_mpc} [Phase3Tactical] t={_sim_time_s:.2f}s ttl_switch {_p3}->{_phase1_active_ttl} mode={_mode3}")
-                        if _phase5_enabled:
-                            _seg5 = str(getattr(_sit3, "segment_context", "none") or "none") if _sit3 is not None else "none"
-                            _ov5 = str(getattr(_sit3, "overlap_state", "none") or "none") if _sit3 is not None else "none"
-                            print(f"{_fl_mpc} [Phase5Tactical] t={_sim_time_s:.2f}s ttl_switch {_p3}->{_phase1_active_ttl} mode_in={_mode3} mode_out={_mode5} seg={_seg5} overlap={_ov5} reason={_p5_reason or 'none'}")
                 self.active_ttl = _phase1_active_ttl
                 # Phase 9 authority path owns speed cap end-to-end.
                 self._phase3_speed_cap = float(_cap_tac) if _cap_tac is not None else None
-                if _pass_shield_enabled:
-                    _p4_prev_eff = getattr(self, '_phase4_prev_eff_mode', None)
-                    _rk4 = 0.0
-                    _seg4 = "none"
-                    _ov4 = "none"
-                    if _sit3 is not None:
-                        try:
-                            _rk4 = float(getattr(_sit3, "collision_risk_01", 0.0) or 0.0)
-                        except Exception:
-                            _rk4 = 0.0
-                        _seg4 = str(getattr(_sit3, "segment_context", "none") or "none")
-                        _ov4 = str(getattr(_sit3, "overlap_state", "none") or "none")
-                    if _mode_tac in _PHASE4_SHIELD_MODES and _p4_prev_eff != _mode_tac:
-                        _ev4 = None
-                        if _mode_tac == COMMIT_PASS_LEFT:
-                            _ev4 = "commit_pass_left"
-                        elif _mode_tac == COMMIT_PASS_RIGHT:
-                            _ev4 = "commit_pass_right"
-                        elif _mode_tac == ABORT_PASS:
-                            _ev4 = "abort_pass"
-                        elif _mode_tac == EMERGENCY_AVOID:
-                            _ev4 = "emergency_avoid"
-                        if _ev4 is not None:
-                            print(
-                                f"{_fl_mpc} [Phase4Event] t={_sim_time_s:.2f}s event={_ev4} mode3={_mode3} eff={_mode_tac} reason={_p4_reason or 'none'} risk_01={_rk4:.2f} seg={_seg4} overlap={_ov4}"
-                            )
-                    if (
-                        _p4_prev_eff is not None
-                        and _p4_prev_eff in _PHASE4_SHIELD_MODES
-                        and _mode_tac not in _PHASE4_SHIELD_MODES
-                    ):
-                        print(
-                            f"{_fl_mpc} [Phase4Event] t={_sim_time_s:.2f}s event=shield_release from={_p4_prev_eff} to={_mode_tac} mode3={_mode3} risk_01={_rk4:.2f} seg={_seg4} overlap={_ov4}"
-                        )
-                    self._phase4_prev_eff_mode = _mode_tac
                 self._phase3_last_mode = _mode_tac
                 _eff_reason = _reason3
-                if _p5_reason:
-                    _eff_reason = _p5_reason
-                if _p4_reason:
-                    _eff_reason = _p4_reason
                 if _p10_ttl_switch_blocked:
                     _eff_reason = "phase10_ttl_switch_blocked"
                 self._phase_effective_planner_state = str(_canonical_mode(_mode_tac) or "FREE_RUN")
@@ -1383,36 +1154,33 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 )
                 _mode9 = _canonical_mode(_mode3)
                 print(
-                    f"{_fl_mpc} [Phase9Planner] t={_sim_time_s:.2f}s planner_state={_mode9} "
+                    f"{_fl_mpc} [Planner] t={_sim_time_s:.2f}s planner_state={_mode9} "
                     f"chosen_ttl={_phase1_active_ttl} target_speed_cap={_cap9} decision_reason={_reason3} "
                     f"assessment_relation={_arel9} assessment_gap_ok={_agap9} "
                     f"assessment_optimal_open={_aopt9} assessment_left_open={_alft9} assessment_right_open={_argt9}"
                 )
-                if _phase11_enabled:
-                    _p11_commit_trigger = str(getattr(self._phase3_tp_state, "phase11_commit_trigger", "none") or "none")
-                    _p11_abort_trigger = str(getattr(self._phase3_tp_state, "phase11_abort_trigger", "none") or "none")
-                    _p11_pass_success = bool(getattr(self._phase3_tp_state, "phase11_pass_success", False))
-                    _p11_abort_success = bool(getattr(self._phase3_tp_state, "phase11_abort_success", False))
-                    _p11_post_state = str(getattr(self._phase3_tp_state, "phase11_post_event_state", "none") or "none")
-                    _p11_commit_cand = int(getattr(self._phase3_tp_state, "phase11_commit_candidate_count", 0))
+                if _commit_enabled:
+                    _commit_st = getattr(self._phase3_tp_state, "commit", None)
+                    _p11_commit_trigger = str(getattr(_commit_st, "trigger", "none") or "none") if _commit_st is not None else "none"
+                    _p11_abort_trigger = str(getattr(_commit_st, "abort_trigger", "none") or "none") if _commit_st is not None else "none"
+                    _p11_pass_success = bool(getattr(_commit_st, "pass_success", False)) if _commit_st is not None else False
+                    _p11_abort_success = bool(getattr(_commit_st, "abort_success", False)) if _commit_st is not None else False
+                    _p11_post_state = str(getattr(_commit_st, "post_event_state", "none") or "none") if _commit_st is not None else "none"
+                    _p11_commit_cand = int(getattr(_commit_st, "candidate_count", 0)) if _commit_st is not None else 0
                     _p11_protected_follow = bool(getattr(self._phase3_tp_state, "protected_follow_active", False))
-                    _p12_seg_ctx = str(getattr(_sit3, "segment_context", "none") or "none") if _sit3 is not None else "none"
-                    _p12_seg_modifier = str(getattr(self._phase3_tp_state, "phase12_segment_modifier", "normal") or "normal")
+                    _seg_ctx = str(getattr(_sit3, "segment_context", "none") or "none") if _sit3 is not None else "none"
+                    _seg_modifier = str(getattr(self._phase3_tp_state, "segment_modifier", "normal") or "normal")
                     print(
-                        f"{_fl_mpc} [Phase11Planner] t={_sim_time_s:.2f}s planner_state={_canonical_mode(_mode3)} "
+                        f"{_fl_mpc} [Commit] t={_sim_time_s:.2f}s planner_state={_canonical_mode(_mode3)} "
                         f"chosen_ttl={_phase1_active_ttl} decision_reason={_reason3} "
                         f"commit_trigger={_p11_commit_trigger} abort_trigger={_p11_abort_trigger} "
                         f"pass_success={1 if _p11_pass_success else 0} abort_success={1 if _p11_abort_success else 0} "
                         f"post_event_state={_p11_post_state} "
                         f"commit_cand_count={_p11_commit_cand} protected_follow={1 if _p11_protected_follow else 0} "
-                        f"seg_ctx={_p12_seg_ctx} seg_modifier={_p12_seg_modifier}"
+                        f"seg_ctx={_seg_ctx} seg_modifier={_seg_modifier}"
                     )
                 if getattr(self, '_full_control_ticks', 0) % 50 == 0:
                     print(f"{_fl_mpc} [Phase3Tactical] t={_sim_time_s:.2f}s mode={_mode3} ttl={_phase1_active_ttl} cap={self._phase3_speed_cap}")
-                    if _phase5_enabled:
-                        _seg5 = str(getattr(_sit3, "segment_context", "none") or "none") if _sit3 is not None else "none"
-                        _ov5 = str(getattr(_sit3, "overlap_state", "none") or "none") if _sit3 is not None else "none"
-                        print(f"{_fl_mpc} [Phase5Tactical] t={_sim_time_s:.2f}s mode_in={_mode3} mode_out={_mode5} ttl={_phase1_active_ttl} cap={self._phase3_speed_cap} seg={_seg5} overlap={_ov5} reason={_p5_reason or 'none'}")
             
             # --- Curvature-based speed gate (from suggestion.md) ---
             # Formula: v_max(s) = sqrt(a_y_max / (|κ(s)| + ε))
@@ -2218,7 +1986,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _hazard_active = (
                 (not pit_mode)
                 and _tactical_planner_enabled
-                and _phase8_requested
+                and _assessment_enabled
                 and (_eff_state_now == "FOLLOW")
                 and _hz_reason_gate
                 and (_hz_overlap or (_hz_gap_bad and (_hz_closing or _hz_risk >= 0.70)))
@@ -2234,7 +2002,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 final_throttle = 0.0
                 final_brake = max(float(final_brake), float(_hazard_brake_floor))
                 print(
-                    f"{_fl_mpc} [Phase9Hazard] t={_sim_time_s:.2f}s active=1 reason={_eff_reason_now} "
+                    f"{_fl_mpc} [Hazard] t={_sim_time_s:.2f}s active=1 reason={_eff_reason_now} "
                     f"overlap={1 if _hz_overlap else 0} closing={1 if _hz_closing else 0} "
                     f"gap_ok={1 if (not _hz_gap_bad) else 0} risk_01={_hz_risk:.3f} "
                     f"brake_floor={_hazard_brake_floor:.2f}"
@@ -2278,7 +2046,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     _t_log = _step_num * (getattr(simulation(), 'control_dt', None) or getattr(simulation(), 'timestep', 0.05))
                     _reason = "coast (speed>=35mph)" if current_speed >= PIT_COAST_MIN_TARGET_MS else f"cap {PIT_MAX_THROTTLE}"
                     print(f"[Pit] step={_step_num} t={_t_log:.2f}s pit_mode=True speed={current_speed:.2f}m/s target=35mph throttle={final_throttle:.2f} ({_reason})")
-            if _phase10_guard_enabled and self is getattr(simulation().scene, 'egoObject', None):
+            if _stability_guard_enabled and self is getattr(simulation().scene, 'egoObject', None):
                 _p10_state = getattr(self, "_phase10_guard_state", None)
                 if _p10_state is None:
                     _p10_state = Phase10StabilityGuardState(
@@ -2297,10 +2065,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     throttle_cmd=float(final_throttle),
                     brake_cmd=float(final_brake),
                     pit_mode=bool(pit_mode),
-                    phase8_gap_ok=bool(getattr(self, "_phase8_gap_ok", True)),
-                    phase8_overlap_flag=bool(getattr(self, "_phase8_overlap_flag", False)),
-                    phase8_closing_flag=bool(getattr(self, "_phase8_closing_flag", False)),
-                    phase8_emergency_risk_01=float(getattr(self, "_phase8_emergency_risk_01", 0.0) or 0.0),
+                    gap_ok=bool(getattr(self, "_phase8_gap_ok", True)),
+                    overlap_flag=bool(getattr(self, "_phase8_overlap_flag", False)),
+                    closing_flag=bool(getattr(self, "_phase8_closing_flag", False)),
+                    emergency_risk_01=float(getattr(self, "_phase8_emergency_risk_01", 0.0) or 0.0),
                     ttl_switch_blocked=bool(_p10_ttl_switch_blocked),
                 )
                 final_steer = float(_p10_guard.steer_cmd_rad)
@@ -2345,48 +2113,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             print(f"[Drive] t={t_log:.2f}s step={step_for_log} Speed drop: from {_last_speed:.2f} to {current_speed:.2f} m/s (delta={current_speed - _last_speed:.2f})")
         self._last_speed = float(current_speed) if current_speed is not None else 0.0
         
-        # Build Action List 
+        # Build Action List
         actions_to_take = [
-            SetSteerAction(final_steer), 
-            SetThrottleAction(final_throttle), 
+            SetSteerAction(final_steer),
+            SetThrottleAction(final_throttle),
             SetBrakeAction(final_brake)
         ]
-        if _phase6_enabled and self is getattr(simulation().scene, 'egoObject', None):
-            _p6_state = str(
-                getattr(
-                    self,
-                    "_phase_effective_planner_state",
-                    getattr(self, "_phase6_planner_state", "FREE_RUN"),
-                )
-                or "FREE_RUN"
-            )
-            _p6_ttl = str(
-                getattr(
-                    self,
-                    "_phase_effective_ttl",
-                    getattr(self, "_phase6_active_ttl", _phase1_active_ttl),
-                )
-                or _phase1_active_ttl
-            )
-            _p6_reason = str(
-                getattr(
-                    self,
-                    "_phase_effective_reason",
-                    getattr(self, "_phase6_decision_reason", "none"),
-                )
-                or "none"
-            )
-            print(
-                format_phase6_executor_log_line(
-                    _sim_time_s,
-                    active_ttl=_p6_ttl,
-                    planner_state=_p6_state,
-                    decision_reason=_p6_reason,
-                    final_steer=float(final_steer),
-                    final_throttle=float(final_throttle),
-                    final_brake=float(final_brake),
-                )
-            )
 
         # Gear Logic: proactive downshift before turns + speed-based shifts
         gear_changed = False

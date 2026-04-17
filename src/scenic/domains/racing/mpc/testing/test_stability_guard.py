@@ -1,4 +1,4 @@
-"""Unit tests for Phase 10 stability guard."""
+"""Unit tests for stability guard."""
 
 from scenic.domains.racing.safety.stability_guard import (
     Phase10StabilityGuardConfig,
@@ -46,10 +46,10 @@ def test_phase10_guard_limits_steer_slew():
         throttle_cmd=0.8,
         brake_cmd=0.0,
         pit_mode=False,
-        phase8_gap_ok=True,
-        phase8_overlap_flag=False,
-        phase8_closing_flag=False,
-        phase8_emergency_risk_01=0.1,
+        gap_ok=True,
+        overlap_flag=False,
+        closing_flag=False,
+        emergency_risk_01=0.1,
         ttl_switch_blocked=False,
     )
     assert abs(d.steer_cmd_rad) <= 0.1001
@@ -76,10 +76,10 @@ def test_phase10_guard_enters_emergency_stable():
         throttle_cmd=0.9,
         brake_cmd=0.0,
         pit_mode=False,
-        phase8_gap_ok=False,
-        phase8_overlap_flag=True,
-        phase8_closing_flag=True,
-        phase8_emergency_risk_01=0.95,
+        gap_ok=False,
+        overlap_flag=True,
+        closing_flag=True,
+        emergency_risk_01=0.95,
         ttl_switch_blocked=False,
     )
     assert d.emergency_stable_mode is True
@@ -110,10 +110,10 @@ def test_phase10_guard_reapproach_hold_suppresses_throttle_after_emergency():
         throttle_cmd=0.9,
         brake_cmd=0.0,
         pit_mode=False,
-        phase8_gap_ok=False,
-        phase8_overlap_flag=True,
-        phase8_closing_flag=True,
-        phase8_emergency_risk_01=0.95,
+        gap_ok=False,
+        overlap_flag=True,
+        closing_flag=True,
+        emergency_risk_01=0.95,
         ttl_switch_blocked=False,
     )
     # After emergency latch window, recovery hold should still cap throttle.
@@ -129,10 +129,10 @@ def test_phase10_guard_reapproach_hold_suppresses_throttle_after_emergency():
         throttle_cmd=0.9,
         brake_cmd=0.0,
         pit_mode=False,
-        phase8_gap_ok=False,
-        phase8_overlap_flag=False,
-        phase8_closing_flag=True,
-        phase8_emergency_risk_01=0.40,
+        gap_ok=False,
+        overlap_flag=False,
+        closing_flag=True,
+        emergency_risk_01=0.40,
         ttl_switch_blocked=False,
     )
     assert d.emergency_stable_mode is False

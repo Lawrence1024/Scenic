@@ -223,11 +223,30 @@ The following actions are referenced in behaviors but are **not** implemented in
 
 ### `FollowRacingLineMPCBehavior`
 
-**Purpose**: Primary racing-line behavior: follow the car's TTL using **MPC** for lateral control (MPCC) and longitudinal control, with waypoint-based reference and curvature/CTE speed profile. The legacy PID-only line-follow behavior was removed; use this behavior (or ``ARTStackControlBehavior`` when an external stack drives the vehicle).
+**Purpose**: Primary racing-line behavior: follow the car's TTL using **MPC** for lateral control (MPCC) and longitudinal control, with an opponent-aware tactical intelligence pipeline that chooses among `optimal`, `left`, and `right` TTLs.
 
 **Implementation**: Uses `getRacingControllers(self, use_mpc=True, mpc_config_path=...)` to obtain `MPCLateralController` and `MPCLongitudinalController`. CTE and reference are computed from waypoints. Supports gear management and optional custom MPC config path.
 
-**Usage**: `do FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None)`
+**Signature**:
+```scenic
+FollowRacingLineMPCBehavior(
+    target_speed=30,
+    manage_gears=True,
+    use_waypoints=True,
+    mpc_config_path=None,
+    planner_enabled=False,          # Phase 1: scripted TTL schedule
+    ttl_schedule=None,
+    target_speed_cap=None,
+    tactical_planner_enabled=False, # enables 4-layer intelligence pipeline
+    phase7_prediction_enabled=False,    # log [Prediction] per cycle
+    phase8_assessment_enabled=False,    # log [Assessment] per cycle
+    phase10_stability_guard_enabled=False, # stability guard + [Guard] telemetry
+    phase11_commit_abort_enabled=False,    # COMMIT_PASS / ABORT_PASS states
+    phase12_segment_aware_enabled=False,   # segment-conditioned commit gating
+)
+```
+
+**Behavior parameters can also be set via `simulation().scene.params`** using the semantic keys `assessment_enabled`, `stability_guard_enabled`, `commit_abort_enabled`, `segment_aware_enabled`.
 
 **Details**: See `mpc/README.md` for formulation, configuration, and integration.
 
@@ -436,6 +455,32 @@ RacingCar (racing)
     └── Simulator-specific extensions (e.g., DSPACERacingCar)
 ```
 
+### Intelligence Pipeline (4 Layers)
+
+When `tactical_planner_enabled=True`, `FollowRacingLineMPCBehavior` runs a 4-layer opponent-aware planning stack each control cycle:
+
+```
+Layer 1 — Perception   : situation_assessment.py
+                          assess_nearest_opponent() → OpponentSituation
+                          Log tag: [Phase2]
+
+Layer 2 — Assessment   : assessment/race_situation.py
+                          assess_race_situation()   → RaceSituationAssessment
+                          Log tag: [Assessment]
+
+Layer 3 — Planning     : tactical_planner.py
+                          tactical_planner_step_v1() → (mode, ttl_key, speed_cap, reason)
+                          Modes: FREE_RUN / FOLLOW / SETUP_LEFT / SETUP_RIGHT /
+                                 COMMIT_PASS_LEFT / COMMIT_PASS_RIGHT / ABORT_PASS
+                          Log tags: [Planner], [Commit], [Hazard]
+
+Layer 4 — Safety       : safety/stability_guard.py
+                          stability_guard_step()    → StabilityGuardDecision
+                          Log tag: [Guard]
+```
+
+Prediction (Layer 0.5): `prediction/fellow_predictor.py` feeds `FellowPredictor` step results into the assessment layer. Log tag: `[Prediction]`.
+
 ### Design Principles
 
 1. **Simulator Independence**: Abstract protocols that simulators implement
@@ -533,7 +578,7 @@ chaser.behavior = OvertakingBehavior(leader, aggressive=True)
 - Manual transmission protocol (`HasManualTransmission`)
 - Racing controllers: **MPC** (lateral MPCC + longitudinal) when `getRacingControllers(agent, use_mpc=True)`; otherwise optimized PID from driving domain
 - MPC module: MPCC lateral controller, longitudinal MPC, reference builder, speed profile, result_data analysis (see `mpc/README.md`)
-- **Planner roadmap (Phases 0–3)**: Phases 0–2 as before, plus Phase 3 tactical modes (`tactical_planner`, `tactical_planner_enabled` on `FollowRacingLineMPCBehavior`, `examples/racing/phase3_tactical/`). Status: `plans/README.md`.
+- **Opponent-aware 4-layer intelligence pipeline**: Perception (`situation_assessment.py`) → Assessment (`assessment/race_situation.py`) → Planning (`tactical_planner.py`) → Safety (`safety/stability_guard.py`). Enabled via `tactical_planner_enabled=True`. Tactical modes: FREE_RUN / FOLLOW / SETUP_LEFT / SETUP_RIGHT / COMMIT_PASS_LEFT / COMMIT_PASS_RIGHT / ABORT_PASS. Asymmetric-opening detection correctly suppresses safety pressure when the fellow is on a parallel TTL (fixes braking in F3L/F3R scenarios). Status: `plans/README.md`.
 
 ### ⚠️ Partially Implemented
 
@@ -618,7 +663,15 @@ ReleaseClutchAction()
 ### Racing Behaviors
 
 ```scenic
-FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None)
+FollowRacingLineMPCBehavior(
+    target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None,
+    tactical_planner_enabled=False,       # enables 4-layer intelligence pipeline
+    phase7_prediction_enabled=False,      # [Prediction] logs per cycle
+    phase8_assessment_enabled=False,      # [Assessment] logs per cycle
+    phase10_stability_guard_enabled=False, # stability guard + [Guard] logs
+    phase11_commit_abort_enabled=False,   # COMMIT_PASS / ABORT_PASS states
+    phase12_segment_aware_enabled=False,  # segment-conditioned commit gating
+)
 PitStopBehavior()  # May require simulator-specific PitLimiterAction
 OvertakingBehavior(target_car, aggressive=False)  # May require simulator-specific actions
 DefensiveBehavior()  # May require simulator-specific actions
@@ -761,7 +814,25 @@ src/scenic/domains/racing/
 ├── behaviors.scenic         # Racing behaviors (incl. FollowRacingLineMPCBehavior)
 ├── actions.py               # Racing actions
 ├── simulators.py            # Racing simulator interfaces (getRacingControllers with use_mpc)
+├── situation_assessment.py  # Layer 1: assess_nearest_opponent() → OpponentSituation
+├── tactical_planner.py      # Layer 3: tactical_planner_step_v1() → (mode, ttl, cap, reason)
+│                            #   TacticalPlannerConfig, TacticalPlannerState, CommitPlannerState
 ├── README.md                # This file (complete reference)
+├── assessment/              # Layer 2: race situation assessment
+│   ├── race_situation.py    #   assess_race_situation() → RaceSituationAssessment
+│   └── __init__.py
+├── prediction/              # Fellow next-step pose predictor
+│   ├── fellow_predictor.py  #   FellowPredictor, format_prediction_log_line
+│   └── __init__.py
+├── safety/                  # Layer 4: stability guard
+│   ├── stability_guard.py   #   stability_guard_step() → StabilityGuardDecision
+│   └── __init__.py
+├── benchmarks/              # Benchmark runners and log analysis
+│   ├── phase_run_common.py  #   Log parser (RE_PLANNER, RE_ASSESSMENT, RE_GUARD, RE_COMMIT …)
+│   ├── f_scenario_bank.py   #   Scenario name banks per runner
+│   ├── phase7_runner.py … phase12_runner.py
+│   ├── parse_commit_metrics.py, analyze_racing_log.py
+│   └── phase_run_common.py
 ├── mpc/                     # MPC/MPCC lateral + longitudinal controllers
 │   ├── config.py, reference_builder.py, mpc_lateral.py, mpc_longitudinal.py
 │   ├── speed_profile.py, io_adapter.py, utils.py, calibration.py

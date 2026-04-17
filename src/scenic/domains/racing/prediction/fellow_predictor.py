@@ -216,12 +216,16 @@ def _fmt_opt(x: Optional[float]) -> str:
     return f"{float(x):.4f}"
 
 
-def format_phase7_prediction_log_line(sim_time_s: float, r: FellowPredictorStepResult) -> str:
+def format_prediction_log_line(sim_time_s: float, r: FellowPredictorStepResult) -> str:
     ps = _fmt_opt(r.fellow_pred_s)
     return (
-        f"[Phase7Prediction] t={sim_time_s:.2f}s fellow_pred_x={r.fellow_pred_x:.4f} "
+        f"[Prediction] t={sim_time_s:.2f}s fellow_pred_x={r.fellow_pred_x:.4f} "
         f"fellow_pred_y={r.fellow_pred_y:.4f} fellow_pred_s={ps} "
         f"prediction_error_next_step={_fmt_opt(r.prediction_error_next_step)} "
         f"prediction_error_zero_motion={_fmt_opt(r.prediction_error_zero_motion)} "
         f"prediction_error_hold_last={_fmt_opt(r.prediction_error_hold_last)}"
     )
+
+
+# Backward-compatibility alias
+format_phase7_prediction_log_line = format_prediction_log_line

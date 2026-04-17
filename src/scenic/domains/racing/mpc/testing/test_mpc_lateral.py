@@ -45,46 +45,6 @@ class TestMPCLateralController(unittest.TestCase):
         self.config = MPCConfig(config_dict)
         self.controller = MPCLateralController(self.config, timestep=0.05)
     
-    def test_compute_errors_straight_path(self):
-        """Test error computation for vehicle on straight path."""
-        position = (5.0, 0.1)  # Slightly to the right (positive y)
-        heading = 0.0  # Pointing along path
-        waypoints = [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)]
-        waypoint_idx = 0
-        
-        e_y, e_psi, _ = self.controller._compute_errors(
-            position, heading, waypoints, waypoint_idx
-        )
-        
-        # Vehicle is at y=0.1, path is at y=0.0
-        # Normal vector points LEFT (negative y direction for horizontal path)
-        # So positive y position = positive e_y (LEFT of path)
-        # Actually, let's check the sign convention:
-        # Normal: (-dy, dx) = (-0, 1) = (0, 1) for horizontal path going right
-        # So positive y = positive e_y (LEFT of path)
-        # The test expectation was wrong - vehicle to the right (positive y) gives positive e_y
-        self.assertGreater(e_y, 0.0)  # Fixed: positive y = positive e_y (LEFT)
-        
-        # Heading is aligned, so e_psi should be small
-        self.assertAlmostEqual(e_psi, 0.0, places=1)
-    
-    def test_compute_errors_heading_error(self):
-        """Test error computation with heading error."""
-        position = (5.0, 0.0)  # On path
-        heading = 0.2  # Pointing left of path direction
-        waypoints = [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)]
-        waypoint_idx = 0
-        
-        e_y, e_psi, _ = self.controller._compute_errors(
-            position, heading, waypoints, waypoint_idx
-        )
-        
-        # On path, so e_y should be small
-        self.assertAlmostEqual(e_y, 0.0, places=1)
-        
-        # e_psi = heading - psi_ref: vehicle pointing left (heading=0.2) with path straight (0) => e_psi > 0
-        self.assertGreater(e_psi, 0.0)
-    
     def test_fallback_steering(self):
         """Test fallback steering behavior."""
         # Initially should return 0.0

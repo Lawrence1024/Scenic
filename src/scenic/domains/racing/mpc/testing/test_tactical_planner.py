@@ -9,6 +9,7 @@ from scenic.domains.racing.tactical_planner import (
     FREE_RUN,
     SETUP_LEFT,
     SETUP_RIGHT,
+    CommitPlannerState,
     TacticalPlannerConfig,
     TacticalPlannerState,
     tactical_planner_step,
@@ -388,6 +389,9 @@ def test_protected_follow_releases_into_setup_when_opening_stably_clear():
         ahead=True,
     )
     # First enter protected FOLLOW due to unsafe/closing pressure.
+    # Use both corridors closed (symmetric blockage) so safety_pressure fires.
+    # An asymmetric opening (left_open ^ right_open) would suppress safety_pressure
+    # because the fellow is on a parallel TTL and is not a collision threat.
     m0, ttl0, cap0, reason0 = tactical_planner_step_v1(
         st,
         s_hazard,
@@ -400,7 +404,7 @@ def test_protected_follow_releases_into_setup_when_opening_stably_clear():
         assessment_relation="ahead",
         assessment_gap_ok=False,
         assessment_optimal_open=False,
-        assessment_left_open=True,
+        assessment_left_open=False,
         assessment_right_open=False,
         assessment_closing_flag=True,
         assessment_emergency_risk_01=0.35,
@@ -750,10 +754,10 @@ def test_lateral_path_lock_holds_setup_during_protected_follow():
 def test_phase11_commit_from_setup_chain_left():
     st = TacticalPlannerState(mode=SETUP_LEFT, last_setup_side="left")
     cfg = TacticalPlannerConfig(
-        phase11_commit_abort_enabled=True,
-        phase11_commit_entry_cycles=1,
-        phase11_commit_max_speed_mps=40.0,  # bypass speed cap — this test covers chain logic
-        phase11_commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers chain logic
+        commit_abort_enabled=True,
+        commit_entry_cycles=1,
+        commit_max_speed_mps=40.0,  # bypass speed cap — this test covers chain logic
+        commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers chain logic
         setup_commit_entry_cycles=1,
         pass_intent_entry_cycles=1,
         setup_reentry_cooldown_s=0.0,
@@ -786,14 +790,14 @@ def test_phase11_commit_from_setup_chain_left():
         assessment_emergency_risk_01=0.08,
     )
     assert m == COMMIT_PASS_LEFT and ttl == "left" and cap is None
-    assert reason == "phase11_commit_pass_left"
-    assert st.phase11_commit_trigger == "setup_chain_commit_left"
-    assert st.phase11_post_event_state == COMMIT_PASS_LEFT
+    assert reason == "commit_pass_left"
+    assert st.commit.trigger == "setup_chain_commit_left"
+    assert st.commit.post_event_state == COMMIT_PASS_LEFT
 
 
 def test_phase11_abort_on_commit_hazard():
     st = TacticalPlannerState(mode=COMMIT_PASS_LEFT, last_setup_side="left")
-    cfg = TacticalPlannerConfig(phase11_commit_abort_enabled=True)
+    cfg = TacticalPlannerConfig(commit_abort_enabled=True)
     s = _sit(
         lateral_relation="right",
         overlap_state="side_by_side",
@@ -821,16 +825,16 @@ def test_phase11_abort_on_commit_hazard():
         assessment_emergency_risk_01=0.7,
     )
     assert m == ABORT_PASS and ttl == "optimal" and cap is None
-    assert reason == "phase11_abort_commit_invalidated"
-    assert st.phase11_abort_trigger == "commit_invalidated_hazard"
-    assert st.phase11_post_event_state == ABORT_PASS
+    assert reason == "abort_commit_invalidated"
+    assert st.commit.abort_trigger == "commit_invalidated_hazard"
+    assert st.commit.post_event_state == ABORT_PASS
 
 
 def test_phase11_commit_does_not_abort_on_stationary_offaxis_overlap():
     st = TacticalPlannerState(mode=COMMIT_PASS_LEFT, last_setup_side="left")
     cfg = TacticalPlannerConfig(
-        phase11_commit_abort_enabled=True,
-        phase11_stationary_overlap_relief_enabled=True,
+        commit_abort_enabled=True,
+        stationary_overlap_relief_enabled=True,
     )
     s = _sit(
         ahead=True,
@@ -859,13 +863,13 @@ def test_phase11_commit_does_not_abort_on_stationary_offaxis_overlap():
         assessment_emergency_risk_01=0.05,
     )
     assert m == COMMIT_PASS_LEFT and ttl == "left" and cap is None
-    assert reason == "phase11_commit_pass_left_hold"
-    assert st.phase11_abort_trigger == "none"
+    assert reason == "commit_pass_left_hold"
+    assert st.commit.abort_trigger == "none"
 
 
 def test_phase11_pass_success_returns_free_run():
     st = TacticalPlannerState(mode=COMMIT_PASS_LEFT, last_setup_side="left")
-    cfg = TacticalPlannerConfig(phase11_commit_abort_enabled=True)
+    cfg = TacticalPlannerConfig(commit_abort_enabled=True)
     s = _sit(
         ahead=False,
         lateral_relation="right",
@@ -893,17 +897,15 @@ def test_phase11_pass_success_returns_free_run():
         assessment_emergency_risk_01=0.05,
     )
     assert m == FREE_RUN and ttl == "optimal" and cap is None
-    assert reason == "phase11_pass_success_free_run"
-    assert st.phase11_pass_success is True
-    assert st.phase11_post_event_state == FREE_RUN
+    assert reason == "pass_success_free_run"
+    assert st.commit.pass_success is True
+    assert st.commit.post_event_state == FREE_RUN
 
 
 def test_phase11_abort_success_recovers_to_follow_when_pressure_clears():
-    st = TacticalPlannerState(
-        mode=ABORT_PASS,
-        phase11_abort_until_s=0.0,
-    )
-    cfg = TacticalPlannerConfig(phase11_commit_abort_enabled=True)
+    st = TacticalPlannerState(mode=ABORT_PASS)
+    st.commit.abort_until_s = 0.0
+    cfg = TacticalPlannerConfig(commit_abort_enabled=True)
     s = _sit(
         ahead=True,
         lateral_relation="right",
@@ -931,14 +933,14 @@ def test_phase11_abort_success_recovers_to_follow_when_pressure_clears():
         assessment_emergency_risk_01=0.1,
     )
     assert m == FOLLOW and ttl == "optimal" and cap is not None
-    assert reason == "phase11_abort_success_follow"
-    assert st.phase11_abort_success is True
-    assert st.phase11_post_event_state == FOLLOW
+    assert reason == "abort_success_follow"
+    assert st.commit.abort_success is True
+    assert st.commit.post_event_state == FOLLOW
 
 
 def test_phase11_does_not_free_run_on_large_gap_while_still_ahead_if_closing():
     st = TacticalPlannerState()
-    cfg_on = TacticalPlannerConfig(phase11_commit_abort_enabled=True, follow_tight_headway_s=0.5)
+    cfg_on = TacticalPlannerConfig(commit_abort_enabled=True, follow_tight_headway_s=0.5)
     s = _sit(
         ahead=True,
         lateral_relation="right",
@@ -969,7 +971,7 @@ def test_phase11_does_not_free_run_on_large_gap_while_still_ahead_if_closing():
     assert reason_on != "opponent_not_blocking"
 
     st2 = TacticalPlannerState()
-    cfg_off = TacticalPlannerConfig(phase11_commit_abort_enabled=False)
+    cfg_off = TacticalPlannerConfig(commit_abort_enabled=False)
     m_off, _ttl_off, _cap_off, reason_off = tactical_planner_step_v1(
         st2,
         s,
@@ -995,9 +997,9 @@ def test_phase11_ttl_clear_does_not_fire_while_fellow_still_ahead():
     commit_success_time_s elapses.  Ego must hold the commit until the fellow is
     physically behind (relation_ahead=False), at which point free_run success fires."""
     cfg = TacticalPlannerConfig(
-        phase11_commit_abort_enabled=True,
-        phase11_commit_success_time_s=1.0,
-        phase11_commit_hold_s=0.5,
+        commit_abort_enabled=True,
+        commit_success_time_s=1.0,
+        commit_hold_s=0.5,
     )
     st = TacticalPlannerState(mode=COMMIT_PASS_LEFT, last_setup_side="left")
     s_ahead = _sit(
@@ -1055,7 +1057,7 @@ def test_phase11_ttl_clear_does_not_fire_while_fellow_still_ahead():
         assessment_emergency_risk_01=0.05,
     )
     assert m2 == COMMIT_PASS_LEFT and ttl2 == "left"
-    assert st.phase11_pass_success is False
+    assert st.commit.pass_success is False
 
     # Fellow drops behind — free_run success fires.
     s_behind = _sit(
@@ -1080,17 +1082,17 @@ def test_phase11_ttl_clear_does_not_fire_while_fellow_still_ahead():
         assessment_emergency_risk_01=0.05,
     )
     assert m3 == FREE_RUN and ttl3 == "optimal"
-    assert reason3 == "phase11_pass_success_free_run"
-    assert st.phase11_pass_success is True
+    assert reason3 == "pass_success_free_run"
+    assert st.commit.pass_success is True
 
 
 def test_phase11_ttl_clear_success_does_not_fire_when_passing_side_blocked():
     """TTL-clear success must NOT fire if the passing side is closed — that would
     be a bogus success while the route is actually occupied."""
     cfg = TacticalPlannerConfig(
-        phase11_commit_abort_enabled=True,
-        phase11_commit_success_time_s=1.0,
-        phase11_commit_hold_s=0.5,
+        commit_abort_enabled=True,
+        commit_success_time_s=1.0,
+        commit_hold_s=0.5,
     )
     st = TacticalPlannerState(mode=COMMIT_PASS_LEFT, last_setup_side="left")
     s_ahead = _sit(
@@ -1123,7 +1125,7 @@ def test_phase11_ttl_clear_success_does_not_fire_when_passing_side_blocked():
         assessment_emergency_risk_01=0.05,
     )
     assert m == COMMIT_PASS_LEFT
-    assert st.phase11_pass_success is False
+    assert st.commit.pass_success is False
 
 
 def test_phase11_protected_follow_not_released_when_emergency_risk_nonzero():
@@ -1136,7 +1138,7 @@ def test_phase11_protected_follow_not_released_when_emergency_risk_nonzero():
     can still release protected_follow while genuine emergency deceleration (risk > 0.25)
     keeps the latch engaged.
     """
-    cfg = TacticalPlannerConfig(phase11_commit_abort_enabled=True)
+    cfg = TacticalPlannerConfig(commit_abort_enabled=True)
     s = _sit(
         ahead=True,
         overlap_state="clear_ahead",
@@ -1177,9 +1179,9 @@ def test_phase11_commit_blocked_when_emergency_risk_nonzero():
     emergency_risk_01=0.424 because that value was below the existing 0.48/0.55 thresholds.
     """
     cfg = TacticalPlannerConfig(
-        phase11_commit_abort_enabled=True,
-        phase11_commit_entry_cycles=1,  # Allow commit in one cycle for test speed
-        phase11_commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers risk gate
+        commit_abort_enabled=True,
+        commit_entry_cycles=1,  # Allow commit in one cycle for test speed
+        commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers risk gate
     )
     s = _sit(
         ahead=True,
@@ -1216,16 +1218,16 @@ def test_phase11_commit_blocked_when_emergency_risk_nonzero():
     )
     # Must NOT enter COMMIT — any elevated risk blocks commit entry.
     assert m != COMMIT_PASS_RIGHT, f"Commit should be blocked when emergency_risk_01=0.42, got {m} ({reason})"
-    assert st.phase11_commit_trigger == "none"
+    assert st.commit.trigger == "none"
 
 
 def test_phase11_relaxes_to_free_run_when_far_nonclosing_low_risk():
     st = TacticalPlannerState()
     cfg_on = TacticalPlannerConfig(
-        phase11_commit_abort_enabled=True,
-        phase11_ahead_relax_free_run_enabled=True,
-        phase11_ahead_relax_min_gap_m=30.0,
-        phase11_ahead_relax_max_risk_01=0.15,
+        commit_abort_enabled=True,
+        ahead_relax_free_run_enabled=True,
+        ahead_relax_min_gap_m=30.0,
+        ahead_relax_max_risk_01=0.15,
     )
     s = _sit(
         ahead=True,
@@ -1279,11 +1281,11 @@ def _make_phase12_commit_setup_state():
 def test_phase12_corner_body_blocks_commit():
     """Phase 12: corner_body segment must block commit entry even when all other gates pass."""
     cfg = TacticalPlannerConfig(
-        phase11_commit_abort_enabled=True,
-        phase11_commit_entry_cycles=1,
-        phase11_commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers segment gating
-        phase12_segment_aware_enabled=True,
-        phase12_corner_body_blocks_commit=True,
+        commit_abort_enabled=True,
+        commit_entry_cycles=1,
+        commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers segment gating
+        segment_aware_enabled=True,
+        corner_body_blocks_commit=True,
         pass_requires_straight=False,  # Phase 12 owns segment gating
     )
     s = _sit(
@@ -1309,18 +1311,18 @@ def test_phase12_corner_body_blocks_commit():
         assessment_emergency_risk_01=0.0,
     )
     assert m != COMMIT_PASS_RIGHT, f"corner_body must block commit, got {m} ({reason})"
-    assert st.phase11_commit_trigger == "none"
-    assert st.phase12_segment_modifier == "blocked"
+    assert st.commit.trigger == "none"
+    assert st.segment_modifier == "blocked"
 
 
 def test_phase12_corner_entry_blocks_commit_when_risk_elevated():
     """Phase 12: corner_entry with collision_risk_01 > corner_entry_commit_risk_max blocks commit."""
     cfg = TacticalPlannerConfig(
-        phase11_commit_abort_enabled=True,
-        phase11_commit_entry_cycles=1,
-        phase11_commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers segment gating
-        phase12_segment_aware_enabled=True,
-        phase12_corner_entry_commit_risk_max=0.30,
+        commit_abort_enabled=True,
+        commit_entry_cycles=1,
+        commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers segment gating
+        segment_aware_enabled=True,
+        corner_entry_commit_risk_max=0.30,
         pass_requires_straight=False,  # Phase 12 owns segment gating
     )
     s = _sit(
@@ -1346,19 +1348,19 @@ def test_phase12_corner_entry_blocks_commit_when_risk_elevated():
         assessment_emergency_risk_01=0.0,
     )
     assert m != COMMIT_PASS_RIGHT, f"corner_entry with risk=0.40 > 0.30 should block commit, got {m}"
-    assert st.phase11_commit_trigger == "none"
-    assert st.phase12_segment_modifier == "conservative"
+    assert st.commit.trigger == "none"
+    assert st.segment_modifier == "conservative"
 
 
 def test_phase12_corner_entry_allows_commit_when_risk_low():
     """Phase 12: corner_entry with collision_risk_01 <= corner_entry_commit_risk_max allows commit."""
     cfg = TacticalPlannerConfig(
-        phase11_commit_abort_enabled=True,
-        phase11_commit_entry_cycles=1,
-        phase11_commit_max_speed_mps=40.0,  # bypass speed cap — this test covers segment gating
-        phase11_commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers segment gating
-        phase12_segment_aware_enabled=True,
-        phase12_corner_entry_commit_risk_max=0.30,
+        commit_abort_enabled=True,
+        commit_entry_cycles=1,
+        commit_max_speed_mps=40.0,  # bypass speed cap — this test covers segment gating
+        commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers segment gating
+        segment_aware_enabled=True,
+        corner_entry_commit_risk_max=0.30,
         pass_requires_straight=False,  # Phase 12 owns segment gating
     )
     s = _sit(
@@ -1384,17 +1386,17 @@ def test_phase12_corner_entry_allows_commit_when_risk_low():
         assessment_emergency_risk_01=0.0,
     )
     assert m == COMMIT_PASS_RIGHT, f"corner_entry with low risk should allow commit, got {m}"
-    assert st.phase12_segment_modifier == "conservative"
+    assert st.segment_modifier == "conservative"
 
 
 def test_phase12_straight_unchanged_from_phase11():
     """Phase 12: on straight segment, behavior is identical to Phase 11 (no additional blocks)."""
     cfg = TacticalPlannerConfig(
-        phase11_commit_abort_enabled=True,
-        phase11_commit_entry_cycles=1,
-        phase11_commit_max_speed_mps=40.0,  # bypass speed cap — this test covers segment gating
-        phase11_commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers segment gating
-        phase12_segment_aware_enabled=True,
+        commit_abort_enabled=True,
+        commit_entry_cycles=1,
+        commit_max_speed_mps=40.0,  # bypass speed cap — this test covers segment gating
+        commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers segment gating
+        segment_aware_enabled=True,
         pass_requires_straight=False,  # Phase 12 owns segment gating
     )
     s = _sit(
@@ -1420,17 +1422,17 @@ def test_phase12_straight_unchanged_from_phase11():
         assessment_emergency_risk_01=0.0,
     )
     assert m == COMMIT_PASS_RIGHT, f"straight segment must not block commit, got {m}"
-    assert st.phase12_segment_modifier == "relaxed"
+    assert st.segment_modifier == "relaxed"
 
 
 def test_phase12_disabled_corner_body_does_not_block():
     """Phase 12 disabled: corner_body does NOT block commit (Phase 11 behavior preserved)."""
     cfg = TacticalPlannerConfig(
-        phase11_commit_abort_enabled=True,
-        phase11_commit_entry_cycles=1,
-        phase11_commit_max_speed_mps=40.0,  # bypass speed cap — this test covers segment gating
-        phase11_commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers segment gating
-        phase12_segment_aware_enabled=False,  # Phase 12 off
+        commit_abort_enabled=True,
+        commit_entry_cycles=1,
+        commit_max_speed_mps=40.0,  # bypass speed cap — this test covers segment gating
+        commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers segment gating
+        segment_aware_enabled=False,  # Phase 12 off
         pass_requires_straight=False,  # Remove straight gate for apples-to-apples comparison
     )
     s = _sit(
@@ -1456,7 +1458,7 @@ def test_phase12_disabled_corner_body_does_not_block():
         assessment_emergency_risk_01=0.0,
     )
     assert m == COMMIT_PASS_RIGHT, f"Phase 12 disabled: corner_body must not block, got {m}"
-    assert st.phase12_segment_modifier == "normal"
+    assert st.segment_modifier == "normal"
 
 
 def test_phase11_commit_blocked_when_above_speed_cap():
@@ -1478,14 +1480,14 @@ def test_phase11_commit_blocked_when_above_speed_cap():
         ahead=True,
     )
     base_cfg = dict(
-        phase11_commit_abort_enabled=True,
-        phase11_commit_entry_cycles=1,
+        commit_abort_enabled=True,
+        commit_entry_cycles=1,
         setup_commit_entry_cycles=1,
         pass_intent_entry_cycles=1,
         setup_reentry_cooldown_s=0.0,
         follow_tight_headway_s=0.5,
-        phase11_commit_max_speed_mps=9.0,
-        phase11_commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers speed cap
+        commit_max_speed_mps=9.0,
+        commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers speed cap
     )
     common_call = dict(
         has_opponent=True,
@@ -1510,7 +1512,7 @@ def test_phase11_commit_blocked_when_above_speed_cap():
     assert m_fast == SETUP_LEFT, (
         f"Commit must be blocked above speed cap, got {m_fast}"
     )
-    assert st_fast.phase11_commit_candidate_count == 0
+    assert st_fast.commit.candidate_count == 0
 
     # At or below cap — commit must fire.
     st_slow = TacticalPlannerState(mode=SETUP_LEFT, last_setup_side="left")
@@ -1522,7 +1524,7 @@ def test_phase11_commit_blocked_when_above_speed_cap():
         f"Commit must fire at or below speed cap, got {m_slow}"
     )
     assert ttl_slow == "left"
-    assert reason_slow == "phase11_commit_pass_left"
+    assert reason_slow == "commit_pass_left"
 
 
 def test_phase11_opposing_commit_cooldown_blocks_then_releases():
@@ -1540,11 +1542,11 @@ def test_phase11_opposing_commit_cooldown_blocks_then_releases():
         ahead=True,
     )
     cfg = TacticalPlannerConfig(
-        phase11_commit_abort_enabled=True,
-        phase11_commit_entry_cycles=1,
-        phase11_commit_max_speed_mps=40.0,
-        phase11_commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers cooldown logic
-        phase11_opposing_commit_cooldown_s=4.0,
+        commit_abort_enabled=True,
+        commit_entry_cycles=1,
+        commit_max_speed_mps=40.0,
+        commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers cooldown logic
+        opposing_commit_cooldown_s=4.0,
         setup_commit_entry_cycles=1,
         pass_intent_entry_cycles=1,
         setup_reentry_cooldown_s=0.0,
@@ -1566,8 +1568,8 @@ def test_phase11_opposing_commit_cooldown_blocks_then_releases():
 
     # Simulate a left commit that has already exited at t=0.0s.
     st = TacticalPlannerState(mode=SETUP_LEFT, last_setup_side="left")
-    st.phase11_last_commit_side = "left"
-    st.phase11_last_commit_exit_s = 0.0
+    st.commit.last_side = "left"
+    st.commit.last_exit_s = 0.0
 
     # At t=1.0s — same-side (left) re-commit must be ALLOWED (no cooldown on same side).
     m_same, _, _, _ = tactical_planner_step_v1(
@@ -1577,8 +1579,8 @@ def test_phase11_opposing_commit_cooldown_blocks_then_releases():
 
     # Simulate a right-commit exit at t=0.0s; try to commit left at t=1.0s (< 4s cooldown).
     st2 = TacticalPlannerState(mode=SETUP_LEFT, last_setup_side="left")
-    st2.phase11_last_commit_side = "right"
-    st2.phase11_last_commit_exit_s = 0.0
+    st2.commit.last_side = "right"
+    st2.commit.last_exit_s = 0.0
     m_blocked, _, _, _ = tactical_planner_step_v1(
         st2, s, ego_speed_mps=12.0, sim_time_s=1.0, **common
     )
@@ -1588,8 +1590,8 @@ def test_phase11_opposing_commit_cooldown_blocks_then_releases():
 
     # At t=5.0s — cooldown expired, opposing commit must now fire.
     st3 = TacticalPlannerState(mode=SETUP_LEFT, last_setup_side="left")
-    st3.phase11_last_commit_side = "right"
-    st3.phase11_last_commit_exit_s = 0.0
+    st3.commit.last_side = "right"
+    st3.commit.last_exit_s = 0.0
     m_released, _, _, _ = tactical_planner_step_v1(
         st3, s, ego_speed_mps=12.0, sim_time_s=5.0, **common
     )
@@ -1599,16 +1601,16 @@ def test_phase11_opposing_commit_cooldown_blocks_then_releases():
 
 
 def test_phase11_commit_blocked_when_gap_too_large():
-    """Commit must not fire when longitudinal gap exceeds phase11_commit_max_longitudinal_m.
+    """Commit must not fire when longitudinal gap exceeds commit_max_longitudinal_m.
 
     Ensures ego closes to within 1-2 car lengths before committing, preventing
     premature long-range commits that abort before the physical overtake completes.
     """
     cfg = TacticalPlannerConfig(
-        phase11_commit_abort_enabled=True,
-        phase11_commit_entry_cycles=1,
-        phase11_commit_max_speed_mps=40.0,
-        phase11_commit_max_longitudinal_m=40.0,
+        commit_abort_enabled=True,
+        commit_entry_cycles=1,
+        commit_max_speed_mps=40.0,
+        commit_max_longitudinal_m=40.0,
         setup_commit_entry_cycles=1,
         pass_intent_entry_cycles=1,
         setup_reentry_cooldown_s=0.0,
@@ -1642,7 +1644,7 @@ def test_phase11_commit_blocked_when_gap_too_large():
     )
     m_far, _, _, _ = tactical_planner_step_v1(st_far, s_far, sim_time_s=0.0, **common)
     assert m_far != COMMIT_PASS_LEFT, f"Commit must be blocked at 45m gap, got {m_far}"
-    assert st_far.phase11_commit_candidate_count == 0
+    assert st_far.commit.candidate_count == 0
 
     # Fellow is 35m ahead — within the 40m gate — commit must fire.
     st_close = TacticalPlannerState(mode=SETUP_LEFT, last_setup_side="left")

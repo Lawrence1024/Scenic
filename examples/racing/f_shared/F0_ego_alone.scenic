@@ -21,6 +21,5 @@ ego.behavior = FollowRacingLineMPCBehavior(
     manage_gears=True,
     use_waypoints=True,
     mpc_config_path=None,
-    phase6_orchestration_enabled=True,
     phase7_prediction_enabled=globalParameters.phase7_prediction_enabled,
 )

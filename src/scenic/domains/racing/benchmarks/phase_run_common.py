@@ -51,77 +51,53 @@ RE_PHASE3_TTL_SWITCH = re.compile(
 RE_PHASE3_STATUS = re.compile(
     r"\[Phase3Tactical\]\s+t=(?P<t>\d+\.?\d*)s\s+mode=(?P<mode>\S+)\s+ttl=(?P<ttl>\S+)\s+cap=(?P<cap>\S+)"
 )
-RE_PHASE4_EVENT = re.compile(
-    r"\[Phase4Event\]\s+t=(?P<t>\d+\.?\d*)s\s+event=(?P<event>\S+)"
-)
 RE_EVAL_CONTACT_EVENT = re.compile(
     r"\[EvalEvent\]\s+t=(?P<t>\d+\.?\d*)s\s+type=eval_contact\s+severity=(?P<sev>\S+)\s+"
     r"bbox_gap_m=(?P<bbox>\S+)\s+dspace_obj1_m=(?P<ds>\S+)\s+dspace_valid=(?P<dsv>[01])"
 )
-RE_PHASE5_EVENT = re.compile(
-    r"\[Phase5Event\]\s+t=(?P<t>\d+\.?\d*)s\s+event=(?P<event>\S+)"
-)
-RE_PHASE5_TTL_SWITCH = re.compile(
-    r"\[Phase5Tactical\]\s+t=(?P<t>\d+\.?\d*)s\s+ttl_switch\s+(?P<from>\S+)->(?P<to>\S+)\s+mode_in=(?P<mode_in>\S+)\s+mode_out=(?P<mode_out>\S+)\s+seg=(?P<seg>\S+)\s+overlap=(?P<ov>\S+)\s+reason=(?P<reason>\S+)"
-)
-RE_PHASE5_STATUS = re.compile(
-    r"\[Phase5Tactical\]\s+t=(?P<t>\d+\.?\d*)s\s+mode_in=(?P<mode_in>\S+)\s+mode_out=(?P<mode_out>\S+)\s+ttl=(?P<ttl>\S+)\s+cap=(?P<cap>\S+)\s+seg=(?P<seg>\S+)\s+overlap=(?P<ov>\S+)\s+reason=(?P<reason>\S+)"
-)
-RE_PHASE6_STATE = re.compile(
-    r"\[Phase6State\]\s+t=(?P<t>\d+\.?\d*)s\s+has_opponent=(?P<opp>[01])\s+pit_mode=(?P<pit>[01])\s+ttl=(?P<ttl>\S+)\s+ego_speed=(?P<ego_v>\S+)\s+opp_speed=(?P<opp_v>\S+)\s+opp_dist=(?P<opp_d>\S+)\s+overlap=(?P<ov>\S+)\s+seg=(?P<seg>\S+)\s+ahead=(?P<ahead>[01])"
-)
-RE_PHASE6_PLANNER = re.compile(
-    r"\[Phase6Planner\]\s+t=(?P<t>\d+\.?\d*)s\s+planner_state=(?P<state>\S+)\s+active_ttl=(?P<ttl>\S+)\s+target_speed_cap=(?P<cap>\S+)\s+decision_reason=(?P<reason>\S+)"
-)
-RE_PHASE6_GUARD = re.compile(
-    r"\[Phase6Guard\]\s+t=(?P<t>\d+\.?\d*)s\s+guard_active=(?P<active>[01])\s+guard_reason=(?P<reason>\S+)\s+steer_limited=(?P<steer>[01])\s+brake_limited=(?P<brake>[01])\s+ttl_switch_blocked=(?P<ttl_block>[01])\s+emergency_stable_mode=(?P<emerg>[01])"
-)
-RE_PHASE6_EXECUTOR = re.compile(
-    r"\[Phase6Executor\]\s+t=(?P<t>\d+\.?\d*)s\s+executor_call=(?P<call>[01])\s+planner_state=(?P<state>\S+)\s+active_ttl=(?P<ttl>\S+)\s+decision_reason=(?P<reason>\S+)\s+steer=(?P<steer>\S+)\s+throttle=(?P<throttle>\S+)\s+brake=(?P<brake>\S+)"
-)
-RE_PHASE7_PREDICTION = re.compile(
-    r"\[Phase7Prediction\]\s+t=(?P<t>\d+\.?\d*)s\s+"
+RE_PREDICTION = re.compile(
+    r"\[Prediction\]\s+t=(?P<t>\d+\.?\d*)s\s+"
     r"fellow_pred_x=(?P<fpx>\S+)\s+fellow_pred_y=(?P<fpy>\S+)\s+fellow_pred_s=(?P<fps>\S+)\s+"
     r"prediction_error_next_step=(?P<e_next>\S+)\s+"
     r"prediction_error_zero_motion=(?P<e0>\S+)\s+"
     r"prediction_error_hold_last=(?P<eh>\S+)"
 )
-RE_PHASE8_ASSESSMENT = re.compile(
-    r"\[Phase8Assessment\]\s+t=(?P<t>\d+\.?\d*)s\s+"
+RE_ASSESSMENT = re.compile(
+    r"\[Assessment\]\s+t=(?P<t>\d+\.?\d*)s\s+"
     r"fellow_relation=(?P<rel>\S+)\s+closing_flag=(?P<closing>[01])\s+"
     r"actual_gap=(?P<actual>\S+)\s+safe_gap=(?P<safe>\S+)\s+gap_ok=(?P<gap_ok>[01])\s+"
     r"optimal_open=(?P<opt>[01])\s+left_open=(?P<left>[01])\s+right_open=(?P<right>[01])\s+"
     r"overlap_flag=(?P<ov>[01])\s+emergency_risk_01=(?P<risk>\S+)\s+source=(?P<src>\S+)"
 )
-RE_PHASE9_PLANNER = re.compile(
-    r"\[Phase9Planner\]\s+t=(?P<t>\d+\.?\d*)s\s+planner_state=(?P<state>\S+)\s+"
+RE_PLANNER = re.compile(
+    r"\[Planner\]\s+t=(?P<t>\d+\.?\d*)s\s+planner_state=(?P<state>\S+)\s+"
     r"chosen_ttl=(?P<ttl>\S+)\s+target_speed_cap=(?P<cap>\S+)\s+decision_reason=(?P<reason>\S+)\s+"
     r"assessment_relation=(?P<arel>\S+)\s+assessment_gap_ok=(?P<agap>\S+)\s+"
     r"assessment_optimal_open=(?P<aopt>\S+)\s+assessment_left_open=(?P<aleft>\S+)\s+assessment_right_open=(?P<aright>\S+)"
 )
-RE_PHASE10_GUARD = re.compile(
-    r"\[Phase10Guard\]\s+t=(?P<t>\d+\.?\d*)s\s+guard_active=(?P<active>[01])\s+"
+RE_GUARD = re.compile(
+    r"\[Guard\]\s+t=(?P<t>\d+\.?\d*)s\s+guard_active=(?P<active>[01])\s+"
     r"guard_reason=(?P<reason>\S+)\s+steer_limited=(?P<steer>[01])\s+"
     r"brake_limited=(?P<brake>[01])\s+ttl_switch_blocked=(?P<ttl_block>[01])\s+"
     r"emergency_stable_mode=(?P<emerg>[01])\s+planner_state=(?P<state>\S+)\s+"
     r"active_ttl=(?P<ttl>\S+)\s+decision_reason=(?P<dec>\S+)\s+"
     r"steer=(?P<cmd_steer>\S+)\s+throttle=(?P<cmd_thr>\S+)\s+brake=(?P<cmd_brk>\S+)"
 )
-RE_PHASE11_PLANNER = re.compile(
-    r"\[Phase11Planner\]\s+t=(?P<t>\d+\.?\d*)s\s+planner_state=(?P<state>\S+)\s+"
-    r"chosen_ttl=(?P<ttl>\S+)\s+decision_reason=(?P<reason>\S+)\s+"
-    r"commit_trigger=(?P<commit>\S+)\s+abort_trigger=(?P<abort>\S+)\s+"
-    r"pass_success=(?P<pass>[01])\s+abort_success=(?P<abort_ok>[01])\s+"
-    r"post_event_state=(?P<post>\S+)"
-)
-RE_PHASE12_PLANNER = re.compile(
-    r"\[Phase11Planner\]\s+t=(?P<t>\d+\.?\d*)s\s+planner_state=(?P<state>\S+)\s+"
+RE_COMMIT = re.compile(
+    r"\[Commit\]\s+t=(?P<t>\d+\.?\d*)s\s+planner_state=(?P<state>\S+)\s+"
     r"chosen_ttl=(?P<ttl>\S+)\s+decision_reason=(?P<reason>\S+)\s+"
     r"commit_trigger=(?P<commit>\S+)\s+abort_trigger=(?P<abort>\S+)\s+"
     r"pass_success=(?P<pass>[01])\s+abort_success=(?P<abort_ok>[01])\s+"
     r"post_event_state=(?P<post>\S+)"
     r".*seg_ctx=(?P<seg_ctx>\S+)\s+seg_modifier=(?P<seg_modifier>\S+)"
 )
+# Backward-compatibility aliases for code that still uses phase-numbered names.
+RE_PHASE7_PREDICTION = RE_PREDICTION
+RE_PHASE8_ASSESSMENT = RE_ASSESSMENT
+RE_PHASE9_PLANNER = RE_PLANNER
+RE_PHASE10_GUARD = RE_GUARD
+RE_PHASE11_PLANNER = RE_COMMIT
+RE_PHASE12_PLANNER = RE_COMMIT
 RE_LOG_TIME_S = re.compile(r"\bt=(?P<t>\d+\.?\d*)s\b")
 # Fellow harness: placement from ego offset ([placement.py])
 RE_FELLOW_PLACEMENT_FROM_EGO = re.compile(
@@ -552,30 +528,8 @@ def collect_metrics_from_log(
                 _line_t = parse_float_or_none(_tm.group("t"))
             if _line_t is not None and _line_t < _ignore_before:
                 continue
-            if "[Phase6State]" in line:
-                p6s = RE_PHASE6_STATE.search(line)
-                if p6s:
-                    phase6_state_line_count += 1
-                    phase6_ttls.append(p6s.group("ttl"))
-            if "[Phase6Planner]" in line:
-                p6p = RE_PHASE6_PLANNER.search(line)
-                if p6p:
-                    phase6_planner_line_count += 1
-                    phase6_states.append(p6p.group("state"))
-                    phase6_ttls.append(p6p.group("ttl"))
-                    phase6_reasons.append(p6p.group("reason"))
-            if "[Phase6Guard]" in line:
-                p6g = RE_PHASE6_GUARD.search(line)
-                if p6g:
-                    phase6_guard_line_count += 1
-                    if p6g.group("active") == "1":
-                        phase6_guard_active_count += 1
-            if "[Phase6Executor]" in line:
-                p6e = RE_PHASE6_EXECUTOR.search(line)
-                if p6e:
-                    phase6_executor_line_count += 1
-            if "[Phase7Prediction]" in line:
-                p7 = RE_PHASE7_PREDICTION.search(line)
+            if "[Prediction]" in line:
+                p7 = RE_PREDICTION.search(line)
                 if p7:
                     phase7_line_count += 1
                     _en = parse_float_or_none(p7.group("e_next"))
@@ -587,8 +541,8 @@ def collect_metrics_from_log(
                         phase7_err_zero.append(_ez)
                     if _eh is not None:
                         phase7_err_hold.append(_eh)
-            if "[Phase8Assessment]" in line:
-                p8 = RE_PHASE8_ASSESSMENT.search(line)
+            if "[Assessment]" in line:
+                p8 = RE_ASSESSMENT.search(line)
                 if p8:
                     phase8_line_count += 1
                     _rel = str(p8.group("rel") or "")
@@ -615,8 +569,8 @@ def collect_metrics_from_log(
                         phase8_actual_gap_vals.append(_actual)
                     if _risk is not None:
                         phase8_risk_vals.append(_risk)
-            if "[Phase9Planner]" in line:
-                p9 = RE_PHASE9_PLANNER.search(line)
+            if "[Planner]" in line:
+                p9 = RE_PLANNER.search(line)
                 if p9:
                     phase9_line_count += 1
                     phase9_states.append(p9.group("state"))
@@ -627,8 +581,8 @@ def collect_metrics_from_log(
                         phase9_gap_ok_known += 1
                         if _ag == "1":
                             phase9_gap_ok_count += 1
-            if "[Phase10Guard]" in line:
-                p10 = RE_PHASE10_GUARD.search(line)
+            if "[Guard]" in line:
+                p10 = RE_GUARD.search(line)
                 if p10:
                     phase10_guard_line_count += 1
                     if p10.group("active") == "1":
@@ -641,8 +595,8 @@ def collect_metrics_from_log(
                         phase10_ttl_switch_blocked_count += 1
                     if p10.group("emerg") == "1":
                         phase10_emergency_stable_count += 1
-            if "[Phase11Planner]" in line:
-                p11 = RE_PHASE11_PLANNER.search(line)
+            if "[Commit]" in line:
+                p11 = RE_COMMIT.search(line)
                 if p11:
                     phase11_planner_line_count += 1
                     if p11.group("commit") != "none":
@@ -689,47 +643,6 @@ def collect_metrics_from_log(
                     if dsv == "0":
                         eval_contact_near_dspace_invalid_count += 1
                 continue
-            if "[Phase4Event]" in line:
-                pe = RE_PHASE4_EVENT.search(line)
-                if pe:
-                    ev = pe.group("event")
-                    if ev == "commit_pass_left":
-                        phase4_event_commit_left += 1
-                    elif ev == "commit_pass_right":
-                        phase4_event_commit_right += 1
-                    elif ev == "abort_pass":
-                        phase4_event_abort += 1
-                    elif ev == "emergency_avoid":
-                        phase4_event_emergency += 1
-                    elif ev == "shield_release":
-                        phase4_event_shield_release += 1
-            if "[Phase5Event]" in line:
-                p5e = RE_PHASE5_EVENT.search(line)
-                if p5e:
-                    ev5 = p5e.group("event")
-                    if ev5 == "segment_override":
-                        phase5_event_segment_override += 1
-                    elif ev5 == "segment_release":
-                        phase5_event_segment_release += 1
-            if "[Phase5Tactical]" in line:
-                phase5_line_count += 1
-                p5s = RE_PHASE5_TTL_SWITCH.search(line)
-                if p5s:
-                    phase5_ttl_switch_count += 1
-                    _mout = p5s.group("mode_out")
-                    _reason = p5s.group("reason")
-                    phase5_mode_out.append(_mout)
-                    phase5_reasons.append(_reason)
-                    if _reason != "none":
-                        phase5_override_count += 1
-                p5st = RE_PHASE5_STATUS.search(line)
-                if p5st:
-                    _mout = p5st.group("mode_out")
-                    _reason = p5st.group("reason")
-                    phase5_mode_out.append(_mout)
-                    phase5_reasons.append(_reason)
-                    if _reason != "none":
-                        phase5_override_count += 1
             m = RE_PHASE0_LINE.search(line)
             if m:
                 ttl_seen.append(m.group("ttl"))

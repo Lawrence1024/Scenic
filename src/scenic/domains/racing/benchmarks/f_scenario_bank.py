@@ -1,4 +1,4 @@
-"""Shared F-scenario bank definitions used across post-Phase-5 runners."""
+"""Shared F-scenario bank definitions used across benchmark runners."""
 
 from __future__ import annotations
 
@@ -17,12 +17,6 @@ F_SCENARIO_NAMES: Tuple[str, ...] = (
     "F7_fellow_right_occupied_deterministic.scenic",
     "F8_corner_entry_fellow_ahead_optimal.scenic",
     "F9_fellow_stationary_roadside_obstacle.scenic",
-)
-
-PHASE6_F_SCENARIO_NAMES: Tuple[str, ...] = (
-    "F0_ego_alone.scenic",
-    "F1_fellow_behind_optimal_cruise.scenic",
-    "F2_fellow_ahead_optimal_slower.scenic",
 )
 
 PHASE7_F_SCENARIO_NAMES: Tuple[str, ...] = (
@@ -77,7 +71,6 @@ PHASE12_F_SCENARIO_NAMES: Tuple[str, ...] = (
 )
 
 PHASE_TO_DEFAULT_F_SCENARIO_NAMES: Dict[int, Tuple[str, ...]] = {
-    6: PHASE6_F_SCENARIO_NAMES,
     7: PHASE7_F_SCENARIO_NAMES,
     8: PHASE8_F_SCENARIO_NAMES,
     9: PHASE9_F_SCENARIO_NAMES,
