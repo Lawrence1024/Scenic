@@ -46,6 +46,8 @@ from scenic.domains.racing.tactical_planner import (
     ABORT_PASS,
     COMMIT_PASS_LEFT,
     COMMIT_PASS_RIGHT,
+    SETUP_LEFT,
+    SETUP_RIGHT,
 )
 from scenic.domains.racing.prediction import FellowPredictor, format_prediction_log_line
 from scenic.domains.racing.assessment import (
@@ -1187,7 +1189,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             curvature_ahead_max_signed = 0.0  # Task 3: signed kappa at apex (left > 0, right < 0) for downstream
             max_lateral_accel = 8.0  # m/s² (conservative for indoor sim, can be configured)
             curvature_epsilon = 0.001  # Small epsilon to avoid division by zero
-            curvature_speed_margin = 0.92  # Use 92% of theoretical v_max (generic: less over-braking, less throttle compensation; works for any TTL)
+            curvature_speed_margin = 0.96  # Use 96% of theoretical v_max (IAC race car with slicks)
             
             if use_waypoints and wp_list and len(wp_list) >= 3:
                 try:
@@ -1271,11 +1273,11 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     # Very sharp turns (κ > 0.08): use 74% margin to reduce high CTE (e.g. segment 43 run).
                     if curvature_ahead_max > 0.015:
                         if curvature_ahead_max > 0.08:
-                            slow_in_margin = 0.74   # Very sharp: stricter so we enter segment 43-type curves slower
+                            slow_in_margin = 0.82   # Very sharp: stricter entry
                         elif curvature_ahead_max > 0.05:
-                            slow_in_margin = 0.82
-                        else:
                             slow_in_margin = 0.88
+                        else:
+                            slow_in_margin = 0.92
                         v_max_slow_in = slow_in_margin * (max_lateral_accel / (curvature_ahead_max + curvature_epsilon)) ** 0.5
                         if v_max_slow_in < curvature_speed_limit:
                             curvature_speed_limit = v_max_slow_in
@@ -1349,8 +1351,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 # When CTE is large, allow faster slew-down so the CTE speed cap takes effect quickly (generic run-off fix).
                 dt_slew = _lon_controller.config.mpc_prediction_dt if hasattr(_lon_controller, 'config') else 0.05
                 slew_down_ms = 12.0 if cte_mag_for_speed >= 3.0 else 7.0   # faster ramp-down when off-line
-                _in_commit_pass = str(getattr(self, '_phase_effective_planner_state', '')) in (COMMIT_PASS_LEFT, COMMIT_PASS_RIGHT)
-                slew_up_ms = 12.0 if _in_commit_pass else 5.0  # accelerate harder during pass commit
+                _in_pass_maneuver = str(getattr(self, '_phase_effective_planner_state', '')) in (COMMIT_PASS_LEFT, COMMIT_PASS_RIGHT, SETUP_LEFT, SETUP_RIGHT)
+                slew_up_ms = 12.0 if _in_pass_maneuver else 8.0  # faster acceleration; pass maneuvers get max ramp
                 if not hasattr(self, '_last_effective_target_speed'):
                     self._last_effective_target_speed = float(effective_target_speed)
                 last_eff = float(self._last_effective_target_speed)

@@ -81,7 +81,7 @@
     curvature_same_sign_clamp_min: 0.02  # (1/m) in curvature >= this, clamp total steer to same sign as feedforward (avoids spin from ff/fb opposition)
     
     # Filtering (smoother = lower cutoff; reduces steering jerk and overcorrect)
-    steering_lpf_cutoff_hz: 1.5  # Low-pass filter cutoff (reduced from 2.0 for smoother steering, less oscillation)
+    steering_lpf_cutoff_hz: 3.0  # Matches IAC steering actuator bandwidth (3 Hz); was 1.5 (too sluggish for racing)
     
     # Waypoint/Reference
     traj_resample_dist: 0.1  # Distance between resampled waypoints (meters) - finer resolution for better tracking

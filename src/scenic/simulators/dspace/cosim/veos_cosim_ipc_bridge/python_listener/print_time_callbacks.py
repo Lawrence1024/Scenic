@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import json
 import socket
 import subprocess
@@ -9,10 +8,47 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from typing import Optional
 
-TIME_RESOLUTION_PER_SECOND = 1e9
-SCENIC_DEFAULT_SCENARIO_SRC = "LagunaSeca_ExternalControl"
+HOST = "127.0.0.1"
+PORT = 50555
+VEOS_HOST = "192.168.100.101"
+VEOS_NAME = "CoSimServerScenic"
+SCENARIO_SRC = "LagunaSeca_ExternalControl"
+FELLOW_NAME = "F1"
+MODELDESK_PRE_CONNECT_DELAY_S = 10.0
+POST_SAVEAS_SETTLE_S = 0.2
+PRE_DOWNLOAD_DELAY_S = 30.0
+POST_MODELDESK_DOWNLOAD_DELAY_S = 30.0
+TIMESTEP_S = 0.01
+VAR_TEST_SETTLE_S = 0.05
+
+EGO_CMD_VARS = [
+    ("throttle",    "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_throttle_cmd/Value",    0.25),
+    ("brake_front", "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_front/Value", 0.10),
+    ("brake_rear",  "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_rear/Value",  0.10),
+    ("steering",    "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_steering_cmd/Value",    0.05),
+    ("gear",        "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_gear_cmd/Value",        1.0),
+]
+
+_EGO_BASE  = "Platform()://ASM_Traffic/Model Root/VehicleDynamics/Plant/UserInterface/DISP_Plant"
+_GPS_BASE  = "Platform()://ASM_Traffic/Model Root/Environment/Road/PlantModel/GPS_POSITION/GPS_CALC"
+EGO_READ_VARS = [
+    ("ego_x_m",       f"{_EGO_BASE}/Positions/Pos_x_Vehicle_CoorSys_E[m]/Out1"),
+    ("ego_y_m",       f"{_EGO_BASE}/Positions/Pos_y_Vehicle_CoorSys_E[m]/Out1"),
+    ("ego_z_m",       f"{_EGO_BASE}/Positions/Pos_z_Vehicle_CoorSys_E[m]/Out1"),
+    ("ego_yaw_deg",   f"{_EGO_BASE}/Positions/Angle_Yaw_Vehicle_CoorSys_E[deg]/Out1"),
+    ("ego_vx_kmh",    f"{_EGO_BASE}/Velocities/v_x_Vehicle_CoG[km|h]/Out1"),
+    ("ego_vy_kmh",    f"{_EGO_BASE}/Velocities/v_y_Vehicle_CoG[km|h]/Out1"),
+    ("gps_lon_deg",   f"{_GPS_BASE}/Longitude_deg"),
+    ("gps_lat_deg",   f"{_GPS_BASE}/Latitude_deg"),
+    ("gps_hdg_deg",   f"{_GPS_BASE}/Heading_deg"),
+]
+
+_FELLOW_EXT_BASE = "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/External_Signals"
+FELLOW_BULK_VARS = [
+    ("fellow_v_kmh_array", f"{_FELLOW_EXT_BASE}/Const_v_Fellows_External[km|h]/Value"),
+    ("fellow_d_m_array",   f"{_FELLOW_EXT_BASE}/Const_d_Fellows_External[m]/Value"),
+]
 
 
 def _default_ipc_client_exe() -> Path:
@@ -35,53 +71,183 @@ def _ensure_src_on_syspath() -> None:
             return
 
 
-def _check_controldesk_like_scenic(*, timestep: float, scenic_control: bool):
-    """Run the same ControlDesk connection path Scenic uses."""
-    _ensure_src_on_syspath()
-    from scenic.simulators.dspace.controldesk import session as cd_session
-
-    class _SimCfg:
-        def __init__(self, scenic_control_: bool):
-            self.scenic_control = bool(scenic_control_)
-
-    class _SimShim:
-        def __init__(self, timestep_: float, scenic_control_: bool):
-            self.timestep = float(timestep_)
-            self.sim = _SimCfg(scenic_control_)
-
-    shim = _SimShim(timestep, scenic_control)
-    return cd_session.connect_and_prepare(shim)
-
-
 def _check_modeldesk_connection():
-    """Run a lightweight ModelDesk COM connection check."""
     _ensure_src_on_syspath()
     from scenic.simulators.dspace.modeldesk.connection import ModelDeskConnection
 
     return ModelDeskConnection().connect()
 
 
-def _connect_controldesk_go_online() -> tuple[bool, str]:
-    """Connect to ControlDesk and request online calibration."""
+def _connect_controldesk_scenic_control():
+    """Run Scenic's full connect_and_prepare path with scenic_control=True.
+
+    This goes online, starts measurement, calls initialize_vesi_interface (which flips
+    Sw_Manual_VESI_Overwrite=1 and enables throttle/brake/gear/steering channels), and
+    sets the simulation step. Returns the connected ControlDeskApp on success, or None.
+    """
     _ensure_src_on_syspath()
-    from scenic.simulators.dspace.controldesk.connection import ControlDeskApp
+    from scenic.simulators.dspace.controldesk import session as cd_session
 
+    class _SimCfg:
+        scenic_control = True
+
+    class _SimShim:
+        timestep = TIMESTEP_S
+        sim = _SimCfg()
+
+    return cd_session.connect_and_prepare(_SimShim())
+
+
+def _connect_maport():
+    """Connect MAPort (XIL API) for variable access. Returns MAPortApp or None.
+
+    Uses the same MAPortConfigVEOS.xml that Scenic uses. start_if_needed=False because
+    VEOS should already be running (ControlDesk went online earlier).
+    """
+    _ensure_src_on_syspath()
     try:
-        cd = ControlDeskApp().connect()
-        cd.go_online()
-        return True, "connected + go_online() succeeded"
+        from scenic.simulators.dspace.maport import session as maport_session
     except Exception as e:
-        return False, f"connect/go_online failed: {e}"
+        print(f"[MAPort] import failed: {type(e).__name__}: {e}", flush=True)
+        return None
+    try:
+        return maport_session.connect_and_prepare_maport(sim=None, start_if_needed=False)
+    except Exception as e:
+        print(f"[MAPort] connect_and_prepare_maport threw: {type(e).__name__}: {e}", flush=True)
+        return None
 
 
-def _modeldesk_create_scenario_add_fellow_and_download(
-    conn_md,
-    *,
-    scenario_src: Optional[str],
-    scenario_name: Optional[str],
-    fellow_name: str,
-    maneuver_reset: bool,
-) -> tuple[bool, str]:
+def _test_variable_access(cd, backend: str = "VarTest") -> tuple[int, int, list[str]]:
+    """Read/write/restore every variable group Scenic touches, via the given backend.
+
+    `cd` can be a ControlDeskApp (COM) or MAPortApp — both expose get_var/set_var.
+    `backend` is a short label used in log prefixes so COM vs MAPort output is
+    easy to tell apart.
+
+    Never aborts on error: each variable's probe is wrapped in its own try/except so
+    failures just print the label and move on. Returns (n_ok, n_fail, failed_labels).
+    """
+    tag = f"[{backend}]"
+    n_ok = 0
+    n_fail = 0
+    failed: list[str] = []
+
+    def _probe_rw_scalar(label: str, path: str, test_val: float) -> None:
+        nonlocal n_ok, n_fail
+        try:
+            before = cd.get_var(path)
+        except Exception as e:
+            print(f"{tag} FAIL {label:22s} (read): {type(e).__name__}: {e}", flush=True)
+            n_fail += 1
+            failed.append(label)
+            return
+        try:
+            cd.set_var(path, float(test_val))
+            time.sleep(VAR_TEST_SETTLE_S)
+            after = cd.get_var(path)
+        except Exception as e:
+            print(f"{tag} FAIL {label:22s} (write/readback): {type(e).__name__}: {e} (before={before!r})", flush=True)
+            n_fail += 1
+            failed.append(label)
+            try:
+                cd.set_var(path, before)
+            except Exception:
+                pass
+            return
+        try:
+            cd.set_var(path, before)
+        except Exception as e:
+            print(f"{tag} WARN {label:22s} restore failed: {type(e).__name__}: {e}", flush=True)
+        print(f"{tag} OK   {label:22s} before={before!r} wrote={test_val!r} readback={after!r}", flush=True)
+        n_ok += 1
+
+    def _probe_read_only(label: str, path: str) -> None:
+        nonlocal n_ok, n_fail
+        try:
+            val = cd.get_var(path)
+        except Exception as e:
+            print(f"{tag} FAIL {label:22s} (read): {type(e).__name__}: {e}", flush=True)
+            n_fail += 1
+            failed.append(label)
+            return
+        print(f"{tag} OK   {label:22s} value={val!r}", flush=True)
+        n_ok += 1
+
+    def _probe_rw_array(label: str, path: str) -> None:
+        nonlocal n_ok, n_fail
+        try:
+            before = cd.get_var(path)
+        except Exception as e:
+            print(f"{tag} FAIL {label:22s} (read): {type(e).__name__}: {e}", flush=True)
+            n_fail += 1
+            failed.append(label)
+            return
+        try:
+            before_list = list(before) if before is not None else []
+        except Exception as e:
+            print(f"{tag} FAIL {label:22s} (value not iterable): {type(e).__name__}: {e}", flush=True)
+            n_fail += 1
+            failed.append(label)
+            return
+        if not before_list:
+            print(f"{tag} OK   {label:22s} (empty array; read succeeded, skipped write probe)", flush=True)
+            n_ok += 1
+            return
+        try:
+            modified = list(before_list)
+            modified[0] = float(modified[0]) + 0.1
+            cd.set_var(path, modified)
+            time.sleep(VAR_TEST_SETTLE_S)
+            after = cd.get_var(path)
+        except Exception as e:
+            print(f"{tag} FAIL {label:22s} (write/readback): {type(e).__name__}: {e}", flush=True)
+            n_fail += 1
+            failed.append(label)
+            try:
+                cd.set_var(path, before_list)
+            except Exception:
+                pass
+            return
+        try:
+            cd.set_var(path, before_list)
+        except Exception as e:
+            print(f"{tag} WARN {label:22s} restore failed: {type(e).__name__}: {e}", flush=True)
+        try:
+            after0 = list(after)[0] if after is not None else None
+        except Exception:
+            after0 = None
+        print(
+            f"{tag} OK   {label:22s} len={len(before_list)} "
+            f"before[0]={before_list[0]!r} wrote[0]={modified[0]!r} readback[0]={after0!r}",
+            flush=True,
+        )
+        n_ok += 1
+
+    def _safe(callable_, label: str) -> None:
+        nonlocal n_fail
+        try:
+            callable_()
+        except Exception as e:
+            print(f"{tag} FAIL {label:22s} (unexpected): {type(e).__name__}: {e}", flush=True)
+            n_fail += 1
+            failed.append(label)
+
+    print(f"{tag} --- Ego command channels (write/read/restore) ---", flush=True)
+    for label, path, test_val in EGO_CMD_VARS:
+        _safe(lambda l=label, p=path, v=test_val: _probe_rw_scalar(l, p, v), label)
+
+    print(f"{tag} --- Ego state readback (read-only) ---", flush=True)
+    for label, path in EGO_READ_VARS:
+        _safe(lambda l=label, p=path: _probe_read_only(l, p), label)
+
+    print(f"{tag} --- Fellow external signals (array read/write/restore) ---", flush=True)
+    for label, path in FELLOW_BULK_VARS:
+        _safe(lambda l=label, p=path: _probe_rw_array(l, p), label)
+
+    return n_ok, n_fail, failed
+
+
+def _modeldesk_create_scenario_add_fellow_and_download(conn_md) -> tuple[bool, str]:
     """Create working scenario, add one fellow, and download to VEOS."""
     import pythoncom
 
@@ -94,22 +260,20 @@ def _modeldesk_create_scenario_add_fellow_and_download(
     if ts0 is None:
         return False, "Active experiment has no TrafficScenario."
 
-    # Match Scenic setup default: simulator.py activates sim.scenario_src, whose model default
-    # is "LagunaSeca_ExternalControl" in src/scenic/simulators/dspace/model.scenic.
-    source = scenario_src if scenario_src else SCENIC_DEFAULT_SCENARIO_SRC
-    name = scenario_name or time.strftime("Scenic_veos_test_%Y%m%d_%H%M%S")
-    fellow_name = str(fellow_name or "F1")
-
+    name = time.strftime("Scenic_veos_test_%Y%m%d_%H%M%S")
     print(
-        f"[ModelDeskDownload] Activate source='{source}' -> SaveAs '{name}' "
-        f"-> add fellow '{fellow_name}' -> Save/Download ...",
+        f"[ModelDeskDownload] Activate source='{SCENARIO_SRC}' -> SaveAs '{name}' "
+        f"-> add fellow '{FELLOW_NAME}' -> Save/Download ...",
         flush=True,
     )
 
     try:
-        exp.ActivateTrafficScenario(source)
+        exp.ActivateTrafficScenario(SCENARIO_SRC)
     except Exception as e:
-        print(f"[ModelDeskDownload] ActivateTrafficScenario({source!r}) ignored: {e}", flush=True)
+        print(
+            f"[ModelDeskDownload] ActivateTrafficScenario({SCENARIO_SRC!r}) ignored: {e}",
+            flush=True,
+        )
 
     try:
         exp.TrafficScenario.SaveAs(name, True)
@@ -129,7 +293,7 @@ def _modeldesk_create_scenario_add_fellow_and_download(
         return False, f"ActivateTrafficScenario({name!r}) failed: {e}"
 
     pythoncom.PumpWaitingMessages()
-    time.sleep(0.2)
+    time.sleep(POST_SAVEAS_SETTLE_S)
     proj = app.ActiveProject
     if proj is None:
         return False, "ActiveProject is None after SaveAs."
@@ -141,12 +305,12 @@ def _modeldesk_create_scenario_add_fellow_and_download(
         return False, "TrafficScenario is None after SaveAs/activate."
 
     try:
-        fellow = ts.Fellows.Item(fellow_name)
-        print(f"[ModelDeskDownload] Using existing fellow: {fellow_name}", flush=True)
+        fellow = ts.Fellows.Item(FELLOW_NAME)
+        print(f"[ModelDeskDownload] Using existing fellow: {FELLOW_NAME}", flush=True)
     except Exception:
         fellow = ts.Fellows.Add()
-        fellow.Name = fellow_name
-        print(f"[ModelDeskDownload] Added fellow: {fellow_name}", flush=True)
+        fellow.Name = FELLOW_NAME
+        print(f"[ModelDeskDownload] Added fellow: {FELLOW_NAME}", flush=True)
 
     try:
         seqs = fellow.Sequences
@@ -181,6 +345,11 @@ def _modeldesk_create_scenario_add_fellow_and_download(
             print(f"[ModelDeskDownload] CheckConsistency() skipped: {e}", flush=True)
 
         ts.Save()
+        print(
+            f"[ModelDeskDownload] Pre-download pause {PRE_DOWNLOAD_DELAY_S:.1f}s ...",
+            flush=True,
+        )
+        time.sleep(PRE_DOWNLOAD_DELAY_S)
         ok = ts.Download()
     except Exception as e:
         return False, f"Save/Download failed: {e}"
@@ -188,413 +357,151 @@ def _modeldesk_create_scenario_add_fellow_and_download(
     if not ok:
         return False, "TrafficScenario.Download() returned False."
 
-    if maneuver_reset:
-        try:
-            exp.ManeuverControl.Reset()
-            print("[ModelDeskDownload] ManeuverControl.Reset() OK.", flush=True)
-        except Exception as e:
-            print(f"[ModelDeskDownload] ManeuverControl.Reset() warning: {e}", flush=True)
-
-    return True, f"Scenario '{name}' downloaded with fellow '{fellow_name}'."
-
-
-def _controldesk_rw_smoke(cd) -> bool:
-    """Best-effort read/write/read/restore check on a VESI variable."""
-    key_throttle = (
-        "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/"
-        "vehicle_inputs/Const_throttle_cmd/Value"
-    )
     try:
-        before = cd.get_var(key_throttle)
-        print(f"[ControlDeskRW] Read before: throttle={before!r}", flush=True)
+        exp.ManeuverControl.Reset()
+        print("[ModelDeskDownload] ManeuverControl.Reset() OK.", flush=True)
     except Exception as e:
-        print(f"[ControlDeskRW] FAILED reading throttle before write: {e}", flush=True)
-        return False
+        print(f"[ModelDeskDownload] ManeuverControl.Reset() warning: {e}", flush=True)
 
-    # Toggle between 0 and 1 where possible, then restore exact previous value.
-    try:
-        try:
-            before_f = float(before)
-            write_val = 0.0 if abs(before_f) > 0.5 else 1.0
-        except Exception:
-            write_val = 1.0
-
-        cd.set_var(key_throttle, write_val)
-        time.sleep(0.05)
-        after = cd.get_var(key_throttle)
-        print(
-            f"[ControlDeskRW] Wrote throttle={write_val!r}; read after={after!r}",
-            flush=True,
-        )
-        cd.set_var(key_throttle, before)
-        time.sleep(0.05)
-        restored = cd.get_var(key_throttle)
-        print(f"[ControlDeskRW] Restored throttle={restored!r}", flush=True)
-        return True
-    except Exception as e:
-        print(f"[ControlDeskRW] FAILED during write/restore: {e}", flush=True)
-        return False
+    return True, f"Scenario '{name}' downloaded with fellow '{FELLOW_NAME}'."
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Listen for timer-callback events from the VEOS IPC bridge client."
-    )
-    parser.add_argument("--host", default="127.0.0.1", help="Local host to bind")
-    parser.add_argument("--port", type=int, default=50555, help="Local TCP port to bind")
-    parser.add_argument(
-        "--time-trigger-ack-delay-s",
-        type=float,
-        default=0.0,
-        help="Delay before replying ACK to TIME_TRIGGER (default: 0.0s).",
-    )
-    parser.add_argument(
-        "--print-every-n",
-        type=int,
-        default=0,
-        help="Print timing line every N TIME_TRIGGER events; 0 disables per-trigger logs (default: 0).",
-    )
-    parser.add_argument(
-        "--no-auto-launch-client",
-        action="store_true",
-        help="Do not auto-launch VeosCoSimTestClientIpc.exe.",
-    )
-    parser.add_argument(
-        "--ipc-client-exe",
-        default=None,
-        help="Path to VeosCoSimTestClientIpc.exe (default: ../client/build/VeosCoSimTestClientIpc.exe).",
-    )
-    parser.add_argument("--veos-host", default="192.168.100.101", help="VEOS host for IPC client.")
-    parser.add_argument("--veos-name", default="CoSimServerScenic", help="VEOS CoSim server name.")
-    parser.add_argument(
-        "--check-controldesk",
-        action="store_true",
-        help="Try ControlDesk connect using Scenic's connect_and_prepare path.",
-    )
-    parser.add_argument(
-        "--check-modeldesk",
-        action="store_true",
-        help="Try ModelDesk COM connect using scenic.simulators.dspace.modeldesk.connection.ModelDeskConnection.",
-    )
-    parser.add_argument(
-        "--modeldesk-create-and-download",
-        action="store_true",
-        help="After ModelDesk connect, SaveAs a working scenario, add one fellow, and Download to VEOS.",
-    )
-    parser.add_argument(
-        "--modeldesk-post-connect-delay-s",
-        type=float,
-        default=10.0,
-        help="Wait time after ModelDesk connect and before scenario copy/download (default: 10.0s).",
-    )
-    parser.add_argument(
-        "--post-modeldesk-download-delay-s",
-        type=float,
-        default=30.0,
-        help="Wait time after successful ModelDesk download before ControlDesk connect/go_online (default: 30.0s).",
-    )
-    parser.add_argument(
-        "--scenario-src",
-        default=SCENIC_DEFAULT_SCENARIO_SRC,
-        help=(
-            "Source scenario name to activate before SaveAs "
-            f"(default: Scenic model default '{SCENIC_DEFAULT_SCENARIO_SRC}')."
-        ),
-    )
-    parser.add_argument(
-        "--scenario-name",
-        default=None,
-        help="Name for SaveAs scenario (default: Scenic_veos_test_YYYYMMDD_HHMMSS).",
-    )
-    parser.add_argument(
-        "--fellow-name",
-        default="F1",
-        help="Fellow name to add/configure in ModelDesk scenario (default: F1).",
-    )
-    parser.add_argument(
-        "--no-maneuver-reset",
-        action="store_true",
-        help="Skip ManeuverControl.Reset() after successful Download.",
-    )
-    parser.add_argument(
-        "--blocking-controldesk-check",
-        action="store_true",
-        help="Run ControlDesk check inside TIME_TRIGGER callback path (legacy blocking mode). Default is non-blocking background mode.",
-    )
-    parser.add_argument(
-        "--first-trigger-controldesk-delay-s",
-        type=float,
-        default=10.0,
-        help="When --check-controldesk is enabled, sleep this long before ControlDesk connect (default: 10.0s).",
-    )
-    parser.add_argument(
-        "--post-controldesk-delay-s",
-        type=float,
-        default=0.0,
-        help="When --check-controldesk is enabled, sleep this long after ControlDesk connect attempt before write test/timing (default: 0.0s).",
-    )
-    parser.add_argument(
-        "--enable-controldesk-rw-test",
-        action="store_true",
-        help="When --check-controldesk is enabled, run read/write smoke test (default: disabled).",
-    )
-    parser.add_argument(
-        "--post-rw-delay-s",
-        type=float,
-        default=0.0,
-        help="When RW smoke test runs, wait this long afterwards before stress timing starts (default: 0.0s).",
-    )
-    parser.add_argument(
-        "--external-control",
-        action="store_true",
-        help="Use scenic_control=False when checking ControlDesk (apply external baseline path).",
-    )
-    parser.add_argument(
-        "--timestep",
-        type=float,
-        default=0.01,
-        help="Timestep used in ControlDesk check via set_simulation_step (default: 0.01).",
-    )
-    args = parser.parse_args()
-    ack_delay = max(0.0, float(args.time_trigger_ack_delay_s))
-    print_every_n = int(args.print_every_n)
-    first_trigger_cd_delay_s = max(0.0, float(args.first_trigger_controldesk_delay_s))
-    post_controldesk_delay_s = max(0.0, float(args.post_controldesk_delay_s))
-    post_rw_delay_s = max(0.0, float(args.post_rw_delay_s))
-    auto_launch_client = not bool(args.no_auto_launch_client)
+    exe_path = _default_ipc_client_exe()
     client_proc = None
 
-    print(f"Starting local IPC listener on {args.host}:{args.port} ...", flush=True)
-    tick_count = 0
-    last_wall_elapsed_s = 0.0
-    last_sim_elapsed_s = 0.0
-    saw_sim_time = False
-
-    def _print_summary(reason: str):
-        if tick_count <= 0:
-            print(f"[STRESS_SUMMARY] reason={reason} ticks=0 (no TIME_TRIGGER samples)", flush=True)
-            return
-        wall_elapsed_s = max(0.0, float(last_wall_elapsed_s))
-        sim_elapsed_s = max(0.0, float(last_sim_elapsed_s))
-        avg_wall_tick_s = wall_elapsed_s / max(1, tick_count)
-        avg_hz = (1.0 / avg_wall_tick_s) if avg_wall_tick_s > 0 else float("inf")
-        sim_hz = (tick_count / sim_elapsed_s) if sim_elapsed_s > 0 else 0.0
-        print(
-            "[STRESS_SUMMARY] "
-            f"reason={reason} ticks={tick_count} sim_elapsed_s={sim_elapsed_s:.6f} "
-            f"wall_elapsed_s={wall_elapsed_s:.6f} "
-            f"avg_wall_tick_s={avg_wall_tick_s:.6f} "
-            f"avg_wall_tick_hz={avg_hz:.2f} "
-            f"sim_tick_hz={sim_hz:.2f}",
-            flush=True,
-        )
-        if saw_sim_time:
-            print(
-                "[STRESS_SUMMARY] Target 10ms timestep => expected sim_dt_s ~= 0.010000",
-                flush=True,
-            )
-        else:
-            print(
-                "[STRESS_SUMMARY] sim_time was not present in callbacks; sim_elapsed_s stayed at 0.",
-                flush=True,
-            )
-
+    print(f"Starting local IPC listener on {HOST}:{PORT} ...", flush=True)
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
             server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            server.bind((args.host, args.port))
+            server.bind((HOST, PORT))
             server.listen(1)
 
-            if auto_launch_client:
-                exe_path = Path(args.ipc_client_exe) if args.ipc_client_exe else _default_ipc_client_exe()
-                if not exe_path.is_file():
-                    print(
-                        f"ERROR: IPC client executable not found: {exe_path}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    return 1
-                cmd = [
-                    str(exe_path),
-                    "--host",
-                    str(args.veos_host),
-                    "--name",
-                    str(args.veos_name),
-                    "--ipc-host",
-                    str(args.host),
-                    "--ipc-port",
-                    str(args.port),
-                ]
-                print(f"Auto-launching IPC client: {' '.join(cmd)}", flush=True)
-                client_proc = subprocess.Popen(
-                    cmd,
-                    cwd=str(exe_path.parent),
-                    creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
+            if not exe_path.is_file():
+                print(
+                    f"ERROR: IPC client executable not found: {exe_path}",
+                    file=sys.stderr,
+                    flush=True,
                 )
+                return 1
+
+            cmd = [
+                str(exe_path),
+                "--host", VEOS_HOST,
+                "--name", VEOS_NAME,
+                "--ipc-host", HOST,
+                "--ipc-port", str(PORT),
+            ]
+            print(f"Auto-launching IPC client: {' '.join(cmd)}", flush=True)
+            client_proc = subprocess.Popen(
+                cmd,
+                cwd=str(exe_path.parent),
+                creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
+            )
 
             print("Waiting for IPC bridge client to connect...", flush=True)
             conn, addr = server.accept()
 
             with conn:
                 print(f"IPC bridge connected from {addr[0]}:{addr[1]}", flush=True)
-                print(
-                    f"Stress test config: ack_delay={ack_delay:.3f}s, "
-                    f"print_every_n={print_every_n}",
-                    flush=True,
-                )
-                buf = b""
-                base_wall_s = None
-                base_sim_ns = None
-                last_sim_ns = None
-                controldesk_checked = False
-                cd_workflow_done = threading.Event()
 
-                def _run_controldesk_workflow():
-                    nonlocal controldesk_checked
-                    scenic_control = not bool(args.external_control)
+                def _run_setup():
                     try:
-                        if first_trigger_cd_delay_s > 0.0:
-                            print(
-                                "[ControlDeskCheck] Pre-connect pause "
-                                f"{first_trigger_cd_delay_s:.3f}s ...",
-                                flush=True,
-                            )
-                            time.sleep(first_trigger_cd_delay_s)
                         print(
-                            f"[ControlDeskCheck] Attempting Scenic-like ControlDesk connect "
-                            f"(scenic_control={scenic_control}, timestep={float(args.timestep):.3f}) ...",
+                            f"[ModelDeskCheck] Pre-connect pause {MODELDESK_PRE_CONNECT_DELAY_S:.1f}s ...",
                             flush=True,
                         )
+                        time.sleep(MODELDESK_PRE_CONNECT_DELAY_S)
+                        print('[ModelDeskCheck] COM dispatch starting: "ModelDesk.Application"', flush=True)
+                        conn_md = _check_modeldesk_connection()
+                        proj = getattr(conn_md, "proj", None)
+                        exp = getattr(conn_md, "exp", None)
+                        proj_name = getattr(proj, "Name", "?") if proj is not None else "?"
+                        exp_name = getattr(exp, "Name", "?") if exp is not None else "?"
                         print(
-                            '[ControlDeskCheck] COM dispatch starting: "ControlDeskNG.Application"',
+                            f"[ModelDeskCheck] OK: connected (project={proj_name}, experiment={exp_name}).",
                             flush=True,
                         )
-                        cd = _check_controldesk_like_scenic(
-                            timestep=float(args.timestep),
-                            scenic_control=scenic_control,
+
+                        md_ok, md_msg = _modeldesk_create_scenario_add_fellow_and_download(conn_md)
+                        if not md_ok:
+                            print(f"[ModelDeskDownload] FAILED: {md_msg}", flush=True)
+                            print("[Setup] ModelDesk step failed; aborting ControlDesk check.", flush=True)
+                            return
+                        print(f"[ModelDeskDownload] OK: {md_msg}", flush=True)
+
+                        print(
+                            f"[ControlDeskAfterModelDesk] Waiting {POST_MODELDESK_DOWNLOAD_DELAY_S:.1f}s "
+                            "before ControlDesk connect + Scenic-control init ...",
+                            flush=True,
                         )
+                        time.sleep(POST_MODELDESK_DOWNLOAD_DELAY_S)
+                        print(
+                            "[ControlDeskAfterModelDesk] Running connect_and_prepare "
+                            "(online + measurement + VESI Manual init + timestep) ...",
+                            flush=True,
+                        )
+                        cd = _connect_controldesk_scenic_control()
                         if cd is None:
-                            print("[ControlDeskCheck] FAILED (see messages above).", flush=True)
+                            print("[ControlDeskAfterModelDesk] FAILED: connect_and_prepare returned None.", flush=True)
+                            print("[Setup] ControlDesk step failed.", flush=True)
+                            return
+                        print(
+                            "[ControlDeskAfterModelDesk] OK: online, measurement started, "
+                            "VesiInterface initialized (scenic_control=True), "
+                            f"timestep={TIMESTEP_S:.4f}s applied.",
+                            flush=True,
+                        )
+
+                        com_ok, com_fail, com_failed = _test_variable_access(cd, backend="ControlDesk")
+
+                        print("[MAPortCheck] Attempting MAPort (XIL API) connect ...", flush=True)
+                        mp = _connect_maport()
+                        if mp is None:
+                            print(
+                                "[MAPortCheck] FAILED: MAPort connect returned None. "
+                                "Check clr/pythonnet install, XIL API assemblies, and MAPortConfigVEOS.xml.",
+                                flush=True,
+                            )
+                            mp_ok = mp_fail = 0
+                            mp_failed: list[str] = []
+                            mp_connected = False
                         else:
-                            print(
-                                "[ControlDeskCheck] OK: connect_and_prepare succeeded "
-                                "(online, measurement started, VESI/baseline, timestep applied).",
-                                flush=True,
-                            )
-                        if post_controldesk_delay_s > 0.0:
-                            print(
-                                "[ControlDeskCheck] Post-connect pause "
-                                f"{post_controldesk_delay_s:.3f}s before write test ...",
-                                flush=True,
-                            )
-                            time.sleep(post_controldesk_delay_s)
-                        if cd is not None and scenic_control and bool(args.enable_controldesk_rw_test):
-                            print(
-                                "[ControlDeskRW] Running Scenic-control read/write smoke test ...",
-                                flush=True,
-                            )
-                            rw_ok = _controldesk_rw_smoke(cd)
-                            print("[ControlDeskRW] OK" if rw_ok else "[ControlDeskRW] FAILED", flush=True)
-                            if post_rw_delay_s > 0.0:
-                                print(
-                                    f"[ControlDeskRW] Post-write settle pause {post_rw_delay_s:.3f}s ...",
-                                    flush=True,
-                                )
-                                time.sleep(post_rw_delay_s)
-                        controldesk_checked = True
-                        print("[ControlDeskCheck] Workflow complete.", flush=True)
+                            print("[MAPortCheck] OK: MAPort connected.", flush=True)
+                            mp_connected = True
+                            try:
+                                mp_ok, mp_fail, mp_failed = _test_variable_access(mp, backend="MAPort")
+                            finally:
+                                try:
+                                    mp.dispose()
+                                    print("[MAPortCheck] MAPort disposed.", flush=True)
+                                except Exception as e:
+                                    print(f"[MAPortCheck] MAPort dispose warning: {type(e).__name__}: {e}", flush=True)
+
+                        print("[Setup] === ALL STEPS COMPLETED SUCCESSFULLY ===", flush=True)
+                        print("[Setup]   ModelDesk scenario downloaded to VEOS.", flush=True)
+                        print("[Setup]   ControlDesk online with scenic_control=True init.", flush=True)
+                        print(f"[Setup]   ControlDesk variable test: {com_ok} OK, {com_fail} FAIL.", flush=True)
+                        if com_failed:
+                            print(f"[Setup]     Failed (ControlDesk): {', '.join(com_failed)}", flush=True)
+                        if mp_connected:
+                            print(f"[Setup]   MAPort variable test:     {mp_ok} OK, {mp_fail} FAIL.", flush=True)
+                            if mp_failed:
+                                print(f"[Setup]     Failed (MAPort):     {', '.join(mp_failed)}", flush=True)
+                        else:
+                            print("[Setup]   MAPort variable test:     SKIPPED (connect failed).", flush=True)
+                        print("[Setup]   IPC bridge is releasing VEOS steps.", flush=True)
                     except Exception as e:
-                        print(f"[ControlDeskCheck] UNHANDLED ERROR: {e}", flush=True)
+                        print(f"[Setup] ERROR: {e}", flush=True)
                         print(traceback.format_exc(), flush=True)
-                    finally:
-                        cd_workflow_done.set()
 
-                if args.check_controldesk and not args.blocking_controldesk_check:
-                    print(
-                        "[ControlDeskCheck] Starting non-blocking background workflow "
-                        "(TIME_TRIGGER callbacks continue).",
-                        flush=True,
-                    )
-                    threading.Thread(
-                        target=_run_controldesk_workflow,
-                        name="ControlDeskCheckWorker",
-                        daemon=True,
-                    ).start()
-                elif args.check_modeldesk:
-                    def _run_modeldesk_workflow():
-                        try:
-                            if first_trigger_cd_delay_s > 0.0:
-                                print(
-                                    "[ModelDeskCheck] Pre-connect pause "
-                                    f"{first_trigger_cd_delay_s:.3f}s ...",
-                                    flush=True,
-                                )
-                                time.sleep(first_trigger_cd_delay_s)
-                            print(
-                                '[ModelDeskCheck] COM dispatch starting: "ModelDesk.Application"',
-                                flush=True,
-                            )
-                            conn_md = _check_modeldesk_connection()
-                            proj = getattr(conn_md, "proj", None)
-                            exp = getattr(conn_md, "exp", None)
-                            proj_name = getattr(proj, "Name", "?") if proj is not None else "?"
-                            exp_name = getattr(exp, "Name", "?") if exp is not None else "?"
-                            print(
-                                f"[ModelDeskCheck] OK: connected (project={proj_name}, experiment={exp_name}).",
-                                flush=True,
-                            )
-                            if bool(args.modeldesk_create_and_download):
-                                delay_s = max(0.0, float(args.modeldesk_post_connect_delay_s))
-                                if delay_s > 0.0:
-                                    print(
-                                        f"[ModelDeskDownload] Post-connect pause {delay_s:.3f}s before SaveAs/copy/download ...",
-                                        flush=True,
-                                    )
-                                    time.sleep(delay_s)
-                                ok, msg = _modeldesk_create_scenario_add_fellow_and_download(
-                                    conn_md,
-                                    scenario_src=args.scenario_src,
-                                    scenario_name=args.scenario_name,
-                                    fellow_name=args.fellow_name,
-                                    maneuver_reset=not bool(args.no_maneuver_reset),
-                                )
-                                if ok:
-                                    print(f"[ModelDeskDownload] OK: {msg}", flush=True)
-                                    delay_after_download = max(0.0, float(args.post_modeldesk_download_delay_s))
-                                    if delay_after_download > 0.0:
-                                        print(
-                                            "[ControlDeskAfterModelDesk] Waiting "
-                                            f"{delay_after_download:.3f}s before ControlDesk connect/go_online ...",
-                                            flush=True,
-                                        )
-                                        time.sleep(delay_after_download)
-                                    ok_cd, msg_cd = _connect_controldesk_go_online()
-                                    if ok_cd:
-                                        print(f"[ControlDeskAfterModelDesk] OK: {msg_cd}", flush=True)
-                                    else:
-                                        print(f"[ControlDeskAfterModelDesk] FAILED: {msg_cd}", flush=True)
-                                else:
-                                    print(f"[ModelDeskDownload] FAILED: {msg}", flush=True)
-                        except Exception as e:
-                            print(f"[ModelDeskCheck] ERROR: {e}", flush=True)
-                            print(traceback.format_exc(), flush=True)
+                threading.Thread(target=_run_setup, name="SetupWorker", daemon=True).start()
 
-                    print(
-                        "[ModelDeskCheck] Starting non-blocking background workflow "
-                        "(TIME_TRIGGER callbacks continue).",
-                        flush=True,
-                    )
-                    threading.Thread(
-                        target=_run_modeldesk_workflow,
-                        name="ModelDeskCheckWorker",
-                        daemon=True,
-                    ).start()
-
+                buf = b""
                 while True:
                     chunk = conn.recv(4096)
                     if not chunk:
                         print("IPC bridge disconnected.", flush=True)
-                        _print_summary("disconnect_before_target")
                         break
 
                     buf += chunk
@@ -615,125 +522,8 @@ def main() -> int:
                             continue
 
                         event = obj.get("event", "UNKNOWN")
-                        sim_time: Optional[int] = obj.get("sim_time")
-                        count = obj.get("count")
-                        source = obj.get("source")
-
                         if event == "TIME_TRIGGER":
-                            if args.check_controldesk and args.blocking_controldesk_check and not controldesk_checked:
-                                scenic_control = not bool(args.external_control)
-                                print(
-                                    "[ControlDeskCheck] First TIME_TRIGGER received. "
-                                    f"Pausing {first_trigger_cd_delay_s:.3f}s before Scenic-like ControlDesk connect ...",
-                                    flush=True,
-                                )
-                                if first_trigger_cd_delay_s > 0.0:
-                                    time.sleep(first_trigger_cd_delay_s)
-                                print(
-                                    f"[ControlDeskCheck] Attempting Scenic-like ControlDesk connect "
-                                    f"(scenic_control={scenic_control}, timestep={float(args.timestep):.3f}) ...",
-                                    flush=True,
-                                )
-                                print(
-                                    '[ControlDeskCheck] COM dispatch starting: "ControlDeskNG.Application"',
-                                    flush=True,
-                                )
-                                cd = _check_controldesk_like_scenic(
-                                    timestep=float(args.timestep),
-                                    scenic_control=scenic_control,
-                                )
-                                if cd is None:
-                                    print("[ControlDeskCheck] FAILED (see messages above).", flush=True)
-                                else:
-                                    print(
-                                        "[ControlDeskCheck] OK: connect_and_prepare succeeded "
-                                        "(online, measurement started, VESI/baseline, timestep applied).",
-                                        flush=True,
-                                    )
-                                if post_controldesk_delay_s > 0.0:
-                                    print(
-                                        "[ControlDeskCheck] Post-connect pause "
-                                        f"{post_controldesk_delay_s:.3f}s before write test and stress timing ...",
-                                        flush=True,
-                                    )
-                                    time.sleep(post_controldesk_delay_s)
-                                if cd is not None and scenic_control and bool(args.enable_controldesk_rw_test):
-                                    print(
-                                        "[ControlDeskRW] Running Scenic-control read/write smoke test ...",
-                                        flush=True,
-                                    )
-                                    rw_ok = _controldesk_rw_smoke(cd)
-                                    if rw_ok:
-                                        print("[ControlDeskRW] OK", flush=True)
-                                    else:
-                                        print("[ControlDeskRW] FAILED", flush=True)
-                                    if post_rw_delay_s > 0.0:
-                                        print(
-                                            f"[ControlDeskRW] Post-write settle pause {post_rw_delay_s:.3f}s ...",
-                                            flush=True,
-                                        )
-                                        time.sleep(post_rw_delay_s)
-                                controldesk_checked = True
-                                # Release this warmup trigger after pre/post delays and ControlDesk probe,
-                                # but do not include it in timing statistics.
-                                if ack_delay > 0.0:
-                                    time.sleep(ack_delay)
-                                conn.sendall(b"STEP\n")
-                                print(
-                                    "[ControlDeskCheck] Warmup complete; stress timing begins on next TIME_TRIGGER.",
-                                    flush=True,
-                                )
-                                continue
-
-                            tick_count += 1
-
-                            now_wall_s = time.perf_counter()
-                            sim_ns = None
-                            if sim_time is not None:
-                                try:
-                                    sim_ns = int(sim_time)
-                                    saw_sim_time = True
-                                except (TypeError, ValueError):
-                                    sim_ns = None
-
-                            if base_wall_s is None:
-                                base_wall_s = now_wall_s
-                                if sim_ns is not None:
-                                    base_sim_ns = sim_ns
-                                last_sim_ns = sim_ns
-
-                            wall_elapsed_s = (
-                                (now_wall_s - base_wall_s) if base_wall_s is not None else 0.0
-                            )
-                            sim_elapsed_s = 0.0
-                            sim_dt_s = None
-                            if sim_ns is not None and base_sim_ns is not None:
-                                sim_elapsed_s = (sim_ns - base_sim_ns) / TIME_RESOLUTION_PER_SECOND
-                            if sim_ns is not None and last_sim_ns is not None:
-                                sim_dt_s = (sim_ns - last_sim_ns) / TIME_RESOLUTION_PER_SECOND
-                            last_sim_ns = sim_ns
-                            last_wall_elapsed_s = wall_elapsed_s
-                            last_sim_elapsed_s = sim_elapsed_s
-
-                            if print_every_n > 0 and (tick_count % print_every_n) == 0:
-                                if sim_dt_s is None:
-                                    print(
-                                        f"[TIME_TRIGGER] tick={tick_count} source={source} count={count} "
-                                        f"sim_elapsed_s={sim_elapsed_s:.6f} wall_elapsed_s={wall_elapsed_s:.6f}",
-                                        flush=True,
-                                    )
-                                else:
-                                    print(
-                                        f"[TIME_TRIGGER] tick={tick_count} source={source} count={count} "
-                                        f"sim_elapsed_s={sim_elapsed_s:.6f} wall_elapsed_s={wall_elapsed_s:.6f} "
-                                        f"sim_dt_s={sim_dt_s:.6f}",
-                                        flush=True,
-                                    )
-
-                            if ack_delay > 0.0:
-                                time.sleep(ack_delay)
                             conn.sendall(b"STEP\n")
-
                         else:
                             print(f"[{event}] {obj}", flush=True)
                             conn.sendall(b"ACK\n")
@@ -742,7 +532,6 @@ def main() -> int:
 
     except KeyboardInterrupt:
         print("Interrupted; shutting down.", flush=True)
-        _print_summary("keyboard_interrupt")
         return 130
     except OSError as exc:
         print(f"ERROR: {exc}", file=sys.stderr, flush=True)

@@ -98,7 +98,9 @@ def test_setup_left_when_opponent_on_right():
     )
     assert m3 == SETUP_LEFT
     assert ttl3 == "left"
-    assert cap3 is None
+    # SETUP now caps speed to opponent + margin when opponent is ahead
+    assert cap3 is not None
+    assert cap3 <= 35.0  # should be opponent_speed (30) + margin (2.5) = 32.5
 
 
 def test_pit_forces_free_run():
@@ -516,12 +518,12 @@ def test_protected_follow_releases_into_setup_when_opening_stably_clear():
         )
         assert m5 == SETUP_LEFT
         assert ttl5 == "left"
-        assert cap5 is None
+        assert cap5 is not None  # SETUP caps speed when opponent ahead
         assert reason5 in ("setup_left_open", "setup_flip_cooldown_hold")
     else:
         assert m4 == SETUP_LEFT
         assert ttl4 == "left"
-        assert cap4 is None
+        assert cap4 is not None  # SETUP caps speed when opponent ahead
         assert reason4 in ("setup_left_open", "setup_flip_cooldown_hold", "setup_commit_left_hold")
 
 
@@ -559,7 +561,7 @@ def test_setup_commit_hold_keeps_setup_during_moderate_pressure():
         assessment_closing_flag=False,
         assessment_emergency_risk_01=0.1,
     )
-    assert m0 == SETUP_LEFT and ttl0 == "left" and cap0 is None
+    assert m0 == SETUP_LEFT and ttl0 == "left" and cap0 is not None
     assert reason0 in ("setup_commit_left_hold", "setup_left_open")
 
     # Moderate pressure (gap temporarily not ok), but opening remains asymmetric and clear.
@@ -580,7 +582,7 @@ def test_setup_commit_hold_keeps_setup_during_moderate_pressure():
         assessment_closing_flag=False,
         assessment_emergency_risk_01=0.1,
     )
-    assert m1 == SETUP_LEFT and ttl1 == "left" and cap1 is None
+    assert m1 == SETUP_LEFT and ttl1 == "left" and cap1 is not None
     assert reason1 == "setup_commit_left_hold"
 
 
@@ -618,7 +620,7 @@ def test_setup_commit_cancels_on_hard_hazard():
         assessment_closing_flag=False,
         assessment_emergency_risk_01=0.1,
     )
-    assert m0 == SETUP_LEFT and ttl0 == "left" and cap0 is None
+    assert m0 == SETUP_LEFT and ttl0 == "left" and cap0 is not None
     assert reason0 in ("setup_commit_left_hold", "setup_left_open")
 
     # Side-by-side overlap is a hard hazard; commit hold must be dropped.
@@ -709,7 +711,7 @@ def test_pass_intent_commit_arms_from_follow_and_enters_setup():
         assessment_closing_flag=False,
         assessment_emergency_risk_01=0.1,
     )
-    assert m1 == SETUP_LEFT and ttl1 == "left" and cap1 is None
+    assert m1 == SETUP_LEFT and ttl1 == "left" and cap1 is not None
     assert reason1 == "setup_commit_left_hold"
 
 
@@ -747,7 +749,7 @@ def test_lateral_path_lock_holds_setup_during_protected_follow():
         assessment_closing_flag=False,
         assessment_emergency_risk_01=0.1,
     )
-    assert m == SETUP_LEFT and ttl == "left" and cap is None
+    assert m == SETUP_LEFT and ttl == "left" and cap is not None
     assert reason == "lateral_path_lock_left_hold"
 
 

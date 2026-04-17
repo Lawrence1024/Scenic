@@ -51,7 +51,7 @@ def _clamp01(x: float) -> float:
 def compute_dynamic_safe_gap_m(
     ego_speed_mps: float,
     *,
-    time_headway_s: float = 1.10,
+    time_headway_s: float = 0.80,
     base_gap_m: float = 6.0,
     max_gap_m: float = 70.0,
     lateral_offset_m: float = 0.0,

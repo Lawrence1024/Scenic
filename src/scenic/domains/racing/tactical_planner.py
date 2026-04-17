@@ -33,8 +33,8 @@ class TacticalPlannerConfig:
     pass_requires_straight: bool = True
     setup_flip_cooldown_s: float = 4.0
     follow_speed_margin_mps: float = 2.5
-    follow_tight_gap_m: float = 14.0
-    follow_tight_headway_s: float = 0.9
+    follow_tight_gap_m: float = 10.0
+    follow_tight_headway_s: float = 0.6
     blocked_headway_s: float = 1.8
     setup_min_headway_s: float = 0.6
     hard_ttc_s: float = 1.4
@@ -42,9 +42,9 @@ class TacticalPlannerConfig:
     follow_tight_cap_scale: float = 0.92
     setup_min_distance_m: float = 9.0
     setup_partial_overlap_lateral_m: float = 1.8
-    setup_reentry_cooldown_s: float = 0.9
+    setup_reentry_cooldown_s: float = 0.5
     contact_recovery_hold_s: float = 1.0
-    protected_follow_release_cycles: int = 3
+    protected_follow_release_cycles: int = 2
     setup_commit_entry_cycles: int = 2
     setup_commit_hold_s: float = 1.2
     setup_commit_min_closing_mps: float = 0.3
@@ -213,11 +213,16 @@ def tactical_planner_step_v1(
 
     def _setup_result(side: str, reason: str) -> Tuple[str, str, Optional[float], str]:
         state.last_setup_side = side
+        # When opponent is ahead, cap approach speed so ego doesn't charge at full
+        # target speed during the lateral transition.  Once COMMIT fires, cap is removed.
+        cap: Optional[float] = None
+        if relation_ahead and sit is not None:
+            cap = max(3.0, float(opponent_speed_mps) + config.follow_speed_margin_mps)
         if side == "left":
             state.mode = SETUP_LEFT
-            return SETUP_LEFT, "left", None, reason
+            return SETUP_LEFT, "left", cap, reason
         state.mode = SETUP_RIGHT
-        return SETUP_RIGHT, "right", None, reason
+        return SETUP_RIGHT, "right", cap, reason
 
     def _clear_safety_latches() -> None:
         state.protected_follow_active = False
@@ -535,6 +540,17 @@ def tactical_planner_step_v1(
         return _commit_result("right", "commit_pass_right_hold")
 
     if commit_enabled and state.mode == ABORT_PASS:
+        # Early release: opponent already behind and no active hazard → pass completed,
+        # no need to hold abort timer (prevents unnecessary hard braking after passing).
+        if (not relation_ahead) and (not overlap_hazard_now) and (not in_recovery_hold):
+            state.commit.abort_success = True
+            state.commit.post_event_state = FREE_RUN
+            _clear_setup_commit()
+            _clear_pass_intent()
+            _clear_lateral_lock()
+            _clear_commit_lifecycle()
+            state.mode = FREE_RUN
+            return FREE_RUN, "optimal", None, "abort_passed_free_run"
         if hard_abort_hazard:
             state.commit.abort_until_s = max(
                 float(state.commit.abort_until_s),

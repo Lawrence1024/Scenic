@@ -46,8 +46,8 @@ def test_dynamic_safe_gap_uses_shorter_headway_for_parallel_ttl():
     """Laterally separated opponent (parallel TTL) should use shorter headway."""
     same_line = compute_dynamic_safe_gap_m(18.0, lateral_offset_m=0.5)
     parallel = compute_dynamic_safe_gap_m(18.0, lateral_offset_m=2.5)
-    # At 18 m/s: same_line = 6+18*1.10 = 25.8, parallel = 6+18*0.35 = 12.3
-    assert same_line > 24.0
+    # At 18 m/s: same_line = 6+18*0.80 = 20.4, parallel = 6+18*0.35 = 12.3
+    assert same_line > 19.0
     assert parallel < 13.0
     assert parallel < same_line
 

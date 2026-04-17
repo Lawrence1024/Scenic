@@ -19,7 +19,7 @@ class StabilityGuardConfig:
     emergency_closing_brake_floor: float = 0.45
     emergency_max_steer_abs_rad: float = 0.15
     reapproach_recovery_hold_s: float = 1.2
-    reapproach_retrigger_risk_01: float = 0.45
+    reapproach_retrigger_risk_01: float = 0.55
     reapproach_max_throttle: float = 0.20
     reapproach_brake_floor: float = 0.12
     reapproach_release_risk_01: float = 0.35
@@ -125,14 +125,16 @@ def stability_guard_step(
         guard_reason = "brake_steer_coupled"
 
     risk = max(0.0, min(1.0, float(emergency_risk_01)))
-    in_committed_pass = str(planner_state or "") in ("COMMIT_PASS_LEFT", "COMMIT_PASS_RIGHT")
+    in_pass_maneuver = str(planner_state or "") in (
+        "COMMIT_PASS_LEFT", "COMMIT_PASS_RIGHT",
+    )
     emergency_trigger = bool(
         (not pit_mode)
         and (
             bool(overlap_flag)
             or risk >= float(config.emergency_risk_enter_01)
             or (
-                (not in_committed_pass)
+                (not in_pass_maneuver)
                 and (not bool(gap_ok))
                 and bool(closing_flag)
                 and risk >= 0.50
@@ -155,7 +157,14 @@ def stability_guard_step(
         and risk <= float(config.emergency_risk_exit_01)
         and (not bool(closing_flag))
     )
-    if emergency_latched and emergency_exit_ok:
+    # During ABORT_PASS with safe conditions, force-release both latches immediately.
+    # The ego has passed the opponent; holding emergency/recovery braking is unnecessary.
+    in_abort_pass = str(planner_state or "") == "ABORT_PASS"
+    if in_abort_pass and emergency_exit_ok:
+        state.emergency_latch_until_s = min(float(state.emergency_latch_until_s), float(sim_time_s))
+        state.recovery_hold_until_s = min(float(state.recovery_hold_until_s), float(sim_time_s))
+        emergency_latched = False
+    elif emergency_latched and emergency_exit_ok:
         state.emergency_latch_until_s = min(float(state.emergency_latch_until_s), float(sim_time_s))
         emergency_latched = False
 
@@ -177,7 +186,7 @@ def stability_guard_step(
             steer_limited = True
     elif (not pit_mode):
         retrigger = bool(
-            (not in_committed_pass)
+            (not in_pass_maneuver)
             and (
                 bool(overlap_flag)
                 or ((not bool(gap_ok)) and bool(closing_flag))

@@ -169,6 +169,7 @@ def main():
     pit_left_edges, pit_right_edges = get_road_boundaries(pit_roads) if not args.no_pit else ([], [])
 
     dx, dy = 0.0, 0.0
+    
     # Four GPS-converted XODR TTLs (left, right, optimal, pit)
     xodr_ttl_files = [
         ("ttl_left_xodr.csv", "Left (XODR)"),
