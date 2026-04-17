@@ -91,13 +91,6 @@ RE_COMMIT = re.compile(
     r"post_event_state=(?P<post>\S+)"
     r".*seg_ctx=(?P<seg_ctx>\S+)\s+seg_modifier=(?P<seg_modifier>\S+)"
 )
-# Backward-compatibility aliases for code that still uses phase-numbered names.
-RE_PHASE7_PREDICTION = RE_PREDICTION
-RE_PHASE8_ASSESSMENT = RE_ASSESSMENT
-RE_PHASE9_PLANNER = RE_PLANNER
-RE_PHASE10_GUARD = RE_GUARD
-RE_PHASE11_PLANNER = RE_COMMIT
-RE_PHASE12_PLANNER = RE_COMMIT
 RE_LOG_TIME_S = re.compile(r"\bt=(?P<t>\d+\.?\d*)s\b")
 # Fellow harness: placement from ego offset ([placement.py])
 RE_FELLOW_PLACEMENT_FROM_EGO = re.compile(
@@ -614,7 +607,7 @@ def collect_metrics_from_log(
                         phase11_commit_pass_right_count += 1
                     elif _p11_state == "ABORT_PASS":
                         phase11_abort_pass_count += 1
-                p12 = RE_PHASE12_PLANNER.search(line)
+                p12 = RE_COMMIT.search(line)
                 if p12:
                     _seg_ctx = str(p12.group("seg_ctx") or "none")
                     _seg_mod = str(p12.group("seg_modifier") or "normal")

@@ -49,16 +49,16 @@ from scenic.domains.racing.tactical_planner import (
 )
 from scenic.domains.racing.prediction import FellowPredictor, format_prediction_log_line
 from scenic.domains.racing.assessment import (
-    Phase8AssessmentState,
-    assess_phase8_situation_stateful,
-    format_phase8_assessment_log_line,
+    RaceSituationState,
+    assess_race_situation,
+    format_assessment_log_line,
 )
 from scenic.domains.racing.safety import (
-    Phase10StabilityGuardConfig,
-    Phase10StabilityGuardState,
-    format_phase10_guard_log_line,
-    phase10_guard_step,
-    phase10_handle_ttl_switch,
+    StabilityGuardConfig,
+    StabilityGuardState,
+    format_stability_guard_log_line,
+    stability_guard_step,
+    stability_guard_handle_ttl_switch,
 )
 
 from scenic.simulators.dspace.ttl.loader import load_ttl_region
@@ -284,7 +284,7 @@ behavior FellowSwerveOutOfControlBehavior(
         self._fellow_plant_log_mode = mode
         wait
 
-behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False, phase7_prediction_enabled=False, phase8_assessment_enabled=False, phase10_stability_guard_enabled=False, phase11_commit_abort_enabled=False, phase12_segment_aware_enabled=False):
+behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False, prediction_enabled=False, assessment_enabled=False, stability_guard_enabled=False, commit_abort_enabled=False, segment_aware_enabled=False):
     """Follow the car's TTL using MPC (Model Predictive Control) for lateral control.
     
     Primary Scenic behavior for line-following on the racing TTL. Lateral and longitudinal
@@ -302,13 +302,13 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         mpc_config_path: Path to MPC config YAML file (optional, uses default if None)
         tactical_planner_enabled: Phase 3 — conservative FOLLOW / SETUP_LEFT / SETUP_RIGHT using
             Phase 2 situation assessment (mutually exclusive with scripted ``planner_enabled`` schedule).
-        phase7_prediction_enabled: Log ``[Prediction]`` for the nearest fellow
+        prediction_enabled: Log ``[Prediction]`` for the nearest fellow
             (ego only; constant-velocity next-step estimate and error vs realized pose).
-        phase8_assessment_enabled: Log ``[Assessment]`` tactical facts
+        assessment_enabled: Log ``[Assessment]`` tactical facts
             (`fellow_relation`, `safe_gap`, `gap_ok`, corridor openness) from current/predicted fellow state.
-        phase10_stability_guard_enabled: Enforce stability guard constraints
+        stability_guard_enabled: Enforce stability guard constraints
             (steer slew, brake-steer coupling, emergency-stable containment, TTL switch rate-limiting).
-        phase11_commit_abort_enabled: Enable explicit pass lifecycle states
+        commit_abort_enabled: Enable explicit pass lifecycle states
             (`COMMIT_PASS_LEFT`, `COMMIT_PASS_RIGHT`, `ABORT_PASS`) in tactical planner output.
     """
     
@@ -359,42 +359,38 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         except Exception:
             _tactical_planner_enabled = False
     _tactical_config = TacticalPlannerConfig()
-    _phase7_requested = bool(phase7_prediction_enabled)
-    _assessment_enabled = bool(phase8_assessment_enabled)
-    _stability_guard_enabled = bool(phase10_stability_guard_enabled)
-    _commit_enabled = bool(phase11_commit_abort_enabled)
+    _phase7_requested = bool(prediction_enabled)
+    _assessment_enabled = bool(assessment_enabled)
+    _stability_guard_enabled = bool(stability_guard_enabled)
+    _commit_enabled = bool(commit_abort_enabled)
     if not _assessment_enabled:
         try:
-            _p = (getattr(simulation().scene, 'params', None) or {})
-            _assessment_enabled = bool(_p.get("assessment_enabled") or _p.get("phase8_assessment_enabled", False))
+            _assessment_enabled = bool((getattr(simulation().scene, 'params', None) or {}).get("assessment_enabled", False))
         except Exception:
             _assessment_enabled = False
     if not _stability_guard_enabled:
         try:
-            _p = (getattr(simulation().scene, 'params', None) or {})
-            _stability_guard_enabled = bool(_p.get("stability_guard_enabled") or _p.get("phase10_stability_guard_enabled", False))
+            _stability_guard_enabled = bool((getattr(simulation().scene, 'params', None) or {}).get("stability_guard_enabled", False))
         except Exception:
             _stability_guard_enabled = False
     if not _commit_enabled:
         try:
-            _p = (getattr(simulation().scene, 'params', None) or {})
-            _commit_enabled = bool(_p.get("commit_abort_enabled") or _p.get("phase11_commit_abort_enabled", False))
+            _commit_enabled = bool((getattr(simulation().scene, 'params', None) or {}).get("commit_abort_enabled", False))
         except Exception:
             _commit_enabled = False
     _tactical_config.commit_abort_enabled = bool(_commit_enabled)
-    _segment_aware_enabled = bool(phase12_segment_aware_enabled)
+    _segment_aware_enabled = bool(segment_aware_enabled)
     if not _segment_aware_enabled:
         try:
-            _p = (getattr(simulation().scene, 'params', None) or {})
-            _segment_aware_enabled = bool(_p.get("segment_aware_enabled") or _p.get("phase12_segment_aware_enabled", False))
+            _segment_aware_enabled = bool((getattr(simulation().scene, 'params', None) or {}).get("segment_aware_enabled", False))
         except Exception:
             _segment_aware_enabled = False
     _tactical_config.segment_aware_enabled = bool(_segment_aware_enabled)
     if _segment_aware_enabled:
-        # Phase 12 owns segment gating via fine-grained modifiers;
+        # Segment-aware gating via fine-grained modifiers;
         # disable the legacy straight-only blanket gate so corner passes are possible.
         _tactical_config.pass_requires_straight = False
-    _phase10_guard_config = Phase10StabilityGuardConfig()
+    _guard_config = StabilityGuardConfig()
     if _phase1_schedule_enabled or _tactical_planner_enabled:
         try:
             _params = getattr(simulation().scene, 'params', None) or {}
@@ -984,11 +980,11 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
 
                 if _assessment_enabled and car_heading is not None:
                     if not hasattr(self, '_phase8_assessment_state'):
-                        self._phase8_assessment_state = Phase8AssessmentState()
+                        self._phase8_assessment_state = RaceSituationState()
                     _pred_xy8 = None
                     if _p7r is not None:
                         _pred_xy8 = (float(_p7r.fellow_pred_x), float(_p7r.fellow_pred_y))
-                    _a8, _a8_state = assess_phase8_situation_stateful(
+                    _a8, _a8_state = assess_race_situation(
                         sit=_sit6,
                         ego_speed_mps=float(current_speed),
                         ego_xy=(float(px), float(py)),
@@ -1004,7 +1000,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         self._phase8_emergency_risk_01 = float(getattr(_a8, "emergency_risk_01", 0.0) or 0.0)
                     except Exception:
                         self._phase8_emergency_risk_01 = 0.0
-                    print(format_phase8_assessment_log_line(_sim_time_s, _a8))
+                    print(format_assessment_log_line(_sim_time_s, _a8))
             
             # --- Phase 3 tactical planner (TTL + follow cap; uses prior-step curvature lookahead) ---
             _p10_ttl_switch_blocked = False
@@ -1012,7 +1008,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 if not hasattr(self, '_phase3_tp_state'):
                     self._phase3_tp_state = TacticalPlannerState()
                 if _stability_guard_enabled and not hasattr(self, '_phase10_guard_state'):
-                    self._phase10_guard_state = Phase10StabilityGuardState(
+                    self._phase10_guard_state = StabilityGuardState(
                         last_ttl=str(_phase1_active_ttl or "optimal")
                     )
                 _k_prev = float(getattr(self, '_last_curvature_ahead_for_tactical', 0.0) or 0.0)
@@ -1101,11 +1097,11 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 if _stability_guard_enabled and _ttl_tac in _phase1_ttl_cache:
                     _ttl_guard_state = getattr(self, "_phase10_guard_state", None)
                     if _ttl_guard_state is None:
-                        _ttl_guard_state = Phase10StabilityGuardState(last_ttl=str(_phase1_active_ttl or "optimal"))
+                        _ttl_guard_state = StabilityGuardState(last_ttl=str(_phase1_active_ttl or "optimal"))
                         self._phase10_guard_state = _ttl_guard_state
-                    _ttl_guarded, _p10_ttl_switch_blocked = phase10_handle_ttl_switch(
+                    _ttl_guarded, _p10_ttl_switch_blocked = stability_guard_handle_ttl_switch(
                         _ttl_guard_state,
-                        config=_phase10_guard_config,
+                        config=_guard_config,
                         sim_time_s=float(_sim_time_s),
                         current_ttl=str(_phase1_active_ttl or "optimal"),
                         requested_ttl=str(_ttl_tac or _phase1_active_ttl),
@@ -2049,13 +2045,13 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             if _stability_guard_enabled and self is getattr(simulation().scene, 'egoObject', None):
                 _p10_state = getattr(self, "_phase10_guard_state", None)
                 if _p10_state is None:
-                    _p10_state = Phase10StabilityGuardState(
+                    _p10_state = StabilityGuardState(
                         last_ttl=str(_phase1_active_ttl or "optimal")
                     )
                     self._phase10_guard_state = _p10_state
-                _p10_guard = phase10_guard_step(
+                _p10_guard = stability_guard_step(
                     _p10_state,
-                    config=_phase10_guard_config,
+                    config=_guard_config,
                     sim_time_s=float(_sim_time_s),
                     control_dt_s=float(_ctrl_dt),
                     planner_state=str(getattr(self, "_phase_effective_planner_state", "FREE_RUN") or "FREE_RUN"),
@@ -2083,7 +2079,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 self._phase10_brake_limited = bool(_p10_guard.brake_limited)
                 self._phase10_ttl_switch_blocked = bool(_p10_guard.ttl_switch_blocked)
                 self._phase10_emergency_stable_mode = bool(_p10_guard.emergency_stable_mode)
-                print(format_phase10_guard_log_line(_sim_time_s, _p10_guard))
+                print(format_stability_guard_log_line(_sim_time_s, _p10_guard))
             self._last_final_steer = final_steer
             self._last_final_throttle = final_throttle
             self._last_final_brake = final_brake

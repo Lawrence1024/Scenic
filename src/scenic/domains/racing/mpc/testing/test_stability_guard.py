@@ -1,17 +1,17 @@
 """Unit tests for stability guard."""
 
 from scenic.domains.racing.safety.stability_guard import (
-    Phase10StabilityGuardConfig,
-    Phase10StabilityGuardState,
-    phase10_guard_step,
-    phase10_handle_ttl_switch,
+    StabilityGuardConfig,
+    StabilityGuardState,
+    stability_guard_step,
+    stability_guard_handle_ttl_switch,
 )
 
 
 def test_phase10_ttl_switch_rate_limit_blocks_fast_flip():
-    state = Phase10StabilityGuardState(last_ttl="optimal")
-    cfg = Phase10StabilityGuardConfig(ttl_switch_min_interval_s=1.0)
-    ttl1, blocked1 = phase10_handle_ttl_switch(
+    state = StabilityGuardState(last_ttl="optimal")
+    cfg = StabilityGuardConfig(ttl_switch_min_interval_s=1.0)
+    ttl1, blocked1 = stability_guard_handle_ttl_switch(
         state,
         config=cfg,
         sim_time_s=1.0,
@@ -20,7 +20,7 @@ def test_phase10_ttl_switch_rate_limit_blocks_fast_flip():
     )
     assert ttl1 == "left"
     assert blocked1 is False
-    ttl2, blocked2 = phase10_handle_ttl_switch(
+    ttl2, blocked2 = stability_guard_handle_ttl_switch(
         state,
         config=cfg,
         sim_time_s=1.2,
@@ -32,9 +32,9 @@ def test_phase10_ttl_switch_rate_limit_blocks_fast_flip():
 
 
 def test_phase10_guard_limits_steer_slew():
-    state = Phase10StabilityGuardState(last_steer_cmd_rad=0.0, last_ttl="optimal")
-    cfg = Phase10StabilityGuardConfig(max_steer_rate_rad_per_s=1.0)
-    d = phase10_guard_step(
+    state = StabilityGuardState(last_steer_cmd_rad=0.0, last_ttl="optimal")
+    cfg = StabilityGuardConfig(max_steer_rate_rad_per_s=1.0)
+    d = stability_guard_step(
         state,
         config=cfg,
         sim_time_s=2.0,
@@ -58,13 +58,13 @@ def test_phase10_guard_limits_steer_slew():
 
 
 def test_phase10_guard_enters_emergency_stable():
-    state = Phase10StabilityGuardState(last_ttl="optimal")
-    cfg = Phase10StabilityGuardConfig(
+    state = StabilityGuardState(last_ttl="optimal")
+    cfg = StabilityGuardConfig(
         emergency_risk_enter_01=0.8,
         emergency_overlap_brake_floor=0.5,
         emergency_max_steer_abs_rad=0.1,
     )
-    d = phase10_guard_step(
+    d = stability_guard_step(
         state,
         config=cfg,
         sim_time_s=3.0,
@@ -89,16 +89,79 @@ def test_phase10_guard_enters_emergency_stable():
     assert abs(d.steer_cmd_rad) <= 0.1001
 
 
+def test_guard_commit_pass_bypasses_reapproach_hold():
+    """During COMMIT_PASS_RIGHT, reapproach_hold must NOT fire even when gap_ok=False."""
+    state = StabilityGuardState(last_ttl="right")
+    cfg = StabilityGuardConfig(
+        reapproach_retrigger_risk_01=0.45,
+        reapproach_max_throttle=0.20,
+        reapproach_brake_floor=0.12,
+    )
+    d = stability_guard_step(
+        state,
+        config=cfg,
+        sim_time_s=4.0,
+        control_dt_s=0.05,
+        planner_state="COMMIT_PASS_RIGHT",
+        active_ttl="right",
+        decision_reason="commit_pass_right_hold",
+        steer_cmd_rad=0.02,
+        throttle_cmd=0.95,
+        brake_cmd=0.0,
+        pit_mode=False,
+        gap_ok=False,
+        overlap_flag=False,
+        closing_flag=True,
+        emergency_risk_01=0.40,
+        ttl_switch_blocked=False,
+    )
+    # Guard should NOT activate reapproach during committed pass.
+    assert d.guard_reason != "reapproach_hold"
+    assert d.throttle_cmd > 0.20  # Not capped to reapproach_max_throttle
+    assert d.brake_cmd < 0.12     # No reapproach brake floor
+
+
+def test_guard_commit_pass_still_triggers_emergency_on_overlap():
+    """Even during COMMIT_PASS, true overlap should still trigger emergency-stable."""
+    state = StabilityGuardState(last_ttl="left")
+    cfg = StabilityGuardConfig(
+        emergency_risk_enter_01=0.85,
+        emergency_overlap_brake_floor=0.60,
+    )
+    d = stability_guard_step(
+        state,
+        config=cfg,
+        sim_time_s=5.0,
+        control_dt_s=0.05,
+        planner_state="COMMIT_PASS_LEFT",
+        active_ttl="left",
+        decision_reason="commit_pass_left_hold",
+        steer_cmd_rad=0.1,
+        throttle_cmd=0.9,
+        brake_cmd=0.0,
+        pit_mode=False,
+        gap_ok=False,
+        overlap_flag=True,
+        closing_flag=True,
+        emergency_risk_01=0.90,
+        ttl_switch_blocked=False,
+    )
+    # Emergency should still fire — overlap is a real collision signal.
+    assert d.emergency_stable_mode is True
+    assert d.throttle_cmd == 0.0
+    assert d.brake_cmd >= 0.60
+
+
 def test_phase10_guard_reapproach_hold_suppresses_throttle_after_emergency():
-    state = Phase10StabilityGuardState(last_ttl="optimal")
-    cfg = Phase10StabilityGuardConfig(
+    state = StabilityGuardState(last_ttl="optimal")
+    cfg = StabilityGuardConfig(
         emergency_risk_enter_01=0.8,
         emergency_hold_s=0.5,
         reapproach_recovery_hold_s=1.0,
         reapproach_max_throttle=0.15,
     )
     # Trigger emergency first.
-    _ = phase10_guard_step(
+    _ = stability_guard_step(
         state,
         config=cfg,
         sim_time_s=0.0,
@@ -117,7 +180,7 @@ def test_phase10_guard_reapproach_hold_suppresses_throttle_after_emergency():
         ttl_switch_blocked=False,
     )
     # After emergency latch window, recovery hold should still cap throttle.
-    d = phase10_guard_step(
+    d = stability_guard_step(
         state,
         config=cfg,
         sim_time_s=0.7,

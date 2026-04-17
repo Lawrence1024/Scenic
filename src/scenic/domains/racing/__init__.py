@@ -76,7 +76,6 @@ simulator that implements the racing domain interface. For example, the
 
 from .gnss_transform import (
     GNSSLocalTransform,
-    GPSDspaceTransform,  # alias
     fit_transform_from_csv,
     fit_transform_from_table,
     load_calibration,
@@ -93,7 +92,6 @@ from .mode import (
 
 __all__ = [
     "GNSSLocalTransform",
-    "GPSDspaceTransform",
     "fit_transform_from_csv",
     "fit_transform_from_table",
     "load_calibration",

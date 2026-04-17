@@ -18,10 +18,10 @@ def main() -> int:
             default_scenario_names=PHASE8_F_SCENARIO_NAMES,
             scenic_extra_args=(
                 "-p",
-                "phase7_prediction_enabled",
+                "prediction_enabled",
                 "True",
                 "-p",
-                "phase8_assessment_enabled",
+                "assessment_enabled",
                 "True",
             ),
             csv_fields=(

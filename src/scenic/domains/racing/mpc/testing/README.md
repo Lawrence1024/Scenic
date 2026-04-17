@@ -37,12 +37,12 @@ Run a specific file: `python -m pytest mpc/testing/test_tactical_planner.py -v`.
 
 | Tag | Source | Enabled by |
 |-----|--------|-----------|
-| `[Prediction]` | `prediction/fellow_predictor.py` | `phase7_prediction_enabled=True` |
-| `[Assessment]` | `assessment/race_situation.py` | `phase8_assessment_enabled=True` |
+| `[Prediction]` | `prediction/fellow_predictor.py` | `prediction_enabled=True` |
+| `[Assessment]` | `assessment/race_situation.py` | `assessment_enabled=True` |
 | `[Planner]` | `behaviors.scenic` | `tactical_planner_enabled=True` |
-| `[Commit]` | `behaviors.scenic` | `phase11_commit_abort_enabled=True` |
+| `[Commit]` | `behaviors.scenic` | `commit_abort_enabled=True` |
 | `[Hazard]` | `behaviors.scenic` | `tactical_planner_enabled=True` |
-| `[Guard]` | `safety/stability_guard.py` | `phase10_stability_guard_enabled=True` |
+| `[Guard]` | `safety/stability_guard.py` | `stability_guard_enabled=True` |
 
 ## Limitations
 

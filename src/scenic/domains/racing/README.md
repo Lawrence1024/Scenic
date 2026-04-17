@@ -238,11 +238,11 @@ FollowRacingLineMPCBehavior(
     ttl_schedule=None,
     target_speed_cap=None,
     tactical_planner_enabled=False, # enables 4-layer intelligence pipeline
-    phase7_prediction_enabled=False,    # log [Prediction] per cycle
-    phase8_assessment_enabled=False,    # log [Assessment] per cycle
-    phase10_stability_guard_enabled=False, # stability guard + [Guard] telemetry
-    phase11_commit_abort_enabled=False,    # COMMIT_PASS / ABORT_PASS states
-    phase12_segment_aware_enabled=False,   # segment-conditioned commit gating
+    prediction_enabled=False,         # log [Prediction] per cycle
+    assessment_enabled=False,         # log [Assessment] per cycle
+    stability_guard_enabled=False,    # stability guard + [Guard] telemetry
+    commit_abort_enabled=False,       # COMMIT_PASS / ABORT_PASS states
+    segment_aware_enabled=False,      # segment-conditioned commit gating
 )
 ```
 
@@ -666,11 +666,11 @@ ReleaseClutchAction()
 FollowRacingLineMPCBehavior(
     target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None,
     tactical_planner_enabled=False,       # enables 4-layer intelligence pipeline
-    phase7_prediction_enabled=False,      # [Prediction] logs per cycle
-    phase8_assessment_enabled=False,      # [Assessment] logs per cycle
-    phase10_stability_guard_enabled=False, # stability guard + [Guard] logs
-    phase11_commit_abort_enabled=False,   # COMMIT_PASS / ABORT_PASS states
-    phase12_segment_aware_enabled=False,  # segment-conditioned commit gating
+    prediction_enabled=False,             # [Prediction] logs per cycle
+    assessment_enabled=False,             # [Assessment] logs per cycle
+    stability_guard_enabled=False,        # stability guard + [Guard] logs
+    commit_abort_enabled=False,           # COMMIT_PASS / ABORT_PASS states
+    segment_aware_enabled=False,          # segment-conditioned commit gating
 )
 PitStopBehavior()  # May require simulator-specific PitLimiterAction
 OvertakingBehavior(target_car, aggressive=False)  # May require simulator-specific actions

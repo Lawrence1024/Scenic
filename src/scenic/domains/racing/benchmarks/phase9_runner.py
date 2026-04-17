@@ -21,10 +21,10 @@ def main() -> int:
                 "tactical_planner_enabled",
                 "True",
                 "-p",
-                "phase8_assessment_enabled",
+                "assessment_enabled",
                 "True",
                 "-p",
-                "phase7_prediction_enabled",
+                "prediction_enabled",
                 "True",
             ),
             csv_fields=(

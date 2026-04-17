@@ -18,12 +18,6 @@ STATIONARY_OPP_SPEED_MPS = 1.5
 FLYBY_LAT_MIN_M = 1.15
 FLYBY_MIN_LONG_SLOT_M = 7.5
 
-# Backward-compatibility aliases (deprecated — use the non-prefixed names above)
-PHASE8_OVERLAP_LAT_RELIEF_M = OVERLAP_LAT_RELIEF_M
-PHASE8_STATIONARY_OPP_SPEED_MPS = STATIONARY_OPP_SPEED_MPS
-PHASE8_FLYBY_LAT_MIN_M = FLYBY_LAT_MIN_M
-PHASE8_FLYBY_MIN_LONG_SLOT_M = FLYBY_MIN_LONG_SLOT_M
-
 
 @dataclass(frozen=True)
 class RaceSituationAssessment:
@@ -49,10 +43,6 @@ class RaceSituationState:
     last_emergency_risk_01: float = 0.0
 
 
-# Backward-compatibility aliases
-Phase8Assessment = RaceSituationAssessment
-Phase8AssessmentState = RaceSituationState
-
 
 def _clamp01(x: float) -> float:
     return max(0.0, min(1.0, float(x)))
@@ -64,11 +54,20 @@ def compute_dynamic_safe_gap_m(
     time_headway_s: float = 1.10,
     base_gap_m: float = 6.0,
     max_gap_m: float = 70.0,
+    lateral_offset_m: float = 0.0,
+    parallel_headway_s: float = 0.35,
+    parallel_lateral_threshold_m: float = 1.5,
 ) -> float:
-    """Simple safe-gap baseline: base margin + speed*time-headway."""
+    """Safe-gap baseline: base margin + speed*time-headway.
+
+    When the opponent is laterally separated beyond *parallel_lateral_threshold_m*
+    (i.e. on a parallel TTL), uses the shorter *parallel_headway_s* instead of
+    the default *time_headway_s* — the cars are side-by-side, not nose-to-tail.
+    """
 
     v = max(0.0, float(ego_speed_mps))
-    gap = float(base_gap_m) + v * float(time_headway_s)
+    headway = parallel_headway_s if abs(float(lateral_offset_m)) > float(parallel_lateral_threshold_m) else time_headway_s
+    gap = float(base_gap_m) + v * float(headway)
     return min(float(max_gap_m), max(float(base_gap_m), gap))
 
 
@@ -202,7 +201,9 @@ def _compute_emergency_risk(
         )
         # Fly-by damping assumes adequate longitudinal headway. Inside the safe-gap envelope,
         # keep full rear-end / closing pressure (e.g. sudden stop while still "gap_ok" false).
-        if float(actual_gap_m) < float(safe_gap_m):
+        # Exception: when laterally separated (parallel TTL), a rear-end collision is not
+        # the primary risk — keep fly-by damping active so risk doesn't spike artificially.
+        if float(actual_gap_m) < float(safe_gap_m) and lat_abs < 1.5:
             flyby_d = 1.0
         gap_pressure *= flyby_d
         ttc_pressure *= flyby_d
@@ -229,6 +230,7 @@ def assess_race_situation(
     """Stateful assessment for stable relation/corridor/risk semantics."""
 
     st = state if state is not None else RaceSituationState()
+    # Initial safe_gap without lateral info (used for no-opponent fallback).
     safe_gap_m = compute_dynamic_safe_gap_m(float(ego_speed_mps))
     if sit is None:
         a_none = RaceSituationAssessment(
@@ -260,8 +262,6 @@ def assess_race_situation(
         else ("ahead" if bool(sit.ahead) else "behind")
     )
     overlap_flag = str(sit.overlap_state or "").lower() in {"side_by_side", "partial_overlap"}
-    actual_gap_m = max(0.0, float(sit.delta_s_m)) if relation == "ahead" else None
-    gap_ok = True if actual_gap_m is None else bool(actual_gap_m >= safe_gap_m)
 
     pred_long, pred_lat, source = _compute_predicted_ego_frame(
         ego_xy,
@@ -270,7 +270,12 @@ def assess_race_situation(
         fallback_long_m=float(sit.longitudinal_m),
         fallback_lat_m=float(sit.lateral_m),
     )
-    closing_flag = bool(relation == "ahead" and float(sit.closing_speed_mps) > 0.30)
+    # Recompute safe_gap with lateral awareness — parallel-TTL opponents use shorter headway.
+    safe_gap_m = compute_dynamic_safe_gap_m(float(ego_speed_mps), lateral_offset_m=float(pred_lat))
+    actual_gap_m = max(0.0, float(sit.delta_s_m)) if relation == "ahead" else None
+    gap_ok = True if actual_gap_m is None else bool(actual_gap_m >= safe_gap_m)
+    closing_threshold_mps = 2.0 if abs(float(pred_lat)) > 1.5 else 0.30
+    closing_flag = bool(relation == "ahead" and float(sit.closing_speed_mps) > closing_threshold_mps)
     if (
         relation == "ahead"
         and float(getattr(sit, "opponent_speed_mps", 0.0)) < float(STATIONARY_OPP_SPEED_MPS)
@@ -330,9 +335,6 @@ def assess_race_situation(
     return assessment, next_state
 
 
-# Backward-compatibility alias
-assess_phase8_situation_stateful = assess_race_situation
-
 
 def format_assessment_log_line(sim_time_s: float, a: RaceSituationAssessment) -> str:
     ag = f"{a.actual_gap_m:.3f}" if a.actual_gap_m is not None else "na"
@@ -344,7 +346,3 @@ def format_assessment_log_line(sim_time_s: float, a: RaceSituationAssessment) ->
         f"overlap_flag={1 if a.overlap_flag else 0} emergency_risk_01={a.emergency_risk_01:.3f} "
         f"source={a.source}"
     )
-
-
-# Backward-compatibility alias
-format_phase8_assessment_log_line = format_assessment_log_line

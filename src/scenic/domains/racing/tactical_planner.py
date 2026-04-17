@@ -365,11 +365,18 @@ def tactical_planner_step_v1(
         state.protected_follow_active = True
         state.protected_follow_clear_count = 0
     in_recovery_hold = float(sim_time_s) < float(state.recovery_hold_until_s)
+    # emergency_risk_high is computed after asymmetric_opening (below)
+    asymmetric_opening = bool(left_open_now) ^ bool(right_open_now)
+    # During a parallel-TTL pass (asymmetric_opening), risk is already dampened by fly-by
+    # geometry.  Use a higher threshold so fly-by-dampened TTC pressure (~0.5) does not
+    # trigger the same gates designed for co-linear rear-end danger (~0.48).
+    _risk_threshold = (
+        0.75 if asymmetric_opening else float(config.pass_safe_risk_max)
+    )
     emergency_risk_high = bool(
         assessment_emergency_risk_01 is not None
-        and float(assessment_emergency_risk_01) >= float(config.pass_safe_risk_max)
+        and float(assessment_emergency_risk_01) >= _risk_threshold
     )
-    asymmetric_opening = bool(left_open_now) ^ bool(right_open_now)
     ref_speed_mps = max(0.0, float(ego_speed_mps), float(opponent_speed_mps))
     dynamic_tight_gap_m = max(
         float(config.follow_tight_gap_m),

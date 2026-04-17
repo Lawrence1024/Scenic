@@ -75,12 +75,6 @@ class GNSSLocalTransform:
         en = self._A_inv @ (xy - self._t)
         return _local_en_to_gps(float(en[0]), float(en[1]), self.lon0_deg, self.lat0_deg)
 
-    # Aliases for backward compatibility
-    def gps_to_dspace(self, lon_deg: float, lat_deg: float) -> Tuple[float, float]:
-        return self.gnss_to_local(lon_deg, lat_deg)
-
-    def dspace_to_gps(self, x: float, y: float) -> Tuple[float, float]:
-        return self.local_to_gnss(x, y)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize for JSON save."""
@@ -100,10 +94,6 @@ class GNSSLocalTransform:
             A=np.array(d["A"]),
             t=np.array(d["t"]),
         )
-
-
-# Backward-compatible alias
-GPSDspaceTransform = GNSSLocalTransform
 
 
 def load_calibration_table_csv(csv_path: Path, target: str = "xodr") -> np.ndarray:

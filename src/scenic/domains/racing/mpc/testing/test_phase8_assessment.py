@@ -1,8 +1,8 @@
 """Unit tests for Phase 8 race-situation assessment helpers."""
 
 from scenic.domains.racing.assessment import (
-    Phase8AssessmentState,
-    assess_phase8_situation_stateful,
+    RaceSituationState,
+    assess_race_situation,
     compute_dynamic_safe_gap_m,
 )
 from scenic.domains.racing.situation_assessment import OpponentSituation
@@ -42,14 +42,51 @@ def test_dynamic_safe_gap_grows_with_speed():
     assert g0 < g1 < g2
 
 
+def test_dynamic_safe_gap_uses_shorter_headway_for_parallel_ttl():
+    """Laterally separated opponent (parallel TTL) should use shorter headway."""
+    same_line = compute_dynamic_safe_gap_m(18.0, lateral_offset_m=0.5)
+    parallel = compute_dynamic_safe_gap_m(18.0, lateral_offset_m=2.5)
+    # At 18 m/s: same_line = 6+18*1.10 = 25.8, parallel = 6+18*0.35 = 12.3
+    assert same_line > 24.0
+    assert parallel < 13.0
+    assert parallel < same_line
+
+
+def test_closing_flag_suppressed_for_laterally_separated_opponent():
+    """Closing at moderate speed with large lateral offset should NOT set closing_flag."""
+    a, _st = assess_race_situation(
+        sit=_sit(ahead=True, delta_s_m=25.0, lateral_m=2.5, long_m=25.0, closing_mps=1.5),
+        ego_speed_mps=18.0,
+        ego_xy=(0.0, 0.0),
+        ego_heading_rad=0.0,
+        predicted_opp_xy=(25.0, 2.5),
+        state=RaceSituationState(),
+    )
+    # 1.5 m/s closing is below the 2.0 m/s parallel threshold.
+    assert a.closing_flag is False
+
+
+def test_closing_flag_still_fires_for_same_line_slow_closing():
+    """Same line (small lateral), slow closing should still set closing_flag."""
+    a, _st = assess_race_situation(
+        sit=_sit(ahead=True, delta_s_m=25.0, lateral_m=0.3, long_m=25.0, closing_mps=0.5),
+        ego_speed_mps=18.0,
+        ego_xy=(0.0, 0.0),
+        ego_heading_rad=0.0,
+        predicted_opp_xy=(25.0, 0.3),
+        state=RaceSituationState(),
+    )
+    assert a.closing_flag is True
+
+
 def test_no_opponent_defaults_open_and_gap_ok():
-    a, _st = assess_phase8_situation_stateful(
+    a, _st = assess_race_situation(
         sit=None,
         ego_speed_mps=20.0,
         ego_xy=(0.0, 0.0),
         ego_heading_rad=0.0,
         predicted_opp_xy=None,
-        state=Phase8AssessmentState(),
+        state=RaceSituationState(),
     )
     assert a.fellow_relation == "none"
     assert a.gap_ok is True
@@ -57,13 +94,13 @@ def test_no_opponent_defaults_open_and_gap_ok():
 
 
 def test_ahead_left_occupancy_blocks_left_corridor():
-    a, _st = assess_phase8_situation_stateful(
+    a, _st = assess_race_situation(
         sit=_sit(ahead=True, delta_s_m=30.0, lateral_m=2.0, long_m=30.0, closing_mps=2.0),
         ego_speed_mps=18.0,
         ego_xy=(0.0, 0.0),
         ego_heading_rad=0.0,
         predicted_opp_xy=(30.0, 2.0),
-        state=Phase8AssessmentState(),
+        state=RaceSituationState(),
     )
     assert a.fellow_relation == "ahead"
     assert a.left_open is False
@@ -71,13 +108,13 @@ def test_ahead_left_occupancy_blocks_left_corridor():
 
 
 def test_gap_ok_false_when_actual_gap_below_safe_gap():
-    a, _st = assess_phase8_situation_stateful(
+    a, _st = assess_race_situation(
         sit=_sit(ahead=True, delta_s_m=8.0, lateral_m=0.0, long_m=8.0, closing_mps=5.0),
         ego_speed_mps=20.0,
         ego_xy=(0.0, 0.0),
         ego_heading_rad=0.0,
         predicted_opp_xy=(8.0, 0.0),
-        state=Phase8AssessmentState(),
+        state=RaceSituationState(),
     )
     assert a.actual_gap_m is not None
     assert a.safe_gap_m > a.actual_gap_m
@@ -85,8 +122,8 @@ def test_gap_ok_false_when_actual_gap_below_safe_gap():
 
 
 def test_stateful_relation_hysteresis_holds_near_zero_delta_s():
-    st = Phase8AssessmentState(previous_relation="ahead")
-    a, st2 = assess_phase8_situation_stateful(
+    st = RaceSituationState(previous_relation="ahead")
+    a, st2 = assess_race_situation(
         sit=_sit(ahead=False, delta_s_m=0.5, lateral_m=0.0, long_m=0.5, closing_mps=1.0),
         ego_speed_mps=18.0,
         ego_xy=(0.0, 0.0),
@@ -103,7 +140,7 @@ def test_flyby_lateral_offset_damps_longitudinal_gap_pressure_at_speed():
 
     Requires ``actual_gap >= safe_gap`` so fly-by damping applies; inside safe envelope it is disabled.
     """
-    a, _st = assess_phase8_situation_stateful(
+    a, _st = assess_race_situation(
         sit=_sit(
             ahead=True,
             delta_s_m=42.0,
@@ -118,16 +155,40 @@ def test_flyby_lateral_offset_damps_longitudinal_gap_pressure_at_speed():
         ego_xy=(0.0, 0.0),
         ego_heading_rad=0.0,
         predicted_opp_xy=(42.0, 2.4),
-        state=Phase8AssessmentState(),
+        state=RaceSituationState(),
     )
     assert a.fellow_relation == "ahead"
     assert a.gap_ok is True
     assert a.emergency_risk_01 < 0.72
 
 
-def test_flyby_damp_disabled_when_gap_below_safe_gap():
-    """Short longitudinal headway: no fly-by discount — rear-end / stop risk stays visible."""
-    a, _st = assess_phase8_situation_stateful(
+def test_flyby_damp_disabled_when_gap_below_safe_gap_same_line():
+    """Short longitudinal headway on same line: no fly-by discount — rear-end risk stays visible."""
+    a, _st = assess_race_situation(
+        sit=_sit(
+            ahead=True,
+            delta_s_m=12.0,
+            lateral_m=0.5,
+            long_m=12.0,
+            closing_mps=10.0,
+            overlap="partial_overlap",
+            risk=0.08,
+            opponent_speed_mps=18.0,
+        ),
+        ego_speed_mps=24.0,
+        ego_xy=(0.0, 0.0),
+        ego_heading_rad=0.0,
+        predicted_opp_xy=(12.0, 0.5),
+        state=RaceSituationState(),
+    )
+    assert a.fellow_relation == "ahead"
+    assert a.gap_ok is False
+    assert a.emergency_risk_01 >= 0.35
+
+
+def test_flyby_damp_stays_active_for_parallel_ttl_inside_safe_gap():
+    """Parallel TTL (large lateral): fly-by damping stays active even inside safe_gap."""
+    a, _st = assess_race_situation(
         sit=_sit(
             ahead=True,
             delta_s_m=12.0,
@@ -142,16 +203,17 @@ def test_flyby_damp_disabled_when_gap_below_safe_gap():
         ego_xy=(0.0, 0.0),
         ego_heading_rad=0.0,
         predicted_opp_xy=(12.0, 2.6),
-        state=Phase8AssessmentState(),
+        state=RaceSituationState(),
     )
     assert a.fellow_relation == "ahead"
     assert a.gap_ok is False
-    assert a.emergency_risk_01 >= 0.35
+    # Fly-by damping is active for lateral > 1.5m, so risk is lower than same-line
+    assert a.emergency_risk_01 < 0.35
 
 
 def test_co_linear_close_range_preserves_nonzero_risk_from_gap_and_closing():
     """Near co-linear and closing still yields meaningful risk without extra speed-only term."""
-    a, _st = assess_phase8_situation_stateful(
+    a, _st = assess_race_situation(
         sit=_sit(
             ahead=True,
             delta_s_m=18.0,
@@ -166,7 +228,7 @@ def test_co_linear_close_range_preserves_nonzero_risk_from_gap_and_closing():
         ego_xy=(0.0, 0.0),
         ego_heading_rad=0.0,
         predicted_opp_xy=(18.0, 0.35),
-        state=Phase8AssessmentState(),
+        state=RaceSituationState(),
     )
     assert a.fellow_relation == "ahead"
     assert a.emergency_risk_01 >= 0.20
@@ -174,7 +236,7 @@ def test_co_linear_close_range_preserves_nonzero_risk_from_gap_and_closing():
 
 def test_roadside_stationary_partial_overlap_does_not_max_out_emergency_risk():
     """Shoulder-parked obstacle: large |lateral| must not trigger overlap=0.9 panic."""
-    a, _st = assess_phase8_situation_stateful(
+    a, _st = assess_race_situation(
         sit=_sit(
             ahead=True,
             delta_s_m=22.0,
@@ -189,7 +251,7 @@ def test_roadside_stationary_partial_overlap_does_not_max_out_emergency_risk():
         ego_xy=(0.0, 0.0),
         ego_heading_rad=0.0,
         predicted_opp_xy=(22.0, -3.8),
-        state=Phase8AssessmentState(),
+        state=RaceSituationState(),
     )
     assert a.fellow_relation == "ahead"
     assert a.overlap_flag is False
@@ -197,7 +259,7 @@ def test_roadside_stationary_partial_overlap_does_not_max_out_emergency_risk():
 
 
 def test_stateful_emergency_risk_emphasizes_overlap_and_closing_gap():
-    a, _st = assess_phase8_situation_stateful(
+    a, _st = assess_race_situation(
         sit=_sit(
             ahead=True,
             delta_s_m=4.0,
@@ -211,7 +273,7 @@ def test_stateful_emergency_risk_emphasizes_overlap_and_closing_gap():
         ego_xy=(0.0, 0.0),
         ego_heading_rad=0.0,
         predicted_opp_xy=(4.0, 0.1),
-        state=Phase8AssessmentState(),
+        state=RaceSituationState(),
     )
     assert a.gap_ok is False
     assert a.emergency_risk_01 >= 0.85

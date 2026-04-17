@@ -225,7 +225,3 @@ def format_prediction_log_line(sim_time_s: float, r: FellowPredictorStepResult) 
         f"prediction_error_zero_motion={_fmt_opt(r.prediction_error_zero_motion)} "
         f"prediction_error_hold_last={_fmt_opt(r.prediction_error_hold_last)}"
     )
-
-
-# Backward-compatibility alias
-format_phase7_prediction_log_line = format_prediction_log_line

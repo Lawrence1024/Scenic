@@ -1,7 +1,7 @@
 """Benchmark runner for Phase 7 fellow next-step prediction.
 
 Uses ``examples/racing/f_shared/`` and the Phase 7 subset from `PHASE7_F_SCENARIO_NAMES`.
-Passes ``-p phase7_prediction_enabled True`` so logs include ``[Phase7Prediction]`` lines.
+Passes ``-p prediction_enabled True`` so logs include ``[Phase7Prediction]`` lines.
 """
 
 from scenic.domains.racing.benchmarks.f_scenario_bank import PHASE7_F_SCENARIO_NAMES
@@ -20,7 +20,7 @@ def main() -> int:
             run_id_prefix="phase7",
             default_scenario_dir="examples/racing/f_shared",
             default_scenario_names=PHASE7_F_SCENARIO_NAMES,
-            scenic_extra_args=("-p", "phase7_prediction_enabled", "True"),
+            scenic_extra_args=("-p", "prediction_enabled", "True"),
             csv_fields=(
                 "scenario",
                 "scenario_instance",

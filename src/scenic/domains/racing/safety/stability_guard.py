@@ -50,11 +50,6 @@ class StabilityGuardDecision:
     emergency_stable_mode: bool
 
 
-# Backward-compatibility aliases
-Phase10StabilityGuardConfig = StabilityGuardConfig
-Phase10StabilityGuardState = StabilityGuardState
-Phase10StabilityGuardDecision = StabilityGuardDecision
-
 
 def stability_guard_handle_ttl_switch(
     state: StabilityGuardState,
@@ -79,10 +74,6 @@ def stability_guard_handle_ttl_switch(
     state.last_ttl = req
     state.last_ttl_switch_sim_time_s = float(sim_time_s)
     return req, False
-
-
-# Backward-compatibility alias
-phase10_handle_ttl_switch = stability_guard_handle_ttl_switch
 
 
 def stability_guard_step(
@@ -134,12 +125,18 @@ def stability_guard_step(
         guard_reason = "brake_steer_coupled"
 
     risk = max(0.0, min(1.0, float(emergency_risk_01)))
+    in_committed_pass = str(planner_state or "") in ("COMMIT_PASS_LEFT", "COMMIT_PASS_RIGHT")
     emergency_trigger = bool(
         (not pit_mode)
         and (
             bool(overlap_flag)
             or risk >= float(config.emergency_risk_enter_01)
-            or ((not bool(gap_ok)) and bool(closing_flag) and risk >= 0.50)
+            or (
+                (not in_committed_pass)
+                and (not bool(gap_ok))
+                and bool(closing_flag)
+                and risk >= 0.50
+            )
         )
     )
     if emergency_trigger:
@@ -180,9 +177,12 @@ def stability_guard_step(
             steer_limited = True
     elif (not pit_mode):
         retrigger = bool(
-            bool(overlap_flag)
-            or ((not bool(gap_ok)) and bool(closing_flag))
-            or (risk >= float(config.reapproach_retrigger_risk_01))
+            (not in_committed_pass)
+            and (
+                bool(overlap_flag)
+                or ((not bool(gap_ok)) and bool(closing_flag))
+                or (risk >= float(config.reapproach_retrigger_risk_01))
+            )
         )
         if retrigger:
             state.recovery_hold_until_s = max(
@@ -230,10 +230,6 @@ def stability_guard_step(
     )
 
 
-# Backward-compatibility alias
-phase10_guard_step = stability_guard_step
-
-
 def format_stability_guard_log_line(sim_time_s: float, decision: StabilityGuardDecision) -> str:
     """Structured telemetry for guard log parse."""
     return (
@@ -245,7 +241,3 @@ def format_stability_guard_log_line(sim_time_s: float, decision: StabilityGuardD
         f"decision_reason={decision.decision_reason} steer={decision.steer_cmd_rad:.3f} "
         f"throttle={decision.throttle_cmd:.3f} brake={decision.brake_cmd:.3f}"
     )
-
-
-# Backward-compatibility alias
-format_phase10_guard_log_line = format_stability_guard_log_line
