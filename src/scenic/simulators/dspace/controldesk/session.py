@@ -62,11 +62,11 @@ def connect_and_prepare(sim):
         return None
 
 
-def start_maneuver(cd):
+def start_maneuver(cd, var_access=None):
     if not cd:
         return False
     try:
-        cd.start_maneuver()
+        cd.start_maneuver(var_access=var_access)
         return True
     except Exception as e:
         print(f"[Maneuver] Failed to start: {e}")
@@ -83,12 +83,12 @@ def pause(cd):
         return False
 
 
-def stop(cd):
+def stop(cd, var_access=None):
     """Stop the active maneuver (pulse MANEUVER_STOP variable)."""
     if not cd:
         return False
     try:
-        cd.stop_maneuver()
+        cd.stop_maneuver(var_access=var_access)
         return True
     except Exception as e:
         print(f"[Maneuver] Failed to stop: {e}")
@@ -96,13 +96,9 @@ def stop(cd):
 
 
 def step(cd, dt):
-    if cd:
-        try:
-            cd.advance_simulation_step()
-            return True
-        except Exception:
-            pass
-    time.sleep(dt)
-    return False
+    raise NotImplementedError(
+        "controldesk.session.step() is dead. DSpaceSimulation.step() owns "
+        "the dual-path (CoSim vs ControlDesk) stepping logic."
+    )
 
 

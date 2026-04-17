@@ -99,43 +99,55 @@ class ControlDeskApp:
             self._timing_log.append((path, "set", time.perf_counter() - t0))
 
     # Maneuver control
-    def start_maneuver(self):
+    def start_maneuver(self, var_access=None):
         """Start the active experiment's maneuver.
-        
+
         Pulses the MANEUVER_START variable: sets it to 1, waits briefly, then resets to 0.
+
+        var_access: optional object with a ``set_var(path, value)`` method (e.g. MAPortApp).
+            When provided, the pulse is written through that backend instead of ControlDesk
+            COM. Scenic passes ``_var_access`` here so under CoSim the pulse goes through
+            MAPort — proven reliable in the tester even when ControlDesk COM reads fail.
         """
-        
         maneuver_start_path = (
             "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/"
             "UserInterface/PAR_Plant/ManeuverControl/MANEUVER_START/MDLDCtrl_ManeuverStart"
         )
-        
-        print("[ControlDesk] Pulse: MANEUVER_START")
-        self.set_var(maneuver_start_path, 1.0)
+        writer = var_access if var_access is not None else self
+        print(f"[ControlDesk] Pulse: MANEUVER_START (backend={type(writer).__name__})")
+        writer.set_var(maneuver_start_path, 1.0)
         time.sleep(0.5)
-        self.set_var(maneuver_start_path, 0.0)
+        writer.set_var(maneuver_start_path, 0.0)
 
-    def stop_maneuver(self):
-        """Stop the active experiment's maneuver via variable pulse (MANEUVER_STOP)."""
+    def stop_maneuver(self, var_access=None):
+        """Stop the active experiment's maneuver via variable pulse (MANEUVER_STOP).
+
+        See ``start_maneuver`` for ``var_access`` semantics.
+        """
         maneuver_stop_path = (
             "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/"
             "UserInterface/PAR_Plant/ManeuverControl/MANEUVER_STOP/MDLDCtrl_ManeuverStop"
         )
-        print("[ControlDesk] Pulse: MANEUVER_STOP")
-        self.set_var(maneuver_stop_path, 1.0)
+        writer = var_access if var_access is not None else self
+        print(f"[ControlDesk] Pulse: MANEUVER_STOP (backend={type(writer).__name__})")
+        writer.set_var(maneuver_stop_path, 1.0)
         time.sleep(0.5)
-        self.set_var(maneuver_stop_path, 0.0)
+        writer.set_var(maneuver_stop_path, 0.0)
 
-    def reset_maneuver(self):
-        """Reset the active experiment's maneuver via variable pulse (RESET)."""
+    def reset_maneuver(self, var_access=None):
+        """Reset the active experiment's maneuver via variable pulse (RESET).
+
+        See ``start_maneuver`` for ``var_access`` semantics.
+        """
         maneuver_reset_path = (
             "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/"
             "UserInterface/PAR_Plant/ManeuverControl/RESET/MDLDCtrl_Reset"
         )
-        print("[ControlDesk] Pulse: MANEUVER_RESET")
-        self.set_var(maneuver_reset_path, 1.0)
+        writer = var_access if var_access is not None else self
+        print(f"[ControlDesk] Pulse: MANEUVER_RESET (backend={type(writer).__name__})")
+        writer.set_var(maneuver_reset_path, 1.0)
         time.sleep(0.5)
-        self.set_var(maneuver_reset_path, 0.0)
+        writer.set_var(maneuver_reset_path, 0.0)
 
     # Simulation control
     def _get_platform(self):

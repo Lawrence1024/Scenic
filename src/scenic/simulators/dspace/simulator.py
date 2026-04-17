@@ -77,7 +77,9 @@ class DSpaceSimulator(RacingSimulator):
                  sync_bridge_port=50555,
                  cosim_bridge_mode="sync_step",
                  cosim_time_trigger_ack_delay_s=3.0,
-                 veos_ipc_client_connect_timeout=120.0):
+                 veos_ipc_client_connect_timeout=120.0,
+                 pre_download_delay_s=30.0,
+                 post_modeldesk_download_delay_s=30.0):
         super().__init__()
         self.scenario_src = scenario_src
         self.scenario_name = scenario_name
@@ -99,6 +101,10 @@ class DSpaceSimulator(RacingSimulator):
         self.cosim_bridge_mode = str(cosim_bridge_mode)
         self.cosim_time_trigger_ack_delay_s = float(cosim_time_trigger_ack_delay_s)
         self.veos_ipc_client_connect_timeout = float(veos_ipc_client_connect_timeout)
+        # Empirically-tuned ModelDesk pauses (see cosim/veos_cosim_ipc_bridge/python_listener/print_time_callbacks.py).
+        # Override via `param pre_download_delay_s = ...` / `param post_modeldesk_download_delay_s = ...`.
+        self.pre_download_delay_s = float(pre_download_delay_s)
+        self.post_modeldesk_download_delay_s = float(post_modeldesk_download_delay_s)
 
     def createSimulation(self, scene, **kwargs):
         return DSpaceSimulation(scene, self, **kwargs)
@@ -443,7 +449,9 @@ class DSpaceSimulation(RacingSimulation):
             print("[dSPACE] Dynamic control detected - authoring scenario in ModelDesk")
             author_scenario(self)
 
-        # 7) Save and Download All to simulator
+        # 7) Save and Download All to simulator (fallback path; primary Download happens in
+        # author_scenario() for dynamic-control scenarios, which also applies the pre/post
+        # download pauses. See modeldesk/authoring.py.)
         try:
             self.ts.Save()
             self.ts.Download()  # Download all to simulator
@@ -517,16 +525,21 @@ class DSpaceSimulation(RacingSimulation):
             print("\nWithout ControlDesk, Fellow vehicles CANNOT move.")
             print("="*70 + "\n")
 
-        # 9) Start maneuver (MANEUVER_START pulse) then pause for step-by-step control; warmup runs next.
+        # 9) Start maneuver (MANEUVER_START pulse). Under CoSim the gate IS the pause, so we
+        # skip cd.pause_simulation() — calling it kills TIME_TRIGGERs and deadlocks stepping
+        # (proven in cosim/.../print_time_callbacks.py stress test).
         if self._cd:
-            if cd_session.start_maneuver(self._cd):
-                print("[Setup] Maneuver started via ControlDesk (MANEUVER_START pulse).")
+            if cd_session.start_maneuver(self._cd, var_access=self._var_access):
+                print("[Setup] Maneuver started via MANEUVER_START pulse.")
             else:
-                print("[Setup] [WARN] ControlDesk start_maneuver failed or not connected")
-            if cd_session.pause(self._cd):
-                print("[Setup] [OK] Simulation paused for step-by-step control")
+                print("[Setup] [WARN] start_maneuver failed or not connected")
+            if not getattr(self.sim, "launch_veos_ipc_client", False):
+                if cd_session.pause(self._cd):
+                    print("[Setup] [OK] Simulation paused for step-by-step control (ControlDesk stepping).")
+                else:
+                    print("[Setup] [WARN] Could not pause simulation")
             else:
-                print("[Setup] [WARN] Could not pause simulation")
+                print("[Setup] [CoSim] Skipping cd.pause_simulation() — SyncStepBridge gate provides pause semantics.")
 
         # 10) Initialize fellow arrays and verify readback (warmup runs 3 s sim time via SingleStep)
         print("[Setup] Initializing fellow arrays...")
@@ -1442,6 +1455,12 @@ class DSpaceSimulation(RacingSimulation):
                 self._timing_last['step_time_ready_until_call'] = 0.0
                 self._timing_last['step_time_call_until_advance'] = time.perf_counter() - step_t0
                 self._timing_last['step_time'] = time.perf_counter() - _t0
+
+                self._cosim_tick_count = getattr(self, "_cosim_tick_count", 0) + 1
+                if self._cosim_tick_count % 1000 == 0:
+                    sim_t = self._cosim_tick_count * float(self.timestep)
+                    wall_ms = self._timing_last['step_time_call_until_advance'] * 1000.0
+                    print(f"[CoSimStep] tick={self._cosim_tick_count} sim_time={sim_t:.3f}s step_wall={wall_ms:.1f}ms")
                 return
             except Exception as e:
                 print(f"[Step] Sync bridge step failed: {e}")
@@ -1462,6 +1481,10 @@ class DSpaceSimulation(RacingSimulation):
             max_retries = 100
             for attempt in range(max_retries):
                 attempt_start = time.perf_counter()
+                assert not self._sync_bridge_step_controlled, \
+                    "CoSim sync stepping active; fallback path must not fire"
+                if self._sync_bridge_step_controlled:
+                    return
                 if self._cd:
                     self._cd.advance_simulation_step()
                 poll_start = time.perf_counter()
@@ -1602,16 +1625,23 @@ class DSpaceSimulation(RacingSimulation):
             finally:
                 self._ros2_bag_recorder = None
 
-        # 1) ControlDesk actions first (before timing and port teardown)
+        # 1) ControlDesk actions first (before timing and port teardown). Under CoSim we never
+        # paused the RTA (SyncStepBridge provides pause semantics instead), so we must NOT call
+        # start_simulation() — it can race with pending TIME_TRIGGERs. Maneuver stop/reset
+        # pulses go through _var_access so they use MAPort when available (reliable even when
+        # ControlDesk COM reads fail in online-mode-flaky scenarios).
         if self._cd:
             var = getattr(self, "_var_access", None) or getattr(self, "_cd", None)
             if var:
                 try:
                     # Required: wait for simulation to settle before RTA Start (do not remove)
                     time.sleep(0.2)
-                    self._cd.start_simulation()  # ControlDesk RTA Start
-                    cd_session.stop(self._cd)  # stop_maneuver pulse
-                    self._cd.reset_maneuver()  # reset_maneuver pulse
+                    if not getattr(self.sim, "launch_veos_ipc_client", False):
+                        self._cd.start_simulation()  # ControlDesk RTA Start (un-pauses RTA)
+                    else:
+                        print("[ControlDesk] Teardown: skipping RTA Start (CoSim mode; RTA was never paused).")
+                    cd_session.stop(self._cd, var_access=var)  # stop_maneuver pulse (via MAPort when available)
+                    self._cd.reset_maneuver(var_access=var)    # reset_maneuver pulse (via MAPort when available)
                     var.set_var(MANUAL_MODE_PATH, 0.0)
                 except Exception as e:
                     print(f"[ControlDesk] Teardown: reset sequence failed: {e}")

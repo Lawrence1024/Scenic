@@ -1,3 +1,5 @@
+import time
+
 from ..controldesk.per_tick_control import ExternalControlManager
 from .traffic_object import apply_fellow_traffic_object
 
@@ -23,7 +25,14 @@ def author_scenario(sim):
         # Check consistency and download
         if sim.ts.CheckConsistency():
             print("[ModelDesk] Scenario is consistent")
-            if sim.ts.Download():
+            _pre_download_s = float(getattr(sim.sim, "pre_download_delay_s", 30.0))
+            print(f"[ModelDesk] Pre-download pause {_pre_download_s:.1f}s ...")
+            time.sleep(_pre_download_s)
+            downloaded = sim.ts.Download()
+            _post_download_s = float(getattr(sim.sim, "post_modeldesk_download_delay_s", 30.0))
+            print(f"[ModelDesk] Post-download pause {_post_download_s:.1f}s ...")
+            time.sleep(_post_download_s)
+            if downloaded:
                 print("[ModelDesk] Scenario downloaded to VEOS successfully")
                 return True
             else:
