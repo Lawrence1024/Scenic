@@ -15,6 +15,20 @@ The important subfolders are:
 - `veos_cosim_ipc_bridge/`
   - the custom bridge used to synchronize VEOS stepping with Scenic over localhost IPC
 
+## Other docs in this folder
+
+- [`FINDINGS.md`](FINDINGS.md) — empirical notes from the CoSim investigation:
+  variable-access backends (MAPort vs ControlDesk COM vs CoSim bus), data-type
+  pitfalls (UINT vs FLOAT), why `VESIResultData_Manual` writes don't reach the
+  plant under CoSim, why `initialize_vesi_interface` writes don't persist, the
+  distinction between `SimulationTime` and `ManeuverTime`, and the open question
+  about what COM call corresponds to the "Start" button in ModelDesk. Read this
+  if you're debugging "I wrote the value, readback confirms it, but the vehicle
+  isn't responding."
+- [`veos_cosim_ipc_bridge/README.md`](veos_cosim_ipc_bridge/README.md) —
+  step-handshake protocol details, including the JSON reply envelope that carries
+  per-tick command values to the bus outports.
+
 ---
 
 ## Important clarification: what is the “Python API” here?
@@ -148,6 +162,27 @@ This produces the IPC-enabled client EXE in:
 ```text
 veos_cosim_ipc_bridge\client\build\VeosCoSimTestClientIpc.exe
 ```
+
+---
+
+## CoSim startup recipe (programmatic — no manual ModelDesk clicks)
+
+The full sequence required before the ego vehicle moves under CoSim:
+
+1. **VEOS IPC client connects** and gate enters AUTO mode (TIME_TRIGGERs flow freely).
+2. **Read `Sw_Activate_CLIF` baseline** via MAPort (usually `0.0`); store for teardown restore.
+3. **Write `Sw_Activate_CLIF = 2.0`** via MAPort — must happen **while gate is AUTO**.
+   - The variable name `[0|1]` is misleading; `2.0` is the correct activation value.
+   - COM writes (ControlDesk) do not persist under CoSim (see `FINDINGS.md §4`); MAPort is required.
+4. **Pulse `MANEUVER_START`** via MAPort (`1.0` → sleep 0.5s → `0.0`).
+   - `connection.py::start_maneuver(var_access=maport)` implements this.
+   - Without step 3 first, the pulse has no effect.
+5. **Verify `ManeuverTime > 0`** — if it stays at 0.0 after 3s, the maneuver engine isn't running.
+6. At **teardown**: write `Sw_Activate_CLIF` back to the captured baseline so the next run sees
+   a clean `0 → 2` transition.
+
+`simulator.py` step 9 handles steps 2–4 and 6 automatically when `launch_veos_ipc_client=True`.
+See `FINDINGS.md §6` for the full empirical story.
 
 ---
 

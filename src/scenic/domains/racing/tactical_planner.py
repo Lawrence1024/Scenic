@@ -277,6 +277,10 @@ def tactical_planner_step_v1(
         if sit is None:
             return False
         overlap_hazard = sit.overlap_state in ("partial_overlap", "side_by_side")
+        # Distance-based hazard only applies when opponent is ahead; an opponent
+        # behind ego is receding and does not constitute a forward proximity hazard.
+        if not relation_ahead:
+            return bool(overlap_hazard)
         ref_speed = max(0.0, float(ego_speed_mps), float(opponent_speed_mps))
         dynamic_blocked_gap = max(
             float(config.follow_tight_gap_m),
@@ -290,6 +294,9 @@ def tactical_planner_step_v1(
         if sit is None:
             return False
         overlap_hazard = sit.overlap_state in ("partial_overlap", "side_by_side")
+        # Opponent behind ego is their responsibility — no forward hazard.
+        if not relation_ahead:
+            return bool(overlap_hazard)
         ref_speed = max(0.0, float(ego_speed_mps), float(opponent_speed_mps))
         dynamic_tight_gap = max(
             float(config.follow_tight_gap_m),

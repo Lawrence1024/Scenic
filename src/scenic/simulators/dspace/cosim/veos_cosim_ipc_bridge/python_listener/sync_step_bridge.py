@@ -22,6 +22,12 @@ class SyncStepBridge:
         self._ready_count = 0       # latest TIME_TRIGGER that is blocked and waiting
         self._released_count = 0    # latest TIME_TRIGGER Scenic has released
 
+        # Auto mode: TIME_TRIGGERs are released immediately (VEOS runs freely).
+        # Manual mode: each TIME_TRIGGER blocks until step() is called.
+        # Start in auto so VEOS runs during setup (MANEUVER_START pulse must reach a live VEOS).
+        # Switch to manual via set_manual() once ManeuverTime is confirmed ticking.
+        self._auto_mode = True
+
     def start(self):
         self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -70,6 +76,20 @@ class SyncStepBridge:
             if self._closed:
                 raise RuntimeError("SyncStepBridge closed")
             return self._ready_count
+
+    def set_auto(self):
+        """Switch to auto mode: TIME_TRIGGERs are released immediately (VEOS runs freely).
+        Also releases any currently blocked trigger so the bridge thread unblocks.
+        """
+        with self._cv:
+            self._auto_mode = True
+            self._released_count = self._ready_count
+            self._cv.notify_all()
+
+    def set_manual(self):
+        """Switch to manual/sync mode: each TIME_TRIGGER blocks until step() is called."""
+        with self._cv:
+            self._auto_mode = False
 
     def release_step(self, count=None):
         with self._cv:
@@ -128,15 +148,19 @@ class SyncStepBridge:
 
                         with self._cv:
                             self._ready_count = max(self._ready_count, count)
+                            if self._auto_mode:
+                                # Auto: release immediately so VEOS runs freely during setup.
+                                self._released_count = max(self._released_count, count)
                             self._cv.notify_all()
 
-                            while self._released_count < count and not self._closed:
+                            # Manual mode: block until step() releases this trigger.
+                            while not self._auto_mode and self._released_count < count and not self._closed:
                                 self._cv.wait()
 
                         if self._closed:
                             return
 
-                        # This is the actual release of one VEOS step.
+                        # Release one VEOS step.
                         conn.sendall(b"STEP\n")
                     else:
                         # Logs / other messages do not control stepping.

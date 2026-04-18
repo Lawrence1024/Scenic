@@ -88,15 +88,15 @@ This means:
 
 ## Build the IPC bridge
 
-Run this from:
+**Important:** `build_client.bat` calls MSVC `cl.exe` directly, so you must run it from
+an **x64 Native Tools Command Prompt for VS** (Start menu → Visual Studio 2019/2022 →
+"x64 Native Tools Command Prompt"). A plain PowerShell / cmd prompt will fail with
+`'cl' is not recognized as an internal or external command`.
 
-```powershell
+From the Native Tools prompt:
+
+```text
 cd C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\cosim\veos_cosim_ipc_bridge
-```
-
-Then build:
-
-```powershell
 .\build_client.bat
 ```
 
@@ -105,6 +105,11 @@ Expected output EXE:
 ```text
 veos_cosim_ipc_bridge\client\build\VeosCoSimTestClientIpc.exe
 ```
+
+After any edit to `VeosCoSimTestClientIpc.cpp` or `TcpEventClient.cpp`, re-run
+`build_client.bat` and confirm the `.exe` timestamp actually updated before re-running
+the tester. Otherwise the Python side will launch the old binary and your changes
+won't take effect.
 
 ---
 
@@ -206,6 +211,19 @@ It is **not** the primary synchronization path anymore.
 
 ---
 
+## Startup ordering requirement
+
+**Before the first VEOS step is gated (while still in AUTO mode):**
+- `Sw_Activate_CLIF` must be set to `2.0` via MAPort
+- Then `MANEUVER_START` must be pulsed via MAPort
+
+Only after both writes does `ManeuverTime` start advancing, which is the gate for
+vehicle motion. The full recipe and rationale are in `../FINDINGS.md §6` and
+`../README.md` (CoSim startup recipe section). `simulator.py` step 9 handles
+this automatically when `launch_veos_ipc_client=True`.
+
+---
+
 ## Current step handshake
 
 The current design is:
@@ -214,14 +232,57 @@ The current design is:
 2. `VeosCoSimTestClientIpc.exe` sends a JSON step-boundary message
 3. Scenic’s `SyncStepBridge` records that VEOS is blocked and ready
 4. Scenic calls its own `step()`
-5. `SyncStepBridge` replies with `STEP`
-6. IPC client calls `VeosCoSim_FinishCommandMI()`
-7. VEOS advances one step
-8. VEOS blocks again at the next `TIME_TRIGGER`
+5. `SyncStepBridge` replies either with the legacy string `STEP` (no command writes)
+   or with a JSON envelope carrying the per-tick command values:
+   ```json
+   {"reply":"STEP","outports":{"throttle_cmd":1.0,"gear_cmd":1,"enable_throttle_cmd":1, ...}}
+   ```
+6. IPC client parses the reply. For every `"name":value` pair in `outports`, it looks
+   up the signal's cached `{id, length, dataType}` (populated at startup via
+   `VeosCoSim_IoGetAvailableSignalsMI`) and calls `VeosCoSim_IoWriteMI(handle, id, 1, &val)`.
+7. IPC client calls `VeosCoSim_FinishCommandMI()`
+8. VEOS advances one step, the plant now reads the freshly-written outport values
+9. VEOS blocks again at the next `TIME_TRIGGER`
 
 This gives:
 
-> one Scenic step == one VEOS CoSim step
+> one Scenic step == one VEOS CoSim step, with per-tick command delivery via outports
+
+### Signal enumeration at connect
+
+Right after `VeosCoSim_StartNonBlockingMI`, the client calls
+`VeosCoSim_IoGetAvailableSignalsMI` and emits one `SIGNAL_INFO` IPC event per signal:
+
+```text
+{"event":"SIGNAL_INFO","id":18,"direction":"Write","dataType":"Float64","length":1,"name":"throttle_cmd"}
+```
+
+followed by a `SIGNAL_ENUM_END` summary with outport/inport counts. This catalog tells
+Scenic what signals exist, their IDs, and their data types. It also populates a
+C++-side `std::map<std::string, OutportSpec>` keyed by signal name, used later for
+`VeosCoSim_IoWriteMI` dispatch.
+
+### Reply protocol — what Scenic sends back
+
+- **Plain `STEP\n`** (legacy) — release one step with no command writes. The previous
+  tick's outport values remain in effect from VEOS' perspective.
+- **JSON envelope** with `"outports":{"name":number,...}` — release one step after
+  writing each named scalar Float64 outport. Names not in the cache are skipped with
+  a warning; non-scalar or non-Float64 signals are skipped in phase 1 (array writes
+  for `v_fellows_external_km_h` etc. can be added later).
+
+The helper `StepGate.set_outports({"throttle_cmd":1.0, ...})` in `print_time_callbacks.py`
+and any future Scenic-side driver exposes a simple state-bag for staging values; the
+next TIME_TRIGGER reply automatically includes them.
+
+### Per-tick heartbeat
+
+The client prints one heartbeat per 1000 ticks to its own console:
+```text
+[ipc] TIME_TRIGGER count=N sim_time=X wrote_outports=M
+```
+Silent ticks mean `wrote_outports=0`. Useful for spotting when the IPC-driven command
+channel goes dormant mid-run.
 
 ---
 

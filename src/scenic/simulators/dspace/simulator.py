@@ -78,8 +78,8 @@ class DSpaceSimulator(RacingSimulator):
                  cosim_bridge_mode="sync_step",
                  cosim_time_trigger_ack_delay_s=3.0,
                  veos_ipc_client_connect_timeout=120.0,
-                 pre_download_delay_s=30.0,
-                 post_modeldesk_download_delay_s=30.0):
+                 pre_download_delay_s=20.0,
+                 post_modeldesk_download_delay_s=20.0):
         super().__init__()
         self.scenario_src = scenario_src
         self.scenario_name = scenario_name
@@ -105,6 +105,92 @@ class DSpaceSimulator(RacingSimulator):
         # Override via `param pre_download_delay_s = ...` / `param post_modeldesk_download_delay_s = ...`.
         self.pre_download_delay_s = float(pre_download_delay_s)
         self.post_modeldesk_download_delay_s = float(post_modeldesk_download_delay_s)
+        # Persistent CoSim state: kept alive across all DSpaceSimulation runs within this process.
+        # Keeping the IPC client connected prevents VEOS BSC-restart (which corrupts sut_te_bridge
+        # CLIF state and blocks subsequent maneuver starts).
+        self._cosim_bridge = None
+        self._cosim_ipc_proc = None
+
+    def _ensure_cosim_started(self):
+        """Start the bridge server and IPC client if not already running. Idempotent."""
+        if self._cosim_bridge is not None:
+            return  # Already running from a previous scenario — reuse it.
+
+        _sb_host = self.sync_bridge_host
+        _sb_port = self.sync_bridge_port
+        _bridge_mode = str(self.cosim_bridge_mode).strip().lower()
+        _ack_delay = self.cosim_time_trigger_ack_delay_s
+        if _bridge_mode in ("sync_step", "sync"):
+            bridge = SyncStepBridge(host=_sb_host, port=_sb_port)
+            step_controlled = True
+            print("[CoSimSync] Bridge mode: sync_step (Scenic-paced lock-step).")
+        elif _bridge_mode in ("print_time_callbacks", "print_callbacks", "ack"):
+            bridge = PrintTimeCallbacksBridge(host=_sb_host, port=_sb_port, time_trigger_ack_delay_s=_ack_delay)
+            step_controlled = False
+            print(f"[CoSimSync] Bridge mode: print_time_callbacks-style ACK (delay={_ack_delay:.3f}s).")
+        else:
+            raise SimulationCreationError(
+                "Unknown cosim_bridge_mode={!r}. Supported: 'sync_step', 'print_time_callbacks'.".format(_bridge_mode)
+            )
+        bridge.start()
+        print(f"[CoSimSync] SyncStepBridge listening on {_sb_host}:{_sb_port}")
+
+        exe_raw = self.veos_ipc_client_exe
+        exe_path = Path(exe_raw) if exe_raw else _default_veos_ipc_client_exe()
+        if not exe_path.is_file():
+            bridge.close()
+            raise SimulationCreationError(
+                f"launch_veos_ipc_client=True but IPC client EXE not found: {exe_path}. "
+                "Build with cosim\\veos_cosim_ipc_bridge\\build_client.bat or set veos_ipc_client_exe=..."
+            )
+        cmd = [str(exe_path), "--host", self.veos_host, "--name", self.veos_cosim_server_name,
+               "--ipc-host", _sb_host, "--ipc-port", str(_sb_port)]
+        print(f"[CoSimSync] Launching VEOS IPC client: {' '.join(cmd)}")
+        proc = subprocess.Popen(
+            cmd, cwd=str(exe_path.parent),
+            creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
+        )
+        _timeout = self.veos_ipc_client_connect_timeout
+        print(f"[CoSimSync] Waiting for IPC client to connect (timeout {_timeout}s) ...")
+        try:
+            bridge.wait_connected(timeout=_timeout)
+        except Exception as e:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            bridge.close()
+            raise SimulationCreationError(
+                f"VEOS IPC client did not connect to SyncStepBridge within {_timeout}s: {e}"
+            ) from e
+        print("[CoSimSync] VEOS IPC client connected to SyncStepBridge.")
+        self._cosim_bridge = bridge
+        self._cosim_ipc_proc = proc
+        self._cosim_bridge_step_controlled = step_controlled
+
+    def _close_cosim(self):
+        """Terminate the persistent IPC client and close the bridge. Called once at process exit."""
+        bridge, proc = self._cosim_bridge, self._cosim_ipc_proc
+        self._cosim_bridge = None
+        self._cosim_ipc_proc = None
+        if bridge is not None:
+            try:
+                bridge.close()
+            except Exception:
+                pass
+        if proc is not None:
+            print("[CoSimSync] Terminating persistent VEOS IPC client process ...")
+            try:
+                proc.kill()
+                proc.wait(timeout=3)
+            except Exception:
+                pass
+
+    def __del__(self):
+        try:
+            self._close_cosim()
+        except Exception:
+            pass
 
     def createSimulation(self, scene, **kwargs):
         return DSpaceSimulation(scene, self, **kwargs)
@@ -276,93 +362,13 @@ class DSpaceSimulation(RacingSimulation):
         except Exception as e:
             print(f"[Setup] [WARN] ART stack reset failed: {e}")
 
-    def _start_cosim_bridge_and_client(self):
-        """Start CoSim bridge/client before ModelDesk scenario setup when enabled."""
-        # VEOS CoSim (optional): SyncStepBridge + auto-spawn IPC client when launch_veos_ipc_client=True.
-        # When False, skip all CoSim setup; stepping uses ControlDesk advance only (no socket bind).
-        if getattr(self.sim, "launch_veos_ipc_client", False):
-            _sb_host = getattr(self.sim, "sync_bridge_host", "127.0.0.1")
-            _sb_port = int(getattr(self.sim, "sync_bridge_port", 50555))
-            _bridge_mode = str(getattr(self.sim, "cosim_bridge_mode", "sync_step")).strip().lower()
-            _ack_delay = float(getattr(self.sim, "cosim_time_trigger_ack_delay_s", 3.0))
-            if _bridge_mode in ("sync_step", "sync"):
-                self._sync_bridge = SyncStepBridge(host=_sb_host, port=_sb_port)
-                self._sync_bridge_step_controlled = True
-                print("[CoSimSync] Bridge mode: sync_step (Scenic-paced lock-step).")
-            elif _bridge_mode in ("print_time_callbacks", "print_callbacks", "ack"):
-                self._sync_bridge = PrintTimeCallbacksBridge(
-                    host=_sb_host,
-                    port=_sb_port,
-                    time_trigger_ack_delay_s=_ack_delay,
-                )
-                self._sync_bridge_step_controlled = False
-                print(
-                    f"[CoSimSync] Bridge mode: print_time_callbacks-style ACK "
-                    f"(TIME_TRIGGER delay={_ack_delay:.3f}s)."
-                )
-            else:
-                raise SimulationCreationError(
-                    "Unknown cosim_bridge_mode={!r}. Supported values: "
-                    "'sync_step', 'print_time_callbacks'.".format(_bridge_mode)
-                )
-            self._sync_bridge.start()
-            print(f"[CoSimSync] SyncStepBridge listening on {_sb_host}:{_sb_port}")
-
-            exe_raw = getattr(self.sim, "veos_ipc_client_exe", None)
-            exe_path = Path(exe_raw) if exe_raw else _default_veos_ipc_client_exe()
-            if not exe_path.is_file():
-                try:
-                    self._sync_bridge.close()
-                finally:
-                    self._sync_bridge = None
-                raise SimulationCreationError(
-                    f"launch_veos_ipc_client=True but IPC client EXE not found: {exe_path}. "
-                    "Build with cosim\\veos_cosim_ipc_bridge\\build_client.bat or set veos_ipc_client_exe=..."
-                )
-            _vh = getattr(self.sim, "veos_host", "192.168.100.101")
-            _vn = getattr(self.sim, "veos_cosim_server_name", "CoSimServerScenic")
-            _timeout = float(getattr(self.sim, "veos_ipc_client_connect_timeout", 120.0))
-            cmd = [
-                str(exe_path),
-                "--host",
-                _vh,
-                "--name",
-                _vn,
-                "--ipc-host",
-                _sb_host,
-                "--ipc-port",
-                str(_sb_port),
-            ]
-            print(f"[CoSimSync] Launching VEOS IPC client: {' '.join(cmd)}")
-            self._veos_ipc_client_proc = subprocess.Popen(
-                cmd,
-                cwd=str(exe_path.parent),
-                creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
-            )
-            print(
-                f"[CoSimSync] Waiting for IPC client to connect (timeout {_timeout}s) ..."
-            )
-            try:
-                self._sync_bridge.wait_connected(timeout=_timeout)
-            except Exception as e:
-                try:
-                    self._veos_ipc_client_proc.terminate()
-                    self._veos_ipc_client_proc.wait(timeout=5)
-                except Exception:
-                    try:
-                        self._veos_ipc_client_proc.kill()
-                    except Exception:
-                        pass
-                self._veos_ipc_client_proc = None
-                try:
-                    self._sync_bridge.close()
-                finally:
-                    self._sync_bridge = None
-                raise SimulationCreationError(
-                    f"VEOS IPC client did not connect to SyncStepBridge within {_timeout}s: {e}"
-                ) from e
-            print("[CoSimSync] VEOS IPC client connected to SyncStepBridge.")
-        else:
+    def _start_cosim_bridge(self):
+        """Open the Python-side TCP bridge server.  Call BEFORE ModelDesk authoring so the
+        port is listening, but do NOT launch the C++ client yet — VEOS may not be running
+        (previous run's client disconnect stops VEOS).  Call _launch_cosim_client() after
+        ts.Download() has restarted VEOS with the new scenario.
+        """
+        if not getattr(self.sim, "launch_veos_ipc_client", False):
             self._sync_bridge = None
             self._sync_bridge_step_controlled = False
             print(
@@ -370,6 +376,94 @@ class DSpaceSimulation(RacingSimulation):
                 "(no SyncStepBridge; direct ControlDesk stepping). "
                 "Set launch_veos_ipc_client=True to enable CoSim."
             )
+            return
+
+        _sb_host = getattr(self.sim, "sync_bridge_host", "127.0.0.1")
+        _sb_port = int(getattr(self.sim, "sync_bridge_port", 50555))
+        _bridge_mode = str(getattr(self.sim, "cosim_bridge_mode", "sync_step")).strip().lower()
+        _ack_delay = float(getattr(self.sim, "cosim_time_trigger_ack_delay_s", 3.0))
+        if _bridge_mode in ("sync_step", "sync"):
+            self._sync_bridge = SyncStepBridge(host=_sb_host, port=_sb_port)
+            self._sync_bridge_step_controlled = True
+            print("[CoSimSync] Bridge mode: sync_step (Scenic-paced lock-step).")
+        elif _bridge_mode in ("print_time_callbacks", "print_callbacks", "ack"):
+            self._sync_bridge = PrintTimeCallbacksBridge(
+                host=_sb_host,
+                port=_sb_port,
+                time_trigger_ack_delay_s=_ack_delay,
+            )
+            self._sync_bridge_step_controlled = False
+            print(
+                f"[CoSimSync] Bridge mode: print_time_callbacks-style ACK "
+                f"(TIME_TRIGGER delay={_ack_delay:.3f}s)."
+            )
+        else:
+            raise SimulationCreationError(
+                "Unknown cosim_bridge_mode={!r}. Supported values: "
+                "'sync_step', 'print_time_callbacks'.".format(_bridge_mode)
+            )
+        self._sync_bridge.start()
+        print(f"[CoSimSync] SyncStepBridge listening on {_sb_host}:{_sb_port}")
+
+    def _launch_cosim_client(self):
+        """Launch VeosCoSimTestClientIpc.exe and wait for it to connect to the bridge.
+        Call AFTER ts.Download() so VEOS has loaded the new scenario and is ready to
+        accept a CoSim connection.  On each run ts.Download() restarts the VEOS
+        simulation, giving the new client a fresh session to connect to.
+        """
+        if self._sync_bridge is None:
+            return
+
+        _sb_host = getattr(self.sim, "sync_bridge_host", "127.0.0.1")
+        _sb_port = int(getattr(self.sim, "sync_bridge_port", 50555))
+        exe_raw = getattr(self.sim, "veos_ipc_client_exe", None)
+        exe_path = Path(exe_raw) if exe_raw else _default_veos_ipc_client_exe()
+        if not exe_path.is_file():
+            try:
+                self._sync_bridge.close()
+            finally:
+                self._sync_bridge = None
+            raise SimulationCreationError(
+                f"launch_veos_ipc_client=True but IPC client EXE not found: {exe_path}. "
+                "Build with cosim\\veos_cosim_ipc_bridge\\build_client.bat or set veos_ipc_client_exe=..."
+            )
+        _vh = getattr(self.sim, "veos_host", "192.168.100.101")
+        _vn = getattr(self.sim, "veos_cosim_server_name", "CoSimServerScenic")
+        _timeout = float(getattr(self.sim, "veos_ipc_client_connect_timeout", 120.0))
+        cmd = [
+            str(exe_path),
+            "--host", _vh,
+            "--name", _vn,
+            "--ipc-host", _sb_host,
+            "--ipc-port", str(_sb_port),
+        ]
+        print(f"[CoSimSync] Launching VEOS IPC client: {' '.join(cmd)}")
+        self._veos_ipc_client_proc = subprocess.Popen(
+            cmd,
+            cwd=str(exe_path.parent),
+            creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
+        )
+        print(f"[CoSimSync] Waiting for IPC client to connect (timeout {_timeout}s) ...")
+        try:
+            self._sync_bridge.wait_connected(timeout=_timeout)
+        except Exception as e:
+            try:
+                self._veos_ipc_client_proc.terminate()
+                self._veos_ipc_client_proc.wait(timeout=5)
+            except Exception:
+                try:
+                    self._veos_ipc_client_proc.kill()
+                except Exception:
+                    pass
+            self._veos_ipc_client_proc = None
+            try:
+                self._sync_bridge.close()
+            finally:
+                self._sync_bridge = None
+            raise SimulationCreationError(
+                f"VEOS IPC client did not connect to SyncStepBridge within {_timeout}s: {e}"
+            ) from e
+        print("[CoSimSync] VEOS IPC client connected to SyncStepBridge.")
 
     def setup(self):
         """Run once per resample: SaveAs/Activate, place ego/fellows, Save/Download, Connect, reset (Stop/Reset/Start), warmup, ART stack, set flags.
@@ -384,8 +478,21 @@ class DSpaceSimulation(RacingSimulation):
         if exp is None:
             raise SimulationCreationError("Activate an experiment in ModelDesk.")
 
-        # Start CoSim bridge/client first so VEOS handshake is ready before ModelDesk scenario setup.
-        self._start_cosim_bridge_and_client()
+        # Attach to (or start) the persistent CoSim bridge owned by DSpaceSimulator.
+        # Keeping the IPC client alive across scenarios prevents VEOS BSC-restart which
+        # corrupts sut_te_bridge CLIF state and blocks subsequent maneuver starts.
+        if getattr(self.sim, "launch_veos_ipc_client", False):
+            self.sim._ensure_cosim_started()
+            self._sync_bridge = self.sim._cosim_bridge
+            self._sync_bridge_step_controlled = getattr(self.sim, "_cosim_bridge_step_controlled", True)
+            print("[CoSimSync] Using persistent VEOS bridge (shared across scenarios).")
+        else:
+            self._sync_bridge = None
+            self._sync_bridge_step_controlled = False
+            print(
+                "[CoSimSync] launch_veos_ipc_client=False — VEOS CoSim disabled "
+                "(no SyncStepBridge; direct ControlDesk stepping)."
+            )
 
         # 1) Switch to source, then SaveAs a working copy
         try:
@@ -454,7 +561,7 @@ class DSpaceSimulation(RacingSimulation):
         # download pauses. See modeldesk/authoring.py.)
         try:
             self.ts.Save()
-            self.ts.Download()  # Download all to simulator
+            self.ts.Download()  # Download all to simulator — this restarts the VEOS simulation
         except Exception as e:
             print(f"[ModelDesk] Save/Download failed: {e}")
         time.sleep(0.1)
@@ -525,14 +632,87 @@ class DSpaceSimulation(RacingSimulation):
             print("\nWithout ControlDesk, Fellow vehicles CANNOT move.")
             print("="*70 + "\n")
 
-        # 9) Start maneuver (MANEUVER_START pulse). Under CoSim the gate IS the pause, so we
+        # 9) Wait for ControlDesk/VEOS to settle after connect before issuing any pulses.
+        print("[Setup] Post-connect settle pause 10s ...")
+        time.sleep(10.0)
+
+        # 9b) Start maneuver (MANEUVER_START pulse). Under CoSim the gate IS the pause, so we
         # skip cd.pause_simulation() — calling it kills TIME_TRIGGERs and deadlocks stepping
         # (proven in cosim/.../print_time_callbacks.py stress test).
+        #
+        # Sw_Activate_CLIF must be 2.0 (CoSim only) for ManeuverTime to advance (FINDINGS.md §6).
+        # initialize_vesi_interface() writes CLIF=0.0 via COM; under CoSim that doesn't persist
+        # (FINDINGS.md §4), so we re-apply 2.0 via MAPort here.
+        _CLIF_PATH = "Platform()://ASM_Traffic/Model Root/VesiInterface/Sw_Activate_CLIF[0|1]/Value"
+        self._clif_original = 0.0  # default restore value; overwritten if read succeeds
         if self._cd:
+            if getattr(self.sim, "launch_veos_ipc_client", False) and self._var_access is not None:
+                # CoSim only: capture CLIF baseline then set 2.0 via MAPort while gate is AUTO.
+                # COM writes don't persist under CoSim (FINDINGS.md §4); MAPort is required.
+                # Non-CoSim path leaves CLIF as set by initialize_vesi_interface() via COM.
+                try:
+                    self._clif_original = float(self._var_access.get_var(_CLIF_PATH))
+                    print(f"[Setup] [CoSim] Captured Sw_Activate_CLIF baseline = {self._clif_original!r}")
+                except Exception as e:
+                    print(f"[Setup] [CoSim] [WARN] Could not read CLIF baseline ({e}); assuming 0.0")
+                try:
+                    self._var_access.set_var(_CLIF_PATH, 2.0)
+                    readback = float(self._var_access.get_var(_CLIF_PATH))
+                    print(f"[Setup] [CoSim] Set Sw_Activate_CLIF=2.0 via MAPort (readback={readback!r})")
+                except Exception as e:
+                    print(f"[Setup] [CoSim] [WARN] Could not set CLIF=2.0 ({e})")
+
             if cd_session.start_maneuver(self._cd, var_access=self._var_access):
                 print("[Setup] Maneuver started via MANEUVER_START pulse.")
             else:
                 print("[Setup] [WARN] start_maneuver failed or not connected")
+
+            # Verify ManeuverTime is advancing (FINDINGS.md §5, §6).
+            # Under CoSim: bridge is in AUTO mode so VEOS is running freely — poll wall-clock.
+            # Under non-CoSim: VEOS advances via ControlDesk — same wall-clock poll.
+            # Root-cause note: VEOS must be running (not frozen) when MANEUVER_START fires so
+            # it sees the 1→0 rising edge. SyncStepBridge starts in AUTO mode for this reason.
+            _MT_PATH = (
+                "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/UserInterface/"
+                "DISP_Plant/ManeuverTime[s]/Out1"
+            )
+            _mt_started = False
+            if self._var_access is not None:
+                _mt_poll_deadline = time.perf_counter() + 5.0
+                while time.perf_counter() < _mt_poll_deadline:
+                    try:
+                        _mt = float(self._var_access.get_var(_MT_PATH))
+                    except Exception:
+                        _mt = 0.0
+                    if _mt > 0.0:
+                        print(f"[Setup] ManeuverTime = {_mt:.4f}s — maneuver is running.")
+                        _mt_started = True
+                        break
+                    time.sleep(0.2)
+
+            # CoSim: switch bridge from AUTO to MANUAL (controlled stepping) now that
+            # ManeuverTime has latched. From this point every VEOS tick requires step().
+            _cosim_active = (
+                getattr(self.sim, "launch_veos_ipc_client", False)
+                and getattr(self, "_sync_bridge", None) is not None
+            )
+            if _cosim_active:
+                self._sync_bridge.set_manual()
+                print("[Setup] [CoSim] Bridge switched AUTO → MANUAL (controlled stepping).")
+
+            if not _mt_started:
+                try:
+                    _mt_final = float(self._var_access.get_var(_MT_PATH)) if self._var_access else 0.0
+                except Exception:
+                    _mt_final = 0.0
+                print(
+                    f"[Setup] FATAL: ManeuverTime = {_mt_final:.4f}s after 5s poll "
+                    "— maneuver engine did not start. "
+                    "Check: CLIF=2.0 set, VEOS stepping, ModelDesk scenario loaded (FINDINGS.md §5, §6)."
+                )
+                import sys as _sys
+                _sys.exit(1)
+
             if not getattr(self.sim, "launch_veos_ipc_client", False):
                 if cd_session.pause(self._cd):
                     print("[Setup] [OK] Simulation paused for step-by-step control (ControlDesk stepping).")
@@ -1640,9 +1820,51 @@ class DSpaceSimulation(RacingSimulation):
                         self._cd.start_simulation()  # ControlDesk RTA Start (un-pauses RTA)
                     else:
                         print("[ControlDesk] Teardown: skipping RTA Start (CoSim mode; RTA was never paused).")
-                    cd_session.stop(self._cd, var_access=var)  # stop_maneuver pulse (via MAPort when available)
-                    self._cd.reset_maneuver(var_access=var)    # reset_maneuver pulse (via MAPort when available)
+
+                    # Under CoSim, stop/reset pulses need VEOS to tick during the 0.5s sleep
+                    # so VEOS sees the rising edge — same issue as MANEUVER_START at setup.
+                    # Switch bridge to AUTO so VEOS runs freely during the pulses.
+                    _bridge = getattr(self, "_sync_bridge", None)
+                    if _bridge is not None:
+                        _bridge.set_auto()
+                        print("[ControlDesk] Teardown: bridge → AUTO for stop/reset pulses.")
+
+                    cd_session.stop(self._cd, var_access=var)       # MANEUVER_STOP pulse
+                    self._cd.reset_maneuver(var_access=var)          # MANEUVER_RESET pulse
                     var.set_var(MANUAL_MODE_PATH, 0.0)
+
+                    # Poll ManeuverTime → 0 to confirm reset landed (up to 3s wall-clock).
+                    _MT_PATH = (
+                        "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/UserInterface/"
+                        "DISP_Plant/ManeuverTime[s]/Out1"
+                    )
+                    _mt_reset_ok = False
+                    _mt_deadline = time.perf_counter() + 3.0
+                    while time.perf_counter() < _mt_deadline:
+                        try:
+                            _mt = float(var.get_var(_MT_PATH))
+                        except Exception:
+                            _mt = -1.0
+                        if _mt <= 0.0:
+                            print(f"[ControlDesk] Teardown: ManeuverTime reset to {_mt:.4f}s — OK.")
+                            _mt_reset_ok = True
+                            break
+                        time.sleep(0.1)
+                    if not _mt_reset_ok:
+                        try:
+                            _mt_final = float(var.get_var(_MT_PATH))
+                        except Exception:
+                            _mt_final = -1.0
+                        print(f"[ControlDesk] Teardown: [WARN] ManeuverTime = {_mt_final:.4f}s after 3s — reset may not have landed.")
+
+                    # Restore Sw_Activate_CLIF to pre-run baseline (captured in setup step 9)
+                    _CLIF_PATH = "Platform()://ASM_Traffic/Model Root/VesiInterface/Sw_Activate_CLIF[0|1]/Value"
+                    _clif_restore = getattr(self, "_clif_original", 0.0)
+                    try:
+                        var.set_var(_CLIF_PATH, _clif_restore)
+                        print(f"[ControlDesk] Teardown: restored Sw_Activate_CLIF → {_clif_restore!r}")
+                    except Exception as e:
+                        print(f"[ControlDesk] Teardown: CLIF restore failed: {e}")
                 except Exception as e:
                     print(f"[ControlDesk] Teardown: reset sequence failed: {e}")
 
@@ -1687,29 +1909,21 @@ class DSpaceSimulation(RacingSimulation):
                 print("[Timing] MAPort per-path timing (get_var/set_var) below:")
             self._var_access.print_timing_summary()
 
-        # 3) SyncStepBridge teardown
+        # 3) SyncStepBridge: switch back to AUTO so VEOS runs freely between scenarios.
+        # Do NOT close — bridge is owned by DSpaceSimulator and persists across scenarios.
+        # DSpaceSimulator._close_cosim() (called by __del__) handles final teardown.
         if self._sync_bridge is not None:
             try:
-                self._sync_bridge.close()
-            finally:
-                self._sync_bridge = None
-                self._sync_bridge_step_controlled = False
-                self._sync_bridge_connected_once = False
-
-        # 3b) VEOS IPC client subprocess (if Scenic launched it via launch_veos_ipc_client)
-        if getattr(self, "_veos_ipc_client_proc", None) is not None:
-            print("[CoSimSync] Terminating VEOS IPC client process ...")
-            try:
-                self._veos_ipc_client_proc.terminate()
-                self._veos_ipc_client_proc.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                try:
-                    self._veos_ipc_client_proc.kill()
-                except Exception:
-                    pass
+                self._sync_bridge.set_auto()
+                print("[CoSimSync] Teardown: bridge → AUTO (VEOS runs freely until next scenario).")
             except Exception:
                 pass
-            self._veos_ipc_client_proc = None
+            self._sync_bridge = None
+            self._sync_bridge_step_controlled = False
+            self._sync_bridge_connected_once = False
+
+        # 3b) IPC client is owned by DSpaceSimulator._cosim_ipc_proc; nothing to do here.
+        self._veos_ipc_client_proc = None
 
         # 4) MAPort teardown
         if self._maport is not None:

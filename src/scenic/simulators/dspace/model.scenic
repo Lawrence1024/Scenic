@@ -43,8 +43,8 @@ param cosim_bridge_mode = (globalParameters.cosim_bridge_mode if 'cosim_bridge_m
 param cosim_time_trigger_ack_delay_s = (globalParameters.cosim_time_trigger_ack_delay_s if 'cosim_time_trigger_ack_delay_s' in globalParameters else 3.0)
 param veos_ipc_client_connect_timeout = (globalParameters.veos_ipc_client_connect_timeout if 'veos_ipc_client_connect_timeout' in globalParameters else 120.0)
 # Empirically-tuned ModelDesk pauses (see cosim/.../print_time_callbacks.py). Raise on cold VEOS boots.
-param pre_download_delay_s = (globalParameters.pre_download_delay_s if 'pre_download_delay_s' in globalParameters else 30.0)
-param post_modeldesk_download_delay_s = (globalParameters.post_modeldesk_download_delay_s if 'post_modeldesk_download_delay_s' in globalParameters else 30.0)
+param pre_download_delay_s = (globalParameters.pre_download_delay_s if 'pre_download_delay_s' in globalParameters else 20.0)
+param post_modeldesk_download_delay_s = (globalParameters.post_modeldesk_download_delay_s if 'post_modeldesk_download_delay_s' in globalParameters else 20.0)
 
 # Configure the dSPACE simulator
 simulator dspace.DSpaceSimulator(

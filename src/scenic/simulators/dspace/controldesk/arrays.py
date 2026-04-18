@@ -9,6 +9,14 @@ WARMUP_SIM_DURATION = 3
 
 def _advance_one_step(sim):
     """Advance simulation by one timestep (poll until simulated time advances). Used during warmup only."""
+    # Under CoSim, VEOS advances via the SyncStepBridge gate, not ControlDesk SingleStep.
+    if getattr(sim, "_sync_bridge_step_controlled", False) and getattr(sim, "_sync_bridge", None) is not None:
+        try:
+            sim._sync_bridge.step(timeout=10.0)
+            return True
+        except Exception:
+            return False
+
     var = getattr(sim, "_var_access", None) or getattr(sim, "_cd", None)
     cd = getattr(sim, "_cd", None)
     if not var:

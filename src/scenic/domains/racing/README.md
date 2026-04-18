@@ -204,6 +204,35 @@ class HasManualTransmission:
     def setClutch(self, clutch: float) -> None: ...  # 0.0=released, 1.0=pressed
 ```
 
+### `RacingSteers` Protocol
+
+Extended protocol for simulator-facing racing controls (used by dSPACE decision-tree integration). Simulators implement these methods to handle `RacingAction` subclasses:
+
+```python
+class RacingSteers:
+    def setSpeedLimit(self, speed_limit: float) -> None: ...
+    def setTTLSelection(self, selection: str) -> None: ...  # "left"|"right"|"race"|"optimal"|"pit"
+    def setTargetGap(self, gap: float) -> None: ...
+    def setStrategy(self, strategy_type: str) -> None: ...  # "cruise_control"|"follow_mode"
+    def setPowertrainMode(self, mode: str) -> None: ...  # "pit_lane"|"quiet"|"nominal"|"race"|"overboost"
+    def setScaleFactor(self, scale_factor: float) -> None: ...  # 0.0–1.0
+    def setPush2Pass(self, active: bool) -> None: ...
+```
+
+Actions backed by this protocol: `SetSpeedLimitAction`, `SetTTLSelectionAction`, `SetTargetGapAction`, `SetStrategyAction`, `SetPowertrainModeAction`, `SetScaleFactorAction`, `SetPush2PassAction`, `StopCarAction`.
+
+### `HasFellowPlant` Protocol
+
+Mixin protocol for traffic agents driven by route-relative speed and lateral offset (used for dSPACE fellow traffic control via `External_Signals`):
+
+```python
+class HasFellowPlant:
+    def setFellowPlant(self, v_kmh: float, d_m: float) -> None: ...
+    # v_kmh: longitudinal speed in km/h; d_m: lateral offset (Frenet t) in meters
+```
+
+Action: `SetFellowPlantAction(v_kmh, d_m)`. Plant state is mirrored in `agent._fellow_plant_state`.
+
 ### Actions Referenced But Not Implemented
 
 The following actions are referenced in behaviors but are **not** implemented in `actions.py`. Simulators may need to provide their own implementations:
@@ -252,86 +281,27 @@ FollowRacingLineMPCBehavior(
 
 ### `PitStopBehavior`
 
-**Purpose**: Execute a pit stop sequence.
-
-**Implementation**:
-```scenic
-behavior PitStopBehavior():
-    """Execute a pit stop using racing-specific systems."""
-    
-    # Enter pit lane with speed limiter
-    take PitLimiterAction(activate=True)  # ⚠️ Not implemented - simulator must provide
-    do FollowRacingLineMPCBehavior(target_speed=20)
-    
-    # Stop for pit stop
-    take SetBrakeAction(1.0)
-    wait  # Simulate pit stop time
-    
-    # Exit pit lane
-    take PitLimiterAction(activate=False)  # ⚠️ Not implemented - simulator must provide
-```
+**Purpose**: Execute a pit stop sequence. **Status: stub** — the behavior exists in `behaviors.scenic` but is a minimal placeholder. Full implementation requires simulator-specific `PitLimiterAction`.
 
 **Usage**: `do PitStopBehavior()`
 
-**Note**: This behavior references `PitLimiterAction` which is not implemented in the base domain. Simulators must provide their own implementation.
+**Note**: References `PitLimiterAction` which is not implemented in the base domain. Simulators must provide their own implementation.
 
 ### `OvertakingBehavior`
 
-**Purpose**: Execute overtaking maneuvers using racing systems.
+**Purpose**: Execute overtaking maneuvers using racing systems. **Status: stub** — the behavior exists in `behaviors.scenic` as a placeholder. Full implementation requires `ERSDeployAction` and `DRSAction`.
 
-**Implementation**:
-```scenic
-behavior OvertakingBehavior(target_car, aggressive=False):
-    """Attempt to overtake target car using racing systems.
-    
-    Args:
-        target_car: The car to overtake
-        aggressive: If True, use all available systems (DRS, ERS)
-    """
-    
-    # Close the gap
-    while (distance from self to target_car) > 5:
-        do FollowRacingLineMPCBehavior(target_speed=35)
-    
-    # Execute overtake with racing systems
-    if aggressive:
-        take ERSDeployAction(mode='overtake', amount=1.0)  # ⚠️ Not implemented
-        take DRSAction(activate=True)  # ⚠️ Not implemented
-    
-    # Move to side and accelerate
-    take SetThrottleAction(1.0)
-    
-    # Complete overtake
-    do FollowRacingLineMPCBehavior() until (distance from self to target_car) > 10
-    
-    # Return to racing line
-    do FollowRacingLineMPCBehavior()
-```
+**Usage**: `do OvertakingBehavior(target_car, aggressive=False)`
 
-**Usage**: `do OvertakingBehavior(opponent_car, aggressive=True)`
-
-**Note**: This behavior references `ERSDeployAction` and `DRSAction` which are not implemented in the base domain.
+**Note**: References `ERSDeployAction` and `DRSAction` which are not implemented in the base domain. For opponent-aware overtaking, use `FollowRacingLineMPCBehavior` with `tactical_planner_enabled=True` instead.
 
 ### `DefensiveBehavior`
 
-**Purpose**: Defend position using racing-specific systems.
-
-**Implementation**:
-```scenic
-behavior DefensiveBehavior():
-    """Defend position using racing-specific systems."""
-    
-    # Adjust racing systems for defense
-    take TractionControlAction(level=8)  # ⚠️ Not implemented
-    take BrakeBiasAction(bias=0.6)  # ⚠️ Not implemented
-    
-    # Follow racing line defensively
-    do FollowRacingLineMPCBehavior(target_speed=25)
-```
+**Purpose**: Defend position using racing-specific systems. **Status: stub** — the behavior exists in `behaviors.scenic` as a placeholder. Full implementation requires `TractionControlAction` and `BrakeBiasAction`.
 
 **Usage**: `do DefensiveBehavior()`
 
-**Note**: This behavior references `TractionControlAction` and `BrakeBiasAction` which are not implemented in the base domain.
+**Note**: References `TractionControlAction` and `BrakeBiasAction` which are not implemented in the base domain.
 
 ---
 
@@ -570,8 +540,8 @@ chaser.behavior = OvertakingBehavior(leader, aggressive=True)
 - Track direction enforcement
 - Starting grid generation
 - Racing car objects with proper properties
-- Core racing behaviors: `FollowRacingLineMPCBehavior` (TTL line follow), `PitStopBehavior`, `OvertakingBehavior`, `DefensiveBehavior`, plus dSPACE fellow (v, d) plants and decision-tree helpers in `behaviors.scenic`
-- 5 racing actions (max speed, TTL, gear/clutch)
+- Core racing behavior: `FollowRacingLineMPCBehavior` (TTL line follow + 4-layer intelligence pipeline), plus dSPACE fellow (v, d) plants and decision-tree helpers in `behaviors.scenic`
+- 5 behavior-facing racing actions (max speed, TTL, gear/clutch) + 9 simulator-protocol actions via `RacingSteers` and `HasFellowPlant`
 - dSPACE integration (via `racing_model.scenic`)
 - Pit lane identification (via road ID or name pattern)
 - Racing simulator interface (`RacingSimulator`, `RacingSimulation`)
@@ -580,9 +550,9 @@ chaser.behavior = OvertakingBehavior(leader, aggressive=True)
 - MPC module: MPCC lateral controller, longitudinal MPC, reference builder, speed profile, result_data analysis (see `mpc/README.md`)
 - **Opponent-aware 4-layer intelligence pipeline**: Perception (`situation_assessment.py`) → Assessment (`assessment/race_situation.py`) → Planning (`tactical_planner.py`) → Safety (`safety/stability_guard.py`). Enabled via `tactical_planner_enabled=True`. Tactical modes: FREE_RUN / FOLLOW / SETUP_LEFT / SETUP_RIGHT / COMMIT_PASS_LEFT / COMMIT_PASS_RIGHT / ABORT_PASS. Asymmetric-opening detection correctly suppresses safety pressure when the fellow is on a parallel TTL (fixes braking in F3L/F3R scenarios). Status: `plans/README.md`.
 
-### ⚠️ Partially Implemented
+### ⚠️ Partially Implemented / Stubs
 
-- **Behaviors reference missing actions**: `PitStopBehavior`, `OvertakingBehavior`, and `DefensiveBehavior` reference actions that are not implemented in `actions.py`:
+- **`PitStopBehavior`, `OvertakingBehavior`, `DefensiveBehavior`**: Present as stubs in `behaviors.scenic` but are not functional. They reference actions that are not implemented in `actions.py`:
   - `PitLimiterAction`
   - `DRSAction`
   - `ERSDeployAction`
@@ -652,12 +622,30 @@ RacingCar:
 
 ### Racing Actions
 
+**Behavior-facing (core):**
 ```python
 SetMaxSpeedAction(max_speed: float)
 SetTTLAction(ttl: Region)
 SetGearAction(gear: int)  # 0-6
 PressClutchAction()
 ReleaseClutchAction()
+```
+
+**Simulator-protocol (`RacingSteers`, dSPACE decision-tree integration):**
+```python
+SetSpeedLimitAction(speed_limit: float, speed_type: str = None)
+SetTTLSelectionAction(selection: str)   # "left"|"right"|"race"|"optimal"|"pit"
+SetTargetGapAction(gap: float, gap_type: str = None)
+SetStrategyAction(strategy_type: str)   # "cruise_control"|"follow_mode"
+SetPowertrainModeAction(mode: str)      # "pit_lane"|"quiet"|"nominal"|"race"|"overboost"
+SetScaleFactorAction(scale_factor: float)
+SetPush2PassAction(active: bool)
+StopCarAction(stop_type: str)           # "emergency"|"immediate"|"safe"
+```
+
+**Fellow plant (`HasFellowPlant`, dSPACE traffic control):**
+```python
+SetFellowPlantAction(v_kmh: float, d_m: float)
 ```
 
 ### Racing Behaviors
@@ -830,9 +818,14 @@ src/scenic/domains/racing/
 ├── benchmarks/              # Benchmark runners and log analysis
 │   ├── phase_run_common.py  #   Log parser (RE_PLANNER, RE_ASSESSMENT, RE_GUARD, RE_COMMIT …)
 │   ├── f_scenario_bank.py   #   Scenario name banks per runner
-│   ├── phase7_runner.py … phase12_runner.py
-│   ├── parse_commit_metrics.py, analyze_racing_log.py
-│   └── phase_run_common.py
+│   ├── phase0_runner.py … phase3_runner.py          # original-architecture runners
+│   ├── phase3_on_phase0_runner.py                   # cross-check runner
+│   ├── phase7_runner.py … phase12_runner.py         # new-architecture (post-Phase 6 restructure)
+│   ├── full_stack_runner.py                         # complete intelligence stack (all F-scenarios)
+│   ├── validation_full_stack_runner.py              # full-stack stress/validation campaign
+│   ├── validation_phase6_12_runner.py               # phase 6-12 regression suite
+│   ├── fellow_runner.py                             # fellow harness smoke tests
+│   └── fellow_placement_debug_runner.py             # fellow placement diagnostics
 ├── mpc/                     # MPC/MPCC lateral + longitudinal controllers
 │   ├── config.py, reference_builder.py, mpc_lateral.py, mpc_longitudinal.py
 │   ├── speed_profile.py, io_adapter.py, utils.py, calibration.py
@@ -857,7 +850,7 @@ src/scenic/simulators/dspace/
 | **Start** | Anywhere on road | Starting grid |
 | **Properties** | Basic vehicle | Fuel, tires, race number |
 | **Behaviors** | Lane following | Racing line, pit stops |
-| **Actions** | Basic control | Max speed, TTL, gear/clutch |
+| **Actions** | Basic control | Max speed, TTL, gear/clutch + `RacingSteers`/`HasFellowPlant` protocols |
 | **Controllers** | Standard PID | Racing-optimized PID |
 
 ---
@@ -867,8 +860,8 @@ src/scenic/simulators/dspace/
 The Racing Domain provides a **minimal but functional** foundation for racing scenarios:
 
 - **1 Object Type**: `RacingCar` with racing systems
-- **5 Actions**: Max speed, TTL, gear, clutch (press/release)
-- **5 Behaviors**: Racing line following (PID), **racing line following with MPC**, pit stops, overtaking, defense
+- **14 Actions**: 5 behavior-facing (max speed, TTL, gear, clutch press/release) + 8 `RacingSteers` protocol + 1 `HasFellowPlant` protocol
+- **4 Behaviors**: Racing line following (PID), **racing line following with MPC + 4-layer intelligence pipeline**, and stubs for pit stops / overtaking / defense
 - **3 Regions**: Main racing road, pit lane road, racing line
 - **Multiple Track Features**: Pit lanes, racing lines
 - **MPC submodule**: MPCC lateral + longitudinal MPC, waypoint reference, speed profile, log analysis (`mpc/`, `segments/`)

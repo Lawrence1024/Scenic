@@ -25,13 +25,20 @@ def author_scenario(sim):
         # Check consistency and download
         if sim.ts.CheckConsistency():
             print("[ModelDesk] Scenario is consistent")
-            _pre_download_s = float(getattr(sim.sim, "pre_download_delay_s", 30.0))
-            print(f"[ModelDesk] Pre-download pause {_pre_download_s:.1f}s ...")
-            time.sleep(_pre_download_s)
+            # Under CoSim, VEOS needs extra settle time around the download; apply
+            # configurable pauses only when launch_veos_ipc_client is enabled. For
+            # non-CoSim runs, behavior matches the pre-CoSim-integration code (no
+            # added delay).
+            cosim_enabled = bool(getattr(sim.sim, "launch_veos_ipc_client", False))
+            if cosim_enabled:
+                _pre_download_s = float(getattr(sim.sim, "pre_download_delay_s", 30.0))
+                print(f"[ModelDesk] Pre-download pause {_pre_download_s:.1f}s (CoSim) ...")
+                time.sleep(_pre_download_s)
             downloaded = sim.ts.Download()
-            _post_download_s = float(getattr(sim.sim, "post_modeldesk_download_delay_s", 30.0))
-            print(f"[ModelDesk] Post-download pause {_post_download_s:.1f}s ...")
-            time.sleep(_post_download_s)
+            if cosim_enabled:
+                _post_download_s = float(getattr(sim.sim, "post_modeldesk_download_delay_s", 30.0))
+                print(f"[ModelDesk] Post-download pause {_post_download_s:.1f}s (CoSim) ...")
+                time.sleep(_post_download_s)
             if downloaded:
                 print("[ModelDesk] Scenario downloaded to VEOS successfully")
                 return True

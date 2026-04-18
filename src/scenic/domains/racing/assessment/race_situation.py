@@ -132,6 +132,12 @@ def _compute_corridor_open_flags(
             left_open = False
         if float(pred_lat_m) <= -0.8:
             right_open = False
+        # Near-center opponent: insufficient lateral clearance for either-side pass.
+        # Two IAC cars (~2m wide each) need ≥3m lateral offset for safe side-by-side.
+        # When fellow is within ±1.5m of ego's line, block both pass corridors.
+        if abs(float(pred_lat_m)) < 1.5:
+            left_open = False
+            right_open = False
         # Overlap state means neither side should be considered confidently open.
         if overlap_flag and abs(float(pred_lat_m)) <= 1.4:
             left_open = False
