@@ -33,7 +33,7 @@ param control_period = (globalParameters.control_period if 'control_period' in g
 param scenic_control = (globalParameters.scenic_control if 'scenic_control' in globalParameters else True)
 
 # VEOS CoSim: True = enable full CoSim (SyncStepBridge + auto-start VeosCoSimTestClientIpc.exe). False = no CoSim (ControlDesk stepping only; see cosim/README.md).
-param launch_veos_ipc_client = (globalParameters.launch_veos_ipc_client if 'launch_veos_ipc_client' in globalParameters else False)
+param launch_veos_ipc_client = (globalParameters.launch_veos_ipc_client if 'launch_veos_ipc_client' in globalParameters else True)
 param veos_host = (globalParameters.veos_host if 'veos_host' in globalParameters else "192.168.100.101")
 param veos_cosim_server_name = (globalParameters.veos_cosim_server_name if 'veos_cosim_server_name' in globalParameters else "CoSimServerScenic")
 param veos_ipc_client_exe = (globalParameters.veos_ipc_client_exe if 'veos_ipc_client_exe' in globalParameters else None)

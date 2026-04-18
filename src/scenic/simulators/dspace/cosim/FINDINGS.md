@@ -280,7 +280,7 @@ In order of frequency:
 
 All CoSim-specific behaviour in `simulator.py` / `controldesk/session.py` /
 `controldesk/connection.py` / `modeldesk/authoring.py` is gated on the
-`launch_veos_ipc_client` Scenic parameter (default `False`). When `False`:
+`launch_veos_ipc_client` Scenic parameter (default `True`). When `False`:
 
 - No IPC bridge, no C++ client spawn, no JSON-envelope replies.
 - `step()` uses the original ControlDesk `advance_simulation_step()` + poll

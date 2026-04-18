@@ -250,9 +250,9 @@ On simulation shutdown, Scenic terminates that process.
 
 Build the client once: `cosim\veos_cosim_ipc_bridge\build_client.bat`.
 
-### Option B — CoSim off (default)
+### Option B — CoSim off
 
-If `launch_veos_ipc_client` is `False` (default), Scenic does **not** start `SyncStepBridge` or bind any CoSim socket. Simulation steps use ControlDesk / MAPort only. Use this when you do not need VEOS–Scenic synchronous stepping (for example to avoid Windows port-permission issues on the sync port).
+If `launch_veos_ipc_client` is `False`, Scenic does **not** start `SyncStepBridge` or bind any CoSim socket. Simulation steps use ControlDesk / MAPort only. Use this when you do not need VEOS–Scenic synchronous stepping (for example to avoid Windows port-permission issues on the sync port).
 
 ### Option C — manual bridge + client (without a full Scenic run)
 
