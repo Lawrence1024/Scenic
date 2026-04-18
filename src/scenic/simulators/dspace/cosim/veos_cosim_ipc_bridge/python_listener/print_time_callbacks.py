@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -31,8 +33,24 @@ MANEUVER_TIME_PATH = (
     "DISP_Plant/ManeuverTime[s]/Out1"
 )
 
-MANEUVER_LIFECYCLE_STEPS = 100   # ~100 × 10ms = 1 sim-second of controlled stepping
-MANEUVER_LIFECYCLE_TIMEOUT_S = 30.0
+MANEUVER_LIFECYCLE_STEPS = 1000  # ~1000 × 10ms = 10 sim-seconds of controlled stepping
+MANEUVER_LIFECYCLE_TIMEOUT_S = 60.0
+
+
+def _pid_alive(pid: int) -> bool:
+    """Return True if a process with the given PID is currently running."""
+    if sys.platform == "win32":
+        result = subprocess.run(
+            ["tasklist", "/fi", f"PID eq {pid}", "/fo", "csv", "/nh"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return str(pid) in result.stdout
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
 
 
 class StepGate:
@@ -419,19 +437,31 @@ def main() -> int:
                 )
                 return 1
 
-            cmd = [
-                str(exe_path),
-                "--host", VEOS_HOST,
-                "--name", VEOS_NAME,
-                "--ipc-host", HOST,
-                "--ipc-port", str(PORT),
-            ]
-            print(f"Auto-launching IPC client: {' '.join(cmd)}", flush=True)
-            client_proc = subprocess.Popen(
-                cmd,
-                cwd=str(exe_path.parent),
-                creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
-            )
+            pid_file = Path(tempfile.gettempdir()) / "scenic_cosim_ipc.pid"
+            if pid_file.exists():
+                try:
+                    existing_pid = int(pid_file.read_text().strip())
+                    if _pid_alive(existing_pid):
+                        print(f"[CoSim] IPC client already running (pid={existing_pid}), reusing — bridge reconnect will pick it up.", flush=True)
+                        client_proc = None
+                    else:
+                        pid_file.unlink(missing_ok=True)
+                except (OSError, ValueError):
+                    pid_file.unlink(missing_ok=True)
+
+            if client_proc is None and not pid_file.exists():
+                cmd = [
+                    str(exe_path),
+                    "--host", VEOS_HOST,
+                    "--name", VEOS_NAME,
+                    "--ipc-host", HOST,
+                    "--ipc-port", str(PORT),
+                ]
+                print(f"Auto-launching IPC client: {' '.join(cmd)}", flush=True)
+                flags = subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+                client_proc = subprocess.Popen(cmd, cwd=str(exe_path.parent), creationflags=flags)
+                pid_file.write_text(str(client_proc.pid))
+                print(f"[CoSim] IPC client launched (pid={client_proc.pid}), PID saved to {pid_file}", flush=True)
 
             print("Waiting for IPC bridge client to connect...", flush=True)
             conn, addr = server.accept()
@@ -623,13 +653,9 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr, flush=True)
         return 1
     finally:
-        if client_proc is not None:
-            print("Terminating auto-launched IPC client process ...", flush=True)
-            try:
-                client_proc.kill()
-                client_proc.wait(timeout=3)
-            except Exception:
-                pass
+        # IPC client is intentionally kept alive so VEOS/asmmaneuverstart state is
+        # preserved across Python invocations. It exits naturally when VEOS stops.
+        pass
 
 
 if __name__ == "__main__":

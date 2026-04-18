@@ -9,12 +9,29 @@ import math
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import pythoncom
 from win32com.client import Dispatch
 from pathlib import Path
 
 from scenic.domains.racing.simulators import RacingSimulator, RacingSimulation
+
+
+def _cosim_pid_alive(pid: int) -> bool:
+    """Return True if the given PID is a running process (Windows-safe)."""
+    if sys.platform == "win32":
+        result = subprocess.run(
+            ["tasklist", "/fi", f"PID eq {pid}", "/fo", "csv", "/nh"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return str(pid) in result.stdout
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
 from scenic.core.simulators import SimulationCreationError
 
 from . import utils as dutils
@@ -143,22 +160,32 @@ class DSpaceSimulator(RacingSimulator):
                 f"launch_veos_ipc_client=True but IPC client EXE not found: {exe_path}. "
                 "Build with cosim\\veos_cosim_ipc_bridge\\build_client.bat or set veos_ipc_client_exe=..."
             )
-        cmd = [str(exe_path), "--host", self.veos_host, "--name", self.veos_cosim_server_name,
-               "--ipc-host", _sb_host, "--ipc-port", str(_sb_port)]
-        print(f"[CoSimSync] Launching VEOS IPC client: {' '.join(cmd)}")
-        proc = subprocess.Popen(
-            cmd, cwd=str(exe_path.parent),
-            creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
-        )
+        _pid_file = Path(tempfile.gettempdir()) / "scenic_cosim_ipc.pid"
+        proc = None
+        if _pid_file.exists():
+            try:
+                existing_pid = int(_pid_file.read_text().strip())
+                if _cosim_pid_alive(existing_pid):
+                    print(f"[CoSimSync] IPC client already running (pid={existing_pid}), reusing — bridge reconnect will pick it up.")
+                else:
+                    _pid_file.unlink(missing_ok=True)
+            except (OSError, ValueError):
+                _pid_file.unlink(missing_ok=True)
+
+        if not _pid_file.exists():
+            cmd = [str(exe_path), "--host", self.veos_host, "--name", self.veos_cosim_server_name,
+                   "--ipc-host", _sb_host, "--ipc-port", str(_sb_port)]
+            print(f"[CoSimSync] Launching VEOS IPC client: {' '.join(cmd)}")
+            flags = (subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP) if sys.platform == "win32" else 0
+            proc = subprocess.Popen(cmd, cwd=str(exe_path.parent), creationflags=flags)
+            _pid_file.write_text(str(proc.pid))
+            print(f"[CoSimSync] IPC client launched (pid={proc.pid}), PID saved to {_pid_file}")
+
         _timeout = self.veos_ipc_client_connect_timeout
         print(f"[CoSimSync] Waiting for IPC client to connect (timeout {_timeout}s) ...")
         try:
             bridge.wait_connected(timeout=_timeout)
         except Exception as e:
-            try:
-                proc.kill()
-            except Exception:
-                pass
             bridge.close()
             raise SimulationCreationError(
                 f"VEOS IPC client did not connect to SyncStepBridge within {_timeout}s: {e}"
@@ -169,20 +196,14 @@ class DSpaceSimulator(RacingSimulator):
         self._cosim_bridge_step_controlled = step_controlled
 
     def _close_cosim(self):
-        """Terminate the persistent IPC client and close the bridge. Called once at process exit."""
-        bridge, proc = self._cosim_bridge, self._cosim_ipc_proc
+        """Close the bridge. IPC client is intentionally kept alive so VEOS/asmmaneuverstart
+        state is preserved across Python invocations. It exits naturally when VEOS stops."""
+        bridge = self._cosim_bridge
         self._cosim_bridge = None
-        self._cosim_ipc_proc = None
+        self._cosim_ipc_proc = None  # clear reference but do NOT kill
         if bridge is not None:
             try:
                 bridge.close()
-            except Exception:
-                pass
-        if proc is not None:
-            print("[CoSimSync] Terminating persistent VEOS IPC client process ...")
-            try:
-                proc.kill()
-                proc.wait(timeout=3)
             except Exception:
                 pass
 

@@ -409,9 +409,15 @@ int main(int argc, char** argv) {
             bool receivedOk = sentOk && g_ipc.ReceiveLine(reply);
 
             if (!sentOk || !receivedOk) {
-                std::cout << "[ipc] Scenic STEP FAILED for TIME_TRIGGER count="
-                          << cmdCount << " (sent=" << sentOk
-                          << " received=" << receivedOk << ")" << std::endl;
+                std::cout << "[ipc] Bridge disconnected (sent=" << sentOk
+                          << " received=" << receivedOk << "). Attempting reconnect to "
+                          << g_ipcHost << ":" << g_ipcPort << " ..." << std::endl;
+                g_ipc.Disconnect();
+                if (g_ipc.Connect(g_ipcHost, g_ipcPort)) {
+                    std::cout << "[ipc] Reconnected to bridge." << std::endl;
+                    SendHello();
+                }
+                // Either way: still call FinishCommandMI below so VEOS advances freely.
             } else {
                 int wrote = 0;
                 if (reply != "STEP") {
