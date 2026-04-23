@@ -253,74 +253,108 @@ class ControlDeskApp:
 
     def initialize_vesi_interface(self):
         """Initialize VesiInterface manual control interface.
-        
+
         Sets all required master switches, race control configuration, and enable flags
         to activate the VesiInterface manual control system.
+
+        Per-step try/except: each write is isolated so one failure doesn't abort the
+        rest. Previously this entire function was wrapped in a single try/except that
+        swallowed the first failing step silently — which is why on Dennis's 2026-04
+        VEOS (renamed switch suffixes, possibly renamed VESIResultData* paths) this
+        method reports "initialized" in session.py despite failing internally, and ego
+        stays uncontrollable. Each failure now prints its full exception + the path,
+        so we can see exactly which write is incompatible with the current VEOS.
         """
-        try:
-            # Step 1: VesiInterface Master Switches
-            self.set_var(
-                "Platform()://ASM_Traffic/Model Root/VesiInterface/Sw_Activate_CLIF[0|1]/Value",
-                0.0
-            )
-            self.set_var(
-                "Platform()://ASM_Traffic/Model Root/VesiInterface/Sw_Manual_VESI_Overwrite[0|1]/Value",
-                1.0  # CRITICAL: Enable manual VESI control
-            )
-            
-            # Step 2: Race Control Configuration
-            print("[ControlDesk] Configuring race control...")
-            self.set_var(
-                "Platform()://ASM_Traffic/Model Root/RaceControl/Sw_RaceControl[0Intern|1Extern|2Orchestrator]/Value",
-                0.0  # Intern mode (required for manual control)
-            )
-            self.set_var(
-                "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_sys_state/Value",
-                9  # CRITICAL: System state constant
-            )
-            self.set_var(
-                "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_track_flag/Value",
-                1
-            )
-            self.set_var(
-                "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_veh_flag/Value",
-                0
-            )
-            
-            # Step 3: Enable Individual Control Channels
-            self.set_var(
-                "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_enable_brake_cmd/Value",
-                1
-            )
-            self.set_var(
-                "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_enable_gear_cmd/Value",
-                1
-            )
-            self.set_var(
-                "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_enable_steering_cmd/Value",
-                1
-            )
-            self.set_var(
-                "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_enable_throttle_cmd/Value",
-                1
-            )
-            
-            # Step 4: Initialize all control values to 0
-            KEY_THROTTLE = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_throttle_cmd/Value"
-            KEY_BRAKE_FRONT = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_front/Value"
-            KEY_BRAKE_REAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_rear/Value"
-            KEY_STEERING = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_steering_cmd/Value"
-            KEY_GEAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_gear_cmd/Value"
-            KEY_CLUTCH = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Pos_ClutchPedal[%]/Value"
-            
-            self.set_var(KEY_THROTTLE, 0.0)
-            self.set_var(KEY_BRAKE_FRONT, 0.0)
-            self.set_var(KEY_BRAKE_REAR, 0.0)
-            self.set_var(KEY_STEERING, 0)
-            self.set_var(KEY_GEAR, 0.0)
-            self.set_var(KEY_CLUTCH, 0.0)
-            
-        except Exception as e:
-            print(f"[ControlDesk] ERROR - VesiInterface initialization failed: {e}")
+        # (path, value, label) — order matters only loosely; steps are independent now.
+        # NOTE: the old 'Sw_Manual_VESI_Overwrite[0|1]/Value' path was updated to the
+        # '[0bridge|1extern|2scenic]/Value' form Dennis's 2026-04 VEOS uses. The legacy
+        # suffix either doesn't exist on the new VEOS or is parsed by ControlDesk's COM
+        # as an array indexer, throwing "Index was outside the bounds of the array."
+        #
+        # Note 2: simulator.py re-applies Sw_Activate_CLIF=2.0 and Sw_Manual_VESI_Overwrite
+        # to a Scenic-param-controlled target later in setup, so the values written here
+        # are effectively "safe defaults / initial state" — simulator.py's setup wins.
+        steps = [
+            # --- VesiInterface master switches ---
+            ("Sw_Activate_CLIF",
+             "Platform()://ASM_Traffic/Model Root/VesiInterface/Sw_Activate_CLIF[0|1]/Value",
+             0.0),
+            ("Sw_Manual_VESI_Overwrite (new suffix)",
+             "Platform()://ASM_Traffic/Model Root/VesiInterface/"
+             "Sw_Manual_VESI_Overwrite[0bridge|1extern|2scenic]/Value",
+             1.0),
+
+            # --- Race Control configuration ---
+            ("Sw_RaceControl",
+             "Platform()://ASM_Traffic/Model Root/RaceControl/"
+             "Sw_RaceControl[0Intern|1Extern|2Orchestrator]/Value",
+             0.0),
+            ("Const_sys_state",
+             "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_sys_state/Value",
+             9),
+            ("Const_track_flag",
+             "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_track_flag/Value",
+             1),
+            ("Const_veh_flag",
+             "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_veh_flag/Value",
+             0),
+
+            # --- Enable individual control channels ---
+            ("Const_enable_brake_cmd",
+             "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/"
+             "vehicle_inputs/Const_enable_brake_cmd/Value", 1),
+            ("Const_enable_gear_cmd",
+             "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/"
+             "vehicle_inputs/Const_enable_gear_cmd/Value", 1),
+            ("Const_enable_steering_cmd",
+             "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/"
+             "vehicle_inputs/Const_enable_steering_cmd/Value", 1),
+            ("Const_enable_throttle_cmd",
+             "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/"
+             "vehicle_inputs/Const_enable_throttle_cmd/Value", 1),
+
+            # --- Initialize control values to 0 ---
+            ("Const_throttle_cmd",
+             "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/"
+             "vehicle_inputs/Const_throttle_cmd/Value", 0.0),
+            ("Const_brake_cmd_front",
+             "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/"
+             "vehicle_inputs/Const_brake_cmd_front/Value", 0.0),
+            ("Const_brake_cmd_rear",
+             "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/"
+             "vehicle_inputs/Const_brake_cmd_rear/Value", 0.0),
+            ("Const_steering_cmd",
+             "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/"
+             "vehicle_inputs/Const_steering_cmd/Value", 0),
+            ("Const_gear_cmd",
+             "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/"
+             "vehicle_inputs/Const_gear_cmd/Value", 0.0),
+            ("Pos_ClutchPedal",
+             "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/"
+             "ExternalUserData/Pos_ClutchPedal[%]/Value", 0.0),
+        ]
+
+        ok_count = 0
+        fail_count = 0
+        for label, path, value in steps:
+            try:
+                self.set_var(path, value)
+                ok_count += 1
+            except Exception as e:
+                fail_count += 1
+                # Log each failure with enough detail to diagnose:
+                #   - which logical step failed
+                #   - full path that was attempted
+                #   - value type (helps catch "wrote scalar to array" mismatches)
+                #   - full exception text
+                print(f"[ControlDesk] [VESI-INIT-FAIL] {label}")
+                print(f"    path  = {path}")
+                print(f"    value = {value!r} (type {type(value).__name__})")
+                print(f"    error = {type(e).__name__}: {e}")
+
+        print(f"[ControlDesk] VesiInterface init summary: {ok_count} ok, {fail_count} failed "
+              f"({len(steps)} total steps)")
+        if fail_count > 0:
+            print("[ControlDesk] [WARN] VESI init had failures — see [VESI-INIT-FAIL] lines above.")
 
 

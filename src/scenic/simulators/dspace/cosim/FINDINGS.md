@@ -295,3 +295,116 @@ All CoSim-specific behaviour in `simulator.py` / `controldesk/session.py` /
 
 Running existing F-bank scenarios without the flag behaves exactly as it did
 pre-integration.
+
+---
+
+## 10. Dennis's 2026-04 VEOS — new switches and VESI init fix
+
+Dennis's updated VEOS adds (or surfaces) two new enum-suffixed switches and
+renames the legacy `Sw_Manual_VESI_Overwrite[0|1]` path. The old path throws
+"Index was outside the bounds of the array" on ControlDesk COM write — the
+square-bracket legacy suffix was parsed as an array indexer on a scalar, and
+that in turn aborted `initialize_vesi_interface()` via its outer try/except,
+leaving all 14 downstream enable/zero writes unexecuted. Symptom: **ego
+doesn't respond to MAPort Const_throttle_cmd despite writes succeeding at
+the MAPort layer** — because the enable flags were never set.
+
+**Fix (2026-04-23, confirmed working):**
+
+- `controldesk/connection.py::initialize_vesi_interface` — switched to
+  per-step try/except with `[VESI-INIT-FAIL]` diagnostic prints so path
+  failures are localized instead of aborting the whole init.
+- Updated the `Sw_Manual_VESI_Overwrite` path to the new
+  `[0bridge|1extern|2scenic]/Value` suffix.
+- `simulator.py` setup writes three switches post-init:
+    * `Sw_Activate_CLIF[0|1]/Value`  → `2.0`
+    * `Sw_MultiEgo_Fellows[0const|1race|2extern]/Sw_MultiEgo_Fellows` → `0.0` (const / MAPort)
+    * `Sw_Manual_VESI_Overwrite[0bridge|1extern|2scenic]/Value` → `1.0` (extern / MAPort)
+  All three captured at setup and restored at teardown.
+
+### Why mode `0 const` for fellow
+
+The reverted controller writes fellow velocity via MAPort
+`Const_v_Fellows_External[km|h]/Value`. Mode `0 const` selects exactly that
+backing path. Mode `2 extern` routes fellow to the CoSim bus
+(`v_fellows_external_km_h[0]`), which requires the `stage_outports()` method
+on `SyncStepBridge` — not present in the reverted code. Use 0 until CoSim-bus
+fellow writes are restored.
+
+### Why mode `1 extern` for ego (and the caveat)
+
+Mode `1 extern` on Dennis's VEOS appears to consume the same MAPort
+`Const_throttle_cmd` / `Const_steering_cmd` paths the controller writes —
+**but only if `initialize_vesi_interface()` completed successfully** (all
+enable flags set). Before the per-step try/except fix, init was silently
+aborting at step 2 and the enable flags stayed at 0 → MAPort writes were
+received but ignored downstream.
+
+Mode `2 scenic` would route ego to CoSim-bus outports (`throttle_cmd`,
+`brake_cmd_front/rear`, `steering_cmd_deg`, `gear_cmd` + `enable_*_cmd`),
+confirmed via Port Topology inspection. This requires `stage_outports()` on
+the bridge and per-tick CoSim ego writes in the controller — not currently
+wired but is Dennis's architecturally preferred path.
+
+### Docker stack requirement — CLIF keepalive
+
+`ExternalControl` VPU's CLIF client must remain connected past the
+`asmmaneuverstart` one-shot, or ManeuverTime freezes after 3s. In the
+minimal Scenic stack (`dspace_scenic_stack.yml`), this is held by the
+`asm_socketcan_bridge` sidecar which connects on VEOS-healthy and runs its
+ROS 2 bridge-node permanently. Without it, VEOS halts before warmup
+regardless of switch settings.
+
+Requires virtual-CAN support in the WSL2 kernel (vcan module); Microsoft's
+default WSL kernel doesn't ship it — rebuild from
+`linux-msft-wsl-<version>` with `CONFIG_CAN_VCAN=y` and point
+`.wslconfig` at the output `bzImage`.
+
+### `DS_ROUTE_ID` env var must NOT be set when driving with Scenic
+
+On Dennis's 2026-04 VEOS, if `DS_ROUTE_ID` is set as an env var on the
+veos service in the compose yml, VEOS uses it to initialize ego pose at
+every `MANEUVER_START` — *overriding* whatever `ts.Download()` wrote to
+the ModelDesk scenario. Symptom: ego teleports from wherever Scenic
+computed (e.g. `(-78.86, -112.41)` for R2 Lap s=439.236m) to the
+route-baked hardcoded pose the moment MANEUVER_START fires (e.g.
+`(-87.20, -148.26)` for `DS_ROUTE_ID=1` pit lane). The ModelDesk
+sequence writes (StartPosition, Route.Activate, AdditionalLateralOffset,
+VehicleOrientation) all land correctly and survive Download + Reset —
+verified by reading back `seq.StartPosition` / `Route.ActiveElement` at
+A=post-`place_ego`, B=post-`ts.Download()`, C=post-`ManeuverControl.Reset()`
+— but ASM_Traffic's ego init on MANEUVER_START ignores them when the env
+var is present.
+
+Fix: leave `DS_ROUTE_ID` commented out in `dspace_scenic_stack.yml`. With
+no env override, Scenic's `place_ego()` writes to the ModelDesk sequence
+and `ts.Download()` becomes the authoritative source of the initial ego
+pose on MANEUVER_START. Confirmed 2026-04-23: ego spawns at
+`(-79.68, -111.85)` — within 1 m of the requested `(-78.86, -112.41)`.
+
+### `Sw_Manual_VESI_Overwrite` is mode-dependent — Scenic-ego vs ART-ego
+
+`Sw_Manual_VESI_Overwrite` routes ego VESI inputs to one of three sources:
+- `0.0` (bridge) — SocketCAN bridge forwards raptor's CAN commands to VEOS
+- `1.0` (extern) — plant reads ego VESI from MAPort `Const_throttle_cmd` /
+  `Const_gear_cmd` / `Const_steering_cmd` (what Scenic's controller writes)
+- `2.0` (scenic) — plant reads ego VESI from the CoSim bus (requires
+  `stage_outports()` on the sync bridge and per-tick CoSim ego writes;
+  not currently wired — see earlier section on Dennis's architecturally
+  preferred path)
+
+`simulator.py::setup()` picks `1.0` vs `0.0` automatically based on
+`scene.params["scenic_control"]` (default `True`):
+
+```python
+_scenic_drives_ego = bool(params.get("scenic_control", True))
+_vesi_overwrite_target = 1.0 if _scenic_drives_ego else 0.0
+```
+
+For ART-driven ego (`param scenic_control = False`,
+`ARTStackControlBehavior`), the switch goes to `0.0` so the plant sees
+raptor's CAN commands via the SocketCAN bridge. Fellow path is independent:
+`Sw_MultiEgo_Fellows = 0.0` (const) regardless, since Scenic always writes
+fellow MAPort arrays. Requires the full `dspace_art_stack.yml` stack up
+(raptor running) — end-to-end verification on Dennis's 2026-04 VEOS still
+pending as of this edit.

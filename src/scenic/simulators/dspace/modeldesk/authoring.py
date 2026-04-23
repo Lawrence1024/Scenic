@@ -36,7 +36,7 @@ def author_scenario(sim):
                 time.sleep(_pre_download_s)
             downloaded = sim.ts.Download()
             if cosim_enabled:
-                _post_download_s = float(getattr(sim.sim, "post_modeldesk_download_delay_s", 30.0))
+                _post_download_s = float(getattr(sim.sim, "post_modeldesk_download_delay_s", 5.0))
                 print(f"[ModelDesk] Post-download pause {_post_download_s:.1f}s (CoSim) ...")
                 time.sleep(_post_download_s)
             if downloaded:

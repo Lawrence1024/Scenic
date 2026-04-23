@@ -91,12 +91,12 @@ class DSpaceSimulator(RacingSimulator):
                  veos_host="192.168.100.101",
                  veos_cosim_server_name="CoSimServerScenic",
                  sync_bridge_host="127.0.0.1",
-                 sync_bridge_port=50555,
+                 sync_bridge_port=51555,
                  cosim_bridge_mode="sync_step",
                  cosim_time_trigger_ack_delay_s=3.0,
                  veos_ipc_client_connect_timeout=120.0,
                  pre_download_delay_s=20.0,
-                 post_modeldesk_download_delay_s=20.0):
+                 post_modeldesk_download_delay_s=5.0):
         super().__init__()
         self.scenario_src = scenario_src
         self.scenario_name = scenario_name
@@ -550,8 +550,8 @@ class DSpaceSimulation(RacingSimulation):
             print("="*70 + "\n")
 
         # 9) Wait for ControlDesk/VEOS to settle after connect before issuing any pulses.
-        print("[Setup] Post-connect settle pause 10s ...")
-        time.sleep(10.0)
+        print("[Setup] Post-connect settle pause 5s ...")
+        time.sleep(5.0)
 
         # 9b) Start maneuver (MANEUVER_START pulse). Under CoSim the gate IS the pause, so we
         # skip cd.pause_simulation() — calling it kills TIME_TRIGGERs and deadlocks stepping
@@ -561,7 +561,26 @@ class DSpaceSimulation(RacingSimulation):
         # initialize_vesi_interface() writes CLIF=0.0 via COM; under CoSim that doesn't persist
         # (FINDINGS.md §4), so we re-apply 2.0 via MAPort here.
         _CLIF_PATH = "Platform()://ASM_Traffic/Model Root/VesiInterface/Sw_Activate_CLIF[0|1]/Value"
+        # Dennis's 2026-04 VEOS update added two switches that route plant input sources:
+        #   Sw_MultiEgo_Fellows[0const|1race|2extern]  -> fellow source; 2=extern means read CoSim
+        #                                                  bus outports v_fellows_external_km_h /
+        #                                                  d_fellows_external_m (what the controller
+        #                                                  already stages via bridge.stage_outports).
+        #   Sw_Manual_VESI_Overwrite[0bridge|1extern|2scenic] -> ego VESI source; 1=extern means read
+        #                                                  MAPort Const_throttle_cmd / Const_gear_cmd /
+        #                                                  Const_steering_cmd (what Scenic already writes).
+        # On pre-Dennis VEOS these paths don't exist — reads raise and we skip the writes silently.
+        _MULTIEGO_FELLOWS_PATH = (
+            "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/FellowMovement/"
+            "External_Signals/Sw_MultiEgo_Fellows[0const|1race|2extern]/Sw_MultiEgo_Fellows"
+        )
+        _VESI_OVERWRITE_PATH = (
+            "Platform()://ASM_Traffic/Model Root/VesiInterface/"
+            "Sw_Manual_VESI_Overwrite[0bridge|1extern|2scenic]/Value"
+        )
         self._clif_original = 0.0  # default restore value; overwritten if read succeeds
+        self._multiego_fellows_original = None  # None = no baseline captured -> skip restore
+        self._vesi_overwrite_original = None
         if self._cd:
             if getattr(self.sim, "launch_veos_ipc_client", False) and self._var_access is not None:
                 # CoSim only: capture CLIF baseline then set 2.0 via MAPort while gate is AUTO.
@@ -578,6 +597,57 @@ class DSpaceSimulation(RacingSimulation):
                     print(f"[Setup] [CoSim] Set Sw_Activate_CLIF=2.0 via MAPort (readback={readback!r})")
                 except Exception as e:
                     print(f"[Setup] [CoSim] [WARN] Could not set CLIF=2.0 ({e})")
+
+                # Sw_MultiEgo_Fellows -> 0 (const / MAPort Const_v/d/s_Fellows_External arrays).
+                # This matches what Scenic's controller.py actually writes every tick:
+                # controller falls back to MAPort Const_*_Fellows_External arrays because the
+                # reverted sync_step_bridge lacks stage_outports. Setting the switch to 2 (extern/
+                # CoSim bus) without stage_outports makes the plant read from an empty bus and
+                # the 400+ MAPort writes land on the wrong outport. 0 (const) is the right match.
+                # Silently skips on pre-Dennis VEOS where this path doesn't exist.
+                try:
+                    self._multiego_fellows_original = float(self._var_access.get_var(_MULTIEGO_FELLOWS_PATH))
+                    try:
+                        self._var_access.set_var(_MULTIEGO_FELLOWS_PATH, 0.0)
+                        readback = float(self._var_access.get_var(_MULTIEGO_FELLOWS_PATH))
+                        print(f"[Setup] [CoSim] Set Sw_MultiEgo_Fellows=0.0 (const) via MAPort "
+                              f"(baseline={self._multiego_fellows_original}, readback={readback})")
+                    except Exception as e:
+                        print(f"[Setup] [CoSim] [WARN] Could not set Sw_MultiEgo_Fellows=0.0 ({e})")
+                except Exception:
+                    # Path doesn't exist on this VEOS — Dennis's update not loaded. Skip silently.
+                    self._multiego_fellows_original = None
+                    print("[Setup] [CoSim] Sw_MultiEgo_Fellows[0const|1race|2extern] not present "
+                          "on this VEOS — skipping (pre-Dennis build).")
+
+                # Sw_Manual_VESI_Overwrite routes ego VESI inputs based on who drives ego:
+                #   - scenic_control=True  -> 1.0 (extern): plant reads ego VESI directly from
+                #     MAPort Const_throttle_cmd / Const_gear_cmd / Const_steering_cmd, which
+                #     Scenic's VehicleController writes every tick.
+                #   - scenic_control=False -> 0.0 (bridge): plant reads ego VESI from the
+                #     SocketCAN bridge (asm_socketcan_bridge), which forwards raptor's CAN
+                #     commands from art_driving_stack to VEOS. Requires the full ART stack up.
+                # Fellow path is independent: Sw_MultiEgo_Fellows=0.0 (const) routes fellow
+                # to MAPort Const_*_Fellows_External arrays regardless of ego driver.
+                _scenic_params = getattr(getattr(self, "scene", None), "params", None) or {}
+                _scenic_drives_ego = bool(_scenic_params.get("scenic_control", True))
+                _vesi_overwrite_target = 1.0 if _scenic_drives_ego else 0.0
+                _vesi_overwrite_label = "extern / Scenic-driven ego" if _scenic_drives_ego else "bridge / ART-driven ego"
+                try:
+                    self._vesi_overwrite_original = float(self._var_access.get_var(_VESI_OVERWRITE_PATH))
+                    try:
+                        self._var_access.set_var(_VESI_OVERWRITE_PATH, _vesi_overwrite_target)
+                        readback = float(self._var_access.get_var(_VESI_OVERWRITE_PATH))
+                        print(f"[Setup] [CoSim] Set Sw_Manual_VESI_Overwrite={_vesi_overwrite_target} "
+                              f"({_vesi_overwrite_label}) via MAPort "
+                              f"(baseline={self._vesi_overwrite_original}, readback={readback})")
+                    except Exception as e:
+                        print(f"[Setup] [CoSim] [WARN] Could not set Sw_Manual_VESI_Overwrite="
+                              f"{_vesi_overwrite_target} ({e})")
+                except Exception:
+                    self._vesi_overwrite_original = None
+                    print("[Setup] [CoSim] Sw_Manual_VESI_Overwrite[0bridge|1extern|2scenic] not "
+                          "present on this VEOS — skipping (pre-Dennis build).")
 
             if cd_session.start_maneuver(self._cd, var_access=self._var_access):
                 print("[Setup] Maneuver started via MANEUVER_START pulse.")
@@ -1782,6 +1852,33 @@ class DSpaceSimulation(RacingSimulation):
                         print(f"[ControlDesk] Teardown: restored Sw_Activate_CLIF -> {_clif_restore!r}")
                     except Exception as e:
                         print(f"[ControlDesk] Teardown: CLIF restore failed: {e}")
+
+                    # Restore Dennis-era switches if we captured baselines for them.
+                    # None => path didn't exist on this VEOS (pre-Dennis build) => skip.
+                    _mef_baseline = getattr(self, "_multiego_fellows_original", None)
+                    if _mef_baseline is not None:
+                        _mef_path = (
+                            "Platform()://ASM_Traffic/Model Root/Environment/Traffic/PlantModel/"
+                            "FellowMovement/External_Signals/Sw_MultiEgo_Fellows[0const|1race|2extern]/"
+                            "Sw_MultiEgo_Fellows"
+                        )
+                        try:
+                            var.set_var(_mef_path, _mef_baseline)
+                            print(f"[ControlDesk] Teardown: restored Sw_MultiEgo_Fellows -> {_mef_baseline}")
+                        except Exception as e:
+                            print(f"[ControlDesk] Teardown: Sw_MultiEgo_Fellows restore failed: {e}")
+
+                    _vow_baseline = getattr(self, "_vesi_overwrite_original", None)
+                    if _vow_baseline is not None:
+                        _vow_path = (
+                            "Platform()://ASM_Traffic/Model Root/VesiInterface/"
+                            "Sw_Manual_VESI_Overwrite[0bridge|1extern|2scenic]/Value"
+                        )
+                        try:
+                            var.set_var(_vow_path, _vow_baseline)
+                            print(f"[ControlDesk] Teardown: restored Sw_Manual_VESI_Overwrite -> {_vow_baseline}")
+                        except Exception as e:
+                            print(f"[ControlDesk] Teardown: Sw_Manual_VESI_Overwrite restore failed: {e}")
                 except Exception as e:
                     print(f"[ControlDesk] Teardown: reset sequence failed: {e}")
 

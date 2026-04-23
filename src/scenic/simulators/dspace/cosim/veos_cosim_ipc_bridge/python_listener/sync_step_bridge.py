@@ -7,7 +7,7 @@ import time
 
 
 class SyncStepBridge:
-    def __init__(self, host="127.0.0.1", port=50555):
+    def __init__(self, host="127.0.0.1", port=51555):
         self.host = host
         self.port = int(port)
 
@@ -175,7 +175,7 @@ class PrintTimeCallbacksBridge:
     can continue without waiting for Scenic ``step()`` to call ``release_step``.
     """
 
-    def __init__(self, host="127.0.0.1", port=50555, time_trigger_ack_delay_s=3.0):
+    def __init__(self, host="127.0.0.1", port=51555, time_trigger_ack_delay_s=3.0):
         self.host = host
         self.port = int(port)
         self.time_trigger_ack_delay_s = max(0.0, float(time_trigger_ack_delay_s))

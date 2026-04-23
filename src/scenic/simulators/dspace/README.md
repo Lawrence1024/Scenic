@@ -193,6 +193,72 @@ See:
 - `cosim/README.md`
 - `cosim/VeosCoSim_Client/README.md`
 - `cosim/veos_cosim_ipc_bridge/README.md`
+- `cosim/FINDINGS.md` §10 — Dennis's 2026-04 VEOS switches, VESI-init fix, minimum viable docker stack
+
+### Minimal Scenic-only docker stack
+
+[`dspace_scenic_stack.yml`](dspace_scenic_stack.yml) brings up only what Scenic
+needs for CoSim runs: `vesi`, `veos`, `ctun`, `can-netns`, `asm_socketcan_bridge`,
+and a `log_collector` sidecar. No `art_driving_stack`/raptor — just enough to
+give VEOS's ExternalControl VPU a persistent CLIF client (the socketcan bridge
+fills this role). Use it instead of the full `dspace_art_stack.yml` when you only
+want Scenic to drive, without version-skew risk against raptor.
+
+Requirements:
+- Custom WSL2 kernel with `CONFIG_CAN_VCAN=y` — see `cosim/FINDINGS.md` §10.
+- The `asm_socketcan_bridge_override.yaml` next to the compose file (already
+  copied; keep in sync if the race_common copy gets updated).
+- `dspace_bridge`'s DBC version must match what's shipped in the bridge image
+  (`CAN1-INDY-V23.dbc` at time of writing; pinned in
+  `asm_socketcan_bridge_override.yaml`).
+- `DS_ROUTE_ID` must stay **unset** on the veos service. If set, VEOS overrides
+  the ModelDesk-downloaded ego start pose at every MANEUVER_START, teleporting
+  ego to a hardcoded route location. Keep the line commented in the yml —
+  Scenic's `place_ego()` + `ts.Download()` is the authoritative spawn source.
+  See `cosim/FINDINGS.md` §10 for the full write-verification trace.
+
+### Required switch settings for Dennis's 2026-04 VEOS
+
+Three switches written at setup (captured/restored at teardown). The
+`Sw_Manual_VESI_Overwrite` target depends on *who drives ego*:
+
+| Switch | Target | Rationale |
+|---|---|---|
+| `Sw_Activate_CLIF[0\|1]/Value` | `2.0` | Unblocks ExternalControl under CoSim (FINDINGS §6) |
+| `Sw_MultiEgo_Fellows[0const\|1race\|2extern]/Sw_MultiEgo_Fellows` | `0.0` (const) | Routes fellow to legacy `Const_*_Fellows_External` MAPort arrays — what Scenic's controller writes every tick |
+| `Sw_Manual_VESI_Overwrite[0bridge\|1extern\|2scenic]/Value` | **`1.0` (extern) when Scenic drives ego** (`scenic_control = True`) | Routes ego VESI to MAPort `Const_throttle_cmd` / `Const_gear_cmd` / `Const_steering_cmd` — exactly what Scenic's controller writes |
+|  | **`0.0` (bridge) when ART drives ego** (`scenic_control = False`, `ARTStackControlBehavior`) | Routes ego VESI to the SocketCAN bridge so raptor's CAN commands reach VEOS. `simulator.py::setup()` selects the value automatically from `scene.params["scenic_control"]` (default `True` → `1.0`). |
+
+Plus `controldesk/connection.py::initialize_vesi_interface()` must complete
+*all* 16 init steps — a stale switch path earlier in the method used to abort
+the rest silently. Watch for `[ControlDesk] VesiInterface init summary: 16 ok,
+0 failed` at setup; any non-zero `failed` count leaves VESI in a half-enabled
+state and ego won't respond to MAPort writes.
+
+### Running ART-driven ego with Scenic-controlled fellow
+
+Historically (pre-CoSim work), Scenic could orchestrate a scenario where
+**raptor drives ego** and **Scenic only moves fellows** — useful for
+shaking out raptor behavior against scripted traffic. The canonical example is
+[`examples/racing/art_fellow_combined.scenic`](../../../../examples/racing/art_fellow_combined.scenic),
+which sets `param scenic_control = False` and assigns `ego.behavior =
+ARTStackControlBehavior()` (a no-op behavior that lets raptor's CAN writes
+through untouched; see `behaviors.scenic::ARTStackControlBehavior`).
+
+Run it with the full `dspace_art_stack.yml` (raptor must be up) and ctun
+tunnel active:
+
+```bash
+scenic examples/racing/art_fellow_combined.scenic --2d --model scenic.simulators.dspace.racing_model --simulate -b --count 1
+```
+
+**Status (2026-04-23):** the `Sw_Manual_VESI_Overwrite` switch is now selected
+automatically based on `scene.params["scenic_control"]` (`simulator.py::setup()`
+reads the param and writes `1.0` when `True`, `0.0` when `False`). Running
+`art_fellow_combined.scenic` as-is (with `param scenic_control = False`) should
+route ego controls to the SocketCAN bridge and fellows to MAPort const arrays —
+end-to-end verification against Dennis's 2026-04 VEOS still pending as of this
+edit.
 
 ---
 

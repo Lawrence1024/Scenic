@@ -4,7 +4,7 @@ setlocal enabledelayedexpansion
 set EXE=%~dp0client\build\VeosCoSimTestClientIpc.exe
 set VEOS_HOST=192.168.100.101
 set VEOS_NAME=CoSimServerScenic
-set IPC_PORT=50555
+set IPC_PORT=51555
 set PID_FILE=%TEMP%\scenic_cosim_ipc.pid
 
 REM ── Check if IPC client is already running ────────────────────────────────

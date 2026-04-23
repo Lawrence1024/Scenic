@@ -1,0 +1,221 @@
+# Minimal dSPACE compose for Scenic CoSim testing only.
+#
+# Contains just the core services Scenic needs to exercise its CoSim path:
+#   vesi          — plant I/O interface to VEOS
+#   veos          — the simulator + CoSim server
+#   ctun          — UDP tunnel exposing VEOS to the Windows host
+#   can-netns     — holds the virtual-CAN network namespace for dspace_bridge
+#   dspace_bridge — ASM <-> SocketCAN bridge (keeps ExternalControl CLIF alive)
+# Plus log_collector (tails each container's stdout to ./logs/<name>.log).
+#
+# Why dspace_bridge is here even though we don't want "the full ART stack":
+# VEOS's ExternalControl VPU blocks after asmmaneuverstart exits unless some
+# CLIF client stays connected. dspace_bridge fills that role in the current
+# race_common layout (2026-04 replacement for the older sut_te_bridge).
+# Without it, ManeuverTime never advances — proven via log inspection 2026-04-23.
+# raptor / art_driving_stack is NOT included — dspace_bridge alone is sufficient
+# for the CLIF keepalive.
+#
+# Deliberately NOT included (vs dspace_art_stack.yml):
+#   - art_driving_stack / raptor — the race decision engine. Introduces signal-
+#     name version skew against Dennis's renamed VEOS signals.
+#   - foxglove visualizer — disabled here for minimalism (optional section below).
+#
+# Philosophy: get Scenic end-to-end on CoSim first, then layer raptor back in
+# once signal-name compatibility is resolved.
+#
+# Usage:
+#   wsl docker compose -f /mnt/c/Users/bklfh/Documents/Scenic/Scenic/src/scenic/simulators/dspace/dspace_scenic_stack.yml up -d
+# Or from WSL directly:
+#   docker compose -f /mnt/c/.../dspace_scenic_stack.yml up -d
+#
+# Tear down:
+#   ... compose down
+#
+# Logs land in ./logs/ next to this file, i.e.:
+#   C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\logs\
+#   *.log files per container, rotating by truncation on each compose up.
+
+networks:
+  dspace_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.6.0.0/16
+
+services:
+  vesi:
+    image: 722180079256.dkr.ecr.eu-central-1.amazonaws.com/dspace/iac_vesi:2026-03-19
+    # pull_policy: always   # uncomment if you need to force a pull
+    container_name: vesi
+    restart: always
+    tty: true
+    networks:
+      dspace_network:
+        ipv4_address: 10.6.0.3
+
+  veos:
+    image: 722180079256.dkr.ecr.eu-central-1.amazonaws.com/dspace/combined_simphera_local_executor_246:race_2026-03-19
+    # pull_policy: always
+    container_name: veos
+    cap_add:
+      - SYS_PTRACE
+    volumes:
+      - /mnt/c/Users/bklfh/Documents/dspace/SimulationPackage_v3.2/IAC_Project/Cosim-VEOS:/home/dspace/Cosim-VEOS
+    environment:
+      - DS_CMU_SERVER=license-server-lb-2-1021906136.eu-central-1.elb.amazonaws.com
+      # Toggle which OSA VEOS loads. Exactly ONE of these should be active.
+      - DS_VEOS_LOAD_OSA=/home/dspace/Cosim-VEOS/ASM_Traffic.osa   # Dennis's new CoSim VEOS
+      # - DS_VEOS_LOAD_OSA=/home/dspace/VEOS/ASM_Traffic.osa            # old (pre-Dennis) VEOS
+      - DS_ASM_SCENARIO_ID=6 # 1 IMS, 2 LVMS, 3 Monza, 4 Las Vegas, 5 Putnam Park, 6 Laguna Seca
+      - DS_CUSTOM_DATA_NUM_SAMPLES=10
+      - USE_SIMPHERA=false
+      - DS_START_COMMAND=deactivatepush2pass-start
+      - DS_VEOS_REMOTE_CAPABLE=1
+      # DS_ROUTE_ID must NOT be set when using Scenic: on Dennis's 2026-04 VEOS, this env var
+      # overrides the ModelDesk scenario's ego start pose at MANEUVER_START time, teleporting
+      # ego to a hardcoded route-based location (e.g. DS_ROUTE_ID=1 = pit lane) regardless of
+      # what ts.Download() wrote. Leave commented out so Scenic's place_ego() + Download path wins.
+      # - DS_ROUTE_ID=1
+      # - DS_INIT_S=400
+      # - DS_INIT_D=0
+      # - DS_INIT_S=400
+      # - DS_INIT_D=0
+    shm_size: 256m
+    networks:
+      dspace_network:
+        ipv4_address: 10.6.0.2
+    depends_on:
+      vesi:
+        condition: service_started
+
+  dspace_foxglove_bridge:
+    # Locally built via ./build_dspace_bridge.sh in ~/dSPACE-IAC-sut-te-bridge.
+    # pull_policy: never prevents Docker from trying to fetch a remote :latest.
+    image: airacingtech/iac_ros2_foxglove_bridge:latest
+    pull_policy: never
+    container_name: foxglove_bridge
+    network_mode: "service:can-netns"
+    ipc: "container:can-netns"
+    depends_on:
+      veos:
+        condition: service_healthy
+      can-netns:
+        condition: service_started
+
+  ctun:
+    image: 722180079256.dkr.ecr.eu-central-1.amazonaws.com/dspace/iac_ctun:2026-03-19
+    # pull_policy: always
+    container_name: ctun
+    ports:
+      - 1723:1723/udp
+    cap_add:
+      - NET_ADMIN
+      - SYS_PTRACE
+    networks:
+      dspace_network:
+        ipv4_address: 10.6.0.8
+    depends_on:
+      can-netns:
+        condition: service_started
+
+  # Network-namespace holder for dspace_bridge. Creates vcan0/vcan1 virtual CAN
+  # interfaces that the bridge will read from. Itself does no useful work beyond
+  # keeping the namespace alive via tail -f.
+  can-netns:
+    # Locally built via ./build_dspace_bridge.sh in ~/dSPACE-IAC-sut-te-bridge.
+    image: airacingtech/iac_asm_socketcan_bridge:latest
+    pull_policy: never
+    container_name: can-netns
+    ipc: "shareable"
+    shm_size: "512m"
+    ports:
+      - 8765:8765/tcp     # kept open so an optional foxglove_bridge can attach later
+    cap_add:
+      - NET_ADMIN
+    entrypoint:
+      - sh
+      - -lc
+      - |
+        modprobe vcan 2>/dev/null || true
+        ip link add dev can0 type vcan 2>/dev/null || true
+        ip link add dev can1 type vcan 2>/dev/null || true
+        ip link set can0 up || true
+        ip link set can1 up || true
+        tail -f /dev/null
+    networks:
+      dspace_network:
+        ipv4_address: 10.6.0.4
+
+  # ASM <-> SocketCAN bridge. Critically, this process also maintains the CLIF
+  # TCP connection to VEOS's ExternalControl VPU — without it, asmmaneuverstart
+  # exits at boot and ExternalControl blocks forever, halting ManeuverTime.
+  # Shares can-netns's network and IPC namespaces so it can see the vcan
+  # interfaces and any shared-memory regions.
+  dspace_bridge:
+    # Locally built via ./build_dspace_bridge.sh in ~/dSPACE-IAC-sut-te-bridge.
+    image: airacingtech/iac_asm_socketcan_bridge:latest
+    pull_policy: never
+    container_name: asm_socketcan_bridge
+    restart: "no"
+    environment:
+      - VESI_IP=10.6.0.3
+      - ASM_IP=10.6.0.2
+    volumes:
+      # Relative path -> resolves to src/scenic/simulators/dspace/asm_socketcan_bridge_override.yaml.
+      # Copied here from race_common so this stack is self-contained; keep in sync
+      # if the race_common copy is updated.
+      - ./asm_socketcan_bridge_override.yaml:/root/dspace_bridge_ws/install/asm_socketcan_bridge/share/asm_socketcan_bridge/config/asm_socketcan_bridge.yaml
+    cap_add:
+      - NET_ADMIN
+    network_mode: "service:can-netns"
+    ipc: "container:can-netns"
+    depends_on:
+      veos:
+        condition: service_healthy
+      can-netns:
+        condition: service_started
+
+  # Sidecar: tails each container's stdout+stderr into ./logs/<name>.log via the
+  # mounted Docker socket. Shell `>` truncates on each collector start, so each
+  # compose-up cycle yields a fresh log file.
+  log_collector:
+    image: docker:cli
+    pull_policy: always
+    container_name: log_collector
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./logs:/logs
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mkdir -p /logs
+        tail_container() {
+          name=$$1
+          until docker inspect "$$name" >/dev/null 2>&1; do sleep 1; done
+          docker logs -f --timestamps "$$name" > /logs/$${name}.log 2>&1 &
+        }
+        tail_container vesi
+        tail_container veos
+        tail_container ctun
+        tail_container can-netns
+        tail_container asm_socketcan_bridge
+        wait
+
+# -----------------------------------------------------------------------------
+# Optional: Foxglove visualizer for live VEOS state. Uncomment to enable.
+# Uses the same network-namespace-sharing pattern as the ART stack (attaches to
+# can-netns) so the 8765 port mapping on can-netns is reused automatically.
+# -----------------------------------------------------------------------------
+#  foxglove_bridge:
+#    image: ghcr.io/airacingtech/iac_ros2_foxglove_bridge:art-jazzy
+#    pull_policy: always
+#    container_name: foxglove_bridge
+#    network_mode: "service:can-netns"
+#    ipc: "container:can-netns"
+#    depends_on:
+#      veos:
+#        condition: service_healthy
+#      can-netns:
+#        condition: service_started

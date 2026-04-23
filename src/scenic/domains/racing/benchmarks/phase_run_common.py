@@ -1194,7 +1194,7 @@ def run_phase_main(spec: PhaseRunnerSpec) -> int:
     parser.add_argument(
         "--inter-run-delay-s",
         type=float,
-        default=15.0,
+        default=10.0,
         help="Delay between scenarios; clamped to [0, 15].",
     )
     args = parser.parse_args()

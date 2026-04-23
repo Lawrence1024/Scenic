@@ -12,7 +12,7 @@ import traceback
 from pathlib import Path
 
 HOST = "127.0.0.1"
-PORT = 50555
+PORT = 51555
 VEOS_HOST = "192.168.100.101"
 VEOS_NAME = "CoSimServerScenic"
 SCENARIO_SRC = "LagunaSeca_ExternalControl"

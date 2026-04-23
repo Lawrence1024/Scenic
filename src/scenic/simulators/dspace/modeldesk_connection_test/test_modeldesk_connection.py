@@ -302,7 +302,7 @@ def main() -> int:
         help="CoSim server name (must match VEOS / cosim_server_scenic.json)",
     )
     parser.add_argument("--ipc-host", default="127.0.0.1", help="SyncStepBridge bind address")
-    parser.add_argument("--ipc-port", type=int, default=50555, help="SyncStepBridge port (Scenic default)")
+    parser.add_argument("--ipc-port", type=int, default=51555, help="SyncStepBridge port (Scenic default)")
     parser.add_argument(
         "--ipc-connect-timeout",
         type=float,
