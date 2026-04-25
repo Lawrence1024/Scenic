@@ -226,12 +226,12 @@ Three switches written at setup (captured/restored at teardown). The
 |---|---|---|
 | `Sw_Activate_CLIF[0\|1]/Value` | `2.0` | Unblocks ExternalControl under CoSim (FINDINGS §6) |
 | `Sw_MultiEgo_Fellows[0const\|1race\|2extern]/Sw_MultiEgo_Fellows` | `0.0` (const) | Routes fellow to legacy `Const_*_Fellows_External` MAPort arrays — what Scenic's controller writes every tick |
-| `Sw_Manual_VESI_Overwrite[0bridge\|1extern\|2scenic]/Value` | **`1.0` (extern) when Scenic drives ego** (`scenic_control = True`) | Routes ego VESI to MAPort `Const_throttle_cmd` / `Const_gear_cmd` / `Const_steering_cmd` — exactly what Scenic's controller writes |
-|  | **`0.0` (bridge) when ART drives ego** (`scenic_control = False`, `ARTStackControlBehavior`) | Routes ego VESI to the SocketCAN bridge so raptor's CAN commands reach VEOS. `simulator.py::setup()` selects the value automatically from `scene.params["scenic_control"]` (default `True` → `1.0`). |
+| `Sw_Manual_VESI_Overwrite[0bridge\|1extern\|2scenic]/Value` *(new VEOS)* or `Sw_Manual_VESI_Overwrite[0\|1]/Value` *(old VEOS)* | **`1.0` (extern) when Scenic drives ego** (`scenic_control = True`) | Routes ego VESI to MAPort `Const_throttle_cmd` / `Const_gear_cmd` / `Const_steering_cmd` — exactly what Scenic's controller writes |
+|  | **`0.0` (bridge) when ART drives ego** (`scenic_control = False`, `ARTStackControlBehavior`) | Routes ego VESI to the SocketCAN bridge so raptor's CAN commands reach VEOS. `simulator.py::setup()` step 9b probes the new path first then falls back to legacy `[0\|1]`; the value is selected from `scene.params["scenic_control"]` (default `True` → `1.0`). |
 
 Plus `controldesk/connection.py::initialize_vesi_interface()` must complete
-*all* 16 init steps — a stale switch path earlier in the method used to abort
-the rest silently. Watch for `[ControlDesk] VesiInterface init summary: 16 ok,
+all of its init steps — a stale switch path earlier in the method used to abort
+the rest silently. Watch for `[ControlDesk] VesiInterface init summary: N ok,
 0 failed` at setup; any non-zero `failed` count leaves VESI in a half-enabled
 state and ego won't respond to MAPort writes.
 
@@ -252,13 +252,31 @@ tunnel active:
 scenic examples/racing/art_fellow_combined.scenic --2d --model scenic.simulators.dspace.racing_model --simulate -b --count 1
 ```
 
-**Status (2026-04-23):** the `Sw_Manual_VESI_Overwrite` switch is now selected
-automatically based on `scene.params["scenic_control"]` (`simulator.py::setup()`
-reads the param and writes `1.0` when `True`, `0.0` when `False`). Running
-`art_fellow_combined.scenic` as-is (with `param scenic_control = False`) should
-route ego controls to the SocketCAN bridge and fellows to MAPort const arrays —
-end-to-end verification against Dennis's 2026-04 VEOS still pending as of this
-edit.
+**Status (2026-04-24):** verified end-to-end on the `dspace_art_stack`
+workflow against the **old VEOS** (non-CoSim). raptor's `acc_pedal_cmd`
+flows through `asm_socketcan_bridge` → VESI → VEOS plant → ego
+throttle/brake/steering. Scenic-ego (`ego_mpc_behavior.scenic`) on the same
+stack also verified — Scenic MPC writes via MAPort `Const_*_cmd` reach the
+plant; raptor's bridge writes are correctly bypassed (live evidence: raptor
+commanding ~38% throttle while plant ran at 100% under Scenic MPC).
+
+The configuration:
+
+- `Sw_Manual_VESI_Overwrite` — `simulator.py` step 9b probes the new-VEOS
+  path `[0bridge|1extern|2scenic]` first; falls back to legacy `[0|1]` on
+  the old VEOS. Whichever resolves is written to `1.0` (Scenic) or `0.0`
+  (ART) and recorded for teardown restore.
+- `Const_enable_*_cmd` — set by
+  `initialize_vesi_interface(scenic_drives_ego=...)`: `1` enables the manual
+  MUX (Scenic), `0` disables it so the bridge MUX wins (ART).
+- `Sw_RaceControl=0`, `Const_sys_state=9`, `Const_track_flag=1` (intern +
+  green) — written by `initialize_vesi_interface()` regardless of mode.
+  Non-obvious: the OSA's "extern" race-control mode does not auto-feed a
+  green flag in the dspace_art_stack, so the plant gates throttle until the
+  internal flag overrides force green. raptor still gets its own race-flag
+  readback via the bridge for its decision-making — that's a separate
+  signal path. See `cosim/FINDINGS.md` §10 ("2026-04-24 — final root cause
+  found and fixed") for the full diagnosis trace.
 
 ---
 

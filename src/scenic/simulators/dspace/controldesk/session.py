@@ -1,54 +1,28 @@
-import json
-import time
-from pathlib import Path
-
 from .connection import ControlDeskApp
 
 
-def _external_control_baseline_path():
-    """Path to external_control_baseline.json (next to dspace package)."""
-    return Path(__file__).resolve().parent.parent / "external_control_baseline.json"
-
-
-def _apply_external_control_baseline(cd):
-    """Apply the 16 VesiInterface variables from external_control_baseline.json (External Control mode)."""
-    path = _external_control_baseline_path()
-    if not path.is_file():
-        print(f"[ControlDesk] External Control baseline not found: {path}")
-        print("[ControlDesk] Run read_vesi_interface_vars.py in External Control mode to create it.")
-        return
-    try:
-        with open(path) as f:
-            snapshot = json.load(f)
-    except Exception as e:
-        print(f"[ControlDesk] Failed to load baseline {path}: {e}")
-        return
-    for var_path, value in snapshot.items():
-        try:
-            cd.set_var(var_path, value)
-        except Exception as e:
-            print(f"[ControlDesk] Failed to set {var_path}: {e}")
-    print("[ControlDesk] Applied External Control baseline (VesiInterface variables from JSON).")
-
-
 def connect_and_prepare(sim):
-    """Connect to ControlDesk, go online, start measurement, init VESI (or apply baseline), set step.
-    
+    """Connect to ControlDesk, go online, start measurement, init VESI, set step.
+
     Args:
-        sim: DSpaceSimulation object with timestep attribute; sim.sim.scenic_control determines
-             whether to initialize Manual Control (True) or apply External Control baseline (False).
+        sim: DSpaceSimulation object with timestep attribute; sim.sim.scenic_control
+            selects which side of the VESI input multiplexer is enabled —
+            True (default) writes the manual-override path on (Scenic / MAPort
+            drives ego); False writes it off (asm_socketcan_bridge / raptor
+            drives ego). See connection.py::initialize_vesi_interface docstring
+            for the full per-mode value table.
     """
     try:
         cd = ControlDeskApp().connect()
         cd.go_online()
         cd.start_measurement()
         scenic_control = getattr(getattr(sim, "sim", None), "scenic_control", True)
+        cd.initialize_vesi_interface(scenic_drives_ego=scenic_control)
         if scenic_control:
-            cd.initialize_vesi_interface()
-            print("[ControlDesk] Manual Control: VesiInterface initialized for Scenic-controlled ego.")
+            print("[ControlDesk] VesiInterface initialized: Scenic-driven ego (manual override on).")
         else:
-            _apply_external_control_baseline(cd)
-        
+            print("[ControlDesk] VesiInterface initialized: ART-driven ego (bridge path on, manual override off).")
+
         # Use the simulation's timestep to ensure Scenic and ControlDesk are synchronized
         timestep = getattr(sim, 'timestep', 0.01)  # Default to 0.01 if not found
         cd.set_simulation_step(timestep)

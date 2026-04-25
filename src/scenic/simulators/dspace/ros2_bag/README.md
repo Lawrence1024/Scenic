@@ -5,10 +5,10 @@ This document describes how **optional** ROS 2 bag recording is tied to **each S
 ## Behavior
 
 - **Default:** no recording. Nothing runs unless you opt in with a Scenic `param`.
-- **Start:** at the end of `DSpaceSimulation.setup()`, after ModelDesk/ControlDesk setup and race “go” signals—immediately before the simulation begins stepping.
-- **Stop:** at the **beginning** of `DSpaceSimulation.destroy()`, before ControlDesk teardown. Scenic’s `Simulation.run()` always calls `destroy()` in a `finally` block, so each sample gets a matching stop.
+- **Start:** at the end of `DSpaceSimulation.setup()`, after ModelDesk/ControlDesk setup and race "go" signals—immediately before the simulation begins stepping.
+- **Stop:** at the **beginning** of `DSpaceSimulation.destroy()`, before ControlDesk teardown. Scenic's `Simulation.run()` always calls `destroy()` in a `finally` block, so each sample gets a matching stop.
 
-Implementation lives under [`ros2_bag/`](ros2_bag/): [`config.py`](ros2_bag/config.py) (scene params) and [`recorder.py`](ros2_bag/recorder.py). Recording uses **native `docker exec <container> bash -c '…'`**, the same engine and container model as **`DSpaceSimulation._call_art_stack_reset`** (ART reset). No WSL indirection.
+Implementation lives in this directory: [`config.py`](config.py) (scene params) and [`recorder.py`](recorder.py). Recording uses **native `docker exec <container> bash -c '…'`**, the same engine and container model as **`DSpaceSimulation._call_art_stack_reset`** (ART reset). No WSL indirection.
 
 ## Enabling recording
 
@@ -24,10 +24,10 @@ If this param is **absent** or **false**, no `ros2 bag record` process is starte
 
 | Param | Purpose |
 |--------|---------|
-| `ros2_bag_container` | Docker container name. If omitted, uses the simulator’s `art_stack_container` (see `DSpaceSimulator`). |
+| `ros2_bag_container` | Docker container name. If omitted, uses the simulator's `art_stack_container` (see `DSpaceSimulator`). |
 | `ros2_bag_parent_dir` | Directory **inside** the container for bags (default `/ros_bags`). Mount this to the host (e.g. `~/ros_ws/ros_bags:/ros_bags`). |
 | `ros2_bag_topics` | Optional list of topic names; if set, records those topics only. If omitted, uses `ros2 bag record -a`. |
-| `ros2_bag_setup_source` | Shell line to source the ROS workspace before `ros2 bag record`. **Default:** `source /opt/race_common/install/setup.bash` (matches ART reset in `simulator.py`). |
+| `ros2_bag_setup_source` | Shell line to source the ROS workspace before `ros2 bag record`. **Default:** `source /race_common/install/setup.bash` (matches ART reset in `simulator.py`; the host-mounted rebuilt workspace, not the baked `/opt/race_common/install/`). |
 
 Params `ros2_bag_use_wsl` and `ros2_bag_wsl_distro` are not used; use the same `docker` on your host PATH that successfully runs ART reset.
 

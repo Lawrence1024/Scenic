@@ -29,7 +29,9 @@ param timestep = (globalParameters.time_step if 'time_step' in globalParameters 
 # None or omit = every step. Example: timestep=0.01, control_period=0.05 → 20 Hz control and readback
 param control_period = (globalParameters.control_period if 'control_period' in globalParameters else None)
 # scenic_control: default True = racing library sends control signals (Scenic controls ego).
-# Set to False for external control (e.g. baseline from external_control_baseline.json).
+# Set to False for external control (asm_socketcan_bridge / raptor drives ego). The
+# initialize_vesi_interface() call in connection.py is conditional on this param —
+# True turns the manual-override mux on, False turns it off so bridge writes land.
 param scenic_control = (globalParameters.scenic_control if 'scenic_control' in globalParameters else True)
 
 # VEOS CoSim: True = enable full CoSim (SyncStepBridge + auto-start VeosCoSimTestClientIpc.exe). False = no CoSim (ControlDesk stepping only; see cosim/README.md).
@@ -44,7 +46,7 @@ param cosim_time_trigger_ack_delay_s = (globalParameters.cosim_time_trigger_ack_
 param veos_ipc_client_connect_timeout = (globalParameters.veos_ipc_client_connect_timeout if 'veos_ipc_client_connect_timeout' in globalParameters else 120.0)
 # Empirically-tuned ModelDesk pauses (see cosim/.../print_time_callbacks.py). Raise on cold VEOS boots.
 param pre_download_delay_s = (globalParameters.pre_download_delay_s if 'pre_download_delay_s' in globalParameters else 20.0)
-param post_modeldesk_download_delay_s = (globalParameters.post_modeldesk_download_delay_s if 'post_modeldesk_download_delay_s' in globalParameters else 20.0)
+param post_modeldesk_download_delay_s = (globalParameters.post_modeldesk_download_delay_s if 'post_modeldesk_download_delay_s' in globalParameters else 5.0)
 
 # Configure the dSPACE simulator
 simulator dspace.DSpaceSimulator(

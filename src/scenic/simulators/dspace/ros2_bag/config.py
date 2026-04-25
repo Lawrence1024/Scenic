@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 # Match ``DSpaceSimulation._call_art_stack_reset`` (same container / workspace).
-ART_STACK_DEFAULT_SETUP = "source /opt/race_common/install/setup.bash"
+# /race_common/install is the host-mounted rebuilt workspace (see simulator.py
+# comment for the 2026-04-24 rename). /opt/race_common/install is the stale baked
+# one and is missing newer message types such as race_msgs/srv/SetSelectedTtl;
+# ros2 bag record needs the fresh types to deserialize custom topics.
+ART_STACK_DEFAULT_SETUP = "source /race_common/install/setup.bash"
 
 
 def _truthy_record_ros2_bag(params: dict) -> bool:

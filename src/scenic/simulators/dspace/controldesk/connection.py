@@ -251,69 +251,107 @@ class ControlDeskApp:
         except Exception as e:
             raise
 
-    def initialize_vesi_interface(self):
-        """Initialize VesiInterface manual control interface.
+    def initialize_vesi_interface(self, scenic_drives_ego=True):
+        """Initialize VesiInterface for either Scenic-ego or ART-ego mode.
 
-        Sets all required master switches, race control configuration, and enable flags
-        to activate the VesiInterface manual control system.
+        Args:
+            scenic_drives_ego: True (default) -> Scenic / MAPort drives ego throttle,
+                brake, steering, gear via VESIResultData_Manual/Const_*_cmd. The four
+                Const_enable_*_cmd flags are set to 1 so the model's input multiplexer
+                selects the manual override path. Race control runs internally
+                (sys_state=9, track_flag=1=green) so the plant accepts commands without
+                needing raptor to publish CAN race-flag frames.
+                False -> the asm_socketcan_bridge / raptor drives ego via VESIResultData
+                /vehicle_inputs (the non-Manual side of the same MUX). The four
+                Const_enable_*_cmd flags must be 0 here, otherwise the manual override
+                wins and bridge writes are dropped on the floor — this is the
+                root-cause documented 2026-04-24 for the "Lichtblick shows throttle
+                but ControlDesk doesn't" symptom on the dspace_art_stack workflow.
+                Race control switches to extern (sys_state=0, track_flag=0,
+                Sw_RaceControl=1) so raptor's CAN race-flag frames are honoured.
+                Clutch goes to 100% (released) for ART, 0 for Scenic.
 
-        Per-step try/except: each write is isolated so one failure doesn't abort the
-        rest. Previously this entire function was wrapped in a single try/except that
-        swallowed the first failing step silently — which is why on Dennis's 2026-04
-        VEOS (renamed switch suffixes, possibly renamed VESIResultData* paths) this
-        method reports "initialized" in session.py despite failing internally, and ego
-        stays uncontrollable. Each failure now prints its full exception + the path,
-        so we can see exactly which write is incompatible with the current VEOS.
+        Per-step try/except is preserved: each write is isolated so one failure doesn't
+        abort the rest. Each failure prints its full exception + path.
+
+        Targeted at Dennis's 2026-04 VEOS only (the deployed build). Legacy old-VEOS
+        switch suffixes such as Sw_Manual_VESI_Overwrite[0|1] have been removed; if
+        you need to drive an old pre-Dennis VEOS, restore those writes from git
+        history.
+
+        IMPORTANT: paths whose suffix uses enum names (e.g.
+        Sw_Manual_VESI_Overwrite[0bridge|1extern|2scenic]) cannot be written through
+        ControlDesk's COM API — COM parses the brackets as an array indexer and
+        chokes on the non-integer enum names. Such switches MUST be written via
+        MAPort instead, and that's what simulator.py step 9b does for
+        Sw_Manual_VESI_Overwrite and Sw_MultiEgo_Fellows. Hence those writes are NOT
+        in this function. The function writes only switches whose paths are
+        COM-compatible (e.g. Sw_Activate_CLIF[0|1] is fine).
         """
-        # (path, value, label) — order matters only loosely; steps are independent now.
-        # NOTE: the old 'Sw_Manual_VESI_Overwrite[0|1]/Value' path was updated to the
-        # '[0bridge|1extern|2scenic]/Value' form Dennis's 2026-04 VEOS uses. The legacy
-        # suffix either doesn't exist on the new VEOS or is parsed by ControlDesk's COM
-        # as an array indexer, throwing "Index was outside the bounds of the array."
-        #
-        # Note 2: simulator.py re-applies Sw_Activate_CLIF=2.0 and Sw_Manual_VESI_Overwrite
-        # to a Scenic-param-controlled target later in setup, so the values written here
-        # are effectively "safe defaults / initial state" — simulator.py's setup wins.
+        # Mode-DEPENDENT values (these change with who drives ego):
+        _enable = 1 if scenic_drives_ego else 0       # manual override mux selector
+        _clif = 0.0 if scenic_drives_ego else 1.0     # bridge mode default for ART
+        _clutch = 0.0 if scenic_drives_ego else 100.0 # ART runs with clutch released
+
+        # Mode-INDEPENDENT race-control values: regardless of whether Scenic or
+        # raptor drives ego, the plant gates throttle on RaceControl state.
+        # Empirically (see cosim/FINDINGS.md §10 final-root-cause block, 2026-04-24)
+        # the "extern" source (Sw_RaceControl=1) does NOT auto-feed a green flag in
+        # the dspace_art_stack OSA — the plant sits in pre-race state and rejects
+        # all throttle (bridge OR manual MAPort) until we force internal + green.
+        # Forcing internal+green lets both Scenic-ego and ART-ego flow inputs
+        # through. raptor's own race-flag readback (which it gets via the bridge
+        # from VEOS for its own decision-making) is a separate concern.
+        _race_ctrl = 0.0   # 0 = intern (the "force green" path the plant uses)
+        _sys_state = 9     # running
+        _track_flag = 1    # green
+        _veh_flag = 0      # no special vehicle flag
+
+        # NOTE: Sw_Manual_VESI_Overwrite is NOT written here — COM can't write the
+        # [0bridge|1extern|2scenic] suffix. simulator.py step 9b writes it via MAPort
+        # for both scenic_control values regardless of CoSim flag. See module
+        # docstring above for context.
         steps = [
-            # --- VesiInterface master switches ---
+            # --- VesiInterface master switches (only COM-compatible paths) ---
             ("Sw_Activate_CLIF",
              "Platform()://ASM_Traffic/Model Root/VesiInterface/Sw_Activate_CLIF[0|1]/Value",
-             0.0),
-            ("Sw_Manual_VESI_Overwrite (new suffix)",
-             "Platform()://ASM_Traffic/Model Root/VesiInterface/"
-             "Sw_Manual_VESI_Overwrite[0bridge|1extern|2scenic]/Value",
-             1.0),
+             _clif),
 
             # --- Race Control configuration ---
             ("Sw_RaceControl",
              "Platform()://ASM_Traffic/Model Root/RaceControl/"
              "Sw_RaceControl[0Intern|1Extern|2Orchestrator]/Value",
-             0.0),
+             _race_ctrl),
             ("Const_sys_state",
              "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_sys_state/Value",
-             9),
+             _sys_state),
             ("Const_track_flag",
              "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_track_flag/Value",
-             1),
+             _track_flag),
             ("Const_veh_flag",
              "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_veh_flag/Value",
-             0),
+             _veh_flag),
 
-            # --- Enable individual control channels ---
+            # --- Enable manual-override path (Const_enable_*_cmd) ---
+            # 1 = Scenic / MAPort drives via Const_*_cmd (manual side of the MUX).
+            # 0 = bridge drives via VESIResultData/vehicle_inputs (non-manual side).
+            # Critical for ART-ego: must be 0 or raptor's CAN inputs are dropped.
             ("Const_enable_brake_cmd",
              "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/"
-             "vehicle_inputs/Const_enable_brake_cmd/Value", 1),
+             "vehicle_inputs/Const_enable_brake_cmd/Value", _enable),
             ("Const_enable_gear_cmd",
              "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/"
-             "vehicle_inputs/Const_enable_gear_cmd/Value", 1),
+             "vehicle_inputs/Const_enable_gear_cmd/Value", _enable),
             ("Const_enable_steering_cmd",
              "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/"
-             "vehicle_inputs/Const_enable_steering_cmd/Value", 1),
+             "vehicle_inputs/Const_enable_steering_cmd/Value", _enable),
             ("Const_enable_throttle_cmd",
              "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/"
-             "vehicle_inputs/Const_enable_throttle_cmd/Value", 1),
+             "vehicle_inputs/Const_enable_throttle_cmd/Value", _enable),
 
             # --- Initialize control values to 0 ---
+            # Same in both modes: Scenic writes these every tick, ART leaves them
+            # untouched (the bridge path doesn't read them when enable=0).
             ("Const_throttle_cmd",
              "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/"
              "vehicle_inputs/Const_throttle_cmd/Value", 0.0),
@@ -331,7 +369,7 @@ class ControlDeskApp:
              "vehicle_inputs/Const_gear_cmd/Value", 0.0),
             ("Pos_ClutchPedal",
              "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/"
-             "ExternalUserData/Pos_ClutchPedal[%]/Value", 0.0),
+             "ExternalUserData/Pos_ClutchPedal[%]/Value", _clutch),
         ]
 
         ok_count = 0

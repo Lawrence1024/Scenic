@@ -1,0 +1,311 @@
+# dspace_art_cosim_stack.yml
+#
+# ART stack (raptor / race_common / art_driving_stack) wired up to run against
+# Dennis's 2026-04 CoSim VEOS instead of the pre-CoSim VEOS.
+#
+# Derived from the KNOWN-FUNCTIONAL non-CoSim yml at
+#   ~/ros_ws/race_common/tools/dspace/dspace_art_stack.yml
+# (NOT the .bak — the .bak was an earlier attempt at stitching CoSim-VEOS
+# support into the ART stack but didn't compile into a functioning ART stack
+# because it put `art_driving_stack` on its own dspace_network IP instead of
+# sharing can-netns's network+IPC namespaces. The .bak did contribute the
+# Cosim-VEOS volume mount idea, the commented OSA-toggle pattern, and the
+# secrets + ros_bags volume conventions — all of which are re-used here on
+# top of the functional current yml's network/IPC layout.)
+#
+# Four working-config facts from the functional yml are preserved, with one
+# correction for CoSim compatibility:
+#
+#   (1) [CORRECTED FOR COSIM] Bridge images use the LOCALLY-REBUILT images
+#       (`airacingtech/iac_asm_socketcan_bridge:latest` + `pull_policy: never`
+#       and `airacingtech/iac_ros2_foxglove_bridge:latest` + `pull_policy:
+#       never`). The non-CoSim yml pulls the upstream art-jazzy images from
+#       GitHub, which is fine against the pre-CoSim VEOS because that VEOS
+#       was not updated with the new ASMBus.h. Dennis's 2026-04 CoSim VEOS
+#       IS updated — the bus header fields moved — so the bridges must be
+#       rebuilt against the matching header (done via
+#       ./build_dspace_bridge.sh in ~/dSPACE-IAC-sut-te-bridge). Both the
+#       rebuilt bridge and the current race_common V23 override agree on
+#       `config/CAN1-INDY-V23.dbc`, so the on-disk DBC pin lines up.
+#   (2) `dspace_bridge`, `dspace_foxglove_bridge`, AND `art_driving_stack`
+#       all share network + IPC namespaces with `can-netns`
+#       (`network_mode: "service:can-netns"`, `ipc: "container:can-netns"`).
+#       This is how all three see the vcan0/vcan1 interfaces that can-netns
+#       creates and how art_driving_stack finds the SocketCAN bridge without
+#       needing an explicit network address.
+#   (3) The bridge config mount uses race_common's V26-pinned override yaml
+#       via a relative `./asm_socketcan_bridge_override.yaml` path. Because
+#       this compose file lives in the Scenic dspace directory, we use an
+#       absolute path to race_common's copy so the V26 DBC pinning is
+#       preserved regardless of invocation CWD.
+#   (4) `art_driving_stack` mounts ~/ros_ws/race_common and runs tmuxp
+#       against `tools/tmux_configs/dspace_iac_docker.yaml` (panes:
+#       dummy_joy, `ros2 launch dspace_launch dspace_all.launch.py`, idle
+#       shell, and a post-launch `ros2 param set .../use_perception True`).
+#
+# CoSim-specific deltas vs the functional non-CoSim yml (exactly three
+# changes; everything else is byte-for-byte preserved):
+#
+#   - veos: added the Cosim-VEOS volume mount
+#     (/mnt/c/.../SimulationPackage_v3.2/IAC_Project/Cosim-VEOS ->
+#     /home/dspace/Cosim-VEOS). The non-CoSim yml doesn't mount it because
+#     it only uses the baked-in old VEOS OSA.
+#   - veos env DS_VEOS_LOAD_OSA -> /home/dspace/Cosim-VEOS/ASM_Traffic.osa
+#     (was /home/dspace/VEOS/ASM_Traffic.osa; old VEOS is no longer deployed
+#     per 2026-04-23 conversation).
+#   - veos env DS_ROUTE_ID is NOT set. Dennis's 2026-04 CoSim VEOS uses this
+#     env var to teleport ego to a hardcoded route-based pose at every
+#     MANEUVER_START, overriding whatever ModelDesk's ts.Download() wrote.
+#     See cosim/FINDINGS.md §10 for the write-verification trace.
+#
+# Optional observability sidecar (ADDITION, not in non-CoSim yml):
+# A `log_collector` sidecar tails every container's stdout+stderr to the
+# Scenic logs directory, matching dspace_scenic_stack.yml's pattern so both
+# stacks share one log dir. Purely observability — remove the whole
+# `log_collector:` block if you want the file byte-for-byte equivalent to
+# the non-CoSim yml plus the three veos changes above.
+#
+# OPEN RISK (the reason this file exists as a separate isolation test):
+# raptor's :stable image expects V26 DBC and the pre-CoSim ASMBus.h layout.
+# Dennis's 2026-04 VEOS renamed switches and updated the bus header; some CAN
+# messages from raptor may decode to the wrong signals on the new VEOS side,
+# or be dropped. If ART-ego drives with this yml, the CoSim changeover is
+# compatible with the old bridges. If not, the signal-name skew theory in
+# cosim/FINDINGS.md §10 is confirmed.
+#
+# Usage (from the Windows host via WSL-mounted docker):
+#   wsl docker compose -f /mnt/c/Users/bklfh/Documents/Scenic/Scenic/src/scenic/simulators/dspace/dspace_art_cosim_stack.yml up -d
+# Tear down:
+#   wsl docker compose -f /mnt/c/Users/bklfh/Documents/Scenic/Scenic/src/scenic/simulators/dspace/dspace_art_cosim_stack.yml down
+#
+# Cannot coexist with dspace_scenic_stack.yml or dspace_art_stack.yml —
+# shared container names (veos, vesi, ctun, asm_socketcan_bridge, can-netns,
+# foxglove_bridge) and the 10.6.0.0/16 subnet.
+
+networks:
+  dspace_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.6.0.0/16
+services:
+  can-netns:
+    # Locally-rebuilt via ./build_dspace_bridge.sh in ~/dSPACE-IAC-sut-te-bridge
+    # against Dennis's 2026-04 CoSim ASMBus.h. pull_policy: never keeps Docker
+    # from overwriting the local :latest tag with a remote fetch.
+    image: airacingtech/iac_asm_socketcan_bridge:latest
+    pull_policy: never
+    container_name: can-netns
+    ipc: "shareable"
+    shm_size: "512m"
+    ports:
+      - 8765:8765/tcp
+    cap_add:
+      - NET_ADMIN
+    entrypoint:
+      - sh
+      - -lc
+      - |
+        modprobe vcan 2>/dev/null || true
+        ip link add dev can0 type vcan 2>/dev/null || true
+        ip link add dev can1 type vcan 2>/dev/null || true
+        ip link set can0 up || true
+        ip link set can1 up || true
+        tail -f /dev/null
+    networks:
+        dspace_network:
+            ipv4_address: 10.6.0.4
+
+  vesi:
+    image: 722180079256.dkr.ecr.eu-central-1.amazonaws.com/dspace/iac_vesi:2026-03-19
+    # pull_policy: always
+    container_name: vesi
+    restart: always
+    tty: true
+    networks:
+      dspace_network:
+        ipv4_address: 10.6.0.3
+
+  veos:
+    image: 722180079256.dkr.ecr.eu-central-1.amazonaws.com/dspace/combined_simphera_local_executor_246:race_2026-03-19
+    # pull_policy: always
+    container_name: veos
+    cap_add:
+      - SYS_PTRACE
+    volumes:
+      # CoSim-specific: mount Dennis's new Cosim-VEOS OSA into the container.
+      # The non-CoSim yml doesn't mount this because it only uses the baked-in
+      # /home/dspace/VEOS/ASM_Traffic.osa.
+      - /mnt/c/Users/bklfh/Documents/dspace/SimulationPackage_v3.2/IAC_Project/Cosim-VEOS:/home/dspace/Cosim-VEOS
+    environment:
+      - DS_CMU_SERVER=license-server-lb-2-1021906136.eu-central-1.elb.amazonaws.com
+      # CoSim VEOS (Dennis's 2026-04 build). Old pre-CoSim path retained as
+      # a commented reference to the non-CoSim yml's default.
+      - DS_VEOS_LOAD_OSA=/home/dspace/Cosim-VEOS/ASM_Traffic.osa
+      # - DS_VEOS_LOAD_OSA=/home/dspace/VEOS/ASM_Traffic.osa
+      - DS_ASM_SCENARIO_ID=6 # 1 IMS, 2 LVMS, 3 Monza, 4 Las Vegas Outside Road Course, 5 Putnam Park, 6 Laguna Seca
+      - DS_CUSTOM_DATA_NUM_SAMPLES=10
+      - USE_SIMPHERA=false
+      - DS_START_COMMAND=deactivatepush2pass-start
+      - DS_VEOS_REMOTE_CAPABLE=1
+      # DS_ROUTE_ID must NOT be set under Dennis's 2026-04 CoSim VEOS — it
+      # overrides ModelDesk's ego start pose on every MANEUVER_START,
+      # forcing ego to a hardcoded route-based location regardless of
+      # ts.Download(). Scenic's place_ego() + Download path is the
+      # authoritative source instead. See cosim/FINDINGS.md §10.
+      # - DS_ROUTE_ID=1 # Start in pit
+      # - DS_INIT_S=400
+      # - DS_INIT_D=0
+    # volumes:
+    # - /path/to/RTT_GPSLoss:/opt/dspace/rtt2023a/RTT_GPSLoss
+    shm_size: 256m
+    networks:
+      dspace_network:
+        ipv4_address: 10.6.0.2
+    depends_on:
+      vesi:
+        condition: service_started
+
+  ctun:
+    image: 722180079256.dkr.ecr.eu-central-1.amazonaws.com/dspace/iac_ctun:2026-03-19
+    # pull_policy: always
+    container_name: ctun
+    ports:
+      - 1723:1723/udp
+    cap_add:
+      - NET_ADMIN
+      - SYS_PTRACE
+    networks:
+      dspace_network:
+        ipv4_address: 10.6.0.8
+    depends_on:
+      can-netns:
+        condition: service_started
+
+  dspace_bridge:
+    # Locally-rebuilt image (matches Dennis's new ASMBus.h). Ships only
+    # CAN1-INDY-V23.dbc; V26 is gone from both the image and the overrides.
+    image: airacingtech/iac_asm_socketcan_bridge:latest
+    container_name: asm_socketcan_bridge
+    # image: ghcr.io/airacingtech/iac_aurelion_ros2_bridge:art-jazzy
+    # container_name: aurelion_ros2_bridge
+    # image: ghcr.io/airacingtech/iac_dspace_bridge_dev:art-jazzy
+    # container_name: dspace_bridge_dev
+    pull_policy: never
+    restart: no
+    environment:
+      - VESI_IP=10.6.0.3
+      - ASM_IP=10.6.0.2
+    volumes:
+      # Absolute path to race_common's override yaml (currently V23-pinned,
+      # which matches the V23 DBC the locally-rebuilt bridge image ships).
+      # If race_common's pinning changes, the file mounted here changes with
+      # it — keep the ART stack using race_common's source of truth for its
+      # CAN config.
+      - /home/bklfh/ros_ws/race_common/tools/dspace/asm_socketcan_bridge_override.yaml:/root/dspace_bridge_ws/install/asm_socketcan_bridge/share/asm_socketcan_bridge/config/asm_socketcan_bridge.yaml
+    cap_add:
+      - NET_ADMIN
+    network_mode: "service:can-netns"
+    ipc: "container:can-netns"
+    depends_on:
+      veos:
+        condition: service_healthy
+      can-netns:
+        condition: service_started
+
+  dspace_foxglove_bridge:
+    # Locally-rebuilt foxglove bridge (matches Dennis's CoSim bus layout).
+    image: airacingtech/iac_ros2_foxglove_bridge:latest
+    pull_policy: never
+    container_name: foxglove_bridge
+    network_mode: "service:can-netns"
+    ipc: "container:can-netns"
+    depends_on:
+      veos:
+        condition: service_healthy
+      can-netns:
+        condition: service_started
+
+  # lichtblick_local:
+  #   image: ghcr.io/lichtblick-suite/lichtblick:latest
+  #   container_name: lichtblick_local
+  #   ports:
+  #     - 8080:8080
+  #   networks:
+  #     dspace_network:
+  #       ipv4_address: 10.6.0.9
+
+  art_driving_stack:
+    image: ghcr.io/airacingtech/art_dspace_race_common:stable
+    pull_policy: always
+    container_name: art_driving_stack
+    environment:
+      - SIM_CLOCK_MODE=false
+      - CAR_NUM=7
+    volumes:
+      - ~/ros_ws/race_common:/race_common
+      # Preserved from the .bak version so recorded bags land on the host
+      # at ~/ros_ws/ros_bags/ and survive container restarts.
+      - ~/ros_ws/ros_bags:/ros_bags
+    entrypoint: [ /bin/bash, -c,
+      "tmuxp load -d tools/tmux_configs/dspace_iac_docker.yaml && \
+      tail -f /dev/null"]
+    # Shares can-netns's network + IPC namespaces (Fact 2). This is how
+    # raptor inside the container reaches the SocketCAN bridge without
+    # needing an explicit service IP on dspace_network. Note: Docker's
+    # `ipc:` shares the Linux kernel IPC namespace (SysV shm, semaphores,
+    # message queues) — it is ORTHOGONAL to Scenic's VeosCoSim IPC client,
+    # which runs on the Windows host and uses localhost TCP (127.0.0.1:51555)
+    # plus the ctun UDP tunnel. The two IPC concepts do not interfere.
+    network_mode: "service:can-netns"
+    ipc: "container:can-netns"
+    depends_on:
+      veos:
+        condition: service_healthy
+      can-netns:
+        condition: service_started
+    # Preserved from the .bak version — lets ros_ws tooling that assumes the
+    # host ssh key is reachable at the container's configured path keep working.
+    secrets:
+      - host_ssh_key
+
+  # OPTIONAL observability sidecar — NOT part of the functional non-CoSim yml.
+  # Tails every stack container's stdout+stderr into
+  # /mnt/c/Users/bklfh/Documents/Scenic/.../dspace/logs/<name>.log via the
+  # mounted Docker socket. Shares the Scenic stack's log directory so both
+  # stacks write to one place. Shell `>` truncates on each collector start
+  # -> fresh log per compose-up cycle. Remove this entire block if you want
+  # this file to match the functional non-CoSim yml plus only the three
+  # CoSim veos changes documented in the header.
+  log_collector:
+    image: docker:cli
+    pull_policy: always
+    container_name: log_collector
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /mnt/c/Users/bklfh/Documents/Scenic/Scenic/src/scenic/simulators/dspace/logs:/logs
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mkdir -p /logs
+        tail_container() {
+          name=$$1
+          until docker inspect "$$name" >/dev/null 2>&1; do sleep 1; done
+          docker logs -f --timestamps "$$name" > /logs/$${name}.log 2>&1 &
+        }
+        tail_container vesi
+        tail_container veos
+        tail_container ctun
+        tail_container can-netns
+        tail_container asm_socketcan_bridge
+        tail_container foxglove_bridge
+        tail_container art_driving_stack
+        wait
+
+
+# Preserved from the .bak version — referenced by art_driving_stack.secrets
+# so host tooling inside the container can use the host SSH key when needed.
+secrets:
+  host_ssh_key:
+    file: /home/bklfh/.ssh/id_ed25519

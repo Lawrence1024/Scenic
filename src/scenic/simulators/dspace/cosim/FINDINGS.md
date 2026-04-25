@@ -384,21 +384,27 @@ pose on MANEUVER_START. Confirmed 2026-04-23: ego spawns at
 
 ### `Sw_Manual_VESI_Overwrite` is mode-dependent — Scenic-ego vs ART-ego
 
-`Sw_Manual_VESI_Overwrite` routes ego VESI inputs to one of three sources:
-- `0.0` (bridge) — SocketCAN bridge forwards raptor's CAN commands to VEOS
-- `1.0` (extern) — plant reads ego VESI from MAPort `Const_throttle_cmd` /
-  `Const_gear_cmd` / `Const_steering_cmd` (what Scenic's controller writes)
-- `2.0` (scenic) — plant reads ego VESI from the CoSim bus (requires
-  `stage_outports()` on the sync bridge and per-tick CoSim ego writes;
-  not currently wired — see earlier section on Dennis's architecturally
-  preferred path)
+`Sw_Manual_VESI_Overwrite` routes ego VESI inputs to one of three sources.
+Two switch-path suffixes exist depending on which VEOS OSA is loaded:
 
-`simulator.py::setup()` picks `1.0` vs `0.0` automatically based on
-`scene.params["scenic_control"]` (default `True`):
+| Suffix | Where | Allowed values |
+|---|---|---|
+| `[0bridge\|1extern\|2scenic]` | Dennis's 2026-04 CoSim VEOS only | `0` bridge, `1` extern, `2` scenic CoSim bus (last not yet wired) |
+| `[0\|1]` (legacy) | Pre-Dennis VEOS (`/home/dspace/VEOS/ASM_Traffic.osa`) | `0` bridge, `1` extern (manual MAPort) |
+
+Only one of the two paths exists on a given OSA. `simulator.py::setup()`
+step 9b probes the new path first; if it TRC-misses (old VEOS), it falls
+back to the legacy `[0|1]` path. The path that actually resolves is recorded
+in `self._vesi_overwrite_path_used` so teardown restores via the same path.
+
+The target value is selected from `scene.params["scenic_control"]`
+(default `True`):
 
 ```python
 _scenic_drives_ego = bool(params.get("scenic_control", True))
 _vesi_overwrite_target = 1.0 if _scenic_drives_ego else 0.0
+# 1.0 = extern/manual (Scenic MAPort drives ego)
+# 0.0 = bridge       (raptor / asm_socketcan_bridge drives ego)
 ```
 
 For ART-driven ego (`param scenic_control = False`,
@@ -406,5 +412,152 @@ For ART-driven ego (`param scenic_control = False`,
 raptor's CAN commands via the SocketCAN bridge. Fellow path is independent:
 `Sw_MultiEgo_Fellows = 0.0` (const) regardless, since Scenic always writes
 fellow MAPort arrays. Requires the full `dspace_art_stack.yml` stack up
-(raptor running) — end-to-end verification on Dennis's 2026-04 VEOS still
-pending as of this edit.
+(raptor running).
+
+Important: COM cannot write paths whose suffix uses enum names (the
+`[0bridge|1extern|2scenic]` form on the new VEOS) — COM parses the brackets
+as an array indexer and chokes on the non-integer enum names. Both paths are
+written via MAPort instead. `initialize_vesi_interface()` in
+`controldesk/connection.py` deliberately omits the
+`Sw_Manual_VESI_Overwrite` write because COM is its only access. Step 9b in
+`simulator.py` is the single source of truth for this switch.
+
+**2026-04-23 attempt status:**
+
+- ✅ **Scenic-ego + Scenic-fellow** works on Dennis's 2026-04 CoSim VEOS.
+  Confirmed by `run.log` with `[Setup] [CoSim] Set Sw_Manual_VESI_Overwrite=1.0
+  (extern / Scenic-driven ego)` and ego spawning at (-79.68, -111.85) post
+  MANEUVER_START.
+- ❌ **ART-ego + Scenic-fellow** attempted with the Option B conditional switch
+  in place — ego did not move. Root cause not yet identified; no log captured
+  of the failure attempt.
+
+The reverting-to-pre-CoSim workaround (`param launch_veos_ipc_client = False`)
+is **no longer available**: Dennis's 2026-04 CoSim VEOS (the only build now
+deployed) requires the new switch-writes pipeline regardless of whether the
+IPC client is used for synchronous stepping. Fixing ART-ego must happen on
+the live CoSim path, not by side-stepping it.
+
+**2026-04-24 diagnosis — one root cause found and fixed:**
+
+Hypothesis 3 (ART stack reset didn't land) turned out to be correct, but for a
+different reason than "raptor wasn't ready". The `_call_art_stack_reset()`
+helper was calling the `set_selected_ttl` service with a type name
+(`race_decision_engine/srv/SetSelectedTtl`) that had been REMOVED from the
+code base. The current race_common build advertises the service only as
+`race_msgs/srv/SetSelectedTtl`. DDS type-hash matching silently failed and the
+`ros2 service call` hung until the 15 s subprocess timeout, at which point
+Scenic logged a warning and moved on — but raptor's TTL was never set, so the
+decision engine stayed on whatever default it booted with and held throttle at
+zero.
+
+The `/vehicle_kinematic_state_node/reset_vks_state` service was also gone from
+the current build, which explains why the first sub-call in the helper was
+also failing silently.
+
+Fixes applied 2026-04-24:
+- Dropped the reset_vks_state call entirely (service removed upstream).
+- Service type renamed in the set_selected_ttl call:
+  `race_decision_engine/srv/SetSelectedTtl` → `race_msgs/srv/SetSelectedTtl`.
+- Setup source changed from `/opt/race_common/install/setup.bash` (baked image,
+  stale — missing the new race_msgs srv definitions) to
+  `/race_common/install/setup.bash` (host-mounted rebuilt workspace, authoritative).
+- Matching update in `ros2_bag/config.py::ART_STACK_DEFAULT_SETUP` so the
+  bag-recorder sources the same fresh install and can deserialize custom
+  race_msgs types.
+
+End-to-end verification (via direct docker exec):
+```
+docker exec art_driving_stack bash -c "source /race_common/install/setup.bash \
+  && ros2 service call /race_decision_engine_node/set_selected_ttl \
+     race_msgs/srv/SetSelectedTtl '{selected_ttl: race}'"
+# -> success=True, message='Queued TTL change to race'
+```
+
+**2026-04-24 — final root cause found and fixed (ART-ego now drives end-to-end):**
+
+After the TTL-service fix above, ART-ego still didn't move. Live in-flight
+diagnostics via MAPort (no Scenic running, just the docker stack +
+ControlDesk-driven simulation) confirmed:
+
+- raptor was correctly publishing `acc_pedal_cmd: 50.0` on
+  `/raptor_dbw_interface/accelerator_cmd` (verified via `ros2 topic echo`).
+- The `asm_socketcan_bridge` was healthy: V23 DBC matched, V-ESI connection
+  established, "vehicle_inputs message received" / "to_raptor message received"
+  logged on every tick.
+- `Sw_Manual_VESI_Overwrite=0` (bridge MUX selected ✓), all four
+  `Const_enable_*_cmd=0` (manual side off ✓), `Pos_ClutchPedal=100` (released
+  ✓), `manual_mode=1` (drive-by-wire enabled ✓), `track_flag_manual[0]=1`
+  (green at the RaceControl VPU level ✓).
+
+Plant feedback (`/raptor_dbw_interface/pt_report_1`): `engine_speed_rpm=950`
+(idle), `throttle_position=0.0`, `vehicle_speed_kmph=0.0` — VEOS was rejecting
+all throttle.
+
+**The deciding probe** was a manual MAPort overlay applied while raptor kept
+publishing 50%:
+
+```
+Sw_RaceControl   1 -> 0   (extern -> intern)
+Const_sys_state  0 -> 9   (off  -> running)
+Const_track_flag 0 -> 1   (red  -> green)
+Sw_Manual_VESI_Overwrite stays at 0  (bridge mode unchanged)
+```
+
+Within one tick, `throttle_position` went 0 → 50%, engine RPM rose from idle,
+and the car accelerated 0 → 13.3 km/h over 6 s. Reverting `Sw_RaceControl=1`
+immediately dropped throttle back to 0. So:
+
+**The ART-ego throttle gate was the RaceControl state machine, not the bridge
+routing.** With `Sw_RaceControl=1` (extern), the plant waits for an external
+race-control source to deliver a green flag. Nothing in the dspace_art_stack
+actually feeds that extern path with a green flag (raptor reads the flag from
+VEOS, not the other way around), so the plant sat in pre-race state and gated
+throttle from any source — bridge, manual MAPort, anything. The
+`track_flag_manual[0]=1` write at the RaceControl VPU level apparently doesn't
+propagate back to the ASM_Traffic plant's `Const_track_flag` when extern mode
+is selected.
+
+**Fix applied 2026-04-24** (`controldesk/connection.py::initialize_vesi_interface`):
+
+The race-control values are now mode-INDEPENDENT (always intern + green):
+```python
+_race_ctrl  = 0.0   # always intern
+_sys_state  = 9     # always running
+_track_flag = 1     # always green
+_veh_flag   = 0
+```
+
+Previously these were mode-dependent (0/9/1 for Scenic-ego, 1/0/0 for
+ART-ego). The ART-ego defaults were a wrong assumption that "extern mode +
+zeros" would let raptor's race-control take over; empirically that's not what
+happens. raptor still gets its own race-flag readback from VEOS via the
+bridge for its decision-making — that's a separate signal path independent
+from how the ASM_Traffic plant gates throttle.
+
+The mode-DEPENDENT values are unchanged:
+```python
+_enable = 1 if scenic_drives_ego else 0       # MUX selector (Scenic vs bridge)
+_clif   = 0.0 if scenic_drives_ego else 1.0   # bridge mode default for ART
+_clutch = 0.0 if scenic_drives_ego else 100.0 # ART runs with clutch released
+```
+…and `Sw_Manual_VESI_Overwrite` stays in `simulator.py` step 9b (1 for
+Scenic, 0 for ART), written via MAPort because COM can't write its
+`[0bridge|1extern|2scenic]` enum suffix.
+
+**End-to-end greppable confirmations on a working ART-ego run:**
+- `[ControlDesk] VesiInterface initialized: ART-driven ego (bridge path on, manual override off).`
+- `[Setup] Set Sw_MultiEgo_Fellows=0.0 (const) via MAPort (...)`
+- `[Setup] Set Sw_Manual_VESI_Overwrite=0.0 (bridge / ART-driven ego) via MAPort [<suffix>] (...)`
+  where `<suffix>` is `[0bridge|1extern|2scenic]` on Dennis's CoSim VEOS or `[0|1]` on the old VEOS.
+- `[Setup] ART set_selected_ttl(race|pit) OK.`
+- raptor's `/raptor_dbw_interface/accelerator_cmd::acc_pedal_cmd` reflected
+  in `/raptor_dbw_interface/pt_report_1::throttle_position` within one tick.
+
+**End-to-end greppable confirmations on a working Scenic-ego run:**
+- `[ControlDesk] VesiInterface initialized: Scenic-driven ego (manual override on).`
+- `[Setup] Set Sw_Manual_VESI_Overwrite=1.0 (extern / Scenic-driven ego) via MAPort [<suffix>] (...)`
+- raptor's `/raptor_dbw_interface/accelerator_cmd::acc_pedal_cmd` *diverges* from the
+  plant's `pt_report_1::throttle_position` (raptor's bridge writes are correctly
+  bypassed; Scenic's MAPort writes are what's driving). Verified live 2026-04-24
+  on the old VEOS: raptor wanted ~38% throttle, plant was at 100% under Scenic MPC.
