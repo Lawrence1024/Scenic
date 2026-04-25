@@ -561,3 +561,118 @@ Scenic, 0 for ART), written via MAPort because COM can't write its
   plant's `pt_report_1::throttle_position` (raptor's bridge writes are correctly
   bypassed; Scenic's MAPort writes are what's driving). Verified live 2026-04-24
   on the old VEOS: raptor wanted ~38% throttle, plant was at 100% under Scenic MPC.
+
+### Open verification gaps — fellow movement (2026-04-25)
+
+Until 2026-04-25 we focused exclusively on *ego* motion in all four
+(scenic_control, launch_veos_ipc_client) configurations. **Scenic-fellow motion
+was never explicitly verified** in three of the four — partial observation only.
+What we know vs. what we owe:
+
+| Stack / VEOS | Ego mode | Fellow seen moving? | Status |
+|---|---|---|---|
+| `dspace_art_stack.yml` (old VEOS) | Scenic-ego | not explicitly verified | open backlog |
+| `dspace_art_stack.yml` (old VEOS) | ART-ego (`art_fellow_combined.scenic`) | not explicitly verified | open backlog |
+| `dspace_art_cosim_stack.yml` (new VEOS) | Scenic-ego (`F1_fellow_behind_optimal_cruise.scenic`) | **yes — observed 2026-04-25** | partially confirmed |
+| `dspace_art_cosim_stack.yml` (new VEOS) | ART-ego (`art_fellow_combined.scenic`) | not yet tested | covered in current Phase B plan |
+
+For the old VEOS, fellow code path uses `Const_*_Fellows_External` MAPort arrays
+written by Scenic's controller every tick — if it ever stopped working we'd
+likely have seen it during MPC runs. But the lack of an explicit
+fellow-position-rising-over-time confirmation is a real gap. When we revisit
+old-VEOS workflows, the test is to run `art_fellow_combined.scenic` (or any
+F-bank scenario with a fellow) on `dspace_art_stack.yml` and tail
+`run.log` for `[Fellow s,t]` lines showing the fellow's `s` advancing, OR
+read the MAPort `FellowTrailer` x/y over time.
+
+---
+
+## 11. ART-ego on Dennis's CoSim VEOS — BLOCKED on `VESIResultData.h` (2026-04-25)
+
+After Phase A confirmed Scenic-ego works end-to-end on the new CoSim VEOS
+(`dspace_art_cosim_stack.yml`, locally-rebuilt bridges, `Cosim-VEOS/ASM_Traffic.osa`),
+Phase B attempted ART-ego on the same stack and is currently blocked at the
+bridge ↔ VEOS protocol layer. Documented here so the state of investigation isn't
+only in conversation memory.
+
+### Symptom
+
+- Scenic setup completes cleanly: VESI init summary `0 failed`,
+  `Sw_Manual_VESI_Overwrite=0.0 (bridge / ART-driven ego) via MAPort [0bridge|1extern|2scenic]`,
+  `ART set_selected_ttl(race) OK`, ManeuverTime advances, ego placed correctly.
+- raptor publishes non-zero `/raptor_dbw_interface/accelerator_cmd::acc_pedal_cmd`
+  (e.g. 100%).
+- The socketcan bridge correctly receives the matching CAN frame (0x579 with data
+  `10 27 06 ...`, where `0x2710 = 10000 = 100%`), parses it via the V23 DBC, sets
+  `feedbackCmd.vehicle_inputs.throttle_cmd = 1.0`,
+  `enable_throttle_cmd = 1`, and on every tick calls
+  `api.sendControlData(22222, &feedbackCmd, sizeof(feedbackCmd))`. No bridge errors.
+- VEOS plant `pt_report_1::throttle_position` stays `0.0`, `engine_speed_rpm` stays
+  at idle (~950), `vehicle_speed_kmph` stays `0.0`. No VEOS errors.
+
+Same OSA accepts manual MAPort writes via `Sw_Manual_VESI_Overwrite=1` /
+`Const_throttle_cmd` — ruling out a broader CoSim handshake or RaceControl
+gating issue. Whatever is wrong is specific to the bridge → VEOS UDP path on
+port 22222.
+
+### What we tried
+
+- Confirmed all the §10 race-control overrides land (intern + green +
+  sys_state=9), so this is not a re-occurrence of the 2026-04-24 RaceControl
+  gate issue.
+- Verified raptor's CAN encode is correct end-to-end (ROS topic → DBC → frame
+  bytes match the spec).
+- Rebuilt `airacingtech/iac_asm_socketcan_bridge:latest` against
+  `~/dSPACE-IAC-sut-te-bridge/dspace_bridge_ws/src/asm_socketcan_bridge/include/asm_socketcan_bridge/ASMBus.h`
+  in both states:
+  - **NEW** (`s_Preview_Lat_m[10]` array, the version Dennis sent): bridge
+    runs cleanly, throttle still doesn't reach plant.
+  - **OLD** (`s_Preview_Lat_m` scalar, git HEAD): bridge crashes on startup
+    with `std::length_error: vector::_M_default_append`. Confirms the new
+    layout is mandatory and is being loaded.
+- Eliminated `race_common` (outside the bridge submodule) as a source of the
+  protocol mismatch — no references to VESI/ASMBus/vehicle_inputs anywhere
+  outside the bridge source tree.
+
+### Hypothesis (current)
+
+The packet sent by `api.sendControlData(22222, &feedbackCmd, sizeof(feedbackCmd))`
+is a raw memory blit of the `VESIResultData` struct. VEOS reinterprets those
+bytes against *its own* compiled definition. If the layouts differ by a single
+field offset or a padding byte, `throttle_cmd` lands somewhere VEOS reads as 0
+and `enable_throttle_cmd` may land on a byte VEOS reads as garbage — exactly
+the symptom.
+
+`VESIResultData.h` lives at
+`~/dSPACE-IAC-sut-te-bridge/dspace_bridge_ws/src/asm_socketcan_bridge/include/asm_socketcan_bridge/VESIResultData.h`,
+is byte-identical between the bridge source and the race_common submodule,
+and Dennis only sent us `ASMBus.h` — not its sibling. Likely the same kind of
+update he did for ASMBus.h, but for the file that defines the actual
+bridge → VEOS payload.
+
+### Action — request to Dennis (sent 2026-04-25)
+
+Asked Dennis for, in priority order:
+1. `VESIResultData.h` matching the new ASM_Bus build.
+2. The rest of the auto-generated header bundle from the same build output
+   (in case there's another sibling we'd hit next).
+3. Struct packing/alignment config the OSA is built with — `#pragma pack`
+   setting and whether `boolean_T` is 1 byte or 4 bytes — since even with
+   the right header, a packing mismatch reproduces this exact symptom.
+
+### Workaround until reply
+
+Scenic-ego on `dspace_art_cosim_stack.yml` is fully working (verified Phase A
+2026-04-25). Use `param scenic_control = True` on any scenario you want to
+exercise on the new CoSim VEOS. ART-ego remains usable on the **old** VEOS via
+`dspace_art_stack.yml` (verified 2026-04-24, §10).
+
+### Reverse-engineering option (not pursued unless Dennis can't help)
+
+If the canonical header isn't available, the layout can be probed: with
+`Sw_Manual_VESI_Overwrite=0` (bridge MUX) and the bridge sending sentinel
+patterns per field, watch which scalar in VEOS lights up (e.g. via MAPort
+read of plant-side `throttle_position` / `steering_angle` etc.). Tedious
+but mechanical. Risk: padding/alignment mismatches are invisible to this
+method until they bite — `boolean_T` size in particular (1 vs 4 bytes) is
+toolchain-dependent and silently shifts every field that follows.

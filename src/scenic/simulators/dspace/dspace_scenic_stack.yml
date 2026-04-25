@@ -177,8 +177,16 @@ services:
         condition: service_started
 
   # Sidecar: tails each container's stdout+stderr into ./logs/<name>.log via the
-  # mounted Docker socket. Shell `>` truncates on each collector start, so each
-  # compose-up cycle yields a fresh log file.
+  # mounted Docker socket.
+  #
+  # Each tail runs as an independent background subshell. The wait-for-exist
+  # poll is concurrent across containers so a slow-to-appear container (e.g.
+  # `asm_socketcan_bridge`, gated on `veos: service_healthy` which under CoSim
+  # only completes after Scenic launches the CoSim IPC client) does not block
+  # earlier ones. Inside each subshell, the log file is truncated once on first
+  # appearance, then `docker logs -f` runs in a while-true retry loop so a
+  # transient exit (e.g. racing with the container's startup transition)
+  # restarts the tail automatically.
   log_collector:
     image: docker:cli
     pull_policy: always
@@ -193,8 +201,14 @@ services:
         mkdir -p /logs
         tail_container() {
           name=$$1
-          until docker inspect "$$name" >/dev/null 2>&1; do sleep 1; done
-          docker logs -f --timestamps "$$name" > /logs/$${name}.log 2>&1 &
+          (
+            until docker inspect "$$name" >/dev/null 2>&1; do sleep 1; done
+            : > /logs/$${name}.log
+            while true; do
+              docker logs -f --timestamps "$$name" >> /logs/$${name}.log 2>&1
+              sleep 2
+            done
+          ) &
         }
         tail_container vesi
         tail_container veos

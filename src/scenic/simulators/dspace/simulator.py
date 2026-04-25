@@ -471,19 +471,39 @@ class DSpaceSimulation(RacingSimulation):
                 self._createObject(obj)
         sys.stdout.flush()  # Flush placement debug ([Ego debug], [Fellow s,t]) so it appears promptly
 
-        # 6) Phase 1: Author scenario in ModelDesk (if dynamic control is needed)
+        # 6) Phase 1: Author scenario in ModelDesk (if dynamic control is needed).
+        # author_scenario() applies its own pre/post-download CoSim pauses, so we
+        # remember whether it ran and skip the matching waits in step 7 below.
+        _authored_in_step6 = False
         if self._needsDynamicControl():
             print("[dSPACE] Dynamic control detected - authoring scenario in ModelDesk")
             author_scenario(self)
+            _authored_in_step6 = True
 
-        # 7) Save and Download All to simulator (fallback path; primary Download happens in
-        # author_scenario() for dynamic-control scenarios, which also applies the pre/post
-        # download pauses. See modeldesk/authoring.py.)
+        # 7) Save and Download All to simulator. Fires for ALL scenarios (covers the case
+        # where _needsDynamicControl is False — e.g. ART-ego scenarios using
+        # ARTStackControlBehavior whose class name doesn't match the "Racing"/"Pit"
+        # heuristic). When step 6 didn't run, this is the ONLY Download — and under CoSim
+        # it MUST be bracketed by the pre/post-download pauses, otherwise ModelDesk's
+        # Download() returns success but ego placement never propagates to VEOS plant
+        # (verified 2026-04-25: ego ends up at VEOS default ~(-8, -33) instead of Lap
+        # (-78, -112) because the bridge / art_driving_stack haven't reached the state
+        # where the maneuver init phase can run). When step 6 DID run, the waits already
+        # fired inside author_scenario() — don't double them here.
+        _cosim_enabled = bool(getattr(self.sim, "launch_veos_ipc_client", False))
+        if _cosim_enabled and not _authored_in_step6:
+            _pre_s = float(getattr(self.sim, "pre_download_delay_s", 20.0))
+            print(f"[ModelDesk] Pre-download pause {_pre_s:.1f}s (CoSim, fallback path) ...")
+            time.sleep(_pre_s)
         try:
             self.ts.Save()
             self.ts.Download()  # Download all to simulator — this restarts the VEOS simulation
         except Exception as e:
             print(f"[ModelDesk] Save/Download failed: {e}")
+        if _cosim_enabled and not _authored_in_step6:
+            _post_s = float(getattr(self.sim, "post_modeldesk_download_delay_s", 5.0))
+            print(f"[ModelDesk] Post-download pause {_post_s:.1f}s (CoSim, fallback path) ...")
+            time.sleep(_post_s)
         time.sleep(0.1)
         if getattr(self, "exp", None) is not None:
             try:
