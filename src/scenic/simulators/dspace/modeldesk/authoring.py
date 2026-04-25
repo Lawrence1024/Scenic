@@ -1,14 +1,11 @@
-import time
-
 from ..controldesk.per_tick_control import ExternalControlManager
 from .traffic_object import apply_fellow_traffic_object
 
 
 def author_scenario(sim):
-    """Author scenario in ModelDesk using COM automation. Delegated from simulator."""
+    """Configure fellow ModelDesk state. Save+Download is the caller's responsibility."""
     try:
-        _setup_scenario(sim)
-        # Configure fellows based on Scenic objects (skip ego and already-created fellows)
+        print(f"[ModelDesk] Using existing scenario: {sim.ts.Name}")
         for scenic_obj in sim.scene.objects:
             if scenic_obj is sim.scene.egoObject:
                 continue
@@ -20,42 +17,11 @@ def author_scenario(sim):
                 continue
             if hasattr(scenic_obj, 'raceNumber'):
                 configure_fellow(sim, scenic_obj)
-        # External control
         ExternalControlManager.enableExternalControlViaScript(sim.scene.objects)
-        # Check consistency and download
-        if sim.ts.CheckConsistency():
-            print("[ModelDesk] Scenario is consistent")
-            # Under CoSim, VEOS needs extra settle time around the download; apply
-            # configurable pauses only when launch_veos_ipc_client is enabled. For
-            # non-CoSim runs, behavior matches the pre-CoSim-integration code (no
-            # added delay).
-            cosim_enabled = bool(getattr(sim.sim, "launch_veos_ipc_client", False))
-            if cosim_enabled:
-                _pre_download_s = float(getattr(sim.sim, "pre_download_delay_s", 30.0))
-                print(f"[ModelDesk] Pre-download pause {_pre_download_s:.1f}s (CoSim) ...")
-                time.sleep(_pre_download_s)
-            downloaded = sim.ts.Download()
-            if cosim_enabled:
-                _post_download_s = float(getattr(sim.sim, "post_modeldesk_download_delay_s", 5.0))
-                print(f"[ModelDesk] Post-download pause {_post_download_s:.1f}s (CoSim) ...")
-                time.sleep(_post_download_s)
-            if downloaded:
-                print("[ModelDesk] Scenario downloaded to VEOS successfully")
-                return True
-            else:
-                print("[ModelDesk] Failed to download scenario to VEOS")
-                return False
-        else:
-            print("[ModelDesk] Scenario is inconsistent - check configuration")
-            return False
+        if not sim.ts.CheckConsistency():
+            print("[ModelDesk] [WARN] Scenario CheckConsistency failed - check configuration")
     except Exception as e:
         print(f"[ModelDesk] Error during scenario authoring: {e}")
-        return False
-
-
-def _setup_scenario(sim):
-    """Setup ModelDesk scenario using existing save_as logic (wrapper)."""
-    print(f"[ModelDesk] Using existing scenario: {sim.ts.Name}")
 
 
 def configure_fellow(sim, scenic_obj):

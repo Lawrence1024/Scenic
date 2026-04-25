@@ -35,7 +35,6 @@ def _cosim_pid_alive(pid: int) -> bool:
 from scenic.core.simulators import SimulationCreationError
 
 from . import utils as dutils
-from .controldesk.per_tick_control import ExternalControlManager
 from .vehicle import VehiclePhysicsState, VehicleController
 from .ttl.loader import get_ttl_config, load_ttl_region, attach_to_ego, attach_ttl
 from .controldesk.arrays import ensure_fellow_arrays_initialized, probe_external_index_base
@@ -43,8 +42,7 @@ from .controldesk.readback import read_ego_state, read_ego_gps, read_fellow_stat
 from .vehicle.actor import ensure_actor, DSpaceVehicleActor
 from .vehicle.indexing import get_fellow_index as indexing_get_fellow_index
 from .geometry.pipeline import build_road_index_and_transform
-from .modeldesk.authoring import author_scenario, configure_fellow
-from .modeldesk.traffic_object import apply_fellow_traffic_object
+from .modeldesk.authoring import author_scenario
 from .modeldesk.placement import (
     place_ego,
     place_fellow,
@@ -57,7 +55,6 @@ from .geometry.route_mapping import detect_track_segment, assign_route_for_segme
 from .modeldesk.routes import set_route as routes_set_route
 from .controldesk import session as cd_session
 from .geometry.params import get_map_path
-from .steer_io import road_rad_to_dspace_value, log_startup_once, DELTA_MAX_RAD, THETA_SW_MAX_DEG, R
 from .cosim.veos_cosim_ipc_bridge.python_listener.sync_step_bridge import (
     PrintTimeCallbacksBridge,
     SyncStepBridge,
@@ -471,38 +468,28 @@ class DSpaceSimulation(RacingSimulation):
                 self._createObject(obj)
         sys.stdout.flush()  # Flush placement debug ([Ego debug], [Fellow s,t]) so it appears promptly
 
-        # 6) Phase 1: Author scenario in ModelDesk (if dynamic control is needed).
-        # author_scenario() applies its own pre/post-download CoSim pauses, so we
-        # remember whether it ran and skip the matching waits in step 7 below.
-        _authored_in_step6 = False
-        if self._needsDynamicControl():
-            print("[dSPACE] Dynamic control detected - authoring scenario in ModelDesk")
-            author_scenario(self)
-            _authored_in_step6 = True
+        # 6) Configure fellow ModelDesk state (no Download yet).
+        author_scenario(self)
 
-        # 7) Save and Download All to simulator. Fires for ALL scenarios (covers the case
-        # where _needsDynamicControl is False — e.g. ART-ego scenarios using
-        # ARTStackControlBehavior whose class name doesn't match the "Racing"/"Pit"
-        # heuristic). When step 6 didn't run, this is the ONLY Download — and under CoSim
-        # it MUST be bracketed by the pre/post-download pauses, otherwise ModelDesk's
-        # Download() returns success but ego placement never propagates to VEOS plant
-        # (verified 2026-04-25: ego ends up at VEOS default ~(-8, -33) instead of Lap
-        # (-78, -112) because the bridge / art_driving_stack haven't reached the state
-        # where the maneuver init phase can run). When step 6 DID run, the waits already
-        # fired inside author_scenario() — don't double them here.
+        # 7) Save+Download to VEOS. Under CoSim the Download MUST be bracketed by
+        # pre/post pauses, or ModelDesk reports success but ego placement never
+        # propagates (verified 2026-04-25: ego ends up at VEOS default ~(-8, -33)
+        # instead of authored (-78, -112) because art_driving_stack hasn't reached
+        # the state where the maneuver init can run). Single source of truth for
+        # the wait — gated only on launch_veos_ipc_client.
         _cosim_enabled = bool(getattr(self.sim, "launch_veos_ipc_client", False))
-        if _cosim_enabled and not _authored_in_step6:
+        if _cosim_enabled:
             _pre_s = float(getattr(self.sim, "pre_download_delay_s", 20.0))
-            print(f"[ModelDesk] Pre-download pause {_pre_s:.1f}s (CoSim, fallback path) ...")
+            print(f"[ModelDesk] Pre-download pause {_pre_s:.1f}s (CoSim) ...")
             time.sleep(_pre_s)
         try:
             self.ts.Save()
-            self.ts.Download()  # Download all to simulator — this restarts the VEOS simulation
+            self.ts.Download()
         except Exception as e:
             print(f"[ModelDesk] Save/Download failed: {e}")
-        if _cosim_enabled and not _authored_in_step6:
+        if _cosim_enabled:
             _post_s = float(getattr(self.sim, "post_modeldesk_download_delay_s", 5.0))
-            print(f"[ModelDesk] Post-download pause {_post_s:.1f}s (CoSim, fallback path) ...")
+            print(f"[ModelDesk] Post-download pause {_post_s:.1f}s (CoSim) ...")
             time.sleep(_post_s)
         time.sleep(0.1)
         if getattr(self, "exp", None) is not None:
@@ -877,331 +864,6 @@ class DSpaceSimulation(RacingSimulation):
         # Assign TTL to fellow if available (same as ego)
         attach_ttl(self, obj, vehicle_type="fellow")
         return result
-    
-    def _needsDynamicControl(self):
-        """Check if any Scenic objects need dynamic control (have behaviors with dSPACE actions)."""
-        try:
-            for obj in self.scene.objects:
-                if hasattr(obj, "behavior"):
-                    behavior = obj.behavior
-                    if behavior:
-                        behavior_name = behavior.__class__.__name__
-                        if (
-                            "Racing" in behavior_name
-                            or "Pit" in behavior_name
-                            or bool(getattr(obj, "_fellow_vd_plant_enabled", False))
-                        ):
-                            return True
-            return False
-        except Exception:
-            return False
-    
-    def _connectModelDesk(self):
-        """Connect to ModelDesk COM application for scenario authoring."""
-        try:
-            from win32com.client import Dispatch
-            self._modeldesk_app = Dispatch("ModelDesk.Application")
-            print("[ModelDesk] Connected to ModelDesk application")
-            return True
-        except Exception as e:
-            print(f"[ModelDesk] Failed to connect: {e}")
-            return False
-
-    def _authorScenarioInModelDesk(self):
-        """Author scenario in ModelDesk using COM automation.
-        
-        This implements Phase 1 of the dSPACE architecture:
-        - Use existing save_as logic to create working copy
-        - Configure fellows with routes and initial properties
-        - Set external control flags for fellow vehicles
-        - Download scenario to VEOS
-        """
-        try:
-            # Use existing save_as logic from setup()
-            self._setupModelDeskScenario()
-            
-            # Configure fellows based on Scenic objects (skip ego and already-created fellows)
-            for scenic_obj in self.scene.objects:
-                # Skip EGO: ego is configured via Maneuver API, not Fellows
-                if scenic_obj is self.scene.egoObject:
-                    continue
-                # Skip if this Scenic object already has a Fellow created during placement
-                try:
-                    exists = any(v.get('scenic_object') is scenic_obj for v in self._fellow_vehicles.values())
-                except Exception:
-                    exists = False
-                if exists:
-                    continue
-                if hasattr(scenic_obj, 'raceNumber'):  # It's a racing car
-                    self._configureFellowInModelDesk(scenic_obj)
-            
-            # Set external control flags for fellow vehicles (required for ControlDesk control)
-            ExternalControlManager.enableExternalControlViaScript(self.scene.objects)
-            
-            # Check consistency and download
-            if self.ts.CheckConsistency():
-                print("[ModelDesk] Scenario is consistent")
-                if self.ts.Download():
-                    print("[ModelDesk] Scenario downloaded to VEOS successfully")
-                    return True
-                else:
-                    print("[ModelDesk] Failed to download scenario to VEOS")
-                    return False
-            else:
-                print("[ModelDesk] Scenario is inconsistent - check configuration")
-                return False
-                
-        except Exception as e:
-            print(f"[ModelDesk] Error during scenario authoring: {e}")
-            return False
-    
-    def _setupModelDeskScenario(self):
-        """Setup ModelDesk scenario using existing save_as logic."""
-        # This integrates with your existing setup() logic
-        # The scenario is already saved and activated in setup()
-        print(f"[ModelDesk] Using existing scenario: {self.ts.Name}")
-
-    def _configureFellowInModelDesk(self, scenic_obj):
-        """Configure a fellow vehicle in ModelDesk scenario.
-        
-        Args:
-            scenic_obj: Scenic RacingCar object
-        """
-        try:
-            # Get fellow name (use raceNumber for identification)
-            fellow_name = f"F{scenic_obj.raceNumber}"
-            
-            # Try to get existing fellow or create new one
-            try:
-                fellow = self.ts.Fellows.Item(fellow_name)
-                print(f"[ModelDesk] Using existing fellow: {fellow_name}")
-            except:
-                # Create new fellow if it doesn't exist
-                fellow = self.ts.Fellows.Add()
-                fellow.Name = fellow_name
-                print(f"[ModelDesk] Created new fellow: {fellow_name}")
-            
-            # Get first sequence
-            sequences = fellow.Sequences
-            if sequences.Count == 0:
-                seq = sequences.Add()
-            else:
-                seq = sequences.Item(1)
-            
-            # Configure route based on track segment
-            route_sel = seq.Route
-            
-            # Determine track segment robustly
-            try:
-                pos_xy = (float(scenic_obj.position.x), float(scenic_obj.position.y))
-            except Exception:
-                pos_xy = None
-            track_segment = None
-            try:
-                if pos_xy is not None:
-                    track_segment = self.detectTrackSegment(pos_xy)
-            except Exception:
-                track_segment = None
-
-            # Default to mainRacing when detection fails
-            if track_segment not in ('pitLane', 'mainRacing'):
-                track_segment = 'mainRacing'
-
-            # Map to desired route type and pick from available elements
-            desired_pref = (self.assignRoute(scenic_obj, track_segment) or 'Lap')
-            desired_is_pit = (desired_pref.lower().startswith('pit'))
-
-            chosen_route = None
-            available_names = []
-            try:
-                available = list(route_sel.AvailableElements)
-                # Coerce to strings for matching
-                available_names = [str(x) for x in available]
-                # Prefer names containing 'pit' for pit lane, otherwise avoid them
-                if desired_is_pit:
-                    pit_candidates = [n for n in available_names if 'pit' in n.lower()]
-                    if pit_candidates:
-                        chosen_route = pit_candidates[0]
-                else:
-                    non_pit = [n for n in available_names if 'pit' not in n.lower()]
-                    if non_pit:
-                        chosen_route = non_pit[0]
-                # Fallbacks
-                if chosen_route is None and available_names:
-                    chosen_route = available_names[0]
-            except Exception as e:
-                print(f"[ModelDesk] Could not enumerate AvailableElements: {e}")
-
-            # If still nothing, fallback to preference string
-            if not chosen_route:
-                chosen_route = desired_pref
-
-            # Activate route
-            try:
-                route_sel.Activate(chosen_route)
-                print(f"[ModelDesk] Set route '{chosen_route}' (from pref '{desired_pref}') for {fellow_name}")
-            except Exception as e:
-                print(f"[ModelDesk] Failed to set route '{chosen_route}' for {fellow_name}: {e}")
-                if available_names:
-                    print(f"[ModelDesk] Available routes: {available_names}")
-            
-            # Set direction (forward)
-            try:
-                route_sel.Direction = 1
-                route_sel.UseExternal = True  # Enable external control for fellow vehicles
-            except Exception:
-                pass
-
-            apply_fellow_traffic_object(fellow)
-            
-            # Store fellow reference for runtime control
-            self._fellow_vehicles[fellow_name] = {
-                'fellow_object': fellow,
-                'scenic_object': scenic_obj,
-                'sequence': seq
-            }
-            
-        except Exception as e:
-            print(f"[ModelDesk] Error configuring fellow: {e}")
-    
-    def setVehicleControl(self, vehicle_name, throttle=None, brake=None, steering=None, velocity=None):
-        """Set dynamic control inputs for a vehicle using VesiInterface manual control."""
-        print(f"\n[setVehicleControl] Called for {vehicle_name}: throttle={throttle}, brake={brake}, steering={steering}, velocity={velocity}")
-
-        # Write directly via variable access (MAPort or ControlDesk) using VesiInterface if available
-        if self._var_access:
-            print(f"[setVehicleControl] Writing to VesiInterface...")
-            # VesiInterface manual control keys (Platform_2)
-            KEY_THROTTLE = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_throttle_cmd/Value"
-            KEY_BRAKE_FRONT = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_front/Value"
-            KEY_BRAKE_REAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_brake_cmd_rear/Value"
-            KEY_STEERING = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_steering_cmd/Value"
-            
-            try:
-                # Throttle: Scenic uses 0-1, ControlDesk expects 0-100 command range
-                if throttle is not None:
-                    throttle_val = float(max(0.0, min(1.0, throttle)) * 100.0)
-                    print(f"  [VesiInterface] Setting throttle: {throttle} -> {throttle_val}")
-                    self._var_access.set_var(KEY_THROTTLE, throttle_val)
-                    print(f"  [VesiInterface] OK - Throttle written successfully")
-                
-                # Brake: Scenic uses 0-1, ControlDesk expects 0-10000 command range
-                # Apply same value to both front and rear
-                if brake is not None:
-                    brake_val = float(max(0.0, min(1.0, brake)) * 10000.0)
-                    print(f"  [VesiInterface] Setting brake: {brake} -> front={brake_val}, rear={brake_val}")
-                    self._var_access.set_var(KEY_BRAKE_FRONT, brake_val)
-                    self._var_access.set_var(KEY_BRAKE_REAR, brake_val)
-                    print(f"  [VesiInterface] OK - Brake (front/rear) written successfully")
-                
-                # Steering: plan — steering is road wheel angle (rad). Single conversion here (only place 240 appears).
-                if steering is not None:
-                    log_startup_once()
-                    delta_cmd_rad = float(steering)
-                    theta_sw_deg_sent = road_rad_to_dspace_value(delta_cmd_rad)
-                    self._var_access.set_var(KEY_STEERING, theta_sw_deg_sent)
-                    u_norm = delta_cmd_rad / DELTA_MAX_RAD
-                    steer_norm = u_norm
-                    sat_io = abs(theta_sw_deg_sent) >= 0.99 * THETA_SW_MAX_DEG
-                    cmd_value_sent = theta_sw_deg_sent  # exact float written to Const_steering_cmd/Value (fix.md)
-                    # fix.md checklist: cmd_value_sent, theta_sw_deg_sent, steer_norm, delta_cmd_rad, delta_max, R
-                    print(f"[STEER_IO] u_norm={u_norm:.4f} delta_cmd_rad={delta_cmd_rad:.4f} steer_norm={steer_norm:.4f} theta_sw_deg_sent={theta_sw_deg_sent:.2f} cmd_value_sent={cmd_value_sent:.2f} delta_max={DELTA_MAX_RAD:.4f} R={R:.2f}")
-                    print(f"[IO] theta_sw_deg_sent={theta_sw_deg_sent:.2f} u_norm={u_norm:.4f} delta_cmd_rad={delta_cmd_rad:.4f} R={R:.2f} sat_io={sat_io}")
-                    print(f"  [VesiInterface] Setting steering: {delta_cmd_rad:.4f} rad -> {theta_sw_deg_sent:.2f} deg")
-                    print(f"  [VesiInterface] OK - Steering written successfully")
-                
-                # Note: Velocity control not available in VesiInterface manual control
-                if velocity is not None:
-                    print(f"  [VesiInterface] WARNING - Velocity control not supported in VesiInterface")
-                    
-            except Exception as e:
-                print(f"[VesiInterface] ERROR - Write failed for {vehicle_name}: {e}")
-                import traceback
-                traceback.print_exc()
-                return False
-        
-        return True
-    
-    def setVehicleGear(self, vehicle_name, gear):
-        """Set gear for a vehicle using VesiInterface manual control (one-shot action).
-        
-        Gear range: 0 (neutral) to 6.
-        """
-        print(f"\n[setVehicleGear] Called for {vehicle_name}: gear={gear}")
-        
-        if self._var_access:
-            # Use VesiInterface gear control
-            KEY_GEAR = "Platform()://ASM_Traffic/Model Root/VesiInterface/VESIResultData_Manual/vehicle_inputs/Const_gear_cmd/Value"
-            try:
-                gear_int = int(gear)
-                # Clamp gear to valid range: 0 (neutral) to 6
-                gear_int = max(0, min(6, gear_int))
-                print(f"  [VesiInterface] Setting gear: {gear_int}")
-                self._var_access.set_var(KEY_GEAR, gear_int)
-                print(f"  [VesiInterface] OK - Gear written successfully")
-            except Exception as e:
-                print(f"[VesiInterface] ERROR - Gear write failed for {vehicle_name}: {e}")
-                import traceback
-                traceback.print_exc()
-    
-    def setVehicleClutch(self, vehicle_name, clutch):
-        """Set clutch pedal position for a vehicle (one-shot action).
-        
-        Note: VesiInterface does not support clutch control, so we use ExternalUserData.
-        Clutch is only used for starting from neutral.
-        """
-        print(f"\n[setVehicleClutch] Called for {vehicle_name}: clutch={clutch}")
-        
-        if self._var_access:
-            # VesiInterface doesn't have clutch, use ExternalUserData
-            KEY_CLUTCH = "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/ExternalUserData/Pos_ClutchPedal[%]/Value"
-            try:
-                # Convert 0-1 to 0-100%
-                clutch_pct = float(clutch * 100.0)
-                print(f"  [VesiInterface] Setting clutch: {clutch} -> {clutch_pct}% (using ExternalUserData)")
-                self._var_access.set_var(KEY_CLUTCH, clutch_pct)
-                print(f"  [VesiInterface] OK - Clutch written successfully")
-            except Exception as e:
-                print(f"[VesiInterface] ERROR - Clutch write failed for {vehicle_name}: {e}")
-                import traceback
-                traceback.print_exc()
-    
-    def getVehicleState(self, vehicle_name):
-        """Get current state of a fellow vehicle.
-        
-        Args:
-            vehicle_name: Name of the fellow vehicle
-            
-        Returns:
-            Dictionary with vehicle state information
-        """
-        if vehicle_name not in self._fellow_vehicles:
-            return None
-        
-        try:
-            vehicle_data = self._fellow_vehicles[vehicle_name]
-            fellow_obj = vehicle_data['fellow_object']
-            
-            state = {
-                'name': vehicle_name,
-                'position': None,
-                'velocity': None,
-                'heading': None
-            }
-            
-            # Try to get position and velocity from fellow object
-            if hasattr(fellow_obj, 'Position'):
-                state['position'] = fellow_obj.Position
-            if hasattr(fellow_obj, 'Velocity'):
-                state['velocity'] = fellow_obj.Velocity
-            if hasattr(fellow_obj, 'Heading'):
-                state['heading'] = fellow_obj.Heading
-                
-            return state
-            
-        except Exception as e:
-            print(f"State retrieval error for {vehicle_name}: {e}")
-            return None
 
     def executeActions(self, allActions):
         """Execute actions selected by agents and apply accumulated control state.

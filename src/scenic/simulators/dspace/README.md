@@ -356,7 +356,6 @@ Called from:
 
 - `modeldesk/placement.py` (`place_fellow`, after route setup)
 - `modeldesk/authoring.py` (`configure_fellow`)
-- `simulator.py` (`_configureFellowInModelDesk`, when placement did not already create the fellow)
 
 To use a different default vehicle for all fellows, change **`DEFAULT_FELLOW_TRAFFIC_OBJECT_BASENAME`** in `traffic_object.py` (use the object name as shown in ModelDesk, not necessarily the full `.tro` path).
 
