@@ -52,12 +52,13 @@ class MPCConfig:
         # Steering mapping (calibrated)
         self.steer_scale = config_dict.get('steer_scale', None)  # Will be calibrated
         
-        # MPC weights (base weights). Defaults synced to vehicle_mpc.yaml (RC-4b).
-        self.w_ey = config_dict.get('w_ey', 10.0)
-        self.w_epsi = config_dict.get('w_epsi', 5.0)
+        # MPC weights (base weights). Defaults synced to vehicle_mpc.yaml (RC-4b/RC-W).
+        # RC-W (2026-04-26): w_ey 10->5, w_epsi 5->1, wT_ey 15->10 to match race_common parity.
+        self.w_ey = config_dict.get('w_ey', 5.0)
+        self.w_epsi = config_dict.get('w_epsi', 1.0)
         self.w_u = config_dict.get('w_u', 0.05)
         self.w_du = config_dict.get('w_du', 2.2)  # Steering rate weight (higher = smoother, less overcorrect)
-        self.wT_ey = config_dict.get('wT_ey', 15.0)
+        self.wT_ey = config_dict.get('wT_ey', 10.0)
         self.wT_epsi = config_dict.get('wT_epsi', 2.0)
 
         # Velocity-weighted costs (improved performance at different speeds)
@@ -84,9 +85,11 @@ class MPCConfig:
         self.w_u_low_curv = config_dict.get('w_u_low_curv', 1.0)
         self.w_u_vel_low_curv = config_dict.get('w_u_vel_low_curv', 0.25)
         self.w_ddu_low_curv = config_dict.get('w_ddu_low_curv', 0.000001)
-        # High curvature weights (for sharp turns). Defaults synced to vehicle_mpc.yaml (RC-4b).
-        self.w_ey_high_curv = config_dict.get('w_ey_high_curv', 22.0)
-        self.w_epsi_high_curv = config_dict.get('w_epsi_high_curv', 12.0)
+        # High curvature weights (for sharp turns). Defaults synced to vehicle_mpc.yaml (RC-4b/RC-W).
+        # RC-W (2026-04-26): de-tuned 22->5, 12->1. Matches base; no high-curv multiplier
+        # (race_common doesn't split). Was over-tracking in tight corners and saturating.
+        self.w_ey_high_curv = config_dict.get('w_ey_high_curv', 5.0)
+        self.w_epsi_high_curv = config_dict.get('w_epsi_high_curv', 1.0)
         self.w_epsi_vel_high_curv = config_dict.get('w_epsi_vel_high_curv', 2.0)
         self.w_u_high_curv = config_dict.get('w_u_high_curv', 0.02)
         self.w_u_vel_high_curv = config_dict.get('w_u_vel_high_curv', 0.05)

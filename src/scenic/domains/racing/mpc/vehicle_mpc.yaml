@@ -18,13 +18,19 @@
     # Steering mapping (to be calibrated)
     steer_scale: null  # Will be calibrated: delta_actual_rad / steer_cmd
     
-    # MPC weights (base weights for moderate curves - increased for better tracking and robustness)
-    w_ey: 10.0  # Lateral error weight (doubled from 5.0 for more aggressive tracking)
-    w_epsi: 5.0  # Heading error weight (increased from 3.0 for better heading correction)
-    w_u: 0.05  # Control input weight (reduced from 0.1 to allow more steering authority)
-    w_du: 2.2  # Control rate weight (increased further for smoother steering, reduce end-of-lap oscillation)
-    wT_ey: 15.0  # Terminal lateral error weight (increased from 5.0 for better terminal tracking)
-    wT_epsi: 2.0  # Terminal heading error weight (increased from 1.0)
+    # MPC weights (base weights for moderate curves)
+    # RC-W (2026-04-26): de-tuned to race_common's mpc_lateral parity (rvc.param.yaml).
+    # Hypothesis: our previous 2-5x higher weights cause MPC to over-track, saturating
+    # steer at ±0.282 (full lock) when CTE grows -- triggering off-track cascades at
+    # corners (visible in F0 t=92s, F2 multiple corners). race_common uses gentler
+    # tracking (single set of weights, no high-curv split) and runs Pure Pursuit as
+    # primary lateral controller; their MPC config is what we're matching here.
+    w_ey: 5.0  # Lateral error weight (was 10.0). race_common: mpc_weight_lat_error=5.0
+    w_epsi: 1.0  # Heading error weight (was 5.0). race_common: mpc_weight_heading_error=1.0
+    w_u: 0.05  # Control input weight
+    w_du: 2.2  # Control rate weight (smoother steering)
+    wT_ey: 10.0  # Terminal lateral error weight (was 15.0). race_common: mpc_weight_terminal_lat_error=10.0
+    wT_epsi: 2.0  # Terminal heading error weight. race_common: mpc_weight_terminal_heading_error=2.0
     
     # Velocity-weighted costs (improved performance at different speeds - critical for high-speed robustness)
     w_epsi_vel: 1.5  # Heading error * velocity^2 weight (tripled from 0.5 for much better high-speed tracking)
@@ -56,9 +62,12 @@
     w_u_vel_low_curv: 0.25  # Velocity-weighted control input in low curvature
     w_ddu_low_curv: 0.000001  # Steering acceleration weight in low curvature (lighter penalty)
     
-    # High curvature weights (for sharp turns - aggressive tracking, reduce high CTE in segments like 43/44)
-    w_ey_high_curv: 22.0  # Lateral error weight in high curvature (increased from 18.0 for tighter tracking in sharp bends after 0.06 threshold did not help)
-    w_epsi_high_curv: 12.0  # Heading error weight in high curvature (increased from 10.0)
+    # High curvature weights (for sharp turns).
+    # RC-W (2026-04-26): de-tuned to match base weights. Previously 22/12 = 4-12x more
+    # aggressive than base, which caused saturation in tight corners (the very place we
+    # MOST need controlled tracking). race_common uses no high-curv split; matching that.
+    w_ey_high_curv: 5.0  # Was 22.0. Matches base w_ey now (no high-curv multiplier).
+    w_epsi_high_curv: 1.0  # Was 12.0. Matches base w_epsi.
     w_epsi_vel_high_curv: 2.0  # Velocity-weighted heading error in high curvature (increased from 0.8 for better high-speed turns)
     w_u_high_curv: 0.02  # Control input weight in high curvature (very low - allow maximum steering)
     w_u_vel_high_curv: 0.05  # Velocity-weighted control input in high curvature (low penalty)
