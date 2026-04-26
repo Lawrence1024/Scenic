@@ -1395,6 +1395,20 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 slew_down_ms = 12.0 if cte_mag_for_speed >= 3.0 else 7.0   # faster ramp-down when off-line
                 _in_pass_maneuver = str(getattr(self, '_phase_effective_planner_state', '')) in (COMMIT_PASS_LEFT, COMMIT_PASS_RIGHT, SETUP_LEFT, SETUP_RIGHT)
                 slew_up_ms = 12.0 if _in_pass_maneuver else 8.0  # faster acceleration; pass maneuvers get max ramp
+                # RC-7b: when ego is in a curve OR a curve is coming up (lookahead 25 wp ~ 25m),
+                # don't allow the speed reference to ramp UP. This implements the racing-line
+                # "carry momentum through the curve, brake before, throttle on exit" pattern by
+                # preventing the planner from slamming throttle to v_target between two curves
+                # (e.g. F2_tactical t=104-108 chicane oscillation: brake, release, throttle 1.0,
+                # brake again, throttle 1.0). Speed CAN still drop (slew_down unchanged), so
+                # safety-side responsiveness is preserved. Only "more throttle while curve nearby"
+                # is suppressed.
+                _seg_at = str(getattr(self, '_segment_type_at_wp', None) or '')
+                _seg_ahead = str(getattr(self, '_segment_type_ahead', None) or '')
+                _curve_nearby = (_seg_at == 'curve') or (_seg_ahead == 'curve')
+                if _curve_nearby and not _in_pass_maneuver:
+                    slew_up_ms = 0.0  # hold or drop -- no ramp up while curve is in scope
+                self._curve_nearby_telemetry = _curve_nearby  # for [CtrlTrace]
                 if not hasattr(self, '_last_effective_target_speed'):
                     self._last_effective_target_speed = float(effective_target_speed)
                 last_eff = float(self._last_effective_target_speed)
@@ -2159,7 +2173,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     f"seg={getattr(self, '_last_valid_segment_id', None)}/"
                     f"{str(getattr(self, '_segment_type_at_wp', None) or 'na')} "
                     f"seg_ahead={getattr(self, '_segment_id_ahead', None)}/"
-                    f"{str(getattr(self, '_segment_type_ahead', None) or 'na')}"
+                    f"{str(getattr(self, '_segment_type_ahead', None) or 'na')} "
+                    f"curve_hold={int(bool(getattr(self, '_curve_nearby_telemetry', False)))}"
                 )
             except Exception as _ct_e:
                 if not getattr(self, '_ctrltrace_warned', False):
