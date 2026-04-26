@@ -1769,13 +1769,20 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             # Compute steering using MPC (mpc_total in [LoopOther] from record_lateral_mpc_ms + record_longitudinal_mpc_ms)
             # Pass behavior's progress index (wp_last_idx) so MPC searches locally; MPC owns chosen segment (last_seg_idx), we do not sync back.
             try:
+                # Corridor-aware MPC: pass per-waypoint LEFT/RIGHT distances if the TTL was
+                # loaded in race_common 20-column format (attach_ttl populates these). Falls
+                # back to plain line-tracking when bounds are unavailable. See docs/frames.md.
+                _ttl_left_dist = getattr(self, 'ttl_left_dist_m', None)
+                _ttl_right_dist = getattr(self, 'ttl_right_dist_m', None)
                 steer_mpc = _lat_controller.run_step(
                     vehicle_state,
                     waypoints_for_mpc,
                     wp_last_idx if (use_waypoints and wp_list and len(wp_list) >= 2) else None,
                     cte_magnitude=cte_mag_for_speed,
                     v_ref_profile=v_ref_profile,  # Same trajectory as longitudinal: smooth turns, avoid over-steer then correct
-                    curvature_ahead_max=curvature_ahead_max  # For deadzone eligibility: never deadzone in moderate curvature (curv_ahead_max < curv_deadzone_max)
+                    curvature_ahead_max=curvature_ahead_max,  # For deadzone eligibility: never deadzone in moderate curvature (curv_ahead_max < curv_deadzone_max)
+                    left_dist_per_wp=_ttl_left_dist,
+                    right_dist_per_wp=_ttl_right_dist,
                 )
                 steer_mpc = float(steer_mpc)
     

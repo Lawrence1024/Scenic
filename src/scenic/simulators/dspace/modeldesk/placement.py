@@ -1,6 +1,8 @@
 import math
 
 from .. import utils as dutils
+from ..geometry.frame_calibration import xodr_to_rd
+from ..geometry.params import get_map_path
 from .traffic_object import apply_fellow_traffic_object
 
 # TTL filenames for route preference (distance to main vs pitlane; if similar, prefer main)
@@ -159,14 +161,24 @@ def _route_pref_from_ttl_distances(sim, xodr_x, xodr_y):
 
 
 def place_ego(sim, obj):
-    """Create/configure the ego vehicle using the Maneuver API."""
-    # 1) Position in map frame (Scenic = map = RD-aligned)
+    """Create/configure the ego vehicle using the Maneuver API.
+
+    Frames: ``obj.position`` is in Scenic XODR-xy (the frame defined by ``param map``).
+    Projection onto the empirical centerline (``ttl_main_road.csv``) and the (s, t)
+    sent to ModelDesk are in dSPACE RD-xy. ``xodr_to_rd`` applies the calibrated
+    translation between the two; identity if no calibration JSON exists for the map
+    (e.g. the OLD ``LagunaSeca.xodr`` workflow). See ``docs/frames.md``.
+    """
+    # 1) Position in map frame (Scenic XODR), then translate to RD frame for projection.
     if getattr(obj, "position", None) is not None:
         scenic_x, scenic_y = obj.position.x, obj.position.y
-        work_x, work_y = scenic_x, scenic_y
+        _xodr_path = get_map_path(getattr(getattr(sim, "scene", None), "params", None) or {})
+        work_x, work_y = xodr_to_rd(scenic_x, scenic_y, _xodr_path)
 
-        # 2) Determine route: prefer TTL-based (distance to main vs pitlane; if similar, prefer main)
-        route_pref = _route_pref_from_ttl_distances(sim, scenic_x, scenic_y)
+        # 2) Determine route: prefer TTL-based (distance to main vs pitlane; if similar, prefer main).
+        # _route_pref_from_ttl_distances compares against TTL CSVs which live in RD frame, so
+        # it must receive the RD-translated position.
+        route_pref = _route_pref_from_ttl_distances(sim, work_x, work_y)
         if not route_pref:
             try:
                 # Road-based detection (RD coordinates)
@@ -365,13 +377,16 @@ def place_fellow(sim, obj):
     # Get vehicle name for logging
     vehicle_name = getattr(obj, "name", f"Fellow_{sim.ts.Fellows.Count}")
     
-    # 1) Position in map frame (Scenic = map = RD-aligned)
+    # 1) Position in map frame (Scenic XODR), then translate to RD frame for projection.
+    # See place_ego docstring for frame conventions; identity translation if no calibration.
     if getattr(obj, "position", None) is not None:
         scenic_x, scenic_y = obj.position.x, obj.position.y
-        work_x, work_y = scenic_x, scenic_y
+        _xodr_path = get_map_path(getattr(getattr(sim, "scene", None), "params", None) or {})
+        work_x, work_y = xodr_to_rd(scenic_x, scenic_y, _xodr_path)
 
-        # 2) Determine route: TTL centerlines (ttl_main_road.csv vs ttl_pitlane.csv), assign to whichever is closer
-        route_pref = _route_pref_from_ttl_distances(sim, scenic_x, scenic_y)
+        # 2) Determine route: TTL centerlines (ttl_main_road.csv vs ttl_pitlane.csv) live in
+        # RD frame, so feed them the translated work_x/work_y.
+        route_pref = _route_pref_from_ttl_distances(sim, work_x, work_y)
         if not route_pref:
             try:
                 position_xy = (work_x, work_y)

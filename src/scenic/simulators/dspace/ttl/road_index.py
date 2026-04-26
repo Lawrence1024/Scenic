@@ -1,10 +1,16 @@
-"""Build a road index from TTL centerline CSVs for (s,t) projection.
+"""Build a road index from TTL reference CSVs for (s,t) projection.
 
-Race tracks: the XODR may have many lanes; neither the OpenDRIVE reference line
-nor lane 0 is guaranteed to be the true track centerline. The TTL CSVs are the
-authoritative centerlines (they were used to generate the XODR with a width).
-When ttlFolder is available, use these polylines as the projection centerline
-so t is lateral offset from the true center.
+The CSVs `ttl_main_road.csv` / `ttl_pitlane.csv` are the **dSPACE ModelDesk R2 / R1
+route reference lines** -- racing-line-shaped polylines baked into the dSPACE project
+in RD frame. They are NOT geometric road centerlines (asymmetry stdev ~8 m,
+apex-cutting pattern) and NOT the optimal racing line (`ttl_optimal_xodr.csv` is a
+different line ~2 m away). Verified 2026-04-26 by constant-d fellow-drive
+measurement on LGS_v1 (see `project_frame_calibration` memory + `docs/frames.md`).
+
+When `ttlFolder` is set, these polylines are used as the projection reference so the
+arc-length s sent to ModelDesk via `seq.StartPosition` matches the dSPACE-side R1/R2
+s=0 origin. t is lateral offset from this ModelDesk reference line, not from the
+geometric track center.
 """
 
 import math

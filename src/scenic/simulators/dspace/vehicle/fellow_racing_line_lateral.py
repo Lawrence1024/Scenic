@@ -37,12 +37,19 @@ def build_racing_line_delta_table(
     ttl_folder: str,
     optimal_csv_name: str,
     road_index_ttl: Dict[str, Any],
+    xodr_path: Optional[str] = None,
 ) -> Optional[Tuple[Any, Any, float]]:
     """Build (s_samples, delta_samples, track_length_m) for main track.
 
     For each point on the optimal line, project onto MainTrack_TTL centerline;
     the lateral coordinate t is δ(s): where the racing line sits relative to
     centerline at that s.
+
+    ``xodr_path`` is required when the optimal CSV is in NEW XODR frame and
+    the centerline (idx_main from ttl_main_road.csv) is in dSPACE RD frame --
+    each optimal point is translated XODR->RD via frame_calibration before
+    projecting. If both are in the same frame (e.g. OLD-map workflow), pass
+    None and the translation is identity. See docs/frames.md.
 
     Returns None if build fails.
     """
@@ -75,11 +82,17 @@ def build_racing_line_delta_table(
     if track_len < 100.0:
         return None
 
+    # Translate optimal points (in NEW XODR frame, e.g. ttl_optimal_xodr.csv) to
+    # RD frame before projecting onto idx_main (built from RD-frame ttl_main_road.csv).
+    # Identity if no calibration JSON for the loaded XODR.
+    from ..geometry.frame_calibration import xodr_to_rd as _xodr_to_rd
+
     samples: List[Tuple[float, float]] = []
     for p in optimal_pts:
         ox, oy = float(p[0]), float(p[1])
+        ox_rd, oy_rd = _xodr_to_rd(ox, oy, xodr_path)
         try:
-            s_i, t_i = project_world_to_st(idx_main, (ox, oy))
+            s_i, t_i = project_world_to_st(idx_main, (ox_rd, oy_rd))
         except Exception:
             continue
         s_i = float(s_i) % track_len
@@ -156,14 +169,27 @@ def get_or_build_delta_table(
     optimal_csv_name: str,
     road_index_ttl: Dict[str, Any],
 ):
-    """Cached (s_arr, d_arr, track_len) per (folder, optimal file)."""
+    """Cached (s_arr, d_arr, track_len) per (folder, optimal file).
+
+    Resolves the active XODR path from the simulator scene params and forwards
+    it to ``build_racing_line_delta_table`` so the optimal points get translated
+    XODR->RD before projecting onto the RD-frame centerline. If the loaded XODR
+    has no calibration JSON sibling the translation is identity (preserves the
+    OLD-map workflow). Cache key includes the XODR basename so multi-map runs
+    don't share a stale table.
+    """
+    from ..geometry.params import get_map_path
+
+    scene_params = getattr(getattr(simulation, "scene", None), "params", None) or {}
+    xodr_path = get_map_path(scene_params)
     cache = getattr(simulation, "_fellow_racing_delta_cache", None)
     if cache is None:
         cache = {}
         simulation._fellow_racing_delta_cache = cache
-    key = (os.path.abspath(str(ttl_folder)), str(optimal_csv_name))
+    xodr_key = os.path.basename(str(xodr_path)) if xodr_path else ""
+    key = (os.path.abspath(str(ttl_folder)), str(optimal_csv_name), xodr_key)
     if key not in cache:
         cache[key] = build_racing_line_delta_table(
-            ttl_folder, optimal_csv_name, road_index_ttl
+            ttl_folder, optimal_csv_name, road_index_ttl, xodr_path=xodr_path
         )
     return cache[key]

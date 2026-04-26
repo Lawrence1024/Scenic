@@ -20,6 +20,44 @@ from .utils import LowPassFilter
 from . import timing as _mpc_timing
 
 
+def _interpolate_bounds_at_horizon(
+    waypoints: List[Tuple[float, float]],
+    left_dist_per_wp: Union[List[float], np.ndarray],
+    right_dist_per_wp: Union[List[float], np.ndarray],
+    s_horizon: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Interpolate per-waypoint corridor distances at MPC horizon arc-lengths.
+
+    Builds cumulative arc-length over ``waypoints`` (euclidean distances between
+    consecutive points), wraps ``s_horizon`` modulo total track length, and linearly
+    interpolates the per-waypoint LEFT/RIGHT distance arrays at each horizon step.
+
+    Returns ``(d_left_horizon, d_right_horizon)``: arrays of length ``len(s_horizon)``
+    holding the lateral distance from the racing line to the LEFT and RIGHT track
+    boundaries at each horizon step (meters; always positive).
+
+    For a degenerate input (fewer than 2 waypoints, or zero arc-length), returns large
+    constants so the corridor barrier cost reduces to identity.
+    """
+    pts = np.asarray([(p[0], p[1]) for p in waypoints], dtype=np.float64)
+    n_wp = len(pts)
+    h = len(s_horizon)
+    if n_wp < 2 or h == 0:
+        return np.full(max(h, 0), 1e6), np.full(max(h, 0), 1e6)
+    deltas = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    s_per_wp = np.concatenate([[0.0], np.cumsum(deltas)])
+    track_len = float(s_per_wp[-1])
+    if track_len < 1.0:
+        return np.full(h, 1e6), np.full(h, 1e6)
+    left_arr = np.asarray(left_dist_per_wp, dtype=np.float64)
+    right_arr = np.asarray(right_dist_per_wp, dtype=np.float64)
+    # Length match: parallel arrays must be aligned with waypoints.
+    if len(left_arr) != n_wp or len(right_arr) != n_wp:
+        return np.full(h, 1e6), np.full(h, 1e6)
+    s_query = np.mod(np.asarray(s_horizon, dtype=np.float64), track_len)
+    return np.interp(s_query, s_per_wp, left_arr), np.interp(s_query, s_per_wp, right_arr)
+
+
 class MPCLateralController:
     """MPCC-style lateral controller: contouring + lag + progress cost.
     
@@ -132,7 +170,9 @@ class MPCLateralController:
                           horizon: int,
                           cte_magnitude: Optional[float] = None,
                           s_0: Optional[float] = None,
-                          s_horizon: Optional[np.ndarray] = None) -> Tuple[csc_matrix, np.ndarray, csc_matrix, np.ndarray, np.ndarray]:
+                          s_horizon: Optional[np.ndarray] = None,
+                          left_dist_horizon: Optional[np.ndarray] = None,
+                          right_dist_horizon: Optional[np.ndarray] = None) -> Tuple[csc_matrix, np.ndarray, csc_matrix, np.ndarray, np.ndarray]:
         """Build QP matrices for MPC problem.
         
         Args:
@@ -277,6 +317,49 @@ class MPCLateralController:
             # State cost: w_ey * e_y^2 + w_epsi * e_psi^2 + w_epsi_vel * e_psi^2 * v^2
             P[x_k_idx, x_k_idx] += w_ey_k  # e_y
             P[x_k_idx + 1, x_k_idx + 1] += w_epsi_k + w_epsi_vel_k * v_k * v_k  # e_psi (with velocity weighting)
+
+            # Corridor barrier cost (mirrors race_common Frenet planner pattern). Per-step
+            # quadratic ``w_b_k * (e_y_k - mid_offset_k)^2`` that pulls the planned
+            # trajectory toward the corridor midpoint -- but ONLY when the car body is
+            # within ``corridor_activation_clearance_m`` of either bound. Hard deadzone
+            # when there's plenty of clearance, so straights and well-centered sections
+            # behave identically to the no-corridor MPC. Identity if no bounds supplied
+            # or feature disabled. See ``docs/frames.md``.
+            if (getattr(self.config, "corridor_barrier_enabled", False)
+                    and left_dist_horizon is not None
+                    and right_dist_horizon is not None
+                    and k < len(left_dist_horizon)
+                    and k < len(right_dist_horizon)):
+                d_left_k = float(left_dist_horizon[k])
+                d_right_k = float(right_dist_horizon[k])
+                vh = float(getattr(self.config, "vehicle_half_width_m", 0.965))
+                # Body clearance to nearest bound when ego is exactly on the racing line.
+                # min_d minus half-width = how close the right or left edge of the body is
+                # to the nearest curb. Positive = body inside, negative = already off.
+                body_clearance_k = min(d_left_k, d_right_k) - vh
+                act_thresh = float(getattr(self.config, "corridor_activation_clearance_m", 0.50))
+                w_max = float(getattr(self.config, "corridor_barrier_weight_max", 5000.0))
+                if body_clearance_k >= act_thresh:
+                    # Plenty of room. No corridor pull. Racing line wins exactly.
+                    w_b_k = 0.0
+                else:
+                    # Cubic ramp: gentle near the threshold, sharp near zero clearance.
+                    # deficit_norm in [0, 1+]; clamp to [0, 1] for the curve, then unbounded
+                    # below zero clearance just hits the cap anyway.
+                    if act_thresh <= 1e-6:
+                        w_b_k = w_max
+                    else:
+                        deficit = act_thresh - body_clearance_k
+                        deficit_norm = max(0.0, min(1.0, deficit / act_thresh))
+                        w_b_k = w_max * (deficit_norm ** 3)
+                if w_b_k > 0.0:
+                    # mid_offset_k: signed offset from racing line to corridor midpoint
+                    # (positive = left of racing line, matching Scenic e_y sign convention).
+                    mid_offset_k = (d_left_k - d_right_k) / 2.0
+                    # Cost: w_b_k * (e_y - mid)^2. Match codebase OSQP convention
+                    # (P[i,i] += w corresponds to w*x_i^2 in cost; q scales without 2x).
+                    P[x_k_idx, x_k_idx] += w_b_k
+                    q[x_k_idx] += -w_b_k * mid_offset_k
             
             # Phase 2: lag error cost Q_lag * (s_ref_k - s_k)^2
             if Q_lag != 0:
@@ -418,7 +501,9 @@ class MPCLateralController:
                  current_waypoint_idx: Optional[int] = None,
                  cte_magnitude: Optional[float] = None,
                  v_ref_profile: Optional[Union[List[float], np.ndarray]] = None,
-                 curvature_ahead_max: Optional[float] = None) -> float:
+                 curvature_ahead_max: Optional[float] = None,
+                 left_dist_per_wp: Optional[Union[List[float], np.ndarray]] = None,
+                 right_dist_per_wp: Optional[Union[List[float], np.ndarray]] = None) -> float:
         """Compute steering command for one control step.
         
         When v_ref_profile is provided (same profile used by longitudinal MPC), the
@@ -627,6 +712,18 @@ class MPCLateralController:
             _mpc_timing.record_lateral_mpc_ms((time.perf_counter() - t0) * 1000)
             return self._fallback_steering(e_y=e_y, e_psi=e_psi)
         
+        # Per-horizon corridor bounds: interpolate per-waypoint LEFT/RIGHT distances at
+        # each ``s_horizon[k]`` so the QP can apply the corridor barrier cost. Identity if
+        # the TTL had no boundary data (left_dist_per_wp / right_dist_per_wp are None).
+        left_dist_horizon = right_dist_horizon = None
+        if (left_dist_per_wp is not None and right_dist_per_wp is not None
+                and len(left_dist_per_wp) >= 2 and len(right_dist_per_wp) >= 2):
+            left_dist_horizon, right_dist_horizon = _interpolate_bounds_at_horizon(
+                waypoints, left_dist_per_wp, right_dist_per_wp, s_horizon
+            )
+            self._log_corridor_left_min = float(np.min(left_dist_horizon))
+            self._log_corridor_right_min = float(np.min(right_dist_horizon))
+
         # Build QP matrices (Phase 2: pass s_0 and s_horizon for lag/progress cost)
         cte_mag_for_mpc = abs(e_y) if e_y is not None else (cte_magnitude if cte_magnitude is not None else 0.0)
         P, q, A, l, u = self._build_qp_matrices(
@@ -634,7 +731,9 @@ class MPCLateralController:
             self.config.mpc_prediction_horizon,
             cte_magnitude=cte_mag_for_mpc,
             s_0=s_0,
-            s_horizon=s_horizon
+            s_horizon=s_horizon,
+            left_dist_horizon=left_dist_horizon,
+            right_dist_horizon=right_dist_horizon,
         )
         
         # Initialize solver on first solve

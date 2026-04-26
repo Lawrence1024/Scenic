@@ -103,6 +103,31 @@ class MPCConfig:
         
         # Task 3: Yaw-rate damping to prevent snap oscillations (cost on (e_psi_{k+1} - e_psi_k)^2)
         self.w_epsi_rate = config_dict.get('w_epsi_rate', 0.1)
+
+        # Corridor barrier (mirrors race_common Frenet planner pattern). Per-step quadratic
+        # cost ``w_b_k * (e_y_k - mid_offset_k)**2`` that pulls the planned trajectory
+        # toward the corridor midpoint when the racing line would put the car body off
+        # the curb. **Hard activation deadzone**: when the car body's clearance to the
+        # nearest bound exceeds ``corridor_activation_clearance_m``, ``w_b_k = 0`` (no
+        # cost) so the racing line wins exactly on safe sections. Cubic ramp only when in
+        # genuine danger. Identity if the TTL lacks LEFT_BOUND/RIGHT_BOUND columns.
+        # See ``docs/frames.md`` for math.
+        self.corridor_barrier_enabled = config_dict.get('corridor_barrier_enabled', True)
+        # Half the IAC AV-21 vehicle width (1.93 m / 2 = 0.965 m).
+        self.vehicle_half_width_m = config_dict.get('vehicle_half_width_m', 0.965)
+        # Body clearance (= min(d_left, d_right) - vehicle_half_width) above which the
+        # barrier is FULLY DISABLED. Default 1.5 m -- chosen so that:
+        #   * Typical straights with min_d ~5-6 m have clearance ~4-5 m >> threshold,
+        #     hard deadzone, racing line wins exactly (no fight, no speed regression).
+        #   * The OOB-suspect Andretti exit section had min_d ~2 m, clearance ~1 m
+        #     (deep inside the activation zone), so the cost fires there meaningfully.
+        # Larger value = pulls inward earlier (safer but more conservative); smaller
+        # value = lets the line cut closer (faster but body may go off-curb).
+        self.corridor_activation_clearance_m = config_dict.get('corridor_activation_clearance_m', 1.5)
+        # Cap on the per-step barrier weight (when body clearance reaches 0). Cubic ramp
+        # from 0 (at activation threshold) to this max (at zero clearance / boundary
+        # contact). Keep large enough to dominate w_ey so the planner pulls inward.
+        self.corridor_barrier_weight_max = config_dict.get('corridor_barrier_weight_max', 5000.0)
         
         # Filter
         self.steering_lpf_cutoff_hz = config_dict.get('steering_lpf_cutoff_hz', 2.0)  # Smoother steering output

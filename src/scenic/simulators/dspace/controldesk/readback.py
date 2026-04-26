@@ -1,6 +1,9 @@
 from scenic.core.vectors import Vector
 import math
 
+from ..geometry.frame_calibration import rd_to_xodr
+from ..geometry.params import get_map_path
+
 EGO_BASE_PATH = "Platform()://ASM_Traffic/Model Root/VehicleDynamics/Plant/UserInterface/DISP_Plant"
 EGO_PATH_X   = f"{EGO_BASE_PATH}/Positions/Pos_x_Vehicle_CoorSys_E[m]/Out1"
 EGO_PATH_Y   = f"{EGO_BASE_PATH}/Positions/Pos_y_Vehicle_CoorSys_E[m]/Out1"
@@ -271,8 +274,38 @@ def read_ego_state(sim, obj):
             vx_kmh = float(var.get_var(EGO_PATH_VX))
             vy_kmh = float(var.get_var(EGO_PATH_VY))
         
-        # Position from ControlDesk is in same frame as map (RD-aligned); use as Scenic position
+        # Position from dSPACE is in RD frame. Translate to Scenic XODR frame so the
+        # --2d viewer (which renders against ``param map`` in XODR-xy) shows ego on
+        # the correct racing line. Identity translation if no calibration JSON exists
+        # for the loaded XODR (e.g. the OLD ``LagunaSeca.xodr`` workflow).
+        # See ``docs/frames.md`` and ``geometry/frame_calibration.py``.
         setattr(obj.dspaceActor, "rd_position", (float(x), float(y)))
+        _xodr_path = get_map_path(getattr(getattr(sim, "scene", None), "params", None) or {})
+        x_xodr, y_xodr = rd_to_xodr(float(x), float(y), _xodr_path)
+
+        # Diagnostic: also stash the dSPACE-side GPS reading on the actor. BoundsCheck
+        # uses this to compute the GPS-derived expected XODR position via pyproj and
+        # compare against the translation-based position. Per-lap calibration sanity
+        # check at no extra control-loop cost (one extra batched MAPort read per step).
+        # Surface first failure visibly so the diagnostic stays useful (don't swallow).
+        try:
+            if hasattr(var, "get_vars"):
+                _gps_pair = var.get_vars((EGO_GPS_LONGITUDE_DEG, EGO_GPS_LATITUDE_DEG))
+                _lon, _lat = _gps_pair
+            else:
+                _lon = float(var.get_var(EGO_GPS_LONGITUDE_DEG))
+                _lat = float(var.get_var(EGO_GPS_LATITUDE_DEG))
+            setattr(obj.dspaceActor, "gps_lonlat", (float(_lon), float(_lat)))
+            if not getattr(sim, "_gps_read_logged_ok", False):
+                print(f"[EgoRead] GPS_CALC OK: lon={float(_lon):.6f} lat={float(_lat):.6f}")
+                sim._gps_read_logged_ok = True
+        except Exception as _gps_e:
+            setattr(obj.dspaceActor, "gps_lonlat", None)
+            if not getattr(sim, "_gps_read_logged_fail", False):
+                print(f"[EgoRead] GPS_CALC read FAILED (first occurrence): "
+                      f"{type(_gps_e).__name__}: {_gps_e} | "
+                      f"path1={EGO_GPS_LONGITUDE_DEG} path2={EGO_GPS_LATITUDE_DEG}")
+                sim._gps_read_logged_fail = True
 
         # yaw_deg, vx_kmh, vy_kmh already read above (get_vars or get_var)
         yaw_rad_raw = yaw_deg * (math.pi / 180.0)
@@ -281,7 +314,8 @@ def read_ego_state(sim, obj):
         #
         # IMPORTANT: Do NOT apply any 90deg or 180deg offset here unless empirically proven.
         # The raw ControlDesk yaw (Angle_Yaw_Vehicle_CoorSys_E) is already consistent with
-        # the XODR geometry used by waypoints in our current setup.
+        # the XODR geometry used by waypoints in our current setup. (Yaw convention is
+        # frame-invariant under pure XY translation.)
         #
         # Normalize to [-pi, pi]
         yaw_rad = math.atan2(math.sin(yaw_rad_raw), math.cos(yaw_rad_raw))
@@ -289,12 +323,12 @@ def read_ego_state(sim, obj):
         # Inputs are km/h, Scenic uses m/s
         vx_ms = vx_kmh / 3.6
         vy_ms = vy_kmh / 3.6
-        
+
         # 4. Update Actor
-        obj.dspaceActor.position = Vector(x, y, z)
+        obj.dspaceActor.position = Vector(x_xodr, y_xodr, z)
         obj.dspaceActor.heading = yaw_rad
         obj.dspaceActor.linvel = Vector(vx_ms, vy_ms, 0)
-        
+
         return True
 
     except Exception as e:
@@ -363,8 +397,11 @@ def read_fellow_state(sim, obj, dutils):
         if hasattr(obj, '_array_bounds_warning_shown'):
             delattr(obj, '_array_bounds_warning_shown')
         
-        # Position from ControlDesk is in same frame as map (RD-aligned); use as Scenic position
-        scenic_x, scenic_y = float(x), float(y)
+        # Position from dSPACE is in RD frame. Translate to Scenic XODR frame for visualization
+        # (identity if no calibration JSON for the loaded map). See docs/frames.md.
+        setattr(obj.dspaceActor, "rd_position", (float(x), float(y)))
+        _xodr_path = get_map_path(params)
+        scenic_x, scenic_y = rd_to_xodr(float(x), float(y), _xodr_path)
         obj.dspaceActor.position = Vector(scenic_x, scenic_y, float(z))
         
         # Convert heading from degrees to radians (same convention as ego plant yaw; no +pi)

@@ -843,9 +843,16 @@ class DSpaceSimulation(RacingSimulation):
                 print(f"[Ego] Aligned heading with road: road_direction_deg={road_deg:.1f}")
         # Assign TTL to ego if available (delegated)
         attach_to_ego(self, obj)
-        # If ttlFolder is set, load both centerline TTLs so segments and track use TTL; otherwise OpenDRIVE.
+        # Phase B.5 (2026-04-26): segment map is XODR-native by default. Only load the
+        # empirical centerline TTLs (ttl_main_road.csv / ttl_pitlane.csv) when the
+        # scenario explicitly opts back in via param preferTtlTrackRegions=True. The
+        # behavior's segment-map builder (behaviors.scenic) checks for
+        # ``scene._main_ttl_waypoints`` first; if absent it falls through to
+        # ``build_waypoint_segment_map(wp_list, track)`` which uses the XODR road
+        # centerline. Both paths produce the same per-waypoint (segment_id, name)
+        # tuples; the XODR path just doesn't depend on driving-session-derived CSVs.
         params = getattr(self.scene, "params", None) or {}
-        if params.get("ttlFolder"):
+        if params.get("ttlFolder") and params.get("preferTtlTrackRegions", False):
             try:
                 ttl_folder, _ = get_ttl_config(params)
                 _, main_pts = load_ttl_region(ttl_folder, TTL_MAIN_ROAD_FILE)
@@ -853,9 +860,11 @@ class DSpaceSimulation(RacingSimulation):
                 if main_pts:
                     setattr(self.scene, "_main_ttl_waypoints", main_pts)
                     setattr(self.scene, "_pit_ttl_waypoints", pit_pts if pit_pts else [])
-                    print(f"[Segment map] ttlFolder set: loaded main ({len(main_pts)} pts) and pit ({len(pit_pts) if pit_pts else 0} pts) centerlines for TTL-based segments")
+                    print(f"[Segment map] LEGACY (preferTtlTrackRegions=True): loaded main ({len(main_pts)} pts) "
+                          f"and pit ({len(pit_pts) if pit_pts else 0} pts) centerlines for TTL-based segments")
             except Exception as e:
-                print(f"[Segment map] ttlFolder set but failed to load TTLs: {e}; will fall back to OpenDRIVE if track present")
+                print(f"[Segment map] preferTtlTrackRegions=True but failed to load TTLs: {e}; "
+                      "behavior will fall back to OpenDRIVE")
         return result
     
     def createFellowInSimulator(self, obj):
@@ -1467,6 +1476,54 @@ class DSpaceSimulation(RacingSimulation):
             except Exception:
                 pass
             # GPS/dSPACE calibration logging disabled (data already collected; no per-step recording)
+            # [BoundsCheck]: per-control-step ground-truth bounds check against race_common
+            # geofence (loaded from assets/ttls/LS_ENU_TTL_CSV/track_inside.csv / outside.csv).
+            # Fires every 10 control steps, OR every step when ego is OUT of bounds (so the
+            # excursion edge is captured precisely). Silent when the boundary CSVs are missing.
+            try:
+                from .geometry.bounds_check import compute_bounds_distance, gps_to_xodr
+                from .geometry.params import get_map_path
+                _ctrl_iv = max(1, int(getattr(self, "_control_interval", 1) or 1))
+                _ct = int(getattr(self, "currentTime", 0) or 0)
+                _is_ctrl_step = (_ct % _ctrl_iv) == 0
+                if _is_ctrl_step:
+                    _bd = compute_bounds_distance(_x, _y)
+                    if _bd is not None:
+                        _d_in, _d_out, _in_track = _bd
+                        # Throttle: every 10 control steps (0.5s @ 0.05 control period) when in bounds;
+                        # every control step when out of bounds. Force log on first call.
+                        _last_log_step = getattr(self, "_bounds_check_last_log_step", None)
+                        _last_in = getattr(self, "_bounds_check_last_in_track", True)
+                        _step_idx = _ct // _ctrl_iv
+                        _due_periodic = (_last_log_step is None) or ((_step_idx - _last_log_step) >= 10)
+                        _state_changed = bool(_in_track) != bool(_last_in)
+                        if (not _in_track) or _due_periodic or _state_changed:
+                            _t_log = float(_ct) * float(self.timestep)
+                            _flag = "OK" if _in_track else "OUT"
+                            # Per-lap calibration sanity check: convert dSPACE GPS readback to
+                            # expected XODR-xy via pyproj, compare against the translation-derived
+                            # ego.position. Residual reveals if our pure-translation fit drifts
+                            # across the lap (rotation/scale we ignored).
+                            _gps_str = ""
+                            _gps = getattr(obj.dspaceActor, "gps_lonlat", None)
+                            if _gps is not None and len(_gps) == 2:
+                                _xodr_path = get_map_path(getattr(getattr(self, "scene", None), "params", None) or {})
+                                _xy_from_gps = gps_to_xodr(_gps[0], _gps[1], _xodr_path)
+                                if _xy_from_gps is not None:
+                                    _resx = _x - _xy_from_gps[0]
+                                    _resy = _y - _xy_from_gps[1]
+                                    _resmag = (_resx * _resx + _resy * _resy) ** 0.5
+                                    _gps_str = (f" lon={_gps[0]:.6f} lat={_gps[1]:.6f}"
+                                                f" xodr_from_gps=({_xy_from_gps[0]:.2f},{_xy_from_gps[1]:.2f})"
+                                                f" residual_dx={_resx:+.2f}m residual_dy={_resy:+.2f}m"
+                                                f" residual_mag={_resmag:.2f}m")
+                            print(f"[BoundsCheck] t={_t_log:.2f}s pos=({_x:.2f},{_y:.2f}) "
+                                  f"d_in={_d_in:.2f}m d_out={_d_out:.2f}m in_track={int(_in_track)} [{_flag}]"
+                                  f"{_gps_str}")
+                            self._bounds_check_last_log_step = _step_idx
+                            self._bounds_check_last_in_track = _in_track
+            except Exception:
+                pass
         self._timing_last['get_properties'] = self._timing_last.get('get_properties', 0.0) + (time.perf_counter() - _t_get_props)
         # Mark end of this step's work for loop_other timing (gap until next executeActions)
         self._loop_end = time.perf_counter()

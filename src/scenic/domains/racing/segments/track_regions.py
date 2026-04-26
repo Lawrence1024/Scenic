@@ -182,8 +182,8 @@ def build_track_regions_from_opendrive(
 
 def build_track_regions_from_ttl(
     ttl_folder: Path,
-    main_file: str = "ttl_main_road.csv",
-    pit_file: str = "ttl_pitlane.csv",
+    main_file: Optional[str] = None,
+    pit_file: Optional[str] = None,
     main_buffer_m: float = MAIN_TRACK_BUFFER_M,
     pit_buffer_m: float = PIT_TRACK_BUFFER_M,
 ) -> Tuple[Optional[Any], Optional[Any]]:
@@ -191,15 +191,32 @@ def build_track_regions_from_ttl(
 
     Args:
         ttl_folder: Folder containing main_file and optionally pit_file.
-        main_file: CSV filename for main road centerline (default ttl_main_road.csv).
-        pit_file: CSV filename for pit lane centerline (default ttl_pitlane.csv).
+        main_file: CSV filename for main road centerline. Default: try
+            ttl_main_road_xodr.csv (XODR-derived true centerline, NEW XODR frame --
+            aligns with LGS_v1.xodr map for visualization), fall back to
+            ttl_main_road.csv (empirical, RD frame -- preserves OLD-map workflow).
+        pit_file: CSV filename for pit lane centerline. Default behaves the same
+            way (ttl_pitlane_xodr.csv preferred, ttl_pitlane.csv fallback).
         main_buffer_m: Buffer in meters on each side of main centerline (default 6).
         pit_buffer_m: Buffer in meters on each side of pit centerline (default 1.5).
 
     Returns:
         (mainTrack, pitTrack) as Scenic Regions. pitTrack is None if pit CSV missing or invalid.
     """
-    main_pts = _load_ttl_csv(Path(ttl_folder), main_file)
+    folder_path = Path(ttl_folder)
+    # Prefer XODR-derived centerline (new XODR frame, geometric centerline of
+    # race_common track boundaries). Empirical CSVs are fallback for OLD-map
+    # workflow. See docs/frames.md.
+    if main_file is None:
+        main_file = ("ttl_main_road_xodr.csv"
+                     if (folder_path / "ttl_main_road_xodr.csv").is_file()
+                     else "ttl_main_road.csv")
+    if pit_file is None:
+        pit_file = ("ttl_pitlane_xodr.csv"
+                    if (folder_path / "ttl_pitlane_xodr.csv").is_file()
+                    else "ttl_pitlane.csv")
+
+    main_pts = _load_ttl_csv(folder_path, main_file)
     if not main_pts or len(main_pts) < 2:
         return (None, None)
 
@@ -261,26 +278,50 @@ def create_track_regions(
     track: Optional[Any] = None,
     main_buffer_m: float = MAIN_TRACK_BUFFER_M,
     pit_buffer_m: float = PIT_TRACK_BUFFER_M,
+    prefer_ttl_track_regions: bool = False,
     **create_track_kw,
 ) -> Tuple[Any, Any, Optional[Any]]:
-    """Build mainTrack and pitTrack from either OpenDRIVE or TTL.
+    """Build mainTrack and pitTrack from XODR-native road geometry by default.
 
-    If ttl_folder is set, mainTrack and pitTrack are built from TTL centerline CSVs.
-    Otherwise they are built from the OpenDRIVE track (either provided or created from map_file).
+    Phase B.5 (2026-04-26): switched default to OpenDRIVE-native. The OLD path
+    used the empirical centerline CSVs (``ttl_main_road.csv`` / ``ttl_pitlane.csv``)
+    which were measured by driving sessions in dSPACE -- slow to produce, brittle
+    when the map changed, and not actually a geometric centerline (varied 1.9-55m
+    from race_common's inner edge). Verified on ``LGS_v1.xodr``: XODR-native
+    mainTrack bbox matches race_common's ``outside.csv`` within 0.83m mean,
+    area 21764 m^2 (~ 3600m lap x ~6m half-width). See ``tools/frames/verify_xodr_native_regions.py``.
 
     Args:
-        map_file: Path to OpenDRIVE .xodr (required if track is None and ttl_folder is None).
-        ttl_folder: Path to folder with ttl_main_road.csv and ttl_pitlane.csv. If set, TTL is used for track regions.
-        track: Existing RacingTrack (optional). If None and not using TTL, one is created from map_file.
-        main_buffer_m: Buffer each side of main centerline in meters (default 6).
-        pit_buffer_m: Buffer each side of pit centerline in meters (default 1.5).
-        **create_track_kw: Passed to createRacingTrack when creating track from map_file.
+        map_file: Path to OpenDRIVE ``.xodr``. Used to ``createRacingTrack`` if ``track`` is None.
+        ttl_folder: Path to TTL folder. ONLY used as a fallback when ``track`` is None and
+            ``map_file`` is also None, OR when ``prefer_ttl_track_regions=True`` (legacy).
+        track: Existing ``RacingTrack`` (optional). Preferred -- avoids re-parsing XODR.
+        main_buffer_m: Buffer each side of main road centerline (default 6).
+        pit_buffer_m: Buffer each side of pit road centerline (default 1.5).
+        prefer_ttl_track_regions: Legacy flag to force TTL-CSV-buffered regions even when
+            XODR is available. Default False (use XODR). Set to True only for back-compat
+            with old empirical-centerline workflow.
+        **create_track_kw: Passed to ``createRacingTrack`` when creating track from map_file.
 
     Returns:
-        (mainTrack, pitTrack, track). mainTrack/pitTrack are Regions; track is the RacingTrack when from OpenDRIVE else None.
+        ``(mainTrack, pitTrack, track)``. ``mainTrack`` / ``pitTrack`` are Regions;
+        ``track`` is the ``RacingTrack`` when XODR-derived, else None.
     """
     from scenic.domains.racing.segments.tracks import createRacingTrack
 
+    # XODR-native path (default): use ``track`` (or build it from map_file).
+    if not prefer_ttl_track_regions:
+        if track is None and map_file:
+            track = createRacingTrack(map_file, **create_track_kw)
+        if track is not None:
+            main_track, pit_track = build_track_regions_from_opendrive(
+                track, main_buffer_m=main_buffer_m, pit_buffer_m=pit_buffer_m
+            )
+            if main_track is not None:
+                return (main_track or nowhere, pit_track or nowhere, track)
+            # XODR path returned empty -- fall through to TTL fallback below.
+
+    # TTL fallback (legacy or XODR-empty case).
     if ttl_folder is not None and str(ttl_folder).strip():
         folder = Path(ttl_folder)
         if not folder.is_absolute():
@@ -290,13 +331,13 @@ def create_track_regions(
             main_buffer_m=main_buffer_m,
             pit_buffer_m=pit_buffer_m,
         )
-        return (main_track or nowhere, pit_track or nowhere, None)
+        return (main_track or nowhere, pit_track or nowhere, track)
 
-    # OpenDRIVE path: need track
-    if track is None:
-        if not map_file:
-            return (nowhere, nowhere, None)
+    # No XODR, no TTL -- empty regions.
+    if track is None and map_file:
         track = createRacingTrack(map_file, **create_track_kw)
+    if track is None:
+        return (nowhere, nowhere, None)
 
     main_track, pit_track = build_track_regions_from_opendrive(
         track, main_buffer_m=main_buffer_m, pit_buffer_m=pit_buffer_m

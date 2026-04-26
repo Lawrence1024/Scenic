@@ -125,6 +125,8 @@ def compute_fellow_ttl_geometric_d_m(
         get_or_build_delta_table,
         lookup_delta,
     )
+    from scenic.simulators.dspace.geometry.frame_calibration import xodr_to_rd
+    from scenic.simulators.dspace.geometry.params import get_map_path
     from scenic.domains.racing.waypoints import (
         initialize_racing_waypoint_start_index,
         select_forward_racing_waypoint,
@@ -204,7 +206,16 @@ def compute_fellow_ttl_geometric_d_m(
                 road_index,
             )
             if tbl is not None:
-                pos_xy = (x_rd, y_rd)
+                # Fellow position from dspaceActor.position is in NEW XODR frame
+                # (controldesk/readback.py applies rd_to_xodr). The centerline that
+                # idx_main wraps (ttl_main_road.csv) is in dSPACE RD frame. Translate
+                # the fellow position back to RD before projecting, otherwise s_meas
+                # is garbage from the frame mismatch -- and the lookup_delta returns
+                # a wrong d_cmd that places the fellow off the racing line. Same fix
+                # pattern as place_ego/place_fellow. See docs/frames.md.
+                _xodr_path = get_map_path(scene_params)
+                _x_rd, _y_rd = xodr_to_rd(x_rd, y_rd, _xodr_path)
+                pos_xy = (_x_rd, _y_rd)
                 try:
                     s_meas, t_meas = dutils.project_world_to_st(idx_main, pos_xy)
                     s_filt = getattr(obj, "_fellow_geo_s_meas_filtered", None)

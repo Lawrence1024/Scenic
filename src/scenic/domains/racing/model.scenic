@@ -34,12 +34,16 @@ param mainLineRoadId = None  # e.g., "2117817291" for Laguna Seca
 param main_loop_connecting_road_ids = None  # e.g. (24, 34) for two junctions
 param pit_connecting_road_ids = None  # e.g. (25, 30)
 
-# Segment and track source: when ttlFolder is set, both segments and mainTrack/pitTrack use TTL centerlines
-# (ttl_main_road.csv, ttl_pitlane.csv). When ttlFolder is not set, both use OpenDRIVE.
+# Track regions are built from XODR road geometry by default (Phase B.5, 2026-04-26).
+# `ttlFolder` is still required for racing-line CSVs (ttl_optimal_xodr.csv, etc.) and for
+# the `on ttl` placement helper, but mainTrack / pitTrack come from the XODR road network
+# (verified to match race_common's geofence within 0.83m mean). Set
+# `preferTtlTrackRegions=True` to revert to the legacy TTL-CSV-buffered behavior.
 param ttlFolder = None  # e.g. localPath('../../assets/ttls/LS_ENU_TTL_CSV')
-param ttlFileName = None  # default TTL file for "on ttl" (e.g. 'ttl_main_road.csv' or 'ttl_optimal_xodr.csv')
-param mainTrackBuffer = 6.0   # meters on each side of main segment centerline (±6 m)
-param pitTrackBuffer = 1.5   # meters on each side of pit segment centerline (±1.5 m)
+param ttlFileName = None  # default TTL file for "on ttl" (e.g. 'ttl_optimal_xodr.csv')
+param mainTrackBuffer = 6.0   # meters on each side of main road centerline (±6 m)
+param pitTrackBuffer = 1.5   # meters on each side of pit road centerline (±1.5 m)
+param preferTtlTrackRegions = False  # legacy: True -> use TTL CSV centerlines (ttl_main_road.csv) instead of XODR
 
 ## Create racing track from the network
 
@@ -63,14 +67,11 @@ network = _track.network
 param pitLaneRoadIds = [str(r.id) for r in _track._pitRoads] if getattr(_track, '_pitRoads', None) and _track._pitRoads else []
 param mainRacingRoadIds = [str(r.id) for r in _track._mainRacingRoads] if _track._mainRacingRoads else []
 
-## Racing-specific regions (segment-based: mainTrack and pitTrack)
-
-## mainTrack and pitTrack are built from segment centerlines (OpenDRIVE or TTL) with fixed buffer widths:
-## - mainTrack: 6 m on each side of main road centerline (includes Corkscrew, Andretti, junction links)
-## - pitTrack: 1.5 m on each side of pit lane centerline
-## - ttl: one TTL centerline (ttlFileName param) with mainTrackBuffer; random point on that TTL
-## Use: new RacingCar on mainTrack  or  new RacingCar on pitTrack  or  new RacingCar on ttl
-## For a specific TTL file: new RacingCar on ttlRegion('ttl_optimal_xodr.csv')
+## Racing-specific regions (XODR-native by default; ±buffer around each road's centerline):
+## - mainTrack: ±mainTrackBuffer around _track._mainRacingRoads centerlines (includes Corkscrew + Andretti links)
+## - pitTrack:  ±pitTrackBuffer around _track._pitRoads centerlines (mutually exclusive with mainTrack -- main wins on overlap)
+## - ttl: a single TTL centerline (param ttlFileName) buffered with mainTrackBuffer; for `new RacingCar on ttl`
+## Set param preferTtlTrackRegions=True to revert to the legacy TTL-CSV-derived regions.
 
 _mainTrack, _pitTrack, _ = create_track_regions(
     map_file=globalParameters.map,
@@ -78,6 +79,7 @@ _mainTrack, _pitTrack, _ = create_track_regions(
     track=_track,
     main_buffer_m=globalParameters.mainTrackBuffer,
     pit_buffer_m=globalParameters.pitTrackBuffer,
+    prefer_ttl_track_regions=globalParameters.preferTtlTrackRegions,
     direction=globalParameters.trackDirection,
     pitLaneRoadId=globalParameters.pitLaneRoadId,
     pitLaneRoadName=globalParameters.pitLaneRoadName,

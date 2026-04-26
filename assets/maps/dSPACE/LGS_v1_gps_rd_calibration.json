@@ -1,0 +1,10 @@
+{
+  "_comment": "XODR->RD frame calibration for LGS_v1.xodr.",
+  "_what": "RD-xy = XODR-xy + (translation_xy). Inverse: XODR-xy = RD-xy - translation_xy.",
+  "_measured_by": "tools/frames/verify_xodr_rd_alignment.py at ego rd=(-79.676, -111.855), GPS=(-121.756725, 36.586363); XODR_from_GPS=(-73.576, -61.093); residual = 51.13m, dx=-6.101, dy=-50.761. Single sample 2026-04-26.",
+  "_assumption": "Pure translation (no rotation/scale). Re-run verify with --samples 30 across multiple track sections to confirm; if dx/dy ranges are >0.5m, switch to a full affine fit via fit_transform_from_csv.",
+  "xodr_path": "assets/maps/dSPACE/LGS_v1.xodr",
+  "model": "translation",
+  "translation_xy_xodr_to_rd": [-6.101, -50.761],
+  "_note_on_visualization": "When this calibration is loaded, placement.py applies XODR->RD translation before projecting onto the empirical centerline (which lives in RD frame). Readback applies RD->XODR translation before assigning to dspaceActor.position so Scenic's --2d viewer (which uses LGS_v1.xodr in XODR frame) shows ego on the correct racing line."
+}
