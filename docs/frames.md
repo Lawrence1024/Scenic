@@ -338,3 +338,17 @@ These could move to XODR-native too, but require care because the `s` value sent
 | ModelDesk placement | `src/scenic/simulators/dspace/modeldesk/placement.py` |
 | Ego/fellow readback | `src/scenic/simulators/dspace/controldesk/readback.py` |
 | Phase B target consolidation | `src/scenic/simulators/dspace/geometry/frames.py` (NEW) |
+| Elevation backfill (RC-Z) | `tools/frames/add_elevation_from_race_common.py` |
+| Elevation reference data | `tools/frames/data/race_common_ttl_17.csv` (race_common's 20-col ttl_17 vendored locally) |
+
+## Note on TTL z-column (RC-Z, 2026-04-26)
+
+The `ttl_*_xodr.csv` files now carry **real elevation** in the z column
+(range -5.33 to +49.54 m, 54.86 m vertical span — Corkscrew alone drops ~18 m).
+Previously z was near-flat (~0.06 m range) which silently no-op'd the longitudinal
+MPC's grade compensation (`gravity_force = mass * g * sin(grade)` at
+`mpc_longitudinal.py:399`). The file format is unchanged (still 3-column
+`x,y,z`); user-authored TTLs are not required to provide rich data, but the
+controller will use whatever is provided. See
+[`docs/racing_controller_cleanup.md`](racing_controller_cleanup.md) for the
+broader RC-* cycle context.
