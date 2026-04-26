@@ -1,6 +1,15 @@
 """Configuration management for MPC controller.
 
 Loads and validates MPC parameters from YAML configuration files.
+
+**Default values policy (RC-4b, 2026-04-26):** the ``config_dict.get(key, default)``
+defaults below are kept in sync with the hot values in ``vehicle_mpc.yaml``. When YAML
+loads correctly (the normal case), the defaults are inert. They only take effect when
+YAML is missing a key (e.g. test stubs, partial configs). Previously the defaults were
+significantly different from YAML — e.g. ``w_ey_high_curv`` default was ``8.0`` while
+YAML had ``22.0`` — which meant any code path that fell back to defaults silently used
+under-tuned weights. RC-4b syncs them so default-fallback behavior matches YAML behavior.
+If you change a YAML hot value, change the corresponding default below too.
 """
 
 import yaml
@@ -36,29 +45,29 @@ class MPCConfig:
         self.steer_tau = config_dict.get('steer_tau', 0.3)
         self.steer_rate_lim = config_dict.get('steer_rate_lim', 6.98)  # QP internal rate limit (rad/s)
         self.steer_rate_limit_output_radps = config_dict.get('steer_rate_limit_output_radps', 1.0)  # output rate limit (rad/s), plan: 1.0
-        self.steer_cmd_max = config_dict.get('steer_cmd_max', 70)  # ControlDesk units
+        self.steer_cmd_max = config_dict.get('steer_cmd_max', 240)  # ControlDesk units (matches YAML)
         # To-Do 4.2: optional higher steer cap in high curvature only (if vehicle/VEOS accepts more angle; else reduce speed or horizon)
         self.max_steer_angle_high_curv = config_dict.get('max_steer_angle_high_curv', None)  # rad; if set, use when |kappa| >= high_curvature_threshold
         
         # Steering mapping (calibrated)
         self.steer_scale = config_dict.get('steer_scale', None)  # Will be calibrated
         
-        # MPC weights (base weights)
-        self.w_ey = config_dict.get('w_ey', 2.0)
-        self.w_epsi = config_dict.get('w_epsi', 2.0)
-        self.w_u = config_dict.get('w_u', 0.1)
-        self.w_du = config_dict.get('w_du', 1.8)  # Steering rate weight (higher = smoother, less overcorrect)
-        self.wT_ey = config_dict.get('wT_ey', 5.0)
-        self.wT_epsi = config_dict.get('wT_epsi', 1.0)
-        
+        # MPC weights (base weights). Defaults synced to vehicle_mpc.yaml (RC-4b).
+        self.w_ey = config_dict.get('w_ey', 10.0)
+        self.w_epsi = config_dict.get('w_epsi', 5.0)
+        self.w_u = config_dict.get('w_u', 0.05)
+        self.w_du = config_dict.get('w_du', 2.2)  # Steering rate weight (higher = smoother, less overcorrect)
+        self.wT_ey = config_dict.get('wT_ey', 15.0)
+        self.wT_epsi = config_dict.get('wT_epsi', 2.0)
+
         # Velocity-weighted costs (improved performance at different speeds)
-        self.w_epsi_vel = config_dict.get('w_epsi_vel', 0.3)  # Heading error * velocity^2 weight
-        self.w_u_vel = config_dict.get('w_u_vel', 0.25)  # Control input * velocity^2 weight
-        
+        self.w_epsi_vel = config_dict.get('w_epsi_vel', 1.5)  # Heading error * velocity^2 weight
+        self.w_u_vel = config_dict.get('w_u_vel', 0.1)  # Control input * velocity^2 weight
+
         # Steering acceleration penalty (smoother steering)
         self.w_ddu = config_dict.get('w_ddu', 0.00003)  # Steering acceleration weight (smoother steering)
         # Feedforward tracking: penalize (delta - delta_ff)^2 = delta_fb^2 to shrink feedback relative to ff (smoother curves, less CTE oscillation)
-        self.w_ff_track = config_dict.get('w_ff_track', 0.2)  # ~0.1x w_ey scale; start small, increase if delta_fb still large
+        self.w_ff_track = config_dict.get('w_ff_track', 1.0)  # ~0.1x w_ey scale; start small, increase if delta_fb still large
         
         # Phase 2/3 MPCC: lag error and progress incentive (set both to 0 for trajectory-tracking only)
         self.Q_lag = config_dict.get('Q_lag', 0.02)   # Lag error: Q_lag * (s_ref - s)^2 per step (default active for Phase 3)
@@ -67,7 +76,7 @@ class MPCConfig:
         # Adaptive weights based on curvature (low curvature = straights, high curvature = sharp turns)
         self.use_adaptive_weights = config_dict.get('use_adaptive_weights', True)
         self.low_curvature_threshold = config_dict.get('low_curvature_threshold', 0.02)  # 1/m
-        self.high_curvature_threshold = config_dict.get('high_curvature_threshold', 0.1)  # 1/m
+        self.high_curvature_threshold = config_dict.get('high_curvature_threshold', 0.07)  # 1/m (matches YAML)
         # Low curvature weights (for straights)
         self.w_ey_low_curv = config_dict.get('w_ey_low_curv', 0.05)  # raised from 0.01 to reduce straight-line drift (oscillation fix)
         self.w_epsi_low_curv = config_dict.get('w_epsi_low_curv', 0.0)
@@ -75,10 +84,10 @@ class MPCConfig:
         self.w_u_low_curv = config_dict.get('w_u_low_curv', 1.0)
         self.w_u_vel_low_curv = config_dict.get('w_u_vel_low_curv', 0.25)
         self.w_ddu_low_curv = config_dict.get('w_ddu_low_curv', 0.000001)
-        # High curvature weights (for sharp turns)
-        self.w_ey_high_curv = config_dict.get('w_ey_high_curv', 8.0)
-        self.w_epsi_high_curv = config_dict.get('w_epsi_high_curv', 5.0)
-        self.w_epsi_vel_high_curv = config_dict.get('w_epsi_vel_high_curv', 0.8)
+        # High curvature weights (for sharp turns). Defaults synced to vehicle_mpc.yaml (RC-4b).
+        self.w_ey_high_curv = config_dict.get('w_ey_high_curv', 22.0)
+        self.w_epsi_high_curv = config_dict.get('w_epsi_high_curv', 12.0)
+        self.w_epsi_vel_high_curv = config_dict.get('w_epsi_vel_high_curv', 2.0)
         self.w_u_high_curv = config_dict.get('w_u_high_curv', 0.02)
         self.w_u_vel_high_curv = config_dict.get('w_u_vel_high_curv', 0.05)
         self.w_ddu_high_curv = config_dict.get('w_ddu_high_curv', 0.000003)
