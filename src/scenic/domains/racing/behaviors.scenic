@@ -2089,6 +2089,36 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 self._phase10_ttl_switch_blocked = bool(_p10_guard.ttl_switch_blocked)
                 self._phase10_emergency_stable_mode = bool(_p10_guard.emergency_stable_mode)
                 print(format_stability_guard_log_line(_sim_time_s, _p10_guard))
+            # RC-1: consolidated controller-trace per tick. Read-only telemetry; safe to remove.
+            # Captures POST-stability-guard (truly final) commands plus the upstream values
+            # the executor used. Some fields are populated by code paths that don't always
+            # run (e.g. _phase8_*); read defensively via getattr so we never crash the
+            # control loop with telemetry. CTE and curvature_ahead read from self attrs
+            # (locals can be stale 0 if the speed-gate try block was skipped).
+            try:
+                _ct_locs = locals()
+                _ct_cte = float(getattr(self, '_last_waypoint_cte_for_speed', 0.0) or 0.0)
+                _ct_k = float(getattr(self, '_last_curvature_ahead_for_tactical', 0.0) or 0.0)
+                print(
+                    f"[CtrlTrace] t={_sim_time_s:.2f}s "
+                    f"v={current_speed:.2f} cte={_ct_cte:.2f} "
+                    f"k_ahead={_ct_k:.4f} "
+                    f"k_signed={float(getattr(self, '_curvature_ahead_max_signed', 0.0) or 0.0):.4f} "
+                    f"brake_cap={float(_ct_locs.get('brake_cap', 0.0) or 0.0):.2f} "
+                    f"brake_mpc={float(_ct_locs.get('brake_mpc', 0.0) or 0.0):.3f} "
+                    f"cte_brake={float(_ct_locs.get('cte_brake', 0.0) or 0.0):.3f} "
+                    f"final_brake={final_brake:.3f} final_throttle={final_throttle:.3f} final_steer={final_steer:+.3f} "
+                    f"planner={str(getattr(self, '_phase_effective_planner_state', 'FREE_RUN') or 'FREE_RUN')} "
+                    f"ttl={str(getattr(self, '_phase_effective_ttl', _phase1_active_ttl) or 'optimal')} "
+                    f"ttl_blocked={int(bool(_p10_ttl_switch_blocked))} "
+                    f"gap_ok={int(bool(getattr(self, '_phase8_gap_ok', True)))} "
+                    f"overlap={int(bool(getattr(self, '_phase8_overlap_flag', False)))} "
+                    f"risk={float(getattr(self, '_phase8_emergency_risk_01', 0.0) or 0.0):.3f}"
+                )
+            except Exception as _ct_e:
+                if not getattr(self, '_ctrltrace_warned', False):
+                    print(f"[CtrlTrace] disabled (first error): {type(_ct_e).__name__}: {_ct_e}")
+                    self._ctrltrace_warned = True
             self._last_final_steer = final_steer
             self._last_final_throttle = final_throttle
             self._last_final_brake = final_brake
