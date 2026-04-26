@@ -286,7 +286,7 @@ behavior FellowSwerveOutOfControlBehavior(
         self._fellow_plant_log_mode = mode
         wait
 
-behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False, prediction_enabled=False, assessment_enabled=False, stability_guard_enabled=False, commit_abort_enabled=False, segment_aware_enabled=False):
+behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_waypoints=True, mpc_config_path=None, planner_enabled=False, ttl_schedule=None, target_speed_cap=None, tactical_planner_enabled=False, prediction_enabled=True, assessment_enabled=True, stability_guard_enabled=False, commit_abort_enabled=True, segment_aware_enabled=False):
     """Follow the car's TTL using MPC (Model Predictive Control) for lateral control.
     
     Primary Scenic behavior for line-following on the racing TTL. Lateral and longitudinal
@@ -898,7 +898,11 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             # --- Phase 8 assessment + dynamic gap (current/predicted fellow state) ---
             self._phase3_speed_cap = None
             _ego_scene = getattr(simulation().scene, 'egoObject', None)
-            if (self is _ego_scene) and (_phase7_requested or _assessment_enabled):
+            # RC-5: include _tactical_planner_enabled in the gate. When tactical is on
+            # but prediction/assessment are off, the planner used to receive None for
+            # _a8 (silent fallback to raw OpponentSituation). Now the assessment block
+            # runs whenever any smart feature is on.
+            if (self is _ego_scene) and (_phase7_requested or _assessment_enabled or _tactical_planner_enabled):
                 _nearest_o6 = None
                 _nearest_d6 = None
                 _nearest_vs6 = 0.0
