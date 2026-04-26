@@ -1111,6 +1111,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         sim_time_s=float(_sim_time_s),
                         current_ttl=str(_phase1_active_ttl or "optimal"),
                         requested_ttl=str(_ttl_tac or _phase1_active_ttl),
+                        planner_state=str(_mode_tac or "FREE_RUN"),  # RC-6: planner intent wins during COMMIT/ABORT
                     )
                     if _p10_ttl_switch_blocked and _ttl_guarded != _ttl_tac:
                         _ttl_tac = _ttl_guarded
@@ -1333,16 +1334,22 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 cte_target_speed = target_speed
             
             # --- Combine CTE and curvature speed limits (take minimum) ---
-            # Task 4: curvature-based speed cap applied here; use single cap from lookahead curvature
-            effective_target_speed = min(cte_target_speed, curvature_speed_cap)
-            if _phase1_speed_cap is not None:
-                effective_target_speed = min(effective_target_speed, _phase1_speed_cap)
+            # RC-6: explicit cap dict + binding_speed_cap telemetry. Previously the implicit
+            # min() chain made it hard to attribute speed-cap behavior in logs. Now the
+            # binding cap is recorded on self so [CtrlTrace] (or any future log line) can
+            # surface which cap was active. Stash on self regardless of pit_mode.
             _p3cap = getattr(self, '_phase3_speed_cap', None)
+            _speed_caps = {
+                'cte': float(cte_target_speed),
+                'curvature': float(curvature_speed_cap),
+                'global': float(MAX_SPEED_LIMIT_MS),
+            }
+            if _phase1_speed_cap is not None:
+                _speed_caps['phase1'] = float(_phase1_speed_cap)
             if _p3cap is not None:
-                effective_target_speed = min(effective_target_speed, float(_p3cap))
-            
-            # Apply universal max speed limit
-            effective_target_speed = min(effective_target_speed, MAX_SPEED_LIMIT_MS)
+                _speed_caps['tactical'] = float(_p3cap)
+            effective_target_speed = min(_speed_caps.values())
+            self._binding_speed_cap = min(_speed_caps, key=_speed_caps.get)
             # Pit mode (racing library): fixed coast target, no slew — drive differently than main
             if pit_mode:
                 if current_speed < PIT_COAST_TOO_SLOW_MS:

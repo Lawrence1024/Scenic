@@ -58,8 +58,17 @@ def stability_guard_handle_ttl_switch(
     sim_time_s: float,
     current_ttl: str,
     requested_ttl: str,
+    planner_state: str = "FREE_RUN",
 ) -> tuple[str, bool]:
-    """Rate-limit TTL switches to reduce path-switch chatter."""
+    """Rate-limit TTL switches to reduce path-switch chatter.
+
+    RC-6: when the tactical planner is mid-pass (COMMIT_PASS_LEFT/RIGHT or ABORT_PASS),
+    the rate-limit is bypassed. The rate-limit exists to suppress chatter during normal
+    driving; planner intent during a committed maneuver wins over chatter-protection.
+    Otherwise the planner can choose 'switch to left for overtake', the guard says 'no,
+    last switch was 0.5 s ago', and the MPC keeps a stale racing-line reference at the
+    worst possible time.
+    """
     cur = str(current_ttl or "optimal")
     req = str(requested_ttl or cur)
     if not state.last_ttl:
@@ -67,6 +76,10 @@ def stability_guard_handle_ttl_switch(
     if req == cur:
         state.last_ttl = cur
         return cur, False
+    if str(planner_state) in ("COMMIT_PASS_LEFT", "COMMIT_PASS_RIGHT", "ABORT_PASS"):
+        state.last_ttl = req
+        state.last_ttl_switch_sim_time_s = float(sim_time_s)
+        return req, False  # planner intent wins; no rate-limit during commit/abort
     dt = float(sim_time_s) - float(state.last_ttl_switch_sim_time_s)
     if dt < float(config.ttl_switch_min_interval_s):
         state.last_ttl = cur
