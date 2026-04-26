@@ -84,6 +84,25 @@ _PHASE1_TTL_FILE_BY_SELECTION = {
 }
 
 
+def _parse_segment_type_from_name(seg_name):
+    """RC-7a: parse 'curve' or 'straight' from a segment name string.
+
+    The OpenDRIVE-derived segment_map names follow the pattern
+    "<path> <type>" where path ∈ {main, pit} and type ∈ {straight, curve}.
+    Returns one of: 'straight', 'curve', or None (unknown / not classified).
+    Same classification logic as situation_assessment.planner_segment_context()
+    uses as its primary keyword check.
+    """
+    if not seg_name:
+        return None
+    s = str(seg_name).lower()
+    if "straight" in s:
+        return "straight"
+    if "curve" in s or "hairpin" in s or "corkscrew" in s:
+        return "curve"
+    return None
+
+
 def _phase1_selection_from_ttl_filename(ttl_file_name):
     """Infer planner selection key from TTL filename."""
     if ttl_file_name is None:
@@ -879,6 +898,18 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _eff_id, _eff_name, _transition = get_segment_at_waypoint_ring_strict(wp_last_idx, _smap, _path, _lid, _lname)
             self._last_valid_segment_id = _eff_id
             self._last_valid_segment_name = _eff_name or ""
+            # RC-7a: parse curve/straight type from segment name. Stash both current and
+            # lookahead-segment type for telemetry. RC-7b will wire these into the speed
+            # planner / behavior decisions. Lookahead is wp_idx + 25 (~ 25 m at 1 m wp
+            # spacing); a typical ego speed of 25-40 m/s spans 25 m in ~0.6-1.0 s, which is
+            # roughly the time it takes to bleed speed before a corner -- the right horizon
+            # for "is there a curve coming?" decisions.
+            self._segment_type_at_wp = _parse_segment_type_from_name(_eff_name)
+            _wp_ahead_idx = (wp_last_idx + 25) % len(wp_list) if (wp_list and len(wp_list) > 0) else wp_last_idx
+            _ahead_seg = get_segment_at_waypoint(_wp_ahead_idx, _smap) if _smap else None
+            _ahead_name = (_ahead_seg[1] or "") if _ahead_seg else ""
+            self._segment_type_ahead = _parse_segment_type_from_name(_ahead_name)
+            self._segment_id_ahead = (_ahead_seg[0] if _ahead_seg else None)
             # Pit exit/enter: update ModelDesk route and _route (for logging/transition only); control uses segment, not route
             if _transition == "pit_exit" and self is simulation().scene.egoObject:
                 self._route = RACING_MODE_MAIN
@@ -2124,7 +2155,11 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     f"ttl_blocked={int(bool(_p10_ttl_switch_blocked))} "
                     f"gap_ok={int(bool(getattr(self, '_phase8_gap_ok', True)))} "
                     f"overlap={int(bool(getattr(self, '_phase8_overlap_flag', False)))} "
-                    f"risk={float(getattr(self, '_phase8_emergency_risk_01', 0.0) or 0.0):.3f}"
+                    f"risk={float(getattr(self, '_phase8_emergency_risk_01', 0.0) or 0.0):.3f} "
+                    f"seg={getattr(self, '_last_valid_segment_id', None)}/"
+                    f"{str(getattr(self, '_segment_type_at_wp', None) or 'na')} "
+                    f"seg_ahead={getattr(self, '_segment_id_ahead', None)}/"
+                    f"{str(getattr(self, '_segment_type_ahead', None) or 'na')}"
                 )
             except Exception as _ct_e:
                 if not getattr(self, '_ctrltrace_warned', False):
