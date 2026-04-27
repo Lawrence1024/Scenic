@@ -730,9 +730,19 @@ def tactical_planner_step_v1(
     )
     overlap_unsafe_for_setup = overlap_side or overlap_partial_unsafe
     close_for_setup = sit.distance_m < dynamic_setup_min_gap_m
+    # SD-2c: prefer the assessment-dampened risk over raw collision_risk_01.
+    # The raw value spikes on closing-speed terms even when fly-by geometry makes
+    # the rear-end interpretation wrong; assessment_emergency_risk_01 already
+    # applies _longitudinal_opening_dampen so it reflects the actual pass risk.
+    # Falls back to raw when assessment is disabled.
+    effective_risk_01 = (
+        float(assessment_emergency_risk_01)
+        if assessment_emergency_risk_01 is not None
+        else float(sit.collision_risk_01)
+    )
     pass_safe = (
         straight_ok
-        and sit.collision_risk_01 <= config.pass_safe_risk_max
+        and effective_risk_01 <= config.pass_safe_risk_max
         and not overlap_unsafe_for_setup
         and not (close_for_setup and sit.overlap_state == "side_by_side")
         and (closing_speed_pos_mps >= float(config.pass_min_relative_speed_mps))
