@@ -221,6 +221,12 @@ class TacticalPlannerConfig:
     # to FOLLOW on optimal. Prevents the "stuck on side TTL while approaching" failure
     # mode from F2_tactical first attempt (4 sec SETUP without COMMIT → contact).
     setup_max_hold_s: float = 2.5
+    # SD-10a: configurable hysteresis thresholds. Pre-SD-10a these were hardcoded
+    # `setup_candidate_count<3` and `follow_pressure_count>=3` literals scattered
+    # in the planner body, which made them invisible to test overrides and config
+    # tuning. Surfaced as proper config fields so they're discoverable and tunable.
+    setup_entry_persistence_cycles: int = 3
+    follow_pressure_threshold_cycles: int = 3
     # SD-6: commit_approach_risk_max=0.10 deleted. It was a closing+risk snapshot gate
     # that fired from the very first tick of SETUP (risk grows above 0.10 immediately
     # when ego closes on fellow), so COMMIT could never fire on F2-style overtakes.
@@ -1482,7 +1488,7 @@ def tactical_planner_step_v1(
         return _follow_result("ahead_blocking_follow")
 
     # Keep FOLLOW while pressure is sustained even if one frame appears pass-safe.
-    if state.follow_pressure_count >= 3:
+    if state.follow_pressure_count >= int(config.follow_pressure_threshold_cycles):
         if state.mode in (SETUP_LEFT, SETUP_RIGHT):
             state.last_setup_exit_sim_time_s = float(sim_time_s)
             _clear_setup_commit()
@@ -1554,7 +1560,7 @@ def tactical_planner_step_v1(
             state.setup_candidate_count = 1
             return _follow_result("setup_candidate_collect")
         state.setup_candidate_count += 1
-        if state.setup_candidate_count < 3:
+        if state.setup_candidate_count < int(config.setup_entry_persistence_cycles):
             return _follow_result("setup_candidate_collect")
     else:
         state.setup_candidate_side = target_side
