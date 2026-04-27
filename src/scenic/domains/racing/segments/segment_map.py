@@ -56,18 +56,12 @@ TTL_OVERLAP_MAIN_WINS_M = 2.0
 
 
 # -----------------------------------------------------------------------------
-# Laguna Seca conventional segments (fallback: named sections by s-fraction).
-# -----------------------------------------------------------------------------
-LAGUNA_SECA_SEGMENTS: List[Tuple[int, float, float, int, str]] = [
-    (0, 0.00, 0.10, 1, "Front Straight+T1"),
-    (0, 0.10, 0.25, 3, "T3-T4"),
-    (0, 0.25, 0.40, 4, "T5-T6"),
-    (0, 0.40, 0.58, 5, "Rahal Straight"),
-    (0, 0.58, 0.68, 6, "Corkscrew"),
-    (0, 0.68, 0.78, 7, "Rainey Curve"),
-    (0, 0.78, 1.00, 8, "T10-T11"),
-    (1, 0.00, 1.00, 2, "Andretti Hairpin"),
-]
+# CC-2 (2026-04-26): LAGUNA_SECA_SEGMENTS deleted. It was a fallback for the
+# OLD LagunaSeca.xodr (2 roads, named sections by s-fraction); the live path
+# is XODR-derived curve/straight from `_build_curve_straight_segments`. The
+# `use_conventional_laguna=True` mode of `build_waypoint_segment_map` is
+# retained for API compatibility but always falls through to the curvature
+# path or the coarse-one-segment path.
 
 
 def _midline_from_edges(left_edge: Any, right_edge: Any, num_points: int = 500) -> Optional[List[Tuple[float, float]]]:
@@ -481,12 +475,9 @@ def build_waypoint_segment_map(
         road_segments = []
         segment_id_offset = []
 
-    # Conventional Laguna only if not using curvature and 2 roads
-    conventional = (
-        LAGUNA_SECA_SEGMENTS
-        if (not use_curvature_segments and use_conventional_laguna and len(centerlines) == 2)
-        else []
-    )
+    # CC-2: LAGUNA_SECA_SEGMENTS deleted (was OLD-LagunaSeca.xodr fallback).
+    # The conventional path now always falls through to coarse-one-segment-per-road.
+    conventional = []  # type: List[Tuple[int, float, float, int, str]]
 
     segment_map: List[Tuple[int, str]] = []
     for i in range(n_wp):

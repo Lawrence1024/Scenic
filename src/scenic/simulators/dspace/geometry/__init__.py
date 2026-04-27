@@ -3,7 +3,8 @@
 from .xodr_parser import build_xodr_sec_points
 from .rd_parser import build_rd_road_index
 from .projection import project_world_to_st, find_road_id_for_position
-from .coordinate_transform import build_coordinate_transform, apply_coordinate_transform, save_transform, load_transform
+# CC-2 (2026-04-26): coordinate_transform.py deleted; was unused
+# (_coordinate_transform = None in simulator.py:656).
 from .utils import (
     clear_collection,
     ensure_two_segments,
@@ -21,10 +22,6 @@ __all__ = [
     'build_rd_road_index',
     'project_world_to_st',
     'find_road_id_for_position',
-    'build_coordinate_transform',
-    'apply_coordinate_transform',
-    'save_transform',
-    'load_transform',
     'clear_collection',
     'ensure_two_segments',
     'activate_type',
