@@ -439,38 +439,21 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         print(f"{_fbhv} TTL preload failed for {_ttl_file}.")
                 print(f"{_fbhv} TTL preload (Phase 1 / Phase 3): folder={_ttl_folder} keys={_preloaded_keys}")
                 # SD-10m: pre-build segment maps for every preloaded TTL.
-                # Mirror BOTH first-tick build paths (TTL waypoints OR OpenDRIVE
-                # track). On LGS, scene._main_ttl_waypoints is None and the
-                # runtime falls through to params['track'] / build_waypoint_segment_map
-                # — pre-build was previously skipping that case silently.
                 _segmap_t0 = _wallclock_time.perf_counter()
                 _scene_for_segmap = simulation().scene
                 _main_ttl_for_segmap = getattr(_scene_for_segmap, '_main_ttl_waypoints', None)
                 _pit_ttl_for_segmap = getattr(_scene_for_segmap, '_pit_ttl_waypoints', None) or []
-                _track_for_segmap = _params.get('track') or getattr(_scene_for_segmap, 'track', None)
-                _segmap_path = None
                 if _main_ttl_for_segmap is not None:
-                    _segmap_path = "ttl"
-                elif _track_for_segmap is not None:
-                    _segmap_path = "opendrive"
-                if _segmap_path is not None:
                     for _sm_key in _preloaded_keys:
                         _sm_pts = _scripted_ttl_cache[_sm_key][1]
                         try:
-                            if _segmap_path == "ttl":
-                                _scripted_segmap_cache[_sm_key] = build_waypoint_segment_map_from_ttl(
-                                    _main_ttl_for_segmap, _pit_ttl_for_segmap, waypoints=_sm_pts
-                                )
-                            else:
-                                _scripted_segmap_cache[_sm_key] = build_waypoint_segment_map(
-                                    _sm_pts, _track_for_segmap
-                                )
+                            _scripted_segmap_cache[_sm_key] = build_waypoint_segment_map_from_ttl(
+                                _main_ttl_for_segmap, _pit_ttl_for_segmap, waypoints=_sm_pts
+                            )
                         except Exception as _sm_e:
                             print(f"{_fbhv} Segment map pre-build failed for {_sm_key}: {_sm_e}")
                     _segmap_ms = (_wallclock_time.perf_counter() - _segmap_t0) * 1000.0
-                    print(f"{_fbhv} Segment maps pre-built ({_segmap_path} path) in {_segmap_ms:.1f} ms ({len(_scripted_segmap_cache)} polylines)")
-                else:
-                    print(f"{_fbhv} Segment map pre-build skipped (no main_ttl_waypoints and no track on scene).")
+                    print(f"{_fbhv} Segment maps pre-built in {_segmap_ms:.1f} ms ({len(_scripted_segmap_cache)} polylines)")
                 # Stash on self so apply_ttl_key_to_agent can swap cached maps.
                 self._scripted_segmap_cache = _scripted_segmap_cache
             if _scripted_schedule_enabled:
