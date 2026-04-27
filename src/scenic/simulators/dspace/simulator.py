@@ -93,7 +93,18 @@ class DSpaceSimulator(RacingSimulator):
                  cosim_time_trigger_ack_delay_s=3.0,
                  veos_ipc_client_connect_timeout=120.0,
                  pre_download_delay_s=20.0,
-                 post_modeldesk_download_delay_s=5.0):
+                 post_modeldesk_download_delay_s=5.0,
+                 # SD-10o: shortened delays for "warm" runs where the persistent
+                 # IPC client is already alive. Indicates the Docker stack +
+                 # VEOS + ModelDesk + experiment are already loaded and stable
+                 # from a prior scenic invocation, so the long settle pauses
+                 # (originally there to absorb cold-start race conditions) can
+                 # be cut. Activated only when _cosim_ipc_was_already_running
+                 # is detected in _ensure_cosim_started.
+                 pre_download_delay_warm_s=1.0,
+                 post_modeldesk_download_delay_warm_s=0.5,
+                 post_connect_settle_s=5.0,
+                 post_connect_settle_warm_s=0.5):
         super().__init__()
         self.scenario_src = scenario_src
         self.scenario_name = scenario_name
@@ -119,11 +130,21 @@ class DSpaceSimulator(RacingSimulator):
         # Override via `param pre_download_delay_s = ...` / `param post_modeldesk_download_delay_s = ...`.
         self.pre_download_delay_s = float(pre_download_delay_s)
         self.post_modeldesk_download_delay_s = float(post_modeldesk_download_delay_s)
+        # SD-10o: warm-run delay overrides (used when IPC client was already
+        # alive at startup, signaling Docker stack + VEOS + ModelDesk are ready).
+        self.pre_download_delay_warm_s = float(pre_download_delay_warm_s)
+        self.post_modeldesk_download_delay_warm_s = float(post_modeldesk_download_delay_warm_s)
+        self.post_connect_settle_s = float(post_connect_settle_s)
+        self.post_connect_settle_warm_s = float(post_connect_settle_warm_s)
         # Persistent CoSim state: kept alive across all DSpaceSimulation runs within this process.
         # Keeping the IPC client connected prevents VEOS BSC-restart (which corrupts sut_te_bridge
         # CLIF state and blocks subsequent maneuver starts).
         self._cosim_bridge = None
         self._cosim_ipc_proc = None
+        # SD-10o: True when _ensure_cosim_started detected an existing IPC
+        # client pid alive in the lockfile. _setupRun reads this to pick the
+        # short "warm" pauses vs the long cold-start pauses.
+        self._cosim_ipc_was_already_running = False
 
     def _ensure_cosim_started(self):
         """Start the bridge server and IPC client if not already running. Idempotent."""
@@ -164,6 +185,9 @@ class DSpaceSimulator(RacingSimulator):
                 existing_pid = int(_pid_file.read_text().strip())
                 if _cosim_pid_alive(existing_pid):
                     print(f"[CoSimSync] IPC client already running (pid={existing_pid}), reusing — bridge reconnect will pick it up.")
+                    # SD-10o: mark this run as "warm" so _setupRun picks the
+                    # shortened ModelDesk/ControlDesk pauses below.
+                    self._cosim_ipc_was_already_running = True
                 else:
                     _pid_file.unlink(missing_ok=True)
             except (OSError, ValueError):
@@ -478,9 +502,18 @@ class DSpaceSimulation(RacingSimulation):
         # the state where the maneuver init can run). Single source of truth for
         # the wait — gated only on launch_veos_ipc_client.
         _cosim_enabled = bool(getattr(self.sim, "launch_veos_ipc_client", False))
+        # SD-10o: if the IPC client was already alive when we started, the
+        # Docker stack + VEOS + ModelDesk are all warm; long settle pauses
+        # are unnecessary (they exist to absorb cold-start race conditions).
+        _cosim_warm = bool(getattr(self.sim, "_cosim_ipc_was_already_running", False))
         if _cosim_enabled:
-            _pre_s = float(getattr(self.sim, "pre_download_delay_s", 20.0))
-            print(f"[ModelDesk] Pre-download pause {_pre_s:.1f}s (CoSim) ...")
+            _pre_s = float(getattr(
+                self.sim,
+                "pre_download_delay_warm_s" if _cosim_warm else "pre_download_delay_s",
+                1.0 if _cosim_warm else 20.0,
+            ))
+            _warm_tag = " [warm]" if _cosim_warm else ""
+            print(f"[ModelDesk] Pre-download pause {_pre_s:.1f}s (CoSim){_warm_tag} ...")
             time.sleep(_pre_s)
         try:
             self.ts.Save()
@@ -488,8 +521,13 @@ class DSpaceSimulation(RacingSimulation):
         except Exception as e:
             print(f"[ModelDesk] Save/Download failed: {e}")
         if _cosim_enabled:
-            _post_s = float(getattr(self.sim, "post_modeldesk_download_delay_s", 5.0))
-            print(f"[ModelDesk] Post-download pause {_post_s:.1f}s (CoSim) ...")
+            _post_s = float(getattr(
+                self.sim,
+                "post_modeldesk_download_delay_warm_s" if _cosim_warm else "post_modeldesk_download_delay_s",
+                0.5 if _cosim_warm else 5.0,
+            ))
+            _warm_tag = " [warm]" if _cosim_warm else ""
+            print(f"[ModelDesk] Post-download pause {_post_s:.1f}s (CoSim){_warm_tag} ...")
             time.sleep(_post_s)
         time.sleep(0.1)
         if getattr(self, "exp", None) is not None:
@@ -560,8 +598,15 @@ class DSpaceSimulation(RacingSimulation):
             print("="*70 + "\n")
 
         # 9) Wait for ControlDesk/VEOS to settle after connect before issuing any pulses.
-        print("[Setup] Post-connect settle pause 5s ...")
-        time.sleep(5.0)
+        # SD-10o: shortened when the IPC client was already alive (warm Docker stack).
+        _settle_s = float(getattr(
+            self.sim,
+            "post_connect_settle_warm_s" if _cosim_warm else "post_connect_settle_s",
+            0.5 if _cosim_warm else 5.0,
+        ))
+        _warm_tag = " [warm]" if _cosim_warm else ""
+        print(f"[Setup] Post-connect settle pause {_settle_s:.1f}s{_warm_tag} ...")
+        time.sleep(_settle_s)
 
         # 9b) Apply Dennis 2026-04 VEOS routing switches via MAPort.
         #
