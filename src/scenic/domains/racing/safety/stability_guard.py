@@ -1,4 +1,18 @@
-"""Stability guard — anti-swerve / anti-chatter / emergency-stable command filter."""
+"""Stability guard — anti-swerve / anti-chatter / emergency-stable command filter.
+
+Authority model (post-SD-4d):
+  - When ``predicted_collision_available=True`` (production caller threads
+    polylines through the planner): EMERGENCY_STABLE entry is triggered
+    EXCLUSIVELY by ``predicted_collision``. Snapshot heuristics (overlap_flag,
+    risk thresholds, gap_ok+closing_flag) are bypassed — they were the source
+    of spurious brakes during clear side-by-side passes (F2/F3 contact).
+  - When ``predicted_collision_available=False`` (legacy callers, unit tests
+    not threading polylines): falls back to today's snapshot logic for backward
+    compat.
+
+The legacy fallback is intentional — tests that don't construct full TTL
+polylines still work. Production callers always set _available=True.
+"""
 
 from __future__ import annotations
 
