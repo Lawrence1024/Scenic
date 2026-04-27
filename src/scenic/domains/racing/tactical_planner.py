@@ -326,7 +326,13 @@ class TacticalPlannerState:
 
 
 def apply_ttl_key_to_agent(agent, ttl_key: str, ttl_cache: dict, file_by_sel: Dict[str, str]) -> bool:
-    """Switch ego TTL polyline and invalidate segment/progress caches (Scenic agent)."""
+    """Switch ego TTL polyline and invalidate segment/progress caches (Scenic agent).
+
+    SD-10m: if the agent carries a `_scripted_segmap_cache` dict (pre-built at
+    behavior startup), swap the cached segment map instead of setting None.
+    Avoids the ~500ms full rebuild on the next tick that previously dominated
+    every TTL switch in [TickBreakdown] traces.
+    """
     if ttl_key not in ttl_cache:
         return False
     region_new, pts_new = ttl_cache[ttl_key]
@@ -334,7 +340,11 @@ def apply_ttl_key_to_agent(agent, ttl_key: str, ttl_cache: dict, file_by_sel: Di
     agent.waypoints = list(pts_new)
     agent.ttl_selection = ttl_key
     agent.ttlFileName = file_by_sel.get(ttl_key, getattr(agent, "ttlFileName", None))
-    agent._waypoint_segment_map = None
+    segmap_cache = getattr(agent, "_scripted_segmap_cache", None)
+    if segmap_cache and ttl_key in segmap_cache:
+        agent._waypoint_segment_map = segmap_cache[ttl_key]
+    else:
+        agent._waypoint_segment_map = None
     agent._last_valid_segment_id = None
     agent._last_valid_segment_name = ""
     agent._cached_cumulative_dist_wp_idx = 0
