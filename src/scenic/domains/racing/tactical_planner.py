@@ -795,7 +795,7 @@ def tactical_planner_step_v1(
         predicted_collision_available=state.predicted_collision_available,
     )
     commit_enabled = bool(config.commit_abort_enabled)
-    hard_abort_hazard = bool(
+    hard_abort_hazard_snapshot = bool(
         in_recovery_hold
         or overlap_hazard_now
         or emergency_risk_high
@@ -804,6 +804,19 @@ def tactical_planner_step_v1(
             assessment_emergency_risk_01 is not None
             and float(assessment_emergency_risk_01) >= float(config.abort_risk_01)
         )
+    )
+    # SD-8: gate hard_abort_hazard on predicted_collision (mirror SD-4c).
+    # The TTC term in the snapshot fires on raw distance/closing without
+    # considering lateral separation — so it triggered abort during F2's
+    # COMMIT_PASS_RIGHT at t=7.00 (gap=5.5m, closing=15 m/s → ttc=0.36s
+    # < abort_ttc_s=0.4) even though ego had 4m of lateral clearance on
+    # the right TTL. PathPredict correctly reported no collision; the
+    # snapshot fired anyway. Fixing it via the same gate as SD-4c.
+    hard_abort_hazard = _apply_predicted_collision_gate(
+        hard_abort_hazard_snapshot,
+        planner_state=state.mode,
+        predicted_collision=state.predicted_collision,
+        predicted_collision_available=state.predicted_collision_available,
     )
     soft_abort_pressure = bool(
         (assessment_gap_ok is False)
@@ -998,6 +1011,39 @@ def tactical_planner_step_v1(
         # no need to hold abort timer (prevents unnecessary hard braking after passing).
         if (not relation_ahead) and (not overlap_hazard_now) and (not in_recovery_hold):
             state.commit.abort_success = True
+            # SD-8: mirror SD-3d HOLD entry from the COMMIT-success branch.
+            # When ego completes the pass during the abort_hold window AND is still
+            # laterally side-by-side (|sit.lateral_m| < merge_safe_lat_m), enter HOLD
+            # on the same side TTL instead of switching back to optimal IMMEDIATELY.
+            # The immediate switch was the F2 "barely clears" failure mode: ABORT
+            # triggered on TTC snapshot mid-pass, ego still on right TTL, relation
+            # flipped behind, abort_passed_free_run fired with ttl_switch right→optimal
+            # at lat=1.95m → near-contact during merge.
+            commit_side_for_hold = str(state.commit.side or state.commit.last_side or "")
+            still_side_by_side = bool(
+                sit is not None
+                and abs(float(sit.lateral_m)) < float(config.merge_safe_lat_m)
+                and commit_side_for_hold in ("left", "right")
+            )
+            if still_side_by_side:
+                state.commit.hold_entry_s = float(sim_time_s)
+                state.commit.hold_speed_at_entry_mps = float(ego_speed_mps)
+                state.commit.hold_pass_side = commit_side_for_hold
+                state.commit.post_event_state = (
+                    HOLD_PASS_LEFT if commit_side_for_hold == "left" else HOLD_PASS_RIGHT
+                )
+                state.mode = (
+                    HOLD_PASS_LEFT if commit_side_for_hold == "left" else HOLD_PASS_RIGHT
+                )
+                _clear_setup_commit()
+                _clear_pass_intent()
+                _clear_lateral_lock()
+                hold_cap = max(
+                    float(state.commit.hold_speed_at_entry_mps),
+                    float(opponent_speed_mps) + float(config.hold_speed_floor_margin_mps),
+                )
+                return state.mode, commit_side_for_hold, hold_cap, "hold_pass_entry_from_abort"
+            # Already laterally clear OR no commit side recorded → original behavior.
             state.commit.post_event_state = FREE_RUN
             _clear_setup_commit()
             _clear_pass_intent()
