@@ -2094,7 +2094,14 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 "proximity_hazard_follow",
                 "gap_not_ok_follow",
             )
-            _hazard_active = (
+            # SD-4d: gate hazard brake floor on predicted-path-collision when
+            # available. Snapshot heuristics (overlap, gap_bad, closing, risk)
+            # remain as the fast-fail filter; predicted_collision is the AUTHORITY.
+            # Falls back to today's snapshot logic when polylines weren't threaded
+            # (test mode / legacy callers).
+            _hz_predicted_collision = bool(getattr(self, "_predicted_collision", False))
+            _hz_predicted_collision_available = bool(getattr(self, "_predicted_collision_available", False))
+            _hz_snapshot = (
                 (not pit_mode)
                 and _tactical_planner_enabled
                 and _assessment_enabled
@@ -2102,6 +2109,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 and _hz_reason_gate
                 and (_hz_overlap or (_hz_gap_bad and (_hz_closing or _hz_risk >= 0.70)))
             )
+            if _hz_predicted_collision_available:
+                _hazard_active = bool(_hz_snapshot and _hz_predicted_collision)
+            else:
+                _hazard_active = bool(_hz_snapshot)
             _hazard_brake_floor = 0.0
             if _hazard_active:
                 if _hz_overlap:

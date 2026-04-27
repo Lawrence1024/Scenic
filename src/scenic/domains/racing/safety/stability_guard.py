@@ -148,19 +148,26 @@ def stability_guard_step(
     in_pass_maneuver = str(planner_state or "") in (
         "COMMIT_PASS_LEFT", "COMMIT_PASS_RIGHT",
     )
-    emergency_trigger = bool(
-        (not pit_mode)
-        and (
-            bool(overlap_flag)
-            or risk >= float(config.emergency_risk_enter_01)
-            or (
-                (not in_pass_maneuver)
-                and (not bool(gap_ok))
-                and bool(closing_flag)
-                and risk >= 0.50
+    # SD-4d: emergency_trigger now uses predicted_collision as authority when
+    # available. Snapshot heuristics (overlap_flag, risk, gap_ok+closing) only
+    # apply as fallback for legacy callers without polyline data. The user's
+    # explicit ask: "we only emergency break if we predict the path will collide".
+    if bool(predicted_collision_available):
+        emergency_trigger = bool((not pit_mode) and predicted_collision)
+    else:
+        emergency_trigger = bool(
+            (not pit_mode)
+            and (
+                bool(overlap_flag)
+                or risk >= float(config.emergency_risk_enter_01)
+                or (
+                    (not in_pass_maneuver)
+                    and (not bool(gap_ok))
+                    and bool(closing_flag)
+                    and risk >= 0.50
+                )
             )
         )
-    )
     if emergency_trigger:
         state.emergency_latch_until_s = max(
             float(state.emergency_latch_until_s),
@@ -171,12 +178,17 @@ def stability_guard_step(
             float(sim_time_s) + float(config.reapproach_recovery_hold_s),
         )
     emergency_latched = float(sim_time_s) < float(state.emergency_latch_until_s)
-    emergency_exit_ok = bool(
-        bool(gap_ok)
-        and (not bool(overlap_flag))
-        and risk <= float(config.emergency_risk_exit_01)
-        and (not bool(closing_flag))
-    )
+    # SD-4d: when predicted_collision is available, exit_ok is simply
+    # "predicted_collision==False". Otherwise fall back to the snapshot exit gate.
+    if bool(predicted_collision_available):
+        emergency_exit_ok = bool(not predicted_collision)
+    else:
+        emergency_exit_ok = bool(
+            bool(gap_ok)
+            and (not bool(overlap_flag))
+            and risk <= float(config.emergency_risk_exit_01)
+            and (not bool(closing_flag))
+        )
     # During ABORT_PASS with safe conditions, force-release both latches immediately.
     # The ego has passed the opponent; holding emergency/recovery braking is unnecessary.
     in_abort_pass = str(planner_state or "") == "ABORT_PASS"
