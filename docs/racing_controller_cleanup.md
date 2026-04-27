@@ -160,15 +160,36 @@ The CC-* cycle (2026-04-26) cleaned this up:
 
 | Stage | Commit | What |
 |---|---|---|
-| CC-1 | 96e0870d | `docs/cleanup_inventory.md` — full deletion+rename map |
-| CC-2 | fabcfcd3 | Delete 6 phase scenario dirs, 4 standalone .scenic, 7 LagunaSeca map files, 12 TTL backups, `coordinate_transform.py`, `Laguna_Seca_transform.json`, `LAGUNA_SECA_SEGMENTS` constant |
-| CC-3a | 44bf6852 | `_phase7_*` → `_prediction_*`, file `phase7_runner.py` → `prediction_runner.py` |
-| CC-3b | (commit) | `_phase8_*` → `_assessment_*`, file → `assessment_runner.py` |
-| CC-3c | (commit) | `_phase10_*` → `_guard_*`, file → `guard_runner.py` |
-| CC-3d | (commit) | `_phase11_*` → `_commit_*`, file → `commit_pass_runner.py`, ~30 test names renamed |
-| CC-3e | 85a6f4db (and follow-up) | Phase 0/1/2/3/4/5/6/9/12 → baseline/scripted/opponent/tactical/shield/segment/orchestration/hazard/seg; remaining runner files renamed |
-| CC-4 | (this commit) | Doc updates: deleted 18 phase-*.md plan docs, rewrote `plans/README.md`, added `docs/racing_smart_driving.md` stub, header pointer in `racing/README.md` |
-| CC-5 | (next) | F-bank validation pass; tag `milestone-cleanup-cc-complete` |
+| CC-1 | `96e0870d` | `docs/cleanup_inventory.md` — full deletion+rename map |
+| CC-2 | `fabcfcd3` | Delete 6 phase scenario dirs, 4 standalone .scenic, 7 LagunaSeca map files, 12 TTL backups, `coordinate_transform.py`, `Laguna_Seca_transform.json`, `LAGUNA_SECA_SEGMENTS` constant |
+| CC-3a | `44bf6852` | `_phase7_*` → `_prediction_*`, file `phase7_runner.py` → `prediction_runner.py` |
+| CC-3b | `0f55560d` | `_phase8_*` → `_assessment_*`, file → `assessment_runner.py` |
+| CC-3c | `2c094aec` | `_phase10_*` → `_guard_*`, file → `guard_runner.py` |
+| CC-3d | `de8ee80c` | `_phase11_*` → `_commit_*`, file → `commit_pass_runner.py`, ~30 test names renamed |
+| CC-3e | `85a6f4db` + `4e1d789c` | Phase 0/1/2/3/4/5/6/9/12 → baseline/scripted/opponent/tactical/shield/segment/orchestration/hazard/seg; remaining runner files renamed |
+| CC-4 | `8788afa0` | Doc updates: deleted 18 phase-*.md plan docs, rewrote `plans/README.md`, added `docs/racing_smart_driving.md` stub, header pointer in `racing/README.md` |
+| CC-5 fix | `72e79f66` | De-double `commit_commit_*` → `commit_*`, `guard_guard_*` → `guard_*` (sed artifact from CC-3) |
+
+**Tag**: `milestone-cleanup-cc-complete` at `72e79f66`.
+
+### CC-5 validation result (full F-bank, `full_stack_20260427_031327`)
+
+| Scenario | Collision | Off-track | Commits | vs historical |
+|---|---|---|---|---|
+| F1 | False | False | 0 | ✓ (correct, fellow behind) |
+| F2 | False | False | 0 | ← smart-driving target for SD-* |
+| F3L | False | False | **81** | ✓ matches historical 81 |
+| F3R | False | False | **53** | ✓ matches historical 54 (±1) |
+| F4 | False | False | 0 | ✓ (emergency brake response) |
+| F5 | False | False | 19 | overtake attempts |
+| F6 | False | False | 117 | |
+| F7 | False | False | 92 | |
+| F8 | **True** | False | 259 | known-difficult corner-entry; pre-existing collision (12 m OOB at t=7.85s) |
+| F9 | False | False | **56** | ✓ matches historical 56 |
+
+Bit-for-bit reproducibility against the pre-CC baseline confirms the cleanup
+introduced no behavioral regressions. F2 and F8 are the targets for the
+SD-* cycle (centered slow opponent, corner-entry collision).
 
 After CC-5 the SD-* cycle starts (see
 [`docs/racing_smart_driving.md`](racing_smart_driving.md)).

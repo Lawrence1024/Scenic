@@ -1,6 +1,26 @@
 # Racing — smart driving on one opponent (SD-* cycle)
 
-**Status:** stub. Populated incrementally as SD-1 through SD-3 land.
+**Status:** kicking off. Built on `milestone-cleanup-cc-complete` (`72e79f66`).
+Populated incrementally as SD-1 through SD-3 land.
+
+## Pre-SD baseline (from full_stack_20260427_031327)
+
+| Scenario | Collision | Off-track | Commits attempted | Note |
+|---|---|---|---|---|
+| F1 (fellow behind) | False | False | 0 | correct — no overtake needed |
+| **F2 (slow ahead, optimal)** | False | False | **0** | **primary SD-2a target** |
+| F3L (slow ahead, left TTL) | False | False | 81 | works today; SD must not regress |
+| F3R (slow ahead, right TTL) | False | False | 53 | works today; SD must not regress |
+| F4 (sudden stop) | False | False | 0 | emergency-brake path; SD must NOT trigger commits here |
+| F5 (swerve out) | False | False | 19 | works |
+| F6 (left occupied) | False | False | 117 | works |
+| F7 (right occupied) | False | False | 92 | works |
+| **F8 (corner-entry+ahead)** | **True** | False | 259 | secondary SD target — collision @ t=7.85s, 12 m OOB |
+| F9 (stationary obstacle) | False | False | 56 | works |
+
+The SD cycle must (a) bring F2's commit count above zero and complete the
+overtake, (b) reduce F8's collision rate, (c) preserve F3L/F3R/F9 within ±20%
+commits, (d) keep F4 collision-free.
 
 ## Goal
 

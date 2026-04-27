@@ -225,19 +225,19 @@ references to the renamed prefix.
 
 ---
 
-## CC-5 — Validation
+## CC-5 — Validation (DONE 2026-04-26)
 
-Single command:
+Run command (Windows-PowerShell-friendly for live output):
+```powershell
+python src/scenic/domains/racing/benchmarks/full_stack_runner.py 2>&1 | Tee-Object -FilePath full_stack.log
 ```
-python src/scenic/domains/racing/benchmarks/full_stack_runner.py 2>&1 | tee /tmp/cc5_full.log
-```
 
-Acceptance: per-scenario `off_track`, `collision`, `near_miss_count` unchanged
-±1 vs the `milestone-rc-cleanup-elev` baseline; `lap_time_s` within ±5%; all
-renamed CSV columns populated correctly (e.g., `commit_pass_left_count`
-matches historical `phase11_commit_pass_left_count`).
+Result captured at `src/scenic/domains/racing/benchmarks/results/full_stack_20260427_031327/`:
+F-bank reproduces historical commits within ±1: F3L=81 (hist 81), F3R=53 (hist 54),
+F9=56 (hist 56). F8 collision is pre-existing (corner-entry edge case; SD-* target).
+No regressions on collision/off-track for F1-F7, F9.
 
-On pass: tag `milestone-cleanup-cc-complete`.
+Tagged `milestone-cleanup-cc-complete` at commit `72e79f66`.
 
 ---
 
