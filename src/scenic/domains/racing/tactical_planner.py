@@ -58,6 +58,10 @@ class TacticalPlannerConfig:
     abort_hold_s: float = 0.9
     abort_risk_01: float = 0.55
     abort_ttc_s: float = 0.4   # tight: only abort on near-imminent collision
+    # SD-2d: while ego is on a commit-side TTL and the fellow is still laterally
+    # within this radius, ABORT keeps the commit-side TTL instead of reverting to
+    # optimal — so an abort decelerates rather than swerving across the fellow.
+    abort_keep_ttl_lat_m: float = 3.0
     ahead_relax_free_run_enabled: bool = True
     ahead_relax_min_gap_m: float = 32.0
     ahead_relax_max_risk_01: float = 0.12
@@ -269,7 +273,23 @@ def tactical_planner_step_v1(
 
     def _abort_result(reason: str) -> Tuple[str, str, Optional[float], str]:
         state.mode = ABORT_PASS
-        return ABORT_PASS, "optimal", None, reason
+        # SD-2d: don't switch TTL during abort while ego is still side-by-side.
+        # Reverting to optimal at gap=8m / lat=2m carries ego LATERALLY across the
+        # fellow (observed F2_tactical t=7.35s: ttl_switch right→optimal caused
+        # ego's left side to clip the fellow's right side at t=7.50s).
+        # Keep the commit-side TTL until either relation flips (fellow behind) or
+        # lateral overlap clears, so the abort becomes a deceleration rather than
+        # a steering swerve into the obstacle.
+        abort_ttl = "optimal"
+        commit_side_now = str(state.commit.side or "")
+        if (
+            commit_side_now in ("left", "right")
+            and relation_ahead
+            and sit is not None
+            and abs(float(sit.lateral_m)) < float(config.abort_keep_ttl_lat_m)
+        ):
+            abort_ttl = commit_side_now
+        return ABORT_PASS, abort_ttl, None, reason
 
     _reset_commit_cycle_flags()
 

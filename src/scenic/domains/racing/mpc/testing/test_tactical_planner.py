@@ -826,10 +826,55 @@ def test_commit_abort_on_commit_hazard():
         assessment_closing_flag=True,
         assessment_emergency_risk_01=0.7,
     )
-    assert m == ABORT_PASS and ttl == "optimal" and cap is None
+    # SD-2d: while ego is still side-by-side (relation_ahead, lateral_m=1.0 < 3.0),
+    # ABORT keeps the commit-side TTL ("left") instead of reverting to optimal.
+    # Reverting at this point would steer ego LATERALLY across the fellow, which
+    # is the bug observed in F2_tactical at t=7.35s (right→optimal contact).
+    assert m == ABORT_PASS and ttl == "left" and cap is None
     assert reason == "abort_commit_invalidated"
     assert st.commit.abort_trigger == "commit_invalidated_hazard"
     assert st.commit.post_event_state == ABORT_PASS
+
+
+def test_commit_abort_reverts_to_optimal_when_laterally_clear():
+    """SD-2d boundary: abort SHOULD return to optimal once laterally clear.
+
+    The keep-commit-side rule only applies inside abort_keep_ttl_lat_m (=3.0).
+    A fellow that has drifted ≥ 3 m off-axis is not in the swerve-into-it zone,
+    so reverting to optimal is safe and lets ego rejoin the racing line.
+    """
+    st = TacticalPlannerState(mode=COMMIT_PASS_LEFT, last_setup_side="left")
+    st.commit.side = "left"
+    cfg = TacticalPlannerConfig(commit_abort_enabled=True)
+    s = _sit(
+        lateral_relation="right",
+        overlap_state="side_by_side",
+        collision_risk_01=0.6,
+        distance_m=11.0,
+        longitudinal_m=2.5,
+        lateral_m=3.4,  # ≥ abort_keep_ttl_lat_m=3.0 → no swerve-into-it risk
+        closing_speed_mps=2.5,
+        ahead=True,
+    )
+    m, ttl, cap, reason = tactical_planner_step_v1(
+        st,
+        s,
+        has_opponent=True,
+        ego_speed_mps=31.0,
+        opponent_speed_mps=24.0,
+        sim_time_s=1.0,
+        pit_mode=False,
+        config=cfg,
+        assessment_relation="ahead",
+        assessment_gap_ok=False,
+        assessment_optimal_open=False,
+        assessment_left_open=True,
+        assessment_right_open=False,
+        assessment_closing_flag=True,
+        assessment_emergency_risk_01=0.7,
+    )
+    assert m == ABORT_PASS and ttl == "optimal" and cap is None
+    assert reason == "abort_commit_invalidated"
 
 
 def test_commit_does_not_abort_on_stationary_offaxis_overlap():
