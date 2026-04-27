@@ -366,12 +366,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         _scripted_schedule_enabled = False
     _scripted_schedule = []
     _scripted_ttl_cache = {}
-    # SD-10m: per-TTL segment-map cache. Keyed on ttl_key ("optimal"/"left"/"right").
-    # Pre-built once after TTL preload so apply_ttl_key_to_agent can swap the
-    # cached map instead of resetting to None and forcing a 400-560ms rebuild
-    # next tick. Per F2_tactical [TickBreakdown] analysis, segmap rebuild was
-    # the dominant cost on every TTL switch.
-    _scripted_segmap_cache = {}
     _scripted_active_ttl = str(getattr(self, 'ttl_selection', '') or '').lower()
     if _scripted_active_ttl not in _PHASE1_TTL_FILE_BY_SELECTION:
         _scripted_active_ttl = _scripted_selection_from_ttl_filename(getattr(self, 'ttlFileName', None)) or "optimal"
@@ -438,24 +432,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     except Exception:
                         print(f"{_fbhv} TTL preload failed for {_ttl_file}.")
                 print(f"{_fbhv} TTL preload (Phase 1 / Phase 3): folder={_ttl_folder} keys={_preloaded_keys}")
-                # SD-10m: pre-build segment maps for every preloaded TTL.
-                _segmap_t0 = _wallclock_time.perf_counter()
-                _scene_for_segmap = simulation().scene
-                _main_ttl_for_segmap = getattr(_scene_for_segmap, '_main_ttl_waypoints', None)
-                _pit_ttl_for_segmap = getattr(_scene_for_segmap, '_pit_ttl_waypoints', None) or []
-                if _main_ttl_for_segmap is not None:
-                    for _sm_key in _preloaded_keys:
-                        _sm_pts = _scripted_ttl_cache[_sm_key][1]
-                        try:
-                            _scripted_segmap_cache[_sm_key] = build_waypoint_segment_map_from_ttl(
-                                _main_ttl_for_segmap, _pit_ttl_for_segmap, waypoints=_sm_pts
-                            )
-                        except Exception as _sm_e:
-                            print(f"{_fbhv} Segment map pre-build failed for {_sm_key}: {_sm_e}")
-                    _segmap_ms = (_wallclock_time.perf_counter() - _segmap_t0) * 1000.0
-                    print(f"{_fbhv} Segment maps pre-built in {_segmap_ms:.1f} ms ({len(_scripted_segmap_cache)} polylines)")
-                # Stash on self so apply_ttl_key_to_agent can swap cached maps.
-                self._scripted_segmap_cache = _scripted_segmap_cache
             if _scripted_schedule_enabled:
                 print(f"{_fbhv} Phase1 planner enabled: schedule={_scripted_schedule if _scripted_schedule else '[]'} speed_cap={_scripted_speed_cap}")
             if _tactical_planner_enabled:
@@ -713,41 +689,31 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 # Build segment map once (main + pit): from OpenDRIVE track or from TTL waypoints (same as visualization).
                 if not hasattr(self, '_waypoint_segment_map') or self._waypoint_segment_map is None:
                     _sec_t_segmap_start = _wallclock_time.perf_counter()
-                    # SD-10m: use the pre-built cached segmap for the active
-                    # TTL if available (avoids the 400-560ms rebuild per the
-                    # [TickBreakdown] root-cause analysis).
-                    _segmap_cached = (_scripted_segmap_cache.get(_scripted_active_ttl)
-                                      if _scripted_segmap_cache else None)
-                    if _segmap_cached is not None:
-                        self._waypoint_segment_map = _segmap_cached
-                        self._last_valid_segment_id = None
-                        self._last_valid_segment_name = ""
-                    else:
-                        try:
-                            scene = simulation().scene
-                            params = getattr(scene, 'params', None) or {}
-                            main_ttl = getattr(scene, '_main_ttl_waypoints', None)
-                            if main_ttl is not None:
-                                pit_ttl = getattr(scene, '_pit_ttl_waypoints', None) or []
-                                self._waypoint_segment_map = build_waypoint_segment_map_from_ttl(main_ttl, pit_ttl, waypoints=wp_list)
+                    try:
+                        scene = simulation().scene
+                        params = getattr(scene, 'params', None) or {}
+                        main_ttl = getattr(scene, '_main_ttl_waypoints', None)
+                        if main_ttl is not None:
+                            pit_ttl = getattr(scene, '_pit_ttl_waypoints', None) or []
+                            self._waypoint_segment_map = build_waypoint_segment_map_from_ttl(main_ttl, pit_ttl, waypoints=wp_list)
+                            self._last_valid_segment_id = None
+                            self._last_valid_segment_name = ""
+                            num_seg = len(set(seg_id for seg_id, _ in self._waypoint_segment_map)) if self._waypoint_segment_map else 0
+                            print(f"{_fbhv} Segment map built from TTL waypoints ({num_seg} segments, main+pit, overlap=main); ring-strict segment filtering active")
+                        else:
+                            track = params.get('track') or getattr(scene, 'track', None)
+                            if track is not None:
+                                self._waypoint_segment_map = build_waypoint_segment_map(wp_list, track)
                                 self._last_valid_segment_id = None
                                 self._last_valid_segment_name = ""
                                 num_seg = len(set(seg_id for seg_id, _ in self._waypoint_segment_map)) if self._waypoint_segment_map else 0
-                                print(f"{_fbhv} Segment map built from TTL waypoints ({num_seg} segments, main+pit, overlap=main); ring-strict segment filtering active")
+                                print(f"{_fbhv} Segment map built from OpenDRIVE ({num_seg} segments, main+pit); ring-strict segment filtering active")
                             else:
-                                track = params.get('track') or getattr(scene, 'track', None)
-                                if track is not None:
-                                    self._waypoint_segment_map = build_waypoint_segment_map(wp_list, track)
-                                    self._last_valid_segment_id = None
-                                    self._last_valid_segment_name = ""
-                                    num_seg = len(set(seg_id for seg_id, _ in self._waypoint_segment_map)) if self._waypoint_segment_map else 0
-                                    print(f"{_fbhv} Segment map built from OpenDRIVE ({num_seg} segments, main+pit); ring-strict segment filtering active")
-                                else:
-                                    self._waypoint_segment_map = None
-                                    print(f"{_fbhv} Segment map not built (no track and no TTL waypoints); log will show segment ?")
-                        except Exception as e:
-                            self._waypoint_segment_map = None
-                            print(f"{_fbhv} Segment map not built: {e}; log will show segment ?")
+                                self._waypoint_segment_map = None
+                                print(f"{_fbhv} Segment map not built (no track and no TTL waypoints); log will show segment ?")
+                    except Exception as e:
+                        self._waypoint_segment_map = None
+                        print(f"{_fbhv} Segment map not built: {e}; log will show segment ?")
                     _sec_segmap_ms += (_wallclock_time.perf_counter() - _sec_t_segmap_start) * 1000.0
                 try:
                     # Initialize progress tracking if needed
