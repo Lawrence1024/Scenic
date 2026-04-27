@@ -446,7 +446,11 @@ def test_protected_follow_releases_into_setup_when_opening_stably_clear():
         assessment_emergency_risk_01=0.05,
     )
     assert m1 == FOLLOW and ttl1 == "optimal" and cap1 is not None
-    m2, ttl2, cap2, _reason2 = tactical_planner_step_v1(
+    # SD-10b: opening_confidence_count fires after max(pass_intent_entry_cycles,
+    # setup_commit_entry_cycles) = 2 ticks of stable opening (was 4 ticks pre-SD-10b
+    # due to the redundant pass_intent + setup_commit chain). Tick 2 of stable
+    # opening (m2 here) is sufficient to arm SETUP.
+    m2, ttl2, cap2, reason2 = tactical_planner_step_v1(
         st,
         s_open,
         has_opponent=True,
@@ -463,54 +467,17 @@ def test_protected_follow_releases_into_setup_when_opening_stably_clear():
         assessment_closing_flag=False,
         assessment_emergency_risk_01=0.05,
     )
-    assert m2 == FOLLOW and ttl2 == "optimal" and cap2 is not None
-    # After latch release, setup entry persistence still applies.
-    m3, ttl3, cap3, reason3 = tactical_planner_step_v1(
-        st,
-        s_open,
-        has_opponent=True,
-        ego_speed_mps=30.0,
-        opponent_speed_mps=24.0,
-        sim_time_s=0.15,
-        pit_mode=False,
-        config=cfg,
-        assessment_relation="ahead",
-        assessment_gap_ok=True,
-        assessment_optimal_open=False,
-        assessment_left_open=True,
-        assessment_right_open=False,
-        assessment_closing_flag=False,
-        assessment_emergency_risk_01=0.05,
-    )
-    assert m3 == FOLLOW and ttl3 == "optimal" and cap3 is not None
-    assert reason3 in ("setup_candidate_collect", "setup_candidate_reset")
-    m4, ttl4, cap4, reason4 = tactical_planner_step_v1(
-        st,
-        s_open,
-        has_opponent=True,
-        ego_speed_mps=30.0,
-        opponent_speed_mps=24.0,
-        sim_time_s=0.20,
-        pit_mode=False,
-        config=cfg,
-        assessment_relation="ahead",
-        assessment_gap_ok=True,
-        assessment_optimal_open=False,
-        assessment_left_open=True,
-        assessment_right_open=False,
-        assessment_closing_flag=False,
-        assessment_emergency_risk_01=0.05,
-    )
-    if m4 == FOLLOW:
-        assert ttl4 == "optimal" and cap4 is not None
-        assert reason4 in ("setup_candidate_collect", "setup_candidate_reset")
-        m5, ttl5, cap5, reason5 = tactical_planner_step_v1(
+    # Either SETUP arms now (opening confidence fires) or one more tick of FOLLOW
+    # before SETUP — both acceptable; the test's intent is that protected_follow
+    # releases and SETUP eventually fires on the open side.
+    if m2 == FOLLOW:
+        m3, ttl3, cap3, reason3 = tactical_planner_step_v1(
             st,
             s_open,
             has_opponent=True,
             ego_speed_mps=30.0,
             opponent_speed_mps=24.0,
-            sim_time_s=0.25,
+            sim_time_s=0.15,
             pit_mode=False,
             config=cfg,
             assessment_relation="ahead",
@@ -521,15 +488,13 @@ def test_protected_follow_releases_into_setup_when_opening_stably_clear():
             assessment_closing_flag=False,
             assessment_emergency_risk_01=0.05,
         )
-        assert m5 == SETUP_LEFT
-        assert ttl5 == "left"
-        assert cap5 is not None  # SETUP caps speed when opponent ahead
-        assert reason5 in ("setup_left_open", "setup_flip_cooldown_hold")
+        assert m3 == SETUP_LEFT, f"SETUP must arm by tick 3 of stable opening, got {m3} ({reason3})"
+        assert ttl3 == "left"
+        assert cap3 is not None
     else:
-        assert m4 == SETUP_LEFT
-        assert ttl4 == "left"
-        assert cap4 is not None  # SETUP caps speed when opponent ahead
-        assert reason4 in ("setup_left_open", "setup_flip_cooldown_hold", "setup_commit_left_hold")
+        assert m2 == SETUP_LEFT, f"unexpected mode {m2} ({reason2})"
+        assert ttl2 == "left"
+        assert cap2 is not None
 
 
 def test_setup_commit_hold_keeps_setup_during_moderate_pressure():
@@ -1270,14 +1235,16 @@ def test_commit_fires_at_moderate_risk_when_pass_safe_passes():
         segment_context="straight",
     )
     # Inject commit-active state directly (setup_commit fired, now waiting for phase11 commit).
+    # SD-10b: pass_intent_candidate_count and setup_commit_candidate_count are
+    # gone; opening_confidence_count >= max(pass_intent_entry_cycles,
+    # setup_commit_entry_cycles) replaces both.
     st = TacticalPlannerState()
     st.mode = "SETUP_PASS_RIGHT"
     st.setup_commit_side = "right"
-    st.setup_commit_candidate_count = int(cfg.setup_commit_entry_cycles)
     st.setup_commit_until_s = 999.0
     st.pass_intent_side = "right"
-    st.pass_intent_candidate_count = int(cfg.pass_intent_entry_cycles)
     st.pass_intent_until_s = 999.0
+    st.opening_confidence_count = max(int(cfg.pass_intent_entry_cycles), int(cfg.setup_commit_entry_cycles))
     st.lateral_path_lock_side = "right"
     st.lateral_path_lock_until_s = 999.0
     # Run with emergency_risk_01 = 0.42 (above old 0.10 gate, below 0.48 pass_safe ceiling).
@@ -1322,11 +1289,10 @@ def test_commit_still_blocked_when_pass_safe_risk_above_ceiling():
     st = TacticalPlannerState()
     st.mode = "SETUP_PASS_RIGHT"
     st.setup_commit_side = "right"
-    st.setup_commit_candidate_count = int(cfg.setup_commit_entry_cycles)
     st.setup_commit_until_s = 999.0
     st.pass_intent_side = "right"
-    st.pass_intent_candidate_count = int(cfg.pass_intent_entry_cycles)
     st.pass_intent_until_s = 999.0
+    st.opening_confidence_count = max(int(cfg.pass_intent_entry_cycles), int(cfg.setup_commit_entry_cycles))
     st.lateral_path_lock_side = "right"
     st.lateral_path_lock_until_s = 999.0
     m, ttl, cap, reason = tactical_planner_step_v1(
@@ -1387,15 +1353,19 @@ def test_commit_relaxes_to_free_run_when_far_nonclosing_low_risk():
 # ---------------------------------------------------------------------------
 
 def _make_seg_commit_setup_state():
-    """Helper: state with an active setup-chain (commit_until active, pass_intent active)."""
+    """Helper: state with an active setup-chain (commit_until active, pass_intent active).
+
+    SD-10b: opening_confidence_count replaces the pass_intent_candidate_count
+    + setup_commit_candidate_count chain. Setting it well above the threshold
+    keeps the test independent of cycle-count config tuning.
+    """
     st = TacticalPlannerState()
     st.mode = "SETUP_PASS_RIGHT"
     st.setup_commit_side = "right"
-    st.setup_commit_candidate_count = 5
     st.setup_commit_until_s = 999.0
     st.pass_intent_side = "right"
-    st.pass_intent_candidate_count = 5
     st.pass_intent_until_s = 999.0
+    st.opening_confidence_count = 5
     st.lateral_path_lock_side = "right"
     st.lateral_path_lock_until_s = 999.0
     return st

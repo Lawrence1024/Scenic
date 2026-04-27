@@ -308,11 +308,15 @@ class TacticalPlannerState:
     protected_follow_clear_count: int = 0
     recovery_hold_until_s: float = -1.0e9
     setup_commit_side: str = ""
-    setup_commit_candidate_count: int = 0
     setup_commit_until_s: float = -1.0e9
     pass_intent_side: str = ""
-    pass_intent_candidate_count: int = 0
     pass_intent_until_s: float = -1.0e9
+    # SD-10b: unified opening-confidence counter. Replaces the redundant
+    # pass_intent_candidate_count + setup_commit_candidate_count chain. Both
+    # measured the same "opening is consistent" signal but had separate
+    # 2-tick build-ups, doubling SETUP arming latency to 4 ticks. Now arms
+    # in max(pass_intent_entry_cycles, setup_commit_entry_cycles) ticks.
+    opening_confidence_count: int = 0
     lateral_path_lock_side: str = ""
     lateral_path_lock_until_s: float = -1.0e9
     commit: CommitPlannerState = field(default_factory=CommitPlannerState)
@@ -492,13 +496,15 @@ def tactical_planner_step_v1(
 
     def _clear_setup_commit() -> None:
         state.setup_commit_side = ""
-        state.setup_commit_candidate_count = 0
         state.setup_commit_until_s = -1.0e9
+        # SD-10b: opening_confidence_count drives both pass_intent and
+        # setup_commit arming, so clearing either resets it.
+        state.opening_confidence_count = 0
 
     def _clear_pass_intent() -> None:
         state.pass_intent_side = ""
-        state.pass_intent_candidate_count = 0
         state.pass_intent_until_s = -1.0e9
+        state.opening_confidence_count = 0
 
     def _clear_lateral_lock() -> None:
         state.lateral_path_lock_side = ""
@@ -1381,38 +1387,41 @@ def tactical_planner_step_v1(
             or float(sit.longitudinal_m) <= _dv_setup_gap_max_m(config, dv_mps)
         )
     )
+    # SD-10b: unified opening-confidence build. Replaces the redundant
+    # pass_intent_candidate_count → setup_commit_candidate_count chain that
+    # used a single-side signal to climb two separate counters serially
+    # (4 ticks total to arm SETUP). One counter, one threshold = arm in
+    # max(pass_intent_entry_cycles, setup_commit_entry_cycles) ticks.
+    opening_confidence_threshold = max(
+        int(config.pass_intent_entry_cycles),
+        int(config.setup_commit_entry_cycles),
+    )
     if intent_candidate_ok:
         if state.pass_intent_side != preferred_side:
             state.pass_intent_side = preferred_side
-            state.pass_intent_candidate_count = 1
+            state.opening_confidence_count = 1
         else:
-            state.pass_intent_candidate_count += 1
-        if state.pass_intent_candidate_count >= int(config.pass_intent_entry_cycles):
+            state.opening_confidence_count += 1
+        if state.opening_confidence_count >= opening_confidence_threshold:
             state.pass_intent_until_s = max(
                 float(state.pass_intent_until_s),
                 float(sim_time_s) + float(config.pass_intent_hold_s),
             )
             pass_intent_active = True
-    else:
-        state.pass_intent_candidate_count = max(0, int(state.pass_intent_candidate_count) - 1)
-
-    # Promote pass intent into setup commit hold as soon as side-consistent setup intent exists.
-    if pass_intent_active:
-        intent_side = str(state.pass_intent_side or preferred_side)
-        if intent_side not in ("left", "right"):
-            intent_side = preferred_side
-        if intent_side in ("left", "right"):
-            if state.setup_commit_side != intent_side:
+            # Same tick: promote to setup_commit. The legacy code took an
+            # extra setup_commit_entry_cycles ticks here; with confidence
+            # already proven by opening_confidence_count, the second build
+            # is redundant.
+            intent_side = str(state.pass_intent_side or preferred_side)
+            if intent_side in ("left", "right"):
                 state.setup_commit_side = intent_side
-                state.setup_commit_candidate_count = 1
-            else:
-                state.setup_commit_candidate_count += 1
-            if state.setup_commit_candidate_count >= int(config.setup_commit_entry_cycles):
                 state.setup_commit_until_s = max(
                     float(state.setup_commit_until_s),
                     float(sim_time_s) + float(config.setup_commit_hold_s),
                 )
                 commit_active = True
+    else:
+        state.opening_confidence_count = max(0, int(state.opening_confidence_count) - 1)
 
     hard_commit_hazard = bool(
         in_recovery_hold
@@ -1430,6 +1439,22 @@ def tactical_planner_step_v1(
         commit_active = False
         if state.mode in (SETUP_LEFT, SETUP_RIGHT):
             state.last_setup_exit_sim_time_s = float(sim_time_s)
+
+    # SD-10b: enforce setup_max_hold_s here, before the commit_active SETUP
+    # return (line ~1550). Pre-SD-10b, commit_active needed 4 ticks of
+    # confidence buildup so the timeout (which is 80 lines downstream) won
+    # the race naturally. With unified opening_confidence_count, commit_active
+    # arms in 2 ticks and would otherwise preempt the timeout indefinitely.
+    if state.mode in (SETUP_LEFT, SETUP_RIGHT) and float(state.setup_entry_s) > -1.0e8:
+        if float(sim_time_s) - float(state.setup_entry_s) > float(config.setup_max_hold_s):
+            state.last_setup_exit_sim_time_s = float(sim_time_s)
+            state.setup_entry_s = -1.0e9
+            state.setup_candidate_side = ""
+            state.setup_candidate_count = 0
+            _clear_setup_commit()
+            _clear_pass_intent()
+            _clear_lateral_lock()
+            return _follow_result("setup_timeout_follow")
 
     if commit_active:
         side = str(state.setup_commit_side or preferred_side)
@@ -1601,20 +1626,9 @@ def tactical_planner_step_v1(
         state.setup_candidate_count = 0
         return _follow_result("setup_too_far_follow")
 
-    # SD-2f: SETUP timeout. If SETUP has held for setup_max_hold_s without reaching
-    # COMMIT (typically because closing speed is too low or geometry is bad), bail
-    # back to FOLLOW on optimal. Prevents the "stuck on side TTL while approaching"
-    # failure mode (F2_tactical first attempt: 4 sec SETUP → contact).
-    if state.mode in (SETUP_LEFT, SETUP_RIGHT) and float(state.setup_entry_s) > -1.0e8:
-        if float(sim_time_s) - float(state.setup_entry_s) > float(config.setup_max_hold_s):
-            state.last_setup_exit_sim_time_s = float(sim_time_s)
-            state.setup_entry_s = -1.0e9
-            state.setup_candidate_side = ""
-            state.setup_candidate_count = 0
-            _clear_setup_commit()
-            _clear_pass_intent()
-            _clear_lateral_lock()
-            return _follow_result("setup_timeout_follow")
+    # SD-10b: setup_max_hold_s timeout was moved upstream (above commit_active
+    # block) so it can't be preempted by the now-faster opening_confidence_count
+    # arming. The downstream block that used to live here is gone.
 
     target_side = preferred_side
 
