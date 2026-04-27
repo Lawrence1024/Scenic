@@ -38,7 +38,15 @@ class TacticalPlannerConfig:
     blocked_headway_s: float = 1.8
     setup_min_headway_s: float = 0.6
     hard_ttc_s: float = 1.4
-    pass_min_relative_speed_mps: float = 3.0  # SD-2e: realistic overtake needs ≥3 m/s differential
+    # SD-2g: dropped from 3.0 to 0.3 to break the matched-speed FOLLOW deadlock.
+    # The 3.0 was unsatisfiable from steady-state FOLLOW (cap=opp+follow_margin → MPC
+    # brakes-for-distance once gap ≤ safe_gap → closing decays to ~0). The "realistic
+    # overtake needs differential" intent is already enforced by SD-2e's COMMIT cap
+    # (=opp+commit_speed_margin_mps=8) which GUARANTEES actual closing during the pass.
+    # The pass_safe gate just needs a feasibility floor: closing >= 0.3 means ego is
+    # not falling behind, so once SETUP raises the cap to opp+setup_speed_margin (4.5),
+    # the pass becomes physically realizable.
+    pass_min_relative_speed_mps: float = 0.3
     follow_tight_cap_scale: float = 0.92
     setup_min_distance_m: float = 9.0
     setup_partial_overlap_lateral_m: float = 1.8
@@ -803,12 +811,23 @@ def tactical_planner_step_v1(
         if assessment_emergency_risk_01 is not None
         else float(sit.collision_risk_01)
     )
+    # SD-2g: "ego can close" is a FEASIBILITY check, not an actual-state check.
+    # In matched-speed FOLLOW (ego held to opp+follow_margin, MPC braking-for-distance)
+    # the actual closing speed decays to ~0. The old gate (closing >= pass_min) was
+    # then unsatisfiable, locking ego in FOLLOW forever. Instead, ask: under SETUP's
+    # raised cap (=opp+setup_speed_margin_mps), would ego be closing fast enough?
+    # If yes, the pass is feasible — let SETUP fire so ego accelerates and the actual
+    # closing materializes. Real differential is enforced by SD-2e's COMMIT cap, not here.
+    pass_can_close = bool(
+        float(ego_speed_mps) + float(config.setup_speed_margin_mps)
+        >= float(opponent_speed_mps) + float(config.pass_min_relative_speed_mps)
+    )
     pass_safe = (
         straight_ok
         and effective_risk_01 <= config.pass_safe_risk_max
         and not overlap_unsafe_for_setup
         and not (close_for_setup and sit.overlap_state == "side_by_side")
-        and (closing_speed_pos_mps >= float(config.pass_min_relative_speed_mps))
+        and pass_can_close
     )
     if bool(assessment_closing_flag):
         pass_safe = pass_safe and asymmetric_opening

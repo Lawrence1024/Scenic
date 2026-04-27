@@ -1722,6 +1722,53 @@ def test_commit_blocked_when_gap_too_large():
     assert ttl_close == "left"
 
 
+def test_pass_safe_feasibility_passes_at_matched_speed():
+    """SD-2g: pass_safe must be a feasibility check, not actual-state check.
+
+    F2_tactical was stuck for 13 sec in matched-speed FOLLOW (closing≈0) because
+    pass_safe required closing >= 3.0 m/s — unsatisfiable from matched-speed
+    steady state (MPC brakes-for-distance, closing decays to 0). The new check
+    asks "under SETUP cap, COULD ego close?" — which is true at matched speed
+    (ego_speed + setup_margin > opp_speed + pass_min).
+    """
+    st = TacticalPlannerState(mode=FOLLOW, last_setup_side="left",
+                              setup_candidate_side="right",
+                              setup_candidate_count=10)  # already past candidate persistence
+    cfg = TacticalPlannerConfig(
+        setup_max_longitudinal_m=28.0,
+        setup_speed_margin_mps=4.5,
+        pass_min_relative_speed_mps=0.3,
+        ahead_relax_free_run_enabled=False,
+    )
+    s = _sit(
+        lateral_relation="left",   # fellow on left → preferred = right
+        collision_risk_01=0.05,
+        segment_context="straight",
+        overlap_state="clear_ahead",
+        distance_m=18.0,
+        longitudinal_m=18.0,        # ≤ 28 → SETUP gate clears
+        closing_speed_mps=0.0,      # matched speed — old gate would block here
+        ahead=True,
+    )
+    m, ttl, cap, reason = tactical_planner_step_v1(
+        st, s,
+        has_opponent=True,
+        ego_speed_mps=11.5,         # opp + follow_margin
+        opponent_speed_mps=9.0,
+        sim_time_s=0.0, pit_mode=False, config=cfg,
+        assessment_relation="ahead",
+        assessment_gap_ok=False,    # gap_ok=False per F2_tactical state
+        assessment_optimal_open=False,
+        assessment_left_open=False, assessment_right_open=True,
+        assessment_closing_flag=False,
+        assessment_emergency_risk_01=0.05,
+    )
+    # SETUP must fire even though current closing=0; SETUP cap will then accelerate
+    # ego and the actual closing will materialize.
+    assert m == SETUP_RIGHT, f"SETUP must fire at matched speed when feasible, got {m}"
+    assert ttl == "right"
+
+
 def test_setup_blocked_when_fellow_too_far():
     """SD-2f: SETUP entry must be gated by setup_max_longitudinal_m.
 
