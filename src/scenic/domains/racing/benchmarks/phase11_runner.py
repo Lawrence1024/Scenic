@@ -49,8 +49,8 @@ def main() -> int:
                 "phase11_commit_pass_left_count",
                 "phase11_commit_pass_right_count",
                 "phase11_abort_pass_count",
-                "phase10_guard_active_count",
-                "phase10_emergency_stable_count",
+                "guard_guard_active_count",
+                "guard_emergency_stable_count",
                 "phase9_state_change_count",
                 "collision",
                 "off_track",
@@ -73,8 +73,8 @@ def main() -> int:
                 "phase11_commit_pass_left_count",
                 "phase11_commit_pass_right_count",
                 "phase11_abort_pass_count",
-                "phase10_guard_active_count",
-                "phase10_emergency_stable_count",
+                "guard_guard_active_count",
+                "guard_emergency_stable_count",
             ),
         )
     )

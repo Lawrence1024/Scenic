@@ -70,8 +70,8 @@ def main() -> int:
                 "phase12_seg_corner_exit_count",
                 "phase12_seg_modifier_blocked_count",
                 "phase12_seg_modifier_conservative_count",
-                "phase10_guard_active_count",
-                "phase10_emergency_stable_count",
+                "guard_guard_active_count",
+                "guard_emergency_stable_count",
                 "phase9_state_change_count",
                 "collision",
                 "off_track",
@@ -99,8 +99,8 @@ def main() -> int:
                 "phase12_seg_corner_body_count",
                 "phase12_seg_modifier_blocked_count",
                 "phase12_seg_modifier_conservative_count",
-                "phase10_guard_active_count",
-                "phase10_emergency_stable_count",
+                "guard_guard_active_count",
+                "guard_emergency_stable_count",
             ),
         )
     )

@@ -14,7 +14,7 @@ Usage (repo root)::
 
 Order (default start is ``fellow_smoke``):
 fellow_runner -> fellow_placement_debug_runner ->
-phase0_runner -> phase1_runner -> phase2_runner -> phase3_runner -> phase4_runner -> phase5_runner -> phase6_runner -> prediction_runner -> assessment_runner -> phase9_runner -> phase10_runner -> phase11_runner.
+phase0_runner -> phase1_runner -> phase2_runner -> phase3_runner -> phase4_runner -> phase5_runner -> phase6_runner -> prediction_runner -> assessment_runner -> phase9_runner -> guard_runner -> phase11_runner.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ _RUNNERS_ORDERED: Tuple[Tuple[str, str], ...] = (
     ("prediction", "scenic.domains.racing.benchmarks.prediction_runner"),
     ("phase8", "scenic.domains.racing.benchmarks.assessment_runner"),
     ("phase9", "scenic.domains.racing.benchmarks.phase9_runner"),
-    ("phase10", "scenic.domains.racing.benchmarks.phase10_runner"),
+    ("phase10", "scenic.domains.racing.benchmarks.guard_runner"),
     ("phase11", "scenic.domains.racing.benchmarks.phase11_runner"),
 )
 

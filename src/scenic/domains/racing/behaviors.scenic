@@ -1044,8 +1044,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             if _tactical_planner_enabled and self is getattr(simulation().scene, 'egoObject', None):
                 if not hasattr(self, '_phase3_tp_state'):
                     self._phase3_tp_state = TacticalPlannerState()
-                if _stability_guard_enabled and not hasattr(self, '_phase10_guard_state'):
-                    self._phase10_guard_state = StabilityGuardState(
+                if _stability_guard_enabled and not hasattr(self, '_guard_guard_state'):
+                    self._guard_guard_state = StabilityGuardState(
                         last_ttl=str(_phase1_active_ttl or "optimal")
                     )
                 _k_prev = float(getattr(self, '_last_curvature_ahead_for_tactical', 0.0) or 0.0)
@@ -1132,10 +1132,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 _ttl_tac = _ttl3
                 _cap_tac = _cap3
                 if _stability_guard_enabled and _ttl_tac in _phase1_ttl_cache:
-                    _ttl_guard_state = getattr(self, "_phase10_guard_state", None)
+                    _ttl_guard_state = getattr(self, "_guard_guard_state", None)
                     if _ttl_guard_state is None:
                         _ttl_guard_state = StabilityGuardState(last_ttl=str(_phase1_active_ttl or "optimal"))
-                        self._phase10_guard_state = _ttl_guard_state
+                        self._guard_guard_state = _ttl_guard_state
                     _ttl_guarded, _p10_ttl_switch_blocked = stability_guard_handle_ttl_switch(
                         _ttl_guard_state,
                         config=_guard_config,
@@ -1146,7 +1146,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     )
                     if _p10_ttl_switch_blocked and _ttl_guarded != _ttl_tac:
                         _ttl_tac = _ttl_guarded
-                        _eff_reason = "phase10_ttl_switch_blocked"
+                        _eff_reason = "guard_ttl_switch_blocked"
                 if _ttl_tac != _phase1_active_ttl and _ttl_tac in _phase1_ttl_cache:
                     if apply_ttl_key_to_agent(self, _ttl_tac, _phase1_ttl_cache, _PHASE1_TTL_FILE_BY_SELECTION):
                         _p3 = _phase1_active_ttl
@@ -1160,7 +1160,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 self._phase3_last_mode = _mode_tac
                 _eff_reason = _reason3
                 if _p10_ttl_switch_blocked:
-                    _eff_reason = "phase10_ttl_switch_blocked"
+                    _eff_reason = "guard_ttl_switch_blocked"
                 self._phase_effective_planner_state = str(_canonical_mode(_mode_tac) or "FREE_RUN")
                 self._phase_effective_ttl = str(_phase1_active_ttl or "optimal")
                 self._phase_effective_reason = str(_eff_reason or "none")
@@ -2108,12 +2108,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     _reason = "coast (speed>=35mph)" if current_speed >= PIT_COAST_MIN_TARGET_MS else f"cap {PIT_MAX_THROTTLE}"
                     print(f"[Pit] step={_step_num} t={_t_log:.2f}s pit_mode=True speed={current_speed:.2f}m/s target=35mph throttle={final_throttle:.2f} ({_reason})")
             if _stability_guard_enabled and self is getattr(simulation().scene, 'egoObject', None):
-                _p10_state = getattr(self, "_phase10_guard_state", None)
+                _p10_state = getattr(self, "_guard_guard_state", None)
                 if _p10_state is None:
                     _p10_state = StabilityGuardState(
                         last_ttl=str(_phase1_active_ttl or "optimal")
                     )
-                    self._phase10_guard_state = _p10_state
+                    self._guard_guard_state = _p10_state
                 _p10_guard = stability_guard_step(
                     _p10_state,
                     config=_guard_config,
@@ -2138,12 +2138,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 self._phase_effective_planner_state = str(_p10_guard.planner_state or getattr(self, "_phase_effective_planner_state", "FREE_RUN"))
                 self._phase_effective_ttl = str(_p10_guard.active_ttl or getattr(self, "_phase_effective_ttl", _phase1_active_ttl))
                 self._phase_effective_reason = str(_p10_guard.decision_reason or getattr(self, "_phase_effective_reason", "none"))
-                self._phase10_guard_active = bool(_p10_guard.guard_active)
-                self._phase10_guard_reason = str(_p10_guard.guard_reason or "none")
-                self._phase10_steer_limited = bool(_p10_guard.steer_limited)
-                self._phase10_brake_limited = bool(_p10_guard.brake_limited)
-                self._phase10_ttl_switch_blocked = bool(_p10_guard.ttl_switch_blocked)
-                self._phase10_emergency_stable_mode = bool(_p10_guard.emergency_stable_mode)
+                self._guard_guard_active = bool(_p10_guard.guard_active)
+                self._guard_guard_reason = str(_p10_guard.guard_reason or "none")
+                self._guard_steer_limited = bool(_p10_guard.steer_limited)
+                self._guard_brake_limited = bool(_p10_guard.brake_limited)
+                self._guard_ttl_switch_blocked = bool(_p10_guard.ttl_switch_blocked)
+                self._guard_emergency_stable_mode = bool(_p10_guard.emergency_stable_mode)
                 print(format_stability_guard_log_line(_sim_time_s, _p10_guard))
             # RC-1: consolidated controller-trace per tick. Read-only telemetry; safe to remove.
             # Captures POST-stability-guard (truly final) commands plus the upstream values

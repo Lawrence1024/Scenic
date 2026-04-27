@@ -184,12 +184,12 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "phase9_setup_pass_right_count",
     "phase9_state_change_count",
     "phase9_gap_ok_rate",
-    "phase10_guard_line_count",
-    "phase10_guard_active_count",
-    "phase10_steer_limited_count",
-    "phase10_brake_limited_count",
-    "phase10_ttl_switch_blocked_count",
-    "phase10_emergency_stable_count",
+    "guard_guard_line_count",
+    "guard_guard_active_count",
+    "guard_steer_limited_count",
+    "guard_brake_limited_count",
+    "guard_ttl_switch_blocked_count",
+    "guard_emergency_stable_count",
     "phase11_planner_line_count",
     "phase11_commit_trigger_count",
     "phase11_abort_trigger_count",
@@ -491,12 +491,12 @@ def collect_metrics_from_log(
     phase9_reasons: List[str] = []
     phase9_gap_ok_count = 0
     phase9_gap_ok_known = 0
-    phase10_guard_line_count = 0
-    phase10_guard_active_count = 0
-    phase10_steer_limited_count = 0
-    phase10_brake_limited_count = 0
-    phase10_ttl_switch_blocked_count = 0
-    phase10_emergency_stable_count = 0
+    guard_guard_line_count = 0
+    guard_guard_active_count = 0
+    guard_steer_limited_count = 0
+    guard_brake_limited_count = 0
+    guard_ttl_switch_blocked_count = 0
+    guard_emergency_stable_count = 0
     phase11_planner_line_count = 0
     phase11_commit_trigger_count = 0
     phase11_abort_trigger_count = 0
@@ -577,17 +577,17 @@ def collect_metrics_from_log(
             if "[Guard]" in line:
                 p10 = RE_GUARD.search(line)
                 if p10:
-                    phase10_guard_line_count += 1
+                    guard_guard_line_count += 1
                     if p10.group("active") == "1":
-                        phase10_guard_active_count += 1
+                        guard_guard_active_count += 1
                     if p10.group("steer") == "1":
-                        phase10_steer_limited_count += 1
+                        guard_steer_limited_count += 1
                     if p10.group("brake") == "1":
-                        phase10_brake_limited_count += 1
+                        guard_brake_limited_count += 1
                     if p10.group("ttl_block") == "1":
-                        phase10_ttl_switch_blocked_count += 1
+                        guard_ttl_switch_blocked_count += 1
                     if p10.group("emerg") == "1":
-                        phase10_emergency_stable_count += 1
+                        guard_emergency_stable_count += 1
             if "[Commit]" in line:
                 p11 = RE_COMMIT.search(line)
                 if p11:
@@ -820,12 +820,12 @@ def collect_metrics_from_log(
         if phase9_gap_ok_known > 0
         else None
     )
-    out["phase10_guard_line_count"] = phase10_guard_line_count
-    out["phase10_guard_active_count"] = phase10_guard_active_count
-    out["phase10_steer_limited_count"] = phase10_steer_limited_count
-    out["phase10_brake_limited_count"] = phase10_brake_limited_count
-    out["phase10_ttl_switch_blocked_count"] = phase10_ttl_switch_blocked_count
-    out["phase10_emergency_stable_count"] = phase10_emergency_stable_count
+    out["guard_guard_line_count"] = guard_guard_line_count
+    out["guard_guard_active_count"] = guard_guard_active_count
+    out["guard_steer_limited_count"] = guard_steer_limited_count
+    out["guard_brake_limited_count"] = guard_brake_limited_count
+    out["guard_ttl_switch_blocked_count"] = guard_ttl_switch_blocked_count
+    out["guard_emergency_stable_count"] = guard_emergency_stable_count
     out["phase11_planner_line_count"] = phase11_planner_line_count
     out["phase11_commit_trigger_count"] = phase11_commit_trigger_count
     out["phase11_abort_trigger_count"] = phase11_abort_trigger_count
