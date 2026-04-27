@@ -57,6 +57,7 @@ from scenic.domains.racing.assessment import (
     assess_race_situation,
     format_assessment_log_line,
 )
+from scenic.domains.racing.assessment.pass_geometry import _xy_at_arclength
 from scenic.domains.racing.safety import (
     StabilityGuardConfig,
     StabilityGuardState,
@@ -432,6 +433,26 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     except Exception:
                         print(f"{_fbhv} TTL preload failed for {_ttl_file}.")
                 print(f"{_fbhv} TTL preload (Phase 1 / Phase 3): folder={_ttl_folder} keys={_preloaded_keys}")
+                # SD-10k: pre-warm Shapely LineString + lap-length caches for every
+                # preloaded TTL polyline. Without this, the first runtime use of
+                # a side TTL (typically when the tactical planner first transitions
+                # to SETUP_PASS_*) cache-misses three places at once and stalls a
+                # tick by ~10ms of pure Shapely build (plus MPC retuning that we
+                # can't pre-warm). Pays the cost up-front during init where the
+                # 766ms cold-start window already absorbs it.
+                _prewarm_t0 = _wallclock_time.perf_counter()
+                for _pw_key in _preloaded_keys:
+                    _pw_pts = _scripted_ttl_cache[_pw_key][1]
+                    try:
+                        _pw_lap = polyline_lap_length_m(_pw_pts)
+                        _pw_x0 = float(_pw_pts[0][0]); _pw_y0 = float(_pw_pts[0][1])
+                        _arc_length_project_xy(_pw_x0, _pw_y0, _pw_pts)
+                        if _pw_lap and _pw_lap > 0.0:
+                            _xy_at_arclength(_pw_pts, 0.0, _pw_lap)
+                    except Exception:
+                        pass  # Cache miss at runtime is the only cost.
+                _prewarm_ms = (_wallclock_time.perf_counter() - _prewarm_t0) * 1000.0
+                print(f"{_fbhv} TTL cache pre-warmed in {_prewarm_ms:.1f} ms ({len(_preloaded_keys)} polylines)")
             if _scripted_schedule_enabled:
                 print(f"{_fbhv} Phase1 planner enabled: schedule={_scripted_schedule if _scripted_schedule else '[]'} speed_cap={_scripted_speed_cap}")
             if _tactical_planner_enabled:
@@ -1169,6 +1190,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     _left_wp = _scripted_ttl_cache["left"][1]
                 if _scripted_ttl_cache is not None and "right" in _scripted_ttl_cache:
                     _right_wp = _scripted_ttl_cache["right"][1]
+                # SD-10i: per-section timing.
+                _sec_t_planner_start = _wallclock_time.perf_counter()
                 _mode3, _ttl3, _cap3, _reason3 = tactical_planner_step_v1(
                     self._tactical_tp_state,
                     _sit3,
@@ -1198,6 +1221,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     # ~1s while abort_keep_ttl_lat_m holds the side line).
                     ego_active_ttl=str(_scripted_active_ttl or "optimal"),
                 )
+                _sec_planner_ms = (_wallclock_time.perf_counter() - _sec_t_planner_start) * 1000.0
+                self._sec_planner_ms = float(_sec_planner_ms)
                 _mode_tac = _mode3
                 _ttl_tac = _ttl3
                 _cap_tac = _cap3
@@ -1670,12 +1695,15 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             
             # Compute throttle/brake using MPC (with grade compensation if available)
             try:
+                # SD-10i: per-section timing for MPC longitudinal solve.
+                _sec_t_lon_start = _wallclock_time.perf_counter()
                 throttle_mpc, brake_mpc = _lon_controller.run_step(
                     vehicle_state_mpc,
                     v_ref_profile,
                     None,  # curvature_profile not used in simplified model
                     grade_profile  # Road grade profile for gravity compensation
                 )
+                self._sec_lon_ms = (_wallclock_time.perf_counter() - _sec_t_lon_start) * 1000.0
                 throttle_mpc = float(throttle_mpc)
                 brake_mpc = float(brake_mpc)
             except Exception as ex:
