@@ -221,6 +221,14 @@ class TacticalPlannerConfig:
     # to FOLLOW on optimal. Prevents the "stuck on side TTL while approaching" failure
     # mode from F2_tactical first attempt (4 sec SETUP without COMMIT → contact).
     setup_max_hold_s: float = 2.5
+    # SD-10c: minimum SETUP dwell time. Once SETUP is entered, don't abort
+    # back to FOLLOW for at least this long unless predicted_collision fires.
+    # F7's failure mode: ego entered SETUP_LEFT then bounced back to FOLLOW
+    # within 0.75s (5x in 11.6s). Even if the SETUP-cancellation reason was
+    # legitimate (low-confidence opening, brief pit_mode flicker), the rapid
+    # ttl ping-pong is destabilizing — better to commit for ~1s and let the
+    # COMMIT entry decide whether to proceed.
+    setup_min_dwell_s: float = 1.0
     # SD-10a: configurable hysteresis thresholds. Pre-SD-10a these were hardcoded
     # `setup_candidate_count<3` and `follow_pressure_count>=3` literals scattered
     # in the planner body, which made them invisible to test overrides and config
@@ -1510,6 +1518,21 @@ def tactical_planner_step_v1(
             _clear_pass_intent()
             _clear_lateral_lock()
             return _abort_result("abort_pass_safe_lost")
+        # SD-10c: setup_min_dwell_s. Don't abort SETUP back to FOLLOW if we
+        # entered SETUP less than min_dwell_s ago AND there's no genuine collision
+        # predicted. The F7 ttl ping-pong was caused by SETUP entering then
+        # bailing within ~0.75s on a transient pass_safe=False. Holding for at
+        # least 1s gives the COMMIT entry chain a chance to confirm or deny.
+        if (
+            state.mode in (SETUP_LEFT, SETUP_RIGHT)
+            and float(state.setup_entry_s) > -1.0e8
+            and (float(sim_time_s) - float(state.setup_entry_s)) < float(config.setup_min_dwell_s)
+            and not bool(state.predicted_collision)
+        ):
+            # Hold the SETUP. Speed cap is whatever _setup_result computed
+            # earlier; re-emit it via _setup_result for state consistency.
+            held_side = "left" if state.mode == SETUP_LEFT else "right"
+            return _setup_result(held_side, f"setup_min_dwell_{held_side}_hold")
         if state.mode in (SETUP_LEFT, SETUP_RIGHT):
             state.last_setup_exit_sim_time_s = float(sim_time_s)
             _clear_setup_commit()

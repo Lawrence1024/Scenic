@@ -921,8 +921,30 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 if hasattr(simulation(), "request_ego_route"):
                     simulation().request_ego_route(self, RACING_MODE_PIT)
             segment_name_current = _eff_name
-            # Pit mode for speed limit and throttle: segment-based only (pit road = pit limit; main = no limit)
-            pit_mode = in_pit_by_segment
+            # SD-10c: pit_mode hysteresis. F7 trace showed ego briefly flagged as
+            # pit_mode=True during a SETUP_LEFT lateral swing (~9.55s, 15.85s,
+            # 17.35s — each tick that the segment classifier glanced at a
+            # waypoint near the pit/main boundary), causing pit_mode_guard to
+            # force FREE_RUN and abort the setup. Result: ttl ping-pong
+            # (5x left↔optimal in 11.6s) and 287x pit_mode_guard events.
+            # Hysteresis: require N consecutive ticks of the same value before
+            # the latched pit_mode flips. Eliminates single-tick segment-classifier
+            # noise without affecting genuine pit-lane entry/exit (which lasts
+            # many seconds).
+            _PIT_HYSTERESIS_TICKS = 3
+            _pit_run = int(getattr(self, '_pit_mode_consecutive_count', 0) or 0)
+            _pit_latched = bool(getattr(self, '_pit_mode_latched', False))
+            if bool(in_pit_by_segment) == _pit_latched:
+                _pit_run = 0
+            else:
+                _pit_run += 1
+                if _pit_run >= _PIT_HYSTERESIS_TICKS:
+                    _pit_latched = bool(in_pit_by_segment)
+                    _pit_run = 0
+            self._pit_mode_consecutive_count = _pit_run
+            self._pit_mode_latched = _pit_latched
+            # Pit mode for speed limit and throttle: latched value only.
+            pit_mode = _pit_latched
             self._in_pit_by_segment = pit_mode
 
             # --- Phase 6 orchestration shells (state -> planner -> guard) ---
