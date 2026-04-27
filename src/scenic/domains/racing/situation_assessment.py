@@ -19,17 +19,51 @@ from typing import List, Optional, Sequence, Tuple
 # ---------------------------------------------------------------------------
 
 
+# SD-10j: TTL polylines are loaded once at startup (preloaded into
+# _scripted_ttl_cache in behaviors.scenic) and the same list object is reused
+# every tick. Cache LineString construction + arc-length sum keyed on
+# id(waypoints) — Shapely build over 3500 points was the dominant per-tick cost
+# after SD-10h fixed pass_geometry's _xy_at_arclength.
+_LAP_LENGTH_CACHE: dict = {}
+_LINESTRING_CACHE: dict = {}
+
+
+def _clear_polyline_caches() -> None:
+    """Test helper: drop cached LineStrings and lap lengths."""
+    _LAP_LENGTH_CACHE.clear()
+    _LINESTRING_CACHE.clear()
+
+
+def _polyline_cache_key(waypoints: Sequence[Sequence[float]]):
+    """Hybrid key: id() for fast hits + endpoints/length for collision disambiguation.
+
+    Python recycles id()s after GC, so id() alone risks returning a stale cached
+    LineString from a since-deleted polyline that happened to share the address.
+    Adding (n, first_xy, last_xy) makes accidental collision astronomically unlikely
+    while staying O(1).
+    """
+    n = len(waypoints)
+    fx, fy = float(waypoints[0][0]), float(waypoints[0][1])
+    lx, ly = float(waypoints[-1][0]), float(waypoints[-1][1])
+    return (id(waypoints), n, fx, fy, lx, ly)
+
+
 def polyline_lap_length_m(waypoints: Sequence[Sequence[float]]) -> float:
     """Closed-loop length: sum of segments i -> i+1 with last -> first."""
     n = len(waypoints)
     if n < 2:
         return 0.0
+    cache_key = _polyline_cache_key(waypoints)
+    cached = _LAP_LENGTH_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     total = 0.0
     for i in range(n):
         x0, y0 = float(waypoints[i][0]), float(waypoints[i][1])
         x1, y1 = float(waypoints[(i + 1) % n][0]), float(waypoints[(i + 1) % n][1])
         dx, dy = x1 - x0, y1 - y0
         total += (dx * dx + dy * dy) ** 0.5
+    _LAP_LENGTH_CACHE[cache_key] = total
     return total
 
 
@@ -42,10 +76,14 @@ def _arc_length_project_xy(
         return None
     if not waypoints or len(waypoints) < 2:
         return None
-    coords = [(float(p[0]), float(p[1])) for p in waypoints]
-    ls = LineString(coords)
-    if ls.is_empty or ls.length <= 0:
-        return None
+    cache_key = _polyline_cache_key(waypoints)
+    ls = _LINESTRING_CACHE.get(cache_key)
+    if ls is None:
+        coords = [(float(p[0]), float(p[1])) for p in waypoints]
+        ls = LineString(coords)
+        if ls.is_empty or ls.length <= 0:
+            return None
+        _LINESTRING_CACHE[cache_key] = ls
     return float(ls.project(Point(float(x), float(y))))
 
 

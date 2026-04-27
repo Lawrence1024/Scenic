@@ -69,10 +69,15 @@ def _xy_at_arclength(
 
     Returns None if shapely unavailable or polyline degenerate.
     SD-10h: caches the LineString on id(waypoints) — see module note above.
+    SD-10j: hybrid key (id + n + first_xy + last_xy) prevents stale-hit when
+    Python recycles a GC'd polyline's id (manifested under random test ordering).
     """
     if not waypoints or len(waypoints) < 2 or lap_length_m <= 0.0:
         return None
-    cache_key = id(waypoints)
+    n = len(waypoints)
+    fx, fy = float(waypoints[0][0]), float(waypoints[0][1])
+    lx, ly = float(waypoints[-1][0]), float(waypoints[-1][1])
+    cache_key = (id(waypoints), n, fx, fy, lx, ly)
     cached = _LINESTRING_CACHE.get(cache_key)
     if cached is None:
         try:
