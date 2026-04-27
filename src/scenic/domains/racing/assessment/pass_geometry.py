@@ -23,9 +23,19 @@ from typing import Optional, Sequence, Tuple
 # Default lookahead — observed F2 successful pass side-by-side window is 2-3 s.
 DEFAULT_PASS_DURATION_S = 2.5
 DEFAULT_SAMPLE_DT_S = 0.25
-# IAC width 1.93 m → half = 0.96 m. Two halves + 0.5 m safety = 1.6 m minimum
-# centreline-to-centreline spacing for a safe pass window.
-DEFAULT_MIN_LAT_CLEARANCE_M = 1.6
+# SD-9: raised from 1.6 m to 2.5 m. The 1.6 m threshold was derived as
+# "IAC half-width 0.96 m × 2 = 1.92 m for body-touching; +ε = 1.6 m" — wrong
+# arithmetic: 0.96+0.96 = 1.92, so 1.6 m is BELOW even body-touching minimum.
+# Realistic racing safety: 1.92 m bodies-touching + 0.5-1.0 m steering/oscillation
+# buffer = ~2.5 m centerline-to-centerline minimum.
+#
+# Empirical confirmation from F-bank (full_stack_20260427_082305):
+#   F2 right TTL @ start section: 2.08 m centerline-to-centerline → 0.15 m body
+#       clearance → "barely clears" → with 2.5 m threshold this section correctly
+#       rejects the pass; ego stays in FOLLOW until fellow moves or geometry widens.
+#   F3L right TTL (fellow on left): 5+ m centerline-to-centerline → 3+ m body
+#       buffer → SAFE pass; threshold change preserves F3L behavior.
+DEFAULT_MIN_LAT_CLEARANCE_M = 2.5
 
 
 def _xy_at_arclength(

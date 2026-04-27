@@ -1,23 +1,43 @@
-"""F2 variant with tactical_planner_enabled=True for RC-5/RC-6 validation.
+"""F2_tactical: slower fellow 35 m ahead on optimal line, ego target 60 m/s,
+tactical_planner_enabled=True.
 
-Same setup as examples/racing/f_shared/F2_fellow_ahead_optimal_slower.scenic
-(slower fellow 35 m ahead on optimal line, ego target 60 m/s) but with the
-tactical planner ON. This exercises:
-  - tactical state machine (FREE_RUN -> FOLLOW -> SETUP_PASS_* -> COMMIT_PASS_*)
-  - RC-5 commit_abort_enabled=True default (planner can now enter COMMIT mode)
-  - RC-5 assessment_enabled=True default (planner gets gap_ok / corridor_open inputs)
-  - RC-5 fixed gate at behaviors.scenic:901 (assessment block runs when tactical is on)
-  - RC-6 stability_guard_handle_ttl_switch planner_state bypass (only fires if guard is on)
+EXPECTED BEHAVIOR (post SD-9, 2026-04-27):
+  This is a "NO SAFE PASS AVAILABLE" scenario by design. The right TTL on
+  this section of LGS provides only ~2.08 m centerline-to-centerline from
+  optimal — below the SD-9 racing safety threshold (2.5 m centerline =
+  ~0.5 m body buffer). Left TTL similar. Therefore:
+
+    - SETUP_PASS_* should NOT fire (pass_window_check correctly rejects).
+    - Ego stays in FOLLOW behind the slower fellow indefinitely.
+    - decision_reason expected: pass_window_unsafe_both_sides (or similar).
+    - collision should be False, off_track False, lap_time longer than F0
+      (because ego is rate-limited to fellow's speed + follow_margin = 11.5 m/s).
+
+  This is the CORRECT racing behavior: when the geometry doesn't permit
+  a safe pass, the right move is to wait. F2 was previously the canonical
+  "ego must overtake" target but the geometry doesn't actually support it
+  at this starting position.
+
+  For test cases that DO exercise a successful overtake, see:
+    F3L_fellow_ahead_left_cruise.scenic   — fellow on LEFT TTL, ego passes RIGHT
+    F3R_fellow_ahead_right_cruise.scenic  — fellow on RIGHT TTL, ego passes LEFT
+  Both have ~5 m lateral separation between side TTLs (well above 2.5 m).
+
+State machine being exercised (mostly the FOLLOW path now):
+  - tactical state machine (FREE_RUN <-> FOLLOW)
+  - SD-3a/c pass_window_check correctly rejecting both sides
+  - SD-4 brake-trigger gating (predicted_collision should be 0 throughout)
+  - SD-9 raised lateral safety threshold
 
 Run:
-    scenic examples/racing/calibration/F2_tactical.scenic --2d \
-        --model scenic.simulators.dspace.racing_model --simulate --count 1 --time 12000
+    scenic examples/racing/calibration/F2_tactical.scenic --2d \\
+        --model scenic.simulators.dspace.racing_model --simulate --count 1 --time 3000
 
 What to look for in the log:
-  - [Phase3Tactical] lines: planner mode transitions
-  - [Commit] / COMMIT_PASS_LEFT / COMMIT_PASS_RIGHT in any log line: commit_abort actually firing
-  - [Assessment] lines: per-tick (RC-5)
-  - [CtrlTrace] ttl=...: switching from 'optimal' to 'left'/'right' during pass attempt
+  - [Tactical] lines: should stay in FOLLOW most of the time
+  - [PathPredict] lines: predicted_collision=0, min_clear ~2.0 m on both sides
+  - decision_reason=pass_window_unsafe_both_sides (or similar refusal)
+  - collision=False, contact_recovery_hold=0
 """
 param map = localPath('../../../assets/maps/dSPACE/LGS_v1.xodr')
 param use2DMap = True
