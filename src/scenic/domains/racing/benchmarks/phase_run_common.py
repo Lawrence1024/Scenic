@@ -166,17 +166,17 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "prediction_gain_vs_zero_mean",
     "prediction_regret_vs_hold_mean",
     "prediction_ratio_vs_hold_mean",
-    "phase8_assessment_line_count",
-    "phase8_fellow_relation_ahead_count",
-    "phase8_fellow_relation_behind_count",
-    "phase8_gap_ok_rate",
-    "phase8_safe_gap_mean",
-    "phase8_actual_gap_mean",
-    "phase8_optimal_open_rate",
-    "phase8_left_open_rate",
-    "phase8_right_open_rate",
-    "phase8_closing_flag_rate",
-    "phase8_emergency_risk_mean",
+    "assessment_assessment_line_count",
+    "assessment_fellow_relation_ahead_count",
+    "assessment_fellow_relation_behind_count",
+    "assessment_gap_ok_rate",
+    "assessment_safe_gap_mean",
+    "assessment_actual_gap_mean",
+    "assessment_optimal_open_rate",
+    "assessment_left_open_rate",
+    "assessment_right_open_rate",
+    "assessment_closing_flag_rate",
+    "assessment_emergency_risk_mean",
     "phase9_planner_line_count",
     "phase9_free_run_count",
     "phase9_follow_count",
@@ -474,17 +474,17 @@ def collect_metrics_from_log(
     prediction_err_next: List[float] = []
     prediction_err_zero: List[float] = []
     prediction_err_hold: List[float] = []
-    phase8_line_count = 0
-    phase8_rel_ahead_count = 0
-    phase8_rel_behind_count = 0
-    phase8_gap_ok_count = 0
-    phase8_opt_open_count = 0
-    phase8_left_open_count = 0
-    phase8_right_open_count = 0
-    phase8_closing_count = 0
-    phase8_safe_gap_vals: List[float] = []
-    phase8_actual_gap_vals: List[float] = []
-    phase8_risk_vals: List[float] = []
+    assessment_line_count = 0
+    assessment_rel_ahead_count = 0
+    assessment_rel_behind_count = 0
+    assessment_gap_ok_count = 0
+    assessment_opt_open_count = 0
+    assessment_left_open_count = 0
+    assessment_right_open_count = 0
+    assessment_closing_count = 0
+    assessment_safe_gap_vals: List[float] = []
+    assessment_actual_gap_vals: List[float] = []
+    assessment_risk_vals: List[float] = []
     phase9_line_count = 0
     phase9_states: List[str] = []
     phase9_ttls: List[str] = []
@@ -537,31 +537,31 @@ def collect_metrics_from_log(
             if "[Assessment]" in line:
                 p8 = RE_ASSESSMENT.search(line)
                 if p8:
-                    phase8_line_count += 1
+                    assessment_line_count += 1
                     _rel = str(p8.group("rel") or "")
                     if _rel == "ahead":
-                        phase8_rel_ahead_count += 1
+                        assessment_rel_ahead_count += 1
                     elif _rel == "behind":
-                        phase8_rel_behind_count += 1
+                        assessment_rel_behind_count += 1
                     if p8.group("gap_ok") == "1":
-                        phase8_gap_ok_count += 1
+                        assessment_gap_ok_count += 1
                     if p8.group("opt") == "1":
-                        phase8_opt_open_count += 1
+                        assessment_opt_open_count += 1
                     if p8.group("left") == "1":
-                        phase8_left_open_count += 1
+                        assessment_left_open_count += 1
                     if p8.group("right") == "1":
-                        phase8_right_open_count += 1
+                        assessment_right_open_count += 1
                     if p8.group("closing") == "1":
-                        phase8_closing_count += 1
+                        assessment_closing_count += 1
                     _safe = parse_float_or_none(p8.group("safe"))
                     _actual = parse_float_or_none(p8.group("actual"))
                     _risk = parse_float_or_none(p8.group("risk"))
                     if _safe is not None:
-                        phase8_safe_gap_vals.append(_safe)
+                        assessment_safe_gap_vals.append(_safe)
                     if _actual is not None:
-                        phase8_actual_gap_vals.append(_actual)
+                        assessment_actual_gap_vals.append(_actual)
                     if _risk is not None:
-                        phase8_risk_vals.append(_risk)
+                        assessment_risk_vals.append(_risk)
             if "[Planner]" in line:
                 p9 = RE_PLANNER.search(line)
                 if p9:
@@ -771,32 +771,32 @@ def collect_metrics_from_log(
     else:
         out["prediction_regret_vs_hold_mean"] = None
         out["prediction_ratio_vs_hold_mean"] = None
-    out["phase8_assessment_line_count"] = phase8_line_count
-    out["phase8_fellow_relation_ahead_count"] = phase8_rel_ahead_count
-    out["phase8_fellow_relation_behind_count"] = phase8_rel_behind_count
-    out["phase8_gap_ok_rate"] = (
-        (float(phase8_gap_ok_count) / float(phase8_line_count)) if phase8_line_count > 0 else None
+    out["assessment_assessment_line_count"] = assessment_line_count
+    out["assessment_fellow_relation_ahead_count"] = assessment_rel_ahead_count
+    out["assessment_fellow_relation_behind_count"] = assessment_rel_behind_count
+    out["assessment_gap_ok_rate"] = (
+        (float(assessment_gap_ok_count) / float(assessment_line_count)) if assessment_line_count > 0 else None
     )
-    out["phase8_safe_gap_mean"] = (
-        (sum(phase8_safe_gap_vals) / len(phase8_safe_gap_vals)) if phase8_safe_gap_vals else None
+    out["assessment_safe_gap_mean"] = (
+        (sum(assessment_safe_gap_vals) / len(assessment_safe_gap_vals)) if assessment_safe_gap_vals else None
     )
-    out["phase8_actual_gap_mean"] = (
-        (sum(phase8_actual_gap_vals) / len(phase8_actual_gap_vals)) if phase8_actual_gap_vals else None
+    out["assessment_actual_gap_mean"] = (
+        (sum(assessment_actual_gap_vals) / len(assessment_actual_gap_vals)) if assessment_actual_gap_vals else None
     )
-    out["phase8_optimal_open_rate"] = (
-        (float(phase8_opt_open_count) / float(phase8_line_count)) if phase8_line_count > 0 else None
+    out["assessment_optimal_open_rate"] = (
+        (float(assessment_opt_open_count) / float(assessment_line_count)) if assessment_line_count > 0 else None
     )
-    out["phase8_left_open_rate"] = (
-        (float(phase8_left_open_count) / float(phase8_line_count)) if phase8_line_count > 0 else None
+    out["assessment_left_open_rate"] = (
+        (float(assessment_left_open_count) / float(assessment_line_count)) if assessment_line_count > 0 else None
     )
-    out["phase8_right_open_rate"] = (
-        (float(phase8_right_open_count) / float(phase8_line_count)) if phase8_line_count > 0 else None
+    out["assessment_right_open_rate"] = (
+        (float(assessment_right_open_count) / float(assessment_line_count)) if assessment_line_count > 0 else None
     )
-    out["phase8_closing_flag_rate"] = (
-        (float(phase8_closing_count) / float(phase8_line_count)) if phase8_line_count > 0 else None
+    out["assessment_closing_flag_rate"] = (
+        (float(assessment_closing_count) / float(assessment_line_count)) if assessment_line_count > 0 else None
     )
-    out["phase8_emergency_risk_mean"] = (
-        (sum(phase8_risk_vals) / len(phase8_risk_vals)) if phase8_risk_vals else None
+    out["assessment_emergency_risk_mean"] = (
+        (sum(assessment_risk_vals) / len(assessment_risk_vals)) if assessment_risk_vals else None
     )
     out["phase9_planner_line_count"] = phase9_line_count
     out["phase9_free_run_count"] = sum(1 for s in phase9_states if s == "FREE_RUN")

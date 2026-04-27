@@ -1016,8 +1016,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                             _p7r = None
 
                 if _assessment_enabled and car_heading is not None:
-                    if not hasattr(self, '_phase8_assessment_state'):
-                        self._phase8_assessment_state = RaceSituationState()
+                    if not hasattr(self, '_assessment_assessment_state'):
+                        self._assessment_assessment_state = RaceSituationState()
                     _pred_xy8 = None
                     if _p7r is not None:
                         _pred_xy8 = (float(_p7r.fellow_pred_x), float(_p7r.fellow_pred_y))
@@ -1027,16 +1027,16 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         ego_xy=(float(px), float(py)),
                         ego_heading_rad=float(car_heading),
                         predicted_opp_xy=_pred_xy8,
-                        state=self._phase8_assessment_state,
+                        state=self._assessment_assessment_state,
                     )
-                    self._phase8_assessment_state = _a8_state
-                    self._phase8_gap_ok = bool(getattr(_a8, "gap_ok", True))
-                    self._phase8_overlap_flag = bool(getattr(_a8, "overlap_flag", False))
-                    self._phase8_closing_flag = bool(getattr(_a8, "closing_flag", False))
+                    self._assessment_assessment_state = _a8_state
+                    self._assessment_gap_ok = bool(getattr(_a8, "gap_ok", True))
+                    self._assessment_overlap_flag = bool(getattr(_a8, "overlap_flag", False))
+                    self._assessment_closing_flag = bool(getattr(_a8, "closing_flag", False))
                     try:
-                        self._phase8_emergency_risk_01 = float(getattr(_a8, "emergency_risk_01", 0.0) or 0.0)
+                        self._assessment_emergency_risk_01 = float(getattr(_a8, "emergency_risk_01", 0.0) or 0.0)
                     except Exception:
-                        self._phase8_emergency_risk_01 = 0.0
+                        self._assessment_emergency_risk_01 = 0.0
                     print(format_assessment_log_line(_sim_time_s, _a8))
             
             # --- Phase 3 tactical planner (TTL + follow cap; uses prior-step curvature lookahead) ---
@@ -2034,10 +2034,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             # reports unsafe overlap/closing/gap pressure, force longitudinal suppression.
             _eff_state_now = str(getattr(self, "_phase_effective_planner_state", "") or "")
             _eff_reason_now = str(getattr(self, "_phase_effective_reason", "") or "")
-            _hz_gap_bad = not bool(getattr(self, "_phase8_gap_ok", True))
-            _hz_overlap = bool(getattr(self, "_phase8_overlap_flag", False))
-            _hz_closing = bool(getattr(self, "_phase8_closing_flag", False))
-            _hz_risk = float(getattr(self, "_phase8_emergency_risk_01", 0.0) or 0.0)
+            _hz_gap_bad = not bool(getattr(self, "_assessment_gap_ok", True))
+            _hz_overlap = bool(getattr(self, "_assessment_overlap_flag", False))
+            _hz_closing = bool(getattr(self, "_assessment_closing_flag", False))
+            _hz_risk = float(getattr(self, "_assessment_emergency_risk_01", 0.0) or 0.0)
             _hz_reason_gate = _eff_reason_now in (
                 "protected_follow_envelope",
                 "contact_recovery_hold",
@@ -2126,10 +2126,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     throttle_cmd=float(final_throttle),
                     brake_cmd=float(final_brake),
                     pit_mode=bool(pit_mode),
-                    gap_ok=bool(getattr(self, "_phase8_gap_ok", True)),
-                    overlap_flag=bool(getattr(self, "_phase8_overlap_flag", False)),
-                    closing_flag=bool(getattr(self, "_phase8_closing_flag", False)),
-                    emergency_risk_01=float(getattr(self, "_phase8_emergency_risk_01", 0.0) or 0.0),
+                    gap_ok=bool(getattr(self, "_assessment_gap_ok", True)),
+                    overlap_flag=bool(getattr(self, "_assessment_overlap_flag", False)),
+                    closing_flag=bool(getattr(self, "_assessment_closing_flag", False)),
+                    emergency_risk_01=float(getattr(self, "_assessment_emergency_risk_01", 0.0) or 0.0),
                     ttl_switch_blocked=bool(_p10_ttl_switch_blocked),
                 )
                 final_steer = float(_p10_guard.steer_cmd_rad)
@@ -2148,7 +2148,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             # RC-1: consolidated controller-trace per tick. Read-only telemetry; safe to remove.
             # Captures POST-stability-guard (truly final) commands plus the upstream values
             # the executor used. Some fields are populated by code paths that don't always
-            # run (e.g. _phase8_*); read defensively via getattr so we never crash the
+            # run (e.g. _assessment_*); read defensively via getattr so we never crash the
             # control loop with telemetry. CTE and curvature_ahead read from self attrs
             # (locals can be stale 0 if the speed-gate try block was skipped).
             try:
@@ -2167,9 +2167,9 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     f"planner={str(getattr(self, '_phase_effective_planner_state', 'FREE_RUN') or 'FREE_RUN')} "
                     f"ttl={str(getattr(self, '_phase_effective_ttl', _phase1_active_ttl) or 'optimal')} "
                     f"ttl_blocked={int(bool(_p10_ttl_switch_blocked))} "
-                    f"gap_ok={int(bool(getattr(self, '_phase8_gap_ok', True)))} "
-                    f"overlap={int(bool(getattr(self, '_phase8_overlap_flag', False)))} "
-                    f"risk={float(getattr(self, '_phase8_emergency_risk_01', 0.0) or 0.0):.3f} "
+                    f"gap_ok={int(bool(getattr(self, '_assessment_gap_ok', True)))} "
+                    f"overlap={int(bool(getattr(self, '_assessment_overlap_flag', False)))} "
+                    f"risk={float(getattr(self, '_assessment_emergency_risk_01', 0.0) or 0.0):.3f} "
                     f"seg={getattr(self, '_last_valid_segment_id', None)}/"
                     f"{str(getattr(self, '_segment_type_at_wp', None) or 'na')} "
                     f"seg_ahead={getattr(self, '_segment_id_ahead', None)}/"

@@ -40,7 +40,7 @@ from scenic.domains.racing.benchmarks.phase_run_common import (
 _CHILD_PHASES: Tuple[Tuple[str, str], ...] = (
     ("phase6", "scenic.domains.racing.benchmarks.phase6_runner"),
     ("prediction", "scenic.domains.racing.benchmarks.prediction_runner"),
-    ("phase8", "scenic.domains.racing.benchmarks.phase8_runner"),
+    ("phase8", "scenic.domains.racing.benchmarks.assessment_runner"),
     ("phase9", "scenic.domains.racing.benchmarks.phase9_runner"),
     ("phase10", "scenic.domains.racing.benchmarks.phase10_runner"),
     ("phase11", "scenic.domains.racing.benchmarks.phase11_runner"),
