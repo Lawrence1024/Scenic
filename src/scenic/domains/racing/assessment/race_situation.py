@@ -18,6 +18,12 @@ STATIONARY_OPP_SPEED_MPS = 1.5
 FLYBY_LAT_MIN_M = 1.15
 FLYBY_MIN_LONG_SLOT_M = 7.5
 
+# SD-2a: corridor-hysteresis hold window. ~5 ticks @ 20 Hz ≈ 0.25 s. The chicken-and-egg
+# pattern observed at F2_tactical t=0.70→0.75 (right_open 1→0 within one tick of ego
+# starting SETUP_PASS_RIGHT) needs a brief grace period so the planner can commit before
+# the lateral re-projection from the TTL switch flips the corridor flag back closed.
+CORRIDOR_HOLD_CYCLES = 5
+
 
 @dataclass(frozen=True)
 class RaceSituationAssessment:
@@ -32,6 +38,10 @@ class RaceSituationAssessment:
     overlap_flag: bool
     emergency_risk_01: float
     source: str
+    # SD-2a: bitmask of which corridor flags were forced open by hysteresis this tick
+    # (raw said closed, but hold_remaining > 0). Used purely for telemetry / grep.
+    # 0 = none held; bit 0 = optimal, bit 1 = left, bit 2 = right.
+    corridor_held_mask: int = 0
 
 
 @dataclass(frozen=True)
@@ -41,6 +51,17 @@ class RaceSituationState:
     previous_relation: str = "none"
     emergency_latch_steps: int = 0
     last_emergency_risk_01: float = 0.0
+    # SD-2a: corridor-flag hysteresis. Once a corridor opens, hold it open for
+    # CORRIDOR_HOLD_CYCLES even if the raw computation would close it. Prevents
+    # the chicken-and-egg pattern where ego switches TTL toward an open side and
+    # the act of switching causes the lateral relationship to flip the corridor
+    # closed within one tick (observed F2_tactical t=0.70→0.75: right_open
+    # 1→0 immediately after ego started SETUP_PASS_RIGHT). Closes are NOT
+    # held — overlap_flag and immediate-danger paths still close instantly via
+    # the bypass below.
+    left_open_hold_remaining: int = 0
+    right_open_hold_remaining: int = 0
+    optimal_open_hold_remaining: int = 0
 
 
 
@@ -143,6 +164,26 @@ def _compute_corridor_open_flags(
             left_open = False
             right_open = False
     return optimal_open, left_open, right_open
+
+
+def _apply_corridor_hysteresis(
+    *, raw_open: bool, prior_hold: int, bypass: bool
+) -> Tuple[bool, int]:
+    """Hold a corridor "open" for CORRIDOR_HOLD_CYCLES after raw computation closes.
+
+    Returns (effective_open, next_hold_remaining).
+    - bypass=True (overlap_flag): immediate close, hold reset.
+    - raw_open=True: open, hold rearmed to CORRIDOR_HOLD_CYCLES.
+    - raw_open=False, prior_hold>0: open (held), hold decremented.
+    - raw_open=False, prior_hold==0: closed.
+    """
+    if bypass:
+        return False, 0
+    if raw_open:
+        return True, int(CORRIDOR_HOLD_CYCLES)
+    if prior_hold > 0:
+        return True, prior_hold - 1
+    return False, 0
 
 
 def _longitudinal_opening_dampen(
@@ -256,6 +297,9 @@ def assess_race_situation(
             previous_relation="none",
             emergency_latch_steps=max(0, int(st.emergency_latch_steps) - 1),
             last_emergency_risk_01=0.0,
+            left_open_hold_remaining=0,
+            right_open_hold_remaining=0,
+            optimal_open_hold_remaining=0,
         )
 
     relation = (
@@ -294,11 +338,35 @@ def assess_race_situation(
     # The predicted position introduces heading-noise at low speed and oscillates around the
     # 0.8 m threshold, causing left_open/right_open to flip every cycle. Current lateral is
     # stable; longitudinal (pred_long) still comes from prediction for gap calc.
-    optimal_open, left_open, right_open = _compute_corridor_open_flags(
+    raw_optimal, raw_left, raw_right = _compute_corridor_open_flags(
         relation=relation,
         pred_long_m=pred_long,
         pred_lat_m=float(sit.lateral_m),
         overlap_flag=overlap_flag,
+    )
+    # SD-2a hysteresis. Raw "open" passes through and arms the hold counter; raw "closed"
+    # is overridden to "open" while hold_remaining > 0 (and we are NOT in an overlap-flag
+    # safety bypass). Overlap flag closes immediately so true near-contact geometry is
+    # never held-open by a stale hysteresis tick.
+    optimal_open, opt_hold = _apply_corridor_hysteresis(
+        raw_open=raw_optimal,
+        prior_hold=int(st.optimal_open_hold_remaining),
+        bypass=overlap_flag,
+    )
+    left_open, left_hold = _apply_corridor_hysteresis(
+        raw_open=raw_left,
+        prior_hold=int(st.left_open_hold_remaining),
+        bypass=overlap_flag,
+    )
+    right_open, right_hold = _apply_corridor_hysteresis(
+        raw_open=raw_right,
+        prior_hold=int(st.right_open_hold_remaining),
+        bypass=overlap_flag,
+    )
+    held_mask = (
+        (1 if (optimal_open and not raw_optimal) else 0)
+        | (2 if (left_open and not raw_left) else 0)
+        | (4 if (right_open and not raw_right) else 0)
     )
 
     risk_now = _compute_emergency_risk(
@@ -332,11 +400,15 @@ def assess_race_situation(
         overlap_flag=overlap_flag,
         emergency_risk_01=risk_out,
         source=source,
+        corridor_held_mask=int(held_mask),
     )
     next_state = RaceSituationState(
         previous_relation=relation,
         emergency_latch_steps=latch_steps,
         last_emergency_risk_01=risk_out,
+        left_open_hold_remaining=left_hold,
+        right_open_hold_remaining=right_hold,
+        optimal_open_hold_remaining=opt_hold,
     )
     return assessment, next_state
 
@@ -344,11 +416,19 @@ def assess_race_situation(
 
 def format_assessment_log_line(sim_time_s: float, a: RaceSituationAssessment) -> str:
     ag = f"{a.actual_gap_m:.3f}" if a.actual_gap_m is not None else "na"
+    held_tag = ""
+    if int(a.corridor_held_mask) != 0:
+        m = int(a.corridor_held_mask)
+        which = []
+        if m & 1: which.append("opt")
+        if m & 2: which.append("L")
+        if m & 4: which.append("R")
+        held_tag = f" [CorridorHysteresis] held={','.join(which)}"
     return (
         f"[Assessment] t={sim_time_s:.2f}s fellow_relation={a.fellow_relation} "
         f"closing_flag={1 if a.closing_flag else 0} actual_gap={ag} safe_gap={a.safe_gap_m:.3f} "
         f"gap_ok={1 if a.gap_ok else 0} optimal_open={1 if a.optimal_open else 0} "
         f"left_open={1 if a.left_open else 0} right_open={1 if a.right_open else 0} "
         f"overlap_flag={1 if a.overlap_flag else 0} emergency_risk_01={a.emergency_risk_01:.3f} "
-        f"source={a.source}"
+        f"source={a.source}{held_tag}"
     )

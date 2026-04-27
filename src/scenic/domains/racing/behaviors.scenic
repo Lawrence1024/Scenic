@@ -1153,7 +1153,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         _scripted_active_ttl = _ttl_tac
                         wp_last_idx = 0
                         wp_list = list(self.waypoints)
-                        print(f"{_fl_mpc} [Phase3Tactical] t={_sim_time_s:.2f}s ttl_switch {_p3}->{_scripted_active_ttl} mode={_mode3}")
+                        print(f"{_fl_mpc} [Tactical] t={_sim_time_s:.2f}s ttl_switch {_p3}->{_scripted_active_ttl} mode={_mode3}")
                 self.active_ttl = _scripted_active_ttl
                 # Phase 9 authority path owns speed cap end-to-end.
                 self._tactical_speed_cap = float(_cap_tac) if _cap_tac is not None else None
@@ -1214,7 +1214,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         f"seg_ctx={_seg_ctx} seg_modifier={_seg_modifier}"
                     )
                 if getattr(self, '_full_control_ticks', 0) % 50 == 0:
-                    print(f"{_fl_mpc} [Phase3Tactical] t={_sim_time_s:.2f}s mode={_mode3} ttl={_scripted_active_ttl} cap={self._tactical_speed_cap}")
+                    print(f"{_fl_mpc} [Tactical] t={_sim_time_s:.2f}s mode={_mode3} ttl={_scripted_active_ttl} cap={self._tactical_speed_cap}")
             
             # --- Curvature-based speed gate (from suggestion.md) ---
             # Formula: v_max(s) = sqrt(a_y_max / (|κ(s)| + ε))
