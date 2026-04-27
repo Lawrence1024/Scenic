@@ -38,7 +38,7 @@ class TacticalPlannerConfig:
     blocked_headway_s: float = 1.8
     setup_min_headway_s: float = 0.6
     hard_ttc_s: float = 1.4
-    pass_min_relative_speed_mps: float = 0.1
+    pass_min_relative_speed_mps: float = 3.0  # SD-2e: realistic overtake needs ≥3 m/s differential
     follow_tight_cap_scale: float = 0.92
     setup_min_distance_m: float = 9.0
     setup_partial_overlap_lateral_m: float = 1.8
@@ -71,7 +71,15 @@ class TacticalPlannerConfig:
     commit_success_time_s: float = 2.0
     commit_max_speed_mps: float = 999.0  # effectively disabled; use opposing_commit_cooldown instead
     opposing_commit_cooldown_s: float = 4.0
-    commit_max_longitudinal_m: float = 40.0  # only commit when within this longitudinal gap
+    # SD-2e: pass should start close to fellow (1-2 car lengths, "outbraking distance"),
+    # not from far back. 22 m ≈ 4-5 car lengths — enough room for the lateral shift but
+    # not so far that the right-TTL geometry can curve back into ego before passing.
+    commit_max_longitudinal_m: float = 22.0  # only commit when within this longitudinal gap
+    # SD-2e: bounded speed margin during COMMIT. Was None (unbounded) which let ego
+    # accelerate to closing-rate=17 m/s — too fast for the right TTL to clear before
+    # converging back to optimal. opp_speed + 8 m/s gives a controlled side-by-side
+    # window (pass typically completes in 2-3 sec at this differential).
+    commit_speed_margin_mps: float = 8.0
     commit_approach_risk_max: float = 0.10   # close-approach risk ceiling for commit entry
     # Segment-conditioned tactical intelligence
     segment_aware_enabled: bool = False
@@ -265,11 +273,19 @@ def tactical_planner_step_v1(
         state.commit.post_event_state = "none"
 
     def _commit_result(side: str, reason: str) -> Tuple[str, str, Optional[float], str]:
+        # SD-2e: cap speed during COMMIT so ego maintains a controlled differential
+        # (~8 m/s closing) instead of charging at full target_speed. Removes the
+        # over-acceleration that caused F2_tactical's right-TTL convergence overshoot.
+        # The cap only applies while the fellow is still ahead; once relation flips
+        # to behind, the COMMIT branch transitions to FREE_RUN (cap=None) at line 522.
+        cap: Optional[float] = None
+        if relation_ahead and sit is not None:
+            cap = max(3.0, float(opponent_speed_mps) + float(config.commit_speed_margin_mps))
         if side == "left":
             state.mode = COMMIT_PASS_LEFT
-            return COMMIT_PASS_LEFT, "left", None, reason
+            return COMMIT_PASS_LEFT, "left", cap, reason
         state.mode = COMMIT_PASS_RIGHT
-        return COMMIT_PASS_RIGHT, "right", None, reason
+        return COMMIT_PASS_RIGHT, "right", cap, reason
 
     def _abort_result(reason: str) -> Tuple[str, str, Optional[float], str]:
         state.mode = ABORT_PASS

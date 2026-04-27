@@ -80,7 +80,8 @@ def test_setup_left_when_opponent_on_right():
         segment_context="straight",
         overlap_state="clear_ahead",
         distance_m=35.0,
-        longitudinal_m=25.0,
+        longitudinal_m=20.0,
+        closing_speed_mps=5.0,  # SD-2e: realistic overtake closing speed
     )
     m, ttl, cap = tactical_planner_step(
         st, s, has_opponent=True, ego_speed_mps=35.0, opponent_speed_mps=30.0,
@@ -119,7 +120,8 @@ def test_setup_flip_cooldown():
     st.mode = SETUP_LEFT
     st.last_flip_sim_time_s = 0.0
     cfg = TacticalPlannerConfig(setup_flip_cooldown_s=100.0)
-    s = _sit(lateral_relation="right", collision_risk_01=0.1, longitudinal_m=25.0, distance_m=35.0)
+    s = _sit(lateral_relation="right", collision_risk_01=0.1, longitudinal_m=20.0, distance_m=35.0,
+             closing_speed_mps=5.0)  # SD-2e: realistic overtake closing speed
     m, ttl, _ = tactical_planner_step(
         st, s, has_opponent=True, ego_speed_mps=35.0, opponent_speed_mps=30.0,
         sim_time_s=1.0, pit_mode=False, config=cfg,
@@ -418,8 +420,9 @@ def test_protected_follow_releases_into_setup_when_opening_stably_clear():
         lateral_relation="right",
         overlap_state="clear_ahead",
         collision_risk_01=0.05,
-        distance_m=30.0,
-        longitudinal_m=24.0,
+        distance_m=24.0,
+        longitudinal_m=20.0,
+        closing_speed_mps=5.0,  # SD-2e: realistic overtake closing speed
         ahead=True,
     )
     # Stable open window should release the protected-follow latch.
@@ -541,7 +544,7 @@ def test_setup_commit_hold_keeps_setup_during_moderate_pressure():
         collision_risk_01=0.1,
         distance_m=24.0,
         longitudinal_m=20.0,
-        closing_speed_mps=1.5,
+        closing_speed_mps=4.0,  # SD-2e: realistic overtake closing speed
         ahead=True,
     )
     m0, ttl0, cap0, reason0 = tactical_planner_step_v1(
@@ -600,7 +603,7 @@ def test_setup_commit_cancels_on_hard_hazard():
         collision_risk_01=0.1,
         distance_m=24.0,
         longitudinal_m=20.0,
-        closing_speed_mps=1.2,
+        closing_speed_mps=4.0,  # SD-2e: realistic overtake closing speed
         ahead=True,
     )
     m0, ttl0, cap0, reason0 = tactical_planner_step_v1(
@@ -667,9 +670,9 @@ def test_pass_intent_commit_arms_from_follow_and_enters_setup():
         lateral_relation="right",
         overlap_state="clear_ahead",
         collision_risk_01=0.08,
-        distance_m=28.0,
-        longitudinal_m=22.0,
-        closing_speed_mps=1.2,
+        distance_m=24.0,
+        longitudinal_m=20.0,
+        closing_speed_mps=4.0,  # SD-2e: realistic overtake closing speed
         ahead=True,
     )
     # First cycle: collect intent, still in FOLLOW.
@@ -769,9 +772,9 @@ def test_commit_from_setup_chain_left():
         lateral_relation="right",
         overlap_state="clear_ahead",
         collision_risk_01=0.08,
-        distance_m=26.0,
-        longitudinal_m=22.0,
-        closing_speed_mps=1.4,
+        distance_m=24.0,
+        longitudinal_m=20.0,
+        closing_speed_mps=4.0,  # SD-2e: realistic overtake closing speed
         ahead=True,
     )
     m, ttl, cap, reason = tactical_planner_step_v1(
@@ -791,7 +794,12 @@ def test_commit_from_setup_chain_left():
         assessment_closing_flag=False,
         assessment_emergency_risk_01=0.08,
     )
-    assert m == COMMIT_PASS_LEFT and ttl == "left" and cap is None
+    # SD-2e: COMMIT now caps speed to opp_speed + commit_speed_margin_mps (24 + 8 = 32).
+    # The cap is bounded but non-None, replacing the unbounded charge that caused
+    # F2_tactical's right-TTL convergence overshoot.
+    assert m == COMMIT_PASS_LEFT and ttl == "left"
+    assert cap is not None
+    assert abs(cap - 32.0) < 0.01
     assert reason == "commit_pass_left"
     assert st.commit.trigger == "setup_chain_commit_left"
     assert st.commit.post_event_state == COMMIT_PASS_LEFT
@@ -909,7 +917,9 @@ def test_commit_does_not_abort_on_stationary_offaxis_overlap():
         assessment_closing_flag=False,
         assessment_emergency_risk_01=0.05,
     )
-    assert m == COMMIT_PASS_LEFT and ttl == "left" and cap is None
+    # SD-2e: COMMIT now caps speed to opp_speed + commit_speed_margin_mps (0 + 8 = 8 m/s).
+    assert m == COMMIT_PASS_LEFT and ttl == "left"
+    assert cap is not None and abs(cap - 8.0) < 0.01
     assert reason == "commit_pass_left_hold"
     assert st.commit.abort_trigger == "none"
 
@@ -1521,9 +1531,9 @@ def test_commit_blocked_when_above_speed_cap():
         lateral_relation="right",
         overlap_state="clear_ahead",
         collision_risk_01=0.08,
-        distance_m=26.0,
-        longitudinal_m=22.0,
-        closing_speed_mps=1.4,
+        distance_m=24.0,
+        longitudinal_m=20.0,
+        closing_speed_mps=4.0,  # SD-2e: realistic overtake closing speed
         ahead=True,
     )
     base_cfg = dict(
@@ -1583,9 +1593,9 @@ def test_commit_opposing_commit_cooldown_blocks_then_releases():
         lateral_relation="right",
         overlap_state="clear_ahead",
         collision_risk_01=0.08,
-        distance_m=26.0,
-        longitudinal_m=22.0,
-        closing_speed_mps=1.4,
+        distance_m=24.0,
+        longitudinal_m=20.0,
+        closing_speed_mps=4.0,  # SD-2e: realistic overtake closing speed
         ahead=True,
     )
     cfg = TacticalPlannerConfig(
@@ -1686,7 +1696,7 @@ def test_commit_blocked_when_gap_too_large():
         collision_risk_01=0.05,
         distance_m=49.0,
         longitudinal_m=45.0,
-        closing_speed_mps=1.4,
+        closing_speed_mps=4.0,  # SD-2e: realistic overtake closing speed
         ahead=True,
     )
     m_far, _, _, _ = tactical_planner_step_v1(st_far, s_far, sim_time_s=0.0, **common)
@@ -1701,7 +1711,7 @@ def test_commit_blocked_when_gap_too_large():
         collision_risk_01=0.05,
         distance_m=39.0,
         longitudinal_m=35.0,
-        closing_speed_mps=1.4,
+        closing_speed_mps=4.0,  # SD-2e: realistic overtake closing speed
         ahead=True,
     )
     m_close, ttl_close, _, reason_close = tactical_planner_step_v1(
