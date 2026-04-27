@@ -3,6 +3,13 @@
 This is the canonical reference for how coordinates flow through the Scenic ↔ dSPACE
 racing stack. **Read this before touching `placement.py`, `readback.py`, or any TTL CSV.**
 
+> **Note on "Phase" terminology:** sections below labelled "Phase A.1", "Phase B.5",
+> etc. refer to the **frames-calibration cycle** (B5/B6 frame migration to LGS_v1.xodr).
+> This is a different concept from the now-deleted control-side "Phase 0–12"
+> numbering — those control-cycle phases were renamed to descriptive names
+> (`prediction`, `assessment`, `guard`, `commit`, etc.) in the CC-* cleanup cycle.
+> See [`docs/cleanup_inventory.md`](cleanup_inventory.md) for the rename map.
+
 ## TL;DR
 
 ```

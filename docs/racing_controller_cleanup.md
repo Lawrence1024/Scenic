@@ -141,10 +141,34 @@ If F0 spinout returns or a similar issue surfaces:
 
 - Tactical planner tuning so it actually attempts SETUP_PASS_* /
   COMMIT_PASS_* with slower opponents (currently sits in FOLLOW
-  indefinitely)
+  indefinitely) — this is the **SD-* cycle** documented in
+  [`docs/racing_smart_driving.md`](racing_smart_driving.md).
 - Consider raising `max_lateral_acceleration` from our 8.0 to race_common's
   15.0 now that the weight de-tune means MPC won't over-react
 - Optionally: import LON_VEL (per-waypoint optimal velocity) from
   race_common's ttl_17 as a richer speed-target source than constant
   `target_speed=60` — RC-V if pursued
 - Pure Pursuit port if MPC tuning hits a ceiling we can't get past
+
+## Cleanup cycle (CC-*) — post-RC
+
+Following the RC cycle, the codebase had accumulated 869 references to
+`_phase\d+_*` symbols whose numeric tag conveyed nothing semantic, plus
+significant legacy (6 dead phase scenario directories on the LagunaSeca
+map, 18 phase-numbered plan docs, `coordinate_transform.py`, etc.).
+The CC-* cycle (2026-04-26) cleaned this up:
+
+| Stage | Commit | What |
+|---|---|---|
+| CC-1 | 96e0870d | `docs/cleanup_inventory.md` — full deletion+rename map |
+| CC-2 | fabcfcd3 | Delete 6 phase scenario dirs, 4 standalone .scenic, 7 LagunaSeca map files, 12 TTL backups, `coordinate_transform.py`, `Laguna_Seca_transform.json`, `LAGUNA_SECA_SEGMENTS` constant |
+| CC-3a | 44bf6852 | `_phase7_*` → `_prediction_*`, file `phase7_runner.py` → `prediction_runner.py` |
+| CC-3b | (commit) | `_phase8_*` → `_assessment_*`, file → `assessment_runner.py` |
+| CC-3c | (commit) | `_phase10_*` → `_guard_*`, file → `guard_runner.py` |
+| CC-3d | (commit) | `_phase11_*` → `_commit_*`, file → `commit_pass_runner.py`, ~30 test names renamed |
+| CC-3e | 85a6f4db (and follow-up) | Phase 0/1/2/3/4/5/6/9/12 → baseline/scripted/opponent/tactical/shield/segment/orchestration/hazard/seg; remaining runner files renamed |
+| CC-4 | (this commit) | Doc updates: deleted 18 phase-*.md plan docs, rewrote `plans/README.md`, added `docs/racing_smart_driving.md` stub, header pointer in `racing/README.md` |
+| CC-5 | (next) | F-bank validation pass; tag `milestone-cleanup-cc-complete` |
+
+After CC-5 the SD-* cycle starts (see
+[`docs/racing_smart_driving.md`](racing_smart_driving.md)).

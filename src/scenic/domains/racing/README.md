@@ -1,5 +1,20 @@
 # Racing Domain - Complete Reference
 
+> **Architecture / change log**
+> - `docs/racing_controller_cleanup.md` — RC-* refactor (telemetry, weight de-tune,
+>   segment-aware speed planner, elevation backfill) and CC-* cleanup (phase
+>   renaming, dead-code deletion).
+> - `docs/cleanup_inventory.md` — full deletion + rename map for the CC-* cycle.
+> - `docs/frames.md` — coordinate frames, track elevation, frame calibration history.
+> - `docs/racing_smart_driving.md` — opponent-aware planner improvements (SD-* cycle).
+>
+> **Canonical scenarios:** `examples/racing/f_shared/F0–F12` is the complete test set.
+> All other historical scenario directories were removed in CC-2.
+>
+> **Phase numbering removed:** the old "Phase 0–12" tags throughout the codebase
+> were renamed to descriptive prefixes in CC-3 (e.g. `_phase7_*` → `_prediction_*`,
+> `_phase11_*` → `_commit_*`). See `docs/cleanup_inventory.md` for the full map.
+
 ## Overview
 
 The Scenic Racing Domain (`@racing/`) extends the Driving Domain (`@driving/`) with racing-specific objects, behaviors, and actions for closed-circuit race tracks. This document provides a comprehensive reference to all racing-specific components that are **additional** to the driving domain.
@@ -35,7 +50,7 @@ The Scenic Racing Domain (`@racing/`) extends the Driving Domain (`@driving/`) w
 ### Basic Setup
 
 ```scenic
-param map = localPath('LagunaSeca.xodr')
+param map = localPath('LGS_v1.xodr')
 param use2DMap = True
 param trackDirection = 'counterclockwise'
 model scenic.domains.racing.model
@@ -48,7 +63,7 @@ opponent = new RacingCar on mainTrack
 ### With Behaviors
 
 ```scenic
-param map = localPath('LagunaSeca.xodr')
+param map = localPath('LGS_v1.xodr')
 param use2DMap = True
 model scenic.domains.racing.model
 
@@ -465,7 +480,7 @@ Prediction (Layer 0.5): `prediction/fellow_predictor.py` feeds `FellowPredictor`
 ### Basic Grid Start
 
 ```scenic
-param map = localPath('LagunaSeca.xodr')
+param map = localPath('LGS_v1.xodr')
 param use2DMap = True
 param trackDirection = 'counterclockwise'
 model scenic.domains.racing.model
@@ -479,7 +494,7 @@ opponent2 = new RacingCar on mainTrack
 ### With Behaviors
 
 ```scenic
-param map = localPath('LagunaSeca.xodr')
+param map = localPath('LGS_v1.xodr')
 param use2DMap = True
 model scenic.domains.racing.model
 
@@ -495,7 +510,7 @@ opponent = new RacingCar on mainTrack, \
 ### Pit Stop Scenario
 
 ```scenic
-param map = localPath('LagunaSeca.xodr')
+param map = localPath('LGS_v1.xodr')
 param use2DMap = True
 model scenic.domains.racing.model
 
@@ -819,8 +834,8 @@ src/scenic/domains/racing/
 │   ├── phase_run_common.py  #   Log parser (RE_PLANNER, RE_ASSESSMENT, RE_GUARD, RE_COMMIT …)
 │   ├── f_scenario_bank.py   #   Scenario name banks per runner
 │   ├── baseline_runner.py … tactical_runner.py          # original-architecture runners
-│   ├── phase3_on_baseline_runner.py                   # cross-check runner
-│   ├── phase7_runner.py … segment_aware_runner.py         # new-architecture (post-Phase 6 restructure)
+│   ├── tactical_on_baseline_runner.py                   # cross-check runner
+│   ├── prediction_runner.py … segment_aware_runner.py         # new-architecture (post-Phase 6 restructure)
 │   ├── full_stack_runner.py                         # complete intelligence stack (all F-scenarios)
 │   ├── validation_full_stack_runner.py              # full-stack stress/validation campaign
 │   ├── validation_orchestration_runner.py               # phase 6-12 regression suite
