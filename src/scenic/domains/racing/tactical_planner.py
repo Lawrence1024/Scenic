@@ -79,16 +79,43 @@ class TacticalPlannerConfig:
     commit_success_time_s: float = 2.0
     commit_max_speed_mps: float = 999.0  # effectively disabled; use opposing_commit_cooldown instead
     opposing_commit_cooldown_s: float = 4.0
-    # SD-2e: pass should start close to fellow (1-2 car lengths, "outbraking distance"),
-    # not from far back. 22 m ≈ 4-5 car lengths — enough room for the lateral shift but
-    # not so far that the right-TTL geometry can curve back into ego before passing.
-    commit_max_longitudinal_m: float = 22.0  # only commit when within this longitudinal gap
-    # SD-2f: don't even enter SETUP when fellow is far away. SETUP performs the lateral
-    # shift to a side TTL; doing it from 40+ m away means ego physically converges with
-    # the fellow on a side line for several seconds before COMMIT can fire (observed
-    # F2_tactical first attempt: 4 sec SETUP→contact). 28 m = commit_max_longitudinal +
-    # ~6 m buffer, so SETUP fires close enough that COMMIT triggers within 1-2 cycles.
-    setup_max_longitudinal_m: float = 28.0
+    # SD-3b: SETUP/COMMIT entry distances are now Δv-derived. Replaces the old
+    # constants setup_max_longitudinal_m / commit_max_longitudinal_m with a linear
+    # function of Δv = ego_speed - opp_speed, clamped to a sane band.
+    #
+    # Formula: gap_max(Δv) = clamp(floor, ceiling, slope * Δv + intercept)
+    #
+    # Anchors at observed F2_tactical successful pass (Δv ≈ 5 m/s):
+    #   SETUP: 1.4*5 + 14  = 21 m  (was 28 — slightly tighter)
+    #   COMMIT: 0.9*5 + 8  = 12.5 m (was 22 — much tighter, real "outbraking" range)
+    # Anchors at high Δv (Δv=15: ego catching slow fellow on long straight):
+    #   SETUP: 1.4*15 + 14 = 35 m  (swerve out far — gap closes fast)
+    #   COMMIT: 0.9*15 + 8 = 21.5 m
+    # Anchors at low Δv (Δv=2: matched-speed startup):
+    #   SETUP: 1.4*2 + 14  = 16.8 m (wait closer)
+    #   COMMIT: 0.9*2 + 8  = 9.8 m
+    setup_gap_dv_slope: float = 1.4
+    setup_gap_dv_intercept_m: float = 14.0
+    setup_gap_dv_floor_m: float = 12.0
+    setup_gap_dv_ceiling_m: float = 42.0
+    commit_gap_dv_slope: float = 0.9
+    commit_gap_dv_intercept_m: float = 8.0
+    commit_gap_dv_floor_m: float = 8.0
+    commit_gap_dv_ceiling_m: float = 30.0
+    # SD-3b: HOLD release longitudinal-clearance formula (Stage 4 will use it).
+    # hold_release_long_m(Δv) = vehicle_length + 1.5 + Δv * slope, where the
+    # vehicle_length+buffer is folded into the intercept (4.88 + 1.5 = 6.4).
+    # Δv=5: 6.4 + 1.5 = 7.9 m. Δv=15: 6.4 + 4.5 = 10.9 m (longer hold for fast pass).
+    hold_release_long_dv_slope: float = 0.3
+    hold_release_long_intercept_m: float = 6.4
+    # SD-3b: HOLD safety floor — force release after this many seconds even if
+    # geometric exit conditions never resolve. Should not normally fire.
+    hold_max_s: float = 4.0
+    # SD-3b: speed cap during HOLD. Cap = max(ego_speed_at_entry, opp_speed + this).
+    hold_speed_floor_margin_mps: float = 1.5
+    # SD-3b: if |sit.lateral_m| > this when COMMIT success fires, we are already
+    # laterally clear — go straight to FREE_RUN, skip HOLD. Below this, enter HOLD.
+    merge_safe_lat_m: float = 2.5
     # SD-2e: bounded speed margin during COMMIT. Was None (unbounded) which let ego
     # accelerate to closing-rate=17 m/s — too fast for the right TTL to clear before
     # converging back to optimal. opp_speed + 8 m/s gives a controlled side-by-side
@@ -108,6 +135,24 @@ class TacticalPlannerConfig:
     segment_aware_enabled: bool = False
     corner_body_blocks_commit: bool = True
     corner_entry_commit_risk_max: float = 0.30
+
+
+# SD-3b: Δv-derived gate helpers. All clamped to a sane band so a freak
+# Δv (e.g. negative or huge) doesn't produce nonsensical gap thresholds.
+def _dv_setup_gap_max_m(config: "TacticalPlannerConfig", dv_mps: float) -> float:
+    raw = float(config.setup_gap_dv_slope) * float(dv_mps) + float(config.setup_gap_dv_intercept_m)
+    return max(float(config.setup_gap_dv_floor_m),
+               min(float(config.setup_gap_dv_ceiling_m), raw))
+
+
+def _dv_commit_gap_max_m(config: "TacticalPlannerConfig", dv_mps: float) -> float:
+    raw = float(config.commit_gap_dv_slope) * float(dv_mps) + float(config.commit_gap_dv_intercept_m)
+    return max(float(config.commit_gap_dv_floor_m),
+               min(float(config.commit_gap_dv_ceiling_m), raw))
+
+
+def _dv_hold_release_long_m(config: "TacticalPlannerConfig", dv_mps: float) -> float:
+    return float(config.hold_release_long_intercept_m) + float(config.hold_release_long_dv_slope) * max(0.0, float(dv_mps))
 
 
 @dataclass
@@ -303,6 +348,11 @@ def tactical_planner_step_v1(
         state.commit.pass_success = False
         state.commit.abort_success = False
         state.commit.post_event_state = "none"
+
+    # SD-3b: speed differential drives SETUP/COMMIT/HOLD distance gates.
+    # Floored at 0.5 so matched-speed FOLLOW (ego ≈ opp) still produces sane
+    # gap thresholds via the formula intercept. Capped above only by physics.
+    dv_mps = max(0.5, float(ego_speed_mps) - float(opponent_speed_mps))
 
     def _commit_result(side: str, reason: str) -> Tuple[str, str, Optional[float], str]:
         # SD-2e: cap speed during COMMIT so ego maintains a controlled differential
@@ -883,7 +933,7 @@ def tactical_planner_step_v1(
         and (not in_recovery_hold)
         and (
             sit is None
-            or float(sit.longitudinal_m) <= float(config.setup_max_longitudinal_m)
+            or float(sit.longitudinal_m) <= _dv_setup_gap_max_m(config, dv_mps)
         )
     )
     if intent_candidate_ok:
@@ -972,7 +1022,7 @@ def tactical_planner_step_v1(
                 # Prevents premature commits from 30+ m away that can't complete before
                 # safety gates re-engage.
                 _commit_gap_ok = bool(
-                    float(sit.longitudinal_m) <= float(config.commit_max_longitudinal_m)
+                    float(sit.longitudinal_m) <= _dv_commit_gap_max_m(config, dv_mps)
                 )
                 commit_candidate_ok = bool(
                     side_open
@@ -1058,7 +1108,7 @@ def tactical_planner_step_v1(
     if (
         state.mode not in (SETUP_LEFT, SETUP_RIGHT)
         and sit is not None
-        and float(sit.longitudinal_m) > float(config.setup_max_longitudinal_m)
+        and float(sit.longitudinal_m) > _dv_setup_gap_max_m(config, dv_mps)
     ):
         state.setup_candidate_side = ""
         state.setup_candidate_count = 0

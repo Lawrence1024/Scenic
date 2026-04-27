@@ -762,7 +762,9 @@ def test_commit_from_setup_chain_left():
         commit_abort_enabled=True,
         commit_entry_cycles=1,
         commit_max_speed_mps=40.0,  # bypass speed cap — this test covers chain logic
-        commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers chain logic
+        # SD-3b: bypass setup+commit gap gates — this test covers chain logic
+        setup_gap_dv_intercept_m=999.0, setup_gap_dv_ceiling_m=999.0,
+        commit_gap_dv_intercept_m=999.0, commit_gap_dv_ceiling_m=999.0,
         setup_commit_entry_cycles=1,
         pass_intent_entry_cycles=1,
         setup_reentry_cooldown_s=0.0,
@@ -1238,7 +1240,9 @@ def test_commit_blocked_when_emergency_risk_nonzero():
     cfg = TacticalPlannerConfig(
         commit_abort_enabled=True,
         commit_entry_cycles=1,  # Allow commit in one cycle for test speed
-        commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers risk gate
+        # SD-3b: bypass setup+commit gap gates — this test covers risk gate
+        setup_gap_dv_intercept_m=999.0, setup_gap_dv_ceiling_m=999.0,
+        commit_gap_dv_intercept_m=999.0, commit_gap_dv_ceiling_m=999.0,
     )
     s = _sit(
         ahead=True,
@@ -1340,7 +1344,9 @@ def test_seg_corner_body_blocks_commit():
     cfg = TacticalPlannerConfig(
         commit_abort_enabled=True,
         commit_entry_cycles=1,
-        commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers segment gating
+        # SD-3b: bypass setup+commit gap gates — this test covers segment gating
+        setup_gap_dv_intercept_m=999.0, setup_gap_dv_ceiling_m=999.0,
+        commit_gap_dv_intercept_m=999.0, commit_gap_dv_ceiling_m=999.0,
         segment_aware_enabled=True,
         corner_body_blocks_commit=True,
         pass_requires_straight=False,  # Phase 12 owns segment gating
@@ -1377,7 +1383,9 @@ def test_seg_corner_entry_blocks_commit_when_risk_elevated():
     cfg = TacticalPlannerConfig(
         commit_abort_enabled=True,
         commit_entry_cycles=1,
-        commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers segment gating
+        # SD-3b: bypass setup+commit gap gates — this test covers segment gating
+        setup_gap_dv_intercept_m=999.0, setup_gap_dv_ceiling_m=999.0,
+        commit_gap_dv_intercept_m=999.0, commit_gap_dv_ceiling_m=999.0,
         segment_aware_enabled=True,
         corner_entry_commit_risk_max=0.30,
         pass_requires_straight=False,  # Phase 12 owns segment gating
@@ -1415,7 +1423,9 @@ def test_seg_corner_entry_allows_commit_when_risk_low():
         commit_abort_enabled=True,
         commit_entry_cycles=1,
         commit_max_speed_mps=40.0,  # bypass speed cap — this test covers segment gating
-        commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers segment gating
+        # SD-3b: bypass setup+commit gap gates — this test covers segment gating
+        setup_gap_dv_intercept_m=999.0, setup_gap_dv_ceiling_m=999.0,
+        commit_gap_dv_intercept_m=999.0, commit_gap_dv_ceiling_m=999.0,
         segment_aware_enabled=True,
         corner_entry_commit_risk_max=0.30,
         pass_requires_straight=False,  # Phase 12 owns segment gating
@@ -1452,7 +1462,9 @@ def test_seg_straight_unchanged_from_phase11():
         commit_abort_enabled=True,
         commit_entry_cycles=1,
         commit_max_speed_mps=40.0,  # bypass speed cap — this test covers segment gating
-        commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers segment gating
+        # SD-3b: bypass setup+commit gap gates — this test covers segment gating
+        setup_gap_dv_intercept_m=999.0, setup_gap_dv_ceiling_m=999.0,
+        commit_gap_dv_intercept_m=999.0, commit_gap_dv_ceiling_m=999.0,
         segment_aware_enabled=True,
         pass_requires_straight=False,  # Phase 12 owns segment gating
     )
@@ -1488,7 +1500,9 @@ def test_seg_disabled_corner_body_does_not_block():
         commit_abort_enabled=True,
         commit_entry_cycles=1,
         commit_max_speed_mps=40.0,  # bypass speed cap — this test covers segment gating
-        commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers segment gating
+        # SD-3b: bypass setup+commit gap gates — this test covers segment gating
+        setup_gap_dv_intercept_m=999.0, setup_gap_dv_ceiling_m=999.0,
+        commit_gap_dv_intercept_m=999.0, commit_gap_dv_ceiling_m=999.0,
         segment_aware_enabled=False,  # Phase 12 off
         pass_requires_straight=False,  # Remove straight gate for apples-to-apples comparison
     )
@@ -1544,7 +1558,9 @@ def test_commit_blocked_when_above_speed_cap():
         setup_reentry_cooldown_s=0.0,
         follow_tight_headway_s=0.5,
         commit_max_speed_mps=9.0,
-        commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers speed cap
+        # SD-3b: bypass setup+commit gap gates — this test covers speed cap
+        setup_gap_dv_intercept_m=999.0, setup_gap_dv_ceiling_m=999.0,
+        commit_gap_dv_intercept_m=999.0, commit_gap_dv_ceiling_m=999.0,
     )
     common_call = dict(
         has_opponent=True,
@@ -1602,7 +1618,9 @@ def test_commit_opposing_commit_cooldown_blocks_then_releases():
         commit_abort_enabled=True,
         commit_entry_cycles=1,
         commit_max_speed_mps=40.0,
-        commit_max_longitudinal_m=999.0,  # bypass gap gate — this test covers cooldown logic
+        # SD-3b: bypass setup+commit gap gates — this test covers cooldown logic
+        setup_gap_dv_intercept_m=999.0, setup_gap_dv_ceiling_m=999.0,
+        commit_gap_dv_intercept_m=999.0, commit_gap_dv_ceiling_m=999.0,
         opposing_commit_cooldown_s=4.0,
         setup_commit_entry_cycles=1,
         pass_intent_entry_cycles=1,
@@ -1658,17 +1676,22 @@ def test_commit_opposing_commit_cooldown_blocks_then_releases():
 
 
 def test_commit_blocked_when_gap_too_large():
-    """Commit must not fire when longitudinal gap exceeds commit_max_longitudinal_m.
+    """Commit must not fire when longitudinal gap exceeds commit gap gate.
 
-    Ensures ego closes to within 1-2 car lengths before committing, preventing
-    premature long-range commits that abort before the physical overtake completes.
+    SD-3b: gate is now Δv-derived. Override slope=0/intercept=40/ceiling=40 so
+    the gate is effectively "gap <= 40m" regardless of Δv — this isolates the
+    test to verify the gap-gate semantics (>40m blocked, ≤40m fires).
     """
     cfg = TacticalPlannerConfig(
         commit_abort_enabled=True,
         commit_entry_cycles=1,
         commit_max_speed_mps=40.0,
-        commit_max_longitudinal_m=40.0,
-        setup_max_longitudinal_m=40.0,  # SD-2f: also bypass setup gap gate for this test
+        commit_gap_dv_slope=0.0,
+        commit_gap_dv_intercept_m=40.0,
+        commit_gap_dv_ceiling_m=40.0,
+        setup_gap_dv_slope=0.0,
+        setup_gap_dv_intercept_m=40.0,
+        setup_gap_dv_ceiling_m=40.0,
         setup_commit_entry_cycles=1,
         pass_intent_entry_cycles=1,
         setup_reentry_cooldown_s=0.0,
@@ -1735,7 +1758,11 @@ def test_pass_safe_feasibility_passes_at_matched_speed():
                               setup_candidate_side="right",
                               setup_candidate_count=10)  # already past candidate persistence
     cfg = TacticalPlannerConfig(
-        setup_max_longitudinal_m=28.0,
+        # SD-3b: pin Δv-derived gates so the test is independent of slope:
+        # cap = 0*Δv + 28 = 28 m for SETUP entry.
+        setup_gap_dv_slope=0.0,
+        setup_gap_dv_intercept_m=28.0,
+        setup_gap_dv_ceiling_m=28.0,
         setup_speed_margin_mps=4.5,
         pass_min_relative_speed_mps=0.3,
         ahead_relax_free_run_enabled=False,
@@ -1770,7 +1797,7 @@ def test_pass_safe_feasibility_passes_at_matched_speed():
 
 
 def test_setup_blocked_when_fellow_too_far():
-    """SD-2f: SETUP entry must be gated by setup_max_longitudinal_m.
+    """SD-2f / SD-3b: SETUP entry must be gated by Δv-derived gap formula.
 
     F2_tactical first attempt entered SETUP at gap=42m and physically converged
     on the right TTL toward the fellow over 4 sec → contact. Stay in FOLLOW until
@@ -1778,9 +1805,11 @@ def test_setup_blocked_when_fellow_too_far():
     """
     st = TacticalPlannerState()
     # Disable ahead_relax so we don't take the FREE_RUN escape; we want to verify
-    # the SD-2f gap-gate path specifically.
+    # the SD-3b gap-gate path specifically. Pin gate to 28m via slope=0/intercept=28.
     cfg = TacticalPlannerConfig(
-        setup_max_longitudinal_m=28.0,
+        setup_gap_dv_slope=0.0,
+        setup_gap_dv_intercept_m=28.0,
+        setup_gap_dv_ceiling_m=28.0,
         ahead_relax_free_run_enabled=False,
     )
     s = _sit(
@@ -1817,7 +1846,11 @@ def test_setup_timeout_bails_back_to_follow():
     """
     st = TacticalPlannerState(mode=SETUP_LEFT, last_setup_side="left",
                               setup_entry_s=0.0)
-    cfg = TacticalPlannerConfig(setup_max_hold_s=2.0, setup_max_longitudinal_m=999.0)
+    cfg = TacticalPlannerConfig(
+        setup_max_hold_s=2.0,
+        # SD-3b: bypass setup gap gate so the test isolates the timeout path.
+        setup_gap_dv_ceiling_m=999.0,
+    )
     s = _sit(
         lateral_relation="right",  # fellow on right → preferred pass side = left
         collision_risk_01=0.05,
