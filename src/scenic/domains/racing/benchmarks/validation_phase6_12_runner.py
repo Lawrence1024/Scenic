@@ -43,7 +43,7 @@ _CHILD_PHASES: Tuple[Tuple[str, str], ...] = (
     ("phase8", "scenic.domains.racing.benchmarks.assessment_runner"),
     ("phase9", "scenic.domains.racing.benchmarks.phase9_runner"),
     ("phase10", "scenic.domains.racing.benchmarks.guard_runner"),
-    ("phase11", "scenic.domains.racing.benchmarks.phase11_runner"),
+    ("phase11", "scenic.domains.racing.benchmarks.commit_runner"),
     ("phase12", "scenic.domains.racing.benchmarks.phase12_runner"),
 )
 
@@ -51,11 +51,11 @@ _SUITE_MODULES: Dict[str, Tuple[Tuple[str, str], ...]] = {
     "all": _CHILD_PHASES,
     "tactical": (
         ("phase10", "scenic.domains.racing.benchmarks.guard_runner"),
-        ("phase11", "scenic.domains.racing.benchmarks.phase11_runner"),
+        ("phase11", "scenic.domains.racing.benchmarks.commit_runner"),
         ("phase12", "scenic.domains.racing.benchmarks.phase12_runner"),
     ),
     "corner": (
-        ("phase11", "scenic.domains.racing.benchmarks.phase11_runner"),
+        ("phase11", "scenic.domains.racing.benchmarks.commit_runner"),
         ("phase12", "scenic.domains.racing.benchmarks.phase12_runner"),
     ),
 }

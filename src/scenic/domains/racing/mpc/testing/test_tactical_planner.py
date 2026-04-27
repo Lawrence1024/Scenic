@@ -753,7 +753,7 @@ def test_lateral_path_lock_holds_setup_during_protected_follow():
     assert reason == "lateral_path_lock_left_hold"
 
 
-def test_phase11_commit_from_setup_chain_left():
+def test_commit_commit_from_setup_chain_left():
     st = TacticalPlannerState(mode=SETUP_LEFT, last_setup_side="left")
     cfg = TacticalPlannerConfig(
         commit_abort_enabled=True,
@@ -797,7 +797,7 @@ def test_phase11_commit_from_setup_chain_left():
     assert st.commit.post_event_state == COMMIT_PASS_LEFT
 
 
-def test_phase11_abort_on_commit_hazard():
+def test_commit_abort_on_commit_hazard():
     st = TacticalPlannerState(mode=COMMIT_PASS_LEFT, last_setup_side="left")
     cfg = TacticalPlannerConfig(commit_abort_enabled=True)
     s = _sit(
@@ -832,7 +832,7 @@ def test_phase11_abort_on_commit_hazard():
     assert st.commit.post_event_state == ABORT_PASS
 
 
-def test_phase11_commit_does_not_abort_on_stationary_offaxis_overlap():
+def test_commit_commit_does_not_abort_on_stationary_offaxis_overlap():
     st = TacticalPlannerState(mode=COMMIT_PASS_LEFT, last_setup_side="left")
     cfg = TacticalPlannerConfig(
         commit_abort_enabled=True,
@@ -869,7 +869,7 @@ def test_phase11_commit_does_not_abort_on_stationary_offaxis_overlap():
     assert st.commit.abort_trigger == "none"
 
 
-def test_phase11_pass_success_returns_free_run():
+def test_commit_pass_success_returns_free_run():
     st = TacticalPlannerState(mode=COMMIT_PASS_LEFT, last_setup_side="left")
     cfg = TacticalPlannerConfig(commit_abort_enabled=True)
     s = _sit(
@@ -904,7 +904,7 @@ def test_phase11_pass_success_returns_free_run():
     assert st.commit.post_event_state == FREE_RUN
 
 
-def test_phase11_abort_success_recovers_to_follow_when_pressure_clears():
+def test_commit_abort_success_recovers_to_follow_when_pressure_clears():
     st = TacticalPlannerState(mode=ABORT_PASS)
     st.commit.abort_until_s = 0.0
     cfg = TacticalPlannerConfig(commit_abort_enabled=True)
@@ -940,7 +940,7 @@ def test_phase11_abort_success_recovers_to_follow_when_pressure_clears():
     assert st.commit.post_event_state == FOLLOW
 
 
-def test_phase11_does_not_free_run_on_large_gap_while_still_ahead_if_closing():
+def test_commit_does_not_free_run_on_large_gap_while_still_ahead_if_closing():
     st = TacticalPlannerState()
     cfg_on = TacticalPlannerConfig(commit_abort_enabled=True, follow_tight_headway_s=0.5)
     s = _sit(
@@ -994,7 +994,7 @@ def test_phase11_does_not_free_run_on_large_gap_while_still_ahead_if_closing():
     assert m_off == FREE_RUN and reason_off == "opponent_not_blocking"
 
 
-def test_phase11_ttl_clear_does_not_fire_while_fellow_still_ahead():
+def test_commit_ttl_clear_does_not_fire_while_fellow_still_ahead():
     """TTL-clear path must NOT fire while the fellow is still ahead, even after
     commit_success_time_s elapses.  Ego must hold the commit until the fellow is
     physically behind (relation_ahead=False), at which point free_run success fires."""
@@ -1088,7 +1088,7 @@ def test_phase11_ttl_clear_does_not_fire_while_fellow_still_ahead():
     assert st.commit.pass_success is True
 
 
-def test_phase11_ttl_clear_success_does_not_fire_when_passing_side_blocked():
+def test_commit_ttl_clear_success_does_not_fire_when_passing_side_blocked():
     """TTL-clear success must NOT fire if the passing side is closed — that would
     be a bogus success while the route is actually occupied."""
     cfg = TacticalPlannerConfig(
@@ -1130,7 +1130,7 @@ def test_phase11_ttl_clear_success_does_not_fire_when_passing_side_blocked():
     assert st.commit.pass_success is False
 
 
-def test_phase11_protected_follow_not_released_when_emergency_risk_nonzero():
+def test_commit_protected_follow_not_released_when_emergency_risk_nonzero():
     """Protected-follow must NOT release into SETUP when emergency_risk_01 > 0.25.
 
     Reproduces the F4 root cause: asymmetric opening (right side available) combined
@@ -1174,8 +1174,8 @@ def test_phase11_protected_follow_not_released_when_emergency_risk_nonzero():
     assert st.protected_follow_active, "protected_follow_active must still be True"
 
 
-def test_phase11_commit_blocked_when_emergency_risk_nonzero():
-    """Phase 11 commit must NOT fire when emergency_risk_01 > phase11_commit_approach_risk_max.
+def test_commit_commit_blocked_when_emergency_risk_nonzero():
+    """Phase 11 commit must NOT fire when emergency_risk_01 > commit_commit_approach_risk_max.
 
     Defense-in-depth against the F4 pattern where commit_candidate_ok was True at
     emergency_risk_01=0.424 because that value was below the existing 0.48/0.55 thresholds.
@@ -1223,7 +1223,7 @@ def test_phase11_commit_blocked_when_emergency_risk_nonzero():
     assert st.commit.trigger == "none"
 
 
-def test_phase11_relaxes_to_free_run_when_far_nonclosing_low_risk():
+def test_commit_relaxes_to_free_run_when_far_nonclosing_low_risk():
     st = TacticalPlannerState()
     cfg_on = TacticalPlannerConfig(
         commit_abort_enabled=True,
@@ -1463,8 +1463,8 @@ def test_phase12_disabled_corner_body_does_not_block():
     assert st.segment_modifier == "normal"
 
 
-def test_phase11_commit_blocked_when_above_speed_cap():
-    """Commit must not fire when ego speed exceeds phase11_commit_max_speed_mps.
+def test_commit_commit_blocked_when_above_speed_cap():
+    """Commit must not fire when ego speed exceeds commit_commit_max_speed_mps.
 
     Root cause for Phase 11 spin-out (F2/F4): COMMIT_PASS fires at racing speed
     (~12.7 m/s). MPC applies large steer ± brake simultaneously, causing
@@ -1529,9 +1529,9 @@ def test_phase11_commit_blocked_when_above_speed_cap():
     assert reason_slow == "commit_pass_left"
 
 
-def test_phase11_opposing_commit_cooldown_blocks_then_releases():
+def test_commit_opposing_commit_cooldown_blocks_then_releases():
     """After a commit exits on side X, opposing-side commits must be blocked until
-    phase11_opposing_commit_cooldown_s has elapsed. Same-side re-commit is allowed
+    commit_opposing_commit_cooldown_s has elapsed. Same-side re-commit is allowed
     immediately. This prevents the right→left oscillation that caused spin-outs.
     """
     s = _sit(
@@ -1602,7 +1602,7 @@ def test_phase11_opposing_commit_cooldown_blocks_then_releases():
     )
 
 
-def test_phase11_commit_blocked_when_gap_too_large():
+def test_commit_commit_blocked_when_gap_too_large():
     """Commit must not fire when longitudinal gap exceeds commit_max_longitudinal_m.
 
     Ensures ego closes to within 1-2 car lengths before committing, preventing

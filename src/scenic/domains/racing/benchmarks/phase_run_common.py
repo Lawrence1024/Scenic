@@ -190,14 +190,14 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "guard_brake_limited_count",
     "guard_ttl_switch_blocked_count",
     "guard_emergency_stable_count",
-    "phase11_planner_line_count",
-    "phase11_commit_trigger_count",
-    "phase11_abort_trigger_count",
-    "phase11_pass_success_count",
-    "phase11_abort_success_count",
-    "phase11_commit_pass_left_count",
-    "phase11_commit_pass_right_count",
-    "phase11_abort_pass_count",
+    "commit_planner_line_count",
+    "commit_commit_trigger_count",
+    "commit_abort_trigger_count",
+    "commit_pass_success_count",
+    "commit_abort_success_count",
+    "commit_commit_pass_left_count",
+    "commit_commit_pass_right_count",
+    "commit_abort_pass_count",
     "phase12_seg_straight_count",
     "phase12_seg_corner_entry_count",
     "phase12_seg_corner_body_count",
@@ -497,14 +497,14 @@ def collect_metrics_from_log(
     guard_brake_limited_count = 0
     guard_ttl_switch_blocked_count = 0
     guard_emergency_stable_count = 0
-    phase11_planner_line_count = 0
-    phase11_commit_trigger_count = 0
-    phase11_abort_trigger_count = 0
-    phase11_pass_success_count = 0
-    phase11_abort_success_count = 0
-    phase11_commit_pass_left_count = 0
-    phase11_commit_pass_right_count = 0
-    phase11_abort_pass_count = 0
+    commit_planner_line_count = 0
+    commit_commit_trigger_count = 0
+    commit_abort_trigger_count = 0
+    commit_pass_success_count = 0
+    commit_abort_success_count = 0
+    commit_commit_pass_left_count = 0
+    commit_commit_pass_right_count = 0
+    commit_abort_pass_count = 0
     phase12_seg_straight_count = 0
     phase12_seg_corner_entry_count = 0
     phase12_seg_corner_body_count = 0
@@ -591,22 +591,22 @@ def collect_metrics_from_log(
             if "[Commit]" in line:
                 p11 = RE_COMMIT.search(line)
                 if p11:
-                    phase11_planner_line_count += 1
+                    commit_planner_line_count += 1
                     if p11.group("commit") != "none":
-                        phase11_commit_trigger_count += 1
+                        commit_commit_trigger_count += 1
                     if p11.group("abort") != "none":
-                        phase11_abort_trigger_count += 1
+                        commit_abort_trigger_count += 1
                     if p11.group("pass") == "1":
-                        phase11_pass_success_count += 1
+                        commit_pass_success_count += 1
                     if p11.group("abort_ok") == "1":
-                        phase11_abort_success_count += 1
+                        commit_abort_success_count += 1
                     _p11_state = str(p11.group("state") or "")
                     if _p11_state == "COMMIT_PASS_LEFT":
-                        phase11_commit_pass_left_count += 1
+                        commit_commit_pass_left_count += 1
                     elif _p11_state == "COMMIT_PASS_RIGHT":
-                        phase11_commit_pass_right_count += 1
+                        commit_commit_pass_right_count += 1
                     elif _p11_state == "ABORT_PASS":
-                        phase11_abort_pass_count += 1
+                        commit_abort_pass_count += 1
                 p12 = RE_COMMIT.search(line)
                 if p12:
                     _seg_ctx = str(p12.group("seg_ctx") or "none")
@@ -826,14 +826,14 @@ def collect_metrics_from_log(
     out["guard_brake_limited_count"] = guard_brake_limited_count
     out["guard_ttl_switch_blocked_count"] = guard_ttl_switch_blocked_count
     out["guard_emergency_stable_count"] = guard_emergency_stable_count
-    out["phase11_planner_line_count"] = phase11_planner_line_count
-    out["phase11_commit_trigger_count"] = phase11_commit_trigger_count
-    out["phase11_abort_trigger_count"] = phase11_abort_trigger_count
-    out["phase11_pass_success_count"] = phase11_pass_success_count
-    out["phase11_abort_success_count"] = phase11_abort_success_count
-    out["phase11_commit_pass_left_count"] = phase11_commit_pass_left_count
-    out["phase11_commit_pass_right_count"] = phase11_commit_pass_right_count
-    out["phase11_abort_pass_count"] = phase11_abort_pass_count
+    out["commit_planner_line_count"] = commit_planner_line_count
+    out["commit_commit_trigger_count"] = commit_commit_trigger_count
+    out["commit_abort_trigger_count"] = commit_abort_trigger_count
+    out["commit_pass_success_count"] = commit_pass_success_count
+    out["commit_abort_success_count"] = commit_abort_success_count
+    out["commit_commit_pass_left_count"] = commit_commit_pass_left_count
+    out["commit_commit_pass_right_count"] = commit_commit_pass_right_count
+    out["commit_abort_pass_count"] = commit_abort_pass_count
     out["phase12_seg_straight_count"] = phase12_seg_straight_count
     out["phase12_seg_corner_entry_count"] = phase12_seg_corner_entry_count
     out["phase12_seg_corner_body_count"] = phase12_seg_corner_body_count
