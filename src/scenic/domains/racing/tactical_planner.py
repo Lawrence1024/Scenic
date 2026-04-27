@@ -391,6 +391,13 @@ def tactical_planner_step_v1(
     ego_s_m: Optional[float] = None,
     opp_s_m: Optional[float] = None,
     lap_length_m: Optional[float] = None,
+    # SD-7: ego's actual current physical TTL ("optimal"/"left"/"right"). The
+    # planner state alone doesn't disambiguate (e.g. ABORT_PASS may be on
+    # a side TTL post-COMMIT before reverting to optimal). Without this,
+    # PathPredict walked the wrong polyline during ABORT_PASS → false
+    # collision predictions → spurious EMERGENCY_STABLE → parallel braking.
+    # Defaults to None for backward compat (falls back to state-derived).
+    ego_active_ttl: Optional[str] = None,
 ) -> Tuple[str, str, Optional[float], str]:
     """Return ``(mode, ttl_key, speed_cap, decision_reason)``.
 
@@ -494,14 +501,28 @@ def tactical_planner_step_v1(
     pc_collision = False
     pc_diag: Dict = {}
     if pc_available:
-        # Resolve which polyline ego/opp are each on right now.
+        # SD-7: ego_active_ttl is the source of truth for which polyline ego
+        # is physically on. Pre-SD-7 we derived it from state.mode, but
+        # ABORT_PASS doesn't encode the side (SD-2d keeps the commit-side TTL
+        # during abort while still side-by-side, so ego may be on right/left
+        # for up to ~1s after ABORT triggered). Mis-deriving ego_track caused
+        # PathPredict to walk the wrong polyline → spurious collision predictions
+        # → EMERGENCY_STABLE → user-visible parallel braking on F2.
+        if str(ego_active_ttl or "") in ("optimal", "left", "right"):
+            _ego_ttl_resolved = str(ego_active_ttl)
+        else:
+            # Fallback for legacy callers that don't thread ego_active_ttl:
+            # derive from state.mode (incomplete for ABORT_PASS but better than nothing).
+            _ego_ttl_resolved = (
+                "left" if state.mode in (SETUP_PASS_LEFT, COMMIT_PASS_LEFT, HOLD_PASS_LEFT, SETUP_LEFT)
+                else "right" if state.mode in (SETUP_PASS_RIGHT, COMMIT_PASS_RIGHT, HOLD_PASS_RIGHT, SETUP_RIGHT)
+                else ("left" if (state.mode == ABORT_PASS and state.commit.side == "left")
+                      else ("right" if (state.mode == ABORT_PASS and state.commit.side == "right")
+                            else "optimal"))
+            )
         ego_track_name, opp_track_name = select_tracks_for_state(
             str(state.mode or "FREE_RUN"),
-            # Best guess for ego's current TTL: derive from mode (commit_side
-            # tells us). For FOLLOW/FREE_RUN/ABORT we default to optimal in
-            # select_tracks_for_state.
-            "left" if state.mode in ("SETUP_PASS_LEFT", "COMMIT_PASS_LEFT", "HOLD_PASS_LEFT", "SETUP_LEFT") else
-            ("right" if state.mode in ("SETUP_PASS_RIGHT", "COMMIT_PASS_RIGHT", "HOLD_PASS_RIGHT", "SETUP_RIGHT") else "optimal"),
+            _ego_ttl_resolved,
         )
         ego_track = optimal_waypoints if ego_track_name == "optimal" else (
             side_waypoints_left if ego_track_name == "left" else side_waypoints_right

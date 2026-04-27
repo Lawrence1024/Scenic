@@ -1159,6 +1159,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     ego_s_m=_opt_ego_s,
                     opp_s_m=_opt_opp_s,
                     lap_length_m=_opt_lap_len,
+                    # SD-7: ego's actual physical TTL — source of truth for
+                    # PathPredict's polyline selection. Pre-SD-7, the planner
+                    # derived ego_track from state.mode which doesn't disambiguate
+                    # ABORT_PASS (post-COMMIT, ego may still be on side TTL for
+                    # ~1s while abort_keep_ttl_lat_m holds the side line).
+                    ego_active_ttl=str(_scripted_active_ttl or "optimal"),
                 )
                 _mode_tac = _mode3
                 _ttl_tac = _ttl3

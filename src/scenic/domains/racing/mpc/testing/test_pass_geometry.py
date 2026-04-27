@@ -241,3 +241,22 @@ def test_select_tracks_for_state_dispatch():
     assert select_tracks_for_state("FREE_RUN", "right") == ("right", "optimal")
     # Unknown / garbage active_ttl → defaults to "optimal".
     assert select_tracks_for_state("ABORT_PASS", "garbage") == ("optimal", "optimal")
+
+
+def test_select_tracks_for_state_abort_pass_uses_active_ttl():
+    """SD-7 regression: during ABORT_PASS, ego may still be physically on
+    the side TTL (SD-2d keeps the commit-side TTL while side-by-side, for
+    up to ~1s). PathPredict must walk the SIDE polyline, not optimal.
+    Pre-SD-7, ABORT_PASS was treated as "ego on optimal" → wrong polyline
+    → spurious collision predictions → user-visible parallel braking on F2.
+    """
+    # Right-side commit just aborted; ego still on right TTL (SD-2d hold).
+    assert select_tracks_for_state("ABORT_PASS", "right") == ("right", "optimal"), (
+        "ABORT_PASS with active_ttl='right' must use the right polyline"
+    )
+    # Left-side commit just aborted; ego still on left TTL (SD-2d hold).
+    assert select_tracks_for_state("ABORT_PASS", "left") == ("left", "optimal"), (
+        "ABORT_PASS with active_ttl='left' must use the left polyline"
+    )
+    # ABORT_PASS after lateral cleared (ttl_switch back to optimal already happened).
+    assert select_tracks_for_state("ABORT_PASS", "optimal") == ("optimal", "optimal")
