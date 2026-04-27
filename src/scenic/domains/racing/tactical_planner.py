@@ -9,7 +9,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Sequence, Tuple
 
-from scenic.domains.racing.assessment.pass_geometry import pass_window_check
+from scenic.domains.racing.assessment.pass_geometry import (
+    pass_window_check,
+    path_collision_predicted,
+    select_tracks_for_state,
+)
 from scenic.domains.racing.situation_assessment import OpponentSituation
 
 FREE_RUN = "FREE_RUN"
@@ -217,6 +221,16 @@ class TacticalPlannerState:
     # SD-2f: timestamp when SETUP was entered. Used for the setup_max_hold_s timeout
     # bail-out (back to FOLLOW on optimal) when SETUP doesn't reach COMMIT in time.
     setup_entry_s: float = -1.0e9
+    # SD-4b: predicted-collision result from the most recent planner tick.
+    # When predicted_collision_available is False, polylines weren't provided and
+    # downstream brake-trigger gates fall back to today's snapshot logic.
+    predicted_collision: bool = False
+    predicted_collision_available: bool = False
+    predicted_collision_min_clear_m: float = 0.0
+    predicted_collision_closest_t_s: float = 0.0
+    predicted_collision_breach_count: int = 0
+    predicted_collision_ego_track: str = ""
+    predicted_collision_opp_track: str = ""
 
 
 def apply_ttl_key_to_agent(agent, ttl_key: str, ttl_cache: dict, file_by_sel: Dict[str, str]) -> bool:
@@ -387,6 +401,53 @@ def tactical_planner_step_v1(
     # Floored at 0.5 so matched-speed FOLLOW (ego ≈ opp) still produces sane
     # gap thresholds via the formula intercept. Capped above only by physics.
     dv_mps = max(0.5, float(ego_speed_mps) - float(opponent_speed_mps))
+
+    # SD-4b: compute predicted-collision once per tick, store on state.
+    # Used by brake-trigger gates (SD-4c/4d) AND emitted as [PathPredict] log.
+    # Falls back to "no collision" when polyline kwargs are absent (existing
+    # tests that don't thread polylines preserve their snapshot-fallback path).
+    pc_available = bool(
+        optimal_waypoints is not None
+        and ego_s_m is not None
+        and opp_s_m is not None
+        and lap_length_m is not None
+        and float(lap_length_m) > 0.0
+    )
+    pc_collision = False
+    pc_diag: Dict = {}
+    if pc_available:
+        # Resolve which polyline ego/opp are each on right now.
+        ego_track_name, opp_track_name = select_tracks_for_state(
+            str(state.mode or "FREE_RUN"),
+            # Best guess for ego's current TTL: derive from mode (commit_side
+            # tells us). For FOLLOW/FREE_RUN/ABORT we default to optimal in
+            # select_tracks_for_state.
+            "left" if state.mode in ("SETUP_PASS_LEFT", "COMMIT_PASS_LEFT", "HOLD_PASS_LEFT", "SETUP_LEFT") else
+            ("right" if state.mode in ("SETUP_PASS_RIGHT", "COMMIT_PASS_RIGHT", "HOLD_PASS_RIGHT", "SETUP_RIGHT") else "optimal"),
+        )
+        ego_track = optimal_waypoints if ego_track_name == "optimal" else (
+            side_waypoints_left if ego_track_name == "left" else side_waypoints_right
+        )
+        opp_track = optimal_waypoints  # opp always on optimal by select_tracks_for_state
+        if ego_track is not None and opp_track is not None:
+            pc_collision, pc_diag = path_collision_predicted(
+                ego_track=ego_track,
+                opp_track=opp_track,
+                ego_s_m=float(ego_s_m),
+                ego_speed_mps=float(ego_speed_mps),
+                opp_s_m=float(opp_s_m),
+                opp_speed_mps=float(opponent_speed_mps),
+                lap_length_m=float(lap_length_m),
+            )
+            state.predicted_collision_ego_track = ego_track_name
+            state.predicted_collision_opp_track = opp_track_name
+        else:
+            pc_available = False
+    state.predicted_collision = bool(pc_collision)
+    state.predicted_collision_available = bool(pc_available)
+    state.predicted_collision_min_clear_m = float(pc_diag.get("min_clear_m", 0.0))
+    state.predicted_collision_closest_t_s = float(pc_diag.get("closest_t_s", 0.0))
+    state.predicted_collision_breach_count = int(pc_diag.get("breach_count", 0))
 
     def _commit_result(side: str, reason: str) -> Tuple[str, str, Optional[float], str]:
         # SD-2e: cap speed during COMMIT so ego maintains a controlled differential

@@ -1196,6 +1196,24 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 self._phase_effective_planner_state = str(_canonical_mode(_mode_tac) or "FREE_RUN")
                 self._phase_effective_ttl = str(_scripted_active_ttl or "optimal")
                 self._phase_effective_reason = str(_eff_reason or "none")
+                # SD-4b: emit [PathPredict] telemetry for the predicted_collision
+                # computation done inside tactical_planner_step_v1. Used to verify
+                # that the gate fires on F4-style sudden-stop scenarios and stays
+                # silent on F2/F3 alongside-but-clear windows.
+                _pc_st = self._tactical_tp_state
+                if bool(getattr(_pc_st, "predicted_collision_available", False)):
+                    print(
+                        f"{_fl_mpc} [PathPredict] t={_sim_time_s:.2f}s "
+                        f"predicted_collision={1 if _pc_st.predicted_collision else 0} "
+                        f"ego_track={_pc_st.predicted_collision_ego_track} "
+                        f"opp_track={_pc_st.predicted_collision_opp_track} "
+                        f"min_clear={_pc_st.predicted_collision_min_clear_m:.3f} "
+                        f"closest_t={_pc_st.predicted_collision_closest_t_s:.2f}s "
+                        f"breach={_pc_st.predicted_collision_breach_count}"
+                    )
+                # Stash on self for downstream brake-trigger consumers (SD-4c/4d).
+                self._predicted_collision = bool(getattr(_pc_st, "predicted_collision", False))
+                self._predicted_collision_available = bool(getattr(_pc_st, "predicted_collision_available", False))
                 _cap9 = f"{self._tactical_speed_cap:.2f}" if self._tactical_speed_cap is not None else "na"
                 _arel9 = str(_a_rel or "na")
                 _agap9 = (
@@ -2163,6 +2181,11 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     closing_flag=bool(getattr(self, "_assessment_closing_flag", False)),
                     emergency_risk_01=float(getattr(self, "_assessment_emergency_risk_01", 0.0) or 0.0),
                     ttl_switch_blocked=bool(_p10_ttl_switch_blocked),
+                    # SD-4b: thread the predicted-collision result from the planner.
+                    # Used by SD-4d to gate EMERGENCY_STABLE entry on predicted-path-collision
+                    # (defaults to False here so it has no effect until SD-4d rewires).
+                    predicted_collision=bool(getattr(self, "_predicted_collision", False)),
+                    predicted_collision_available=bool(getattr(self, "_predicted_collision_available", False)),
                 )
                 final_steer = float(_p10_guard.steer_cmd_rad)
                 final_throttle = float(_p10_guard.throttle_cmd)

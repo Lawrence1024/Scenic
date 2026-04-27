@@ -107,6 +107,13 @@ def stability_guard_step(
     closing_flag: bool,
     emergency_risk_01: float,
     ttl_switch_blocked: bool,
+    # SD-4b: predicted-path-collision result from tactical_planner_step_v1.
+    # When predicted_collision_available is False (legacy callers without
+    # polylines), fall back to today's snapshot logic. SD-4d will rewrite
+    # the emergency_trigger to use predicted_collision as the sole authority
+    # when it IS available — this commit only adds the kwargs (no behavior change).
+    predicted_collision: bool = False,
+    predicted_collision_available: bool = False,
 ) -> StabilityGuardDecision:
     """Apply command-level stability constraints and emergency containment."""
     steer = float(steer_cmd_rad)
