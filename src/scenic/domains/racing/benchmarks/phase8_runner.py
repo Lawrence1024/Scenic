@@ -43,8 +43,8 @@ def main() -> int:
                 "phase8_right_open_rate",
                 "phase8_closing_flag_rate",
                 "phase8_emergency_risk_mean",
-                "phase7_prediction_error_next_step_mean",
-                "phase7_prediction_ratio_vs_hold_mean",
+                "prediction_error_next_step_mean",
+                "prediction_ratio_vs_hold_mean",
                 "phase6_state_line_count",
                 "phase6_planner_line_count",
                 "phase6_guard_line_count",
@@ -71,8 +71,8 @@ def main() -> int:
                 "phase8_left_open_rate",
                 "phase8_right_open_rate",
                 "phase8_emergency_risk_mean",
-                "phase7_prediction_error_next_step_mean",
-                "phase7_prediction_ratio_vs_hold_mean",
+                "prediction_error_next_step_mean",
+                "prediction_ratio_vs_hold_mean",
             ),
         )
     )

@@ -158,14 +158,14 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "eval_contact_overlap_dspace_invalid_count",
     "eval_contact_near_dspace_invalid_count",
     "collision_eval_hull_overlap",
-    "phase7_prediction_line_count",
-    "phase7_prediction_error_next_step_mean",
-    "phase7_prediction_error_next_step_max",
-    "phase7_prediction_error_zero_motion_mean",
-    "phase7_prediction_error_hold_last_mean",
-    "phase7_prediction_gain_vs_zero_mean",
-    "phase7_prediction_regret_vs_hold_mean",
-    "phase7_prediction_ratio_vs_hold_mean",
+    "prediction_line_count",
+    "prediction_error_next_step_mean",
+    "prediction_error_next_step_max",
+    "prediction_error_zero_motion_mean",
+    "prediction_error_hold_last_mean",
+    "prediction_gain_vs_zero_mean",
+    "prediction_regret_vs_hold_mean",
+    "prediction_ratio_vs_hold_mean",
     "phase8_assessment_line_count",
     "phase8_fellow_relation_ahead_count",
     "phase8_fellow_relation_behind_count",
@@ -470,10 +470,10 @@ def collect_metrics_from_log(
     eval_contact_near_count = 0
     eval_contact_overlap_dspace_invalid_count = 0
     eval_contact_near_dspace_invalid_count = 0
-    phase7_line_count = 0
-    phase7_err_next: List[float] = []
-    phase7_err_zero: List[float] = []
-    phase7_err_hold: List[float] = []
+    prediction_line_count = 0
+    prediction_err_next: List[float] = []
+    prediction_err_zero: List[float] = []
+    prediction_err_hold: List[float] = []
     phase8_line_count = 0
     phase8_rel_ahead_count = 0
     phase8_rel_behind_count = 0
@@ -524,16 +524,16 @@ def collect_metrics_from_log(
             if "[Prediction]" in line:
                 p7 = RE_PREDICTION.search(line)
                 if p7:
-                    phase7_line_count += 1
+                    prediction_line_count += 1
                     _en = parse_float_or_none(p7.group("e_next"))
                     _ez = parse_float_or_none(p7.group("e0"))
                     _eh = parse_float_or_none(p7.group("eh"))
                     if _en is not None:
-                        phase7_err_next.append(_en)
+                        prediction_err_next.append(_en)
                     if _ez is not None:
-                        phase7_err_zero.append(_ez)
+                        prediction_err_zero.append(_ez)
                     if _eh is not None:
-                        phase7_err_hold.append(_eh)
+                        prediction_err_hold.append(_eh)
             if "[Assessment]" in line:
                 p8 = RE_ASSESSMENT.search(line)
                 if p8:
@@ -745,32 +745,32 @@ def collect_metrics_from_log(
     out["eval_contact_overlap_dspace_invalid_count"] = eval_contact_overlap_dspace_invalid_count
     out["eval_contact_near_dspace_invalid_count"] = eval_contact_near_dspace_invalid_count
     out["collision_eval_hull_overlap"] = bool(eval_contact_overlap_count > 0)
-    out["phase7_prediction_line_count"] = phase7_line_count
-    out["phase7_prediction_error_next_step_mean"] = (
-        (sum(phase7_err_next) / len(phase7_err_next)) if phase7_err_next else None
+    out["prediction_line_count"] = prediction_line_count
+    out["prediction_error_next_step_mean"] = (
+        (sum(prediction_err_next) / len(prediction_err_next)) if prediction_err_next else None
     )
-    out["phase7_prediction_error_next_step_max"] = max(phase7_err_next) if phase7_err_next else None
-    out["phase7_prediction_error_zero_motion_mean"] = (
-        (sum(phase7_err_zero) / len(phase7_err_zero)) if phase7_err_zero else None
+    out["prediction_error_next_step_max"] = max(prediction_err_next) if prediction_err_next else None
+    out["prediction_error_zero_motion_mean"] = (
+        (sum(prediction_err_zero) / len(prediction_err_zero)) if prediction_err_zero else None
     )
-    out["phase7_prediction_error_hold_last_mean"] = (
-        (sum(phase7_err_hold) / len(phase7_err_hold)) if phase7_err_hold else None
+    out["prediction_error_hold_last_mean"] = (
+        (sum(prediction_err_hold) / len(prediction_err_hold)) if prediction_err_hold else None
     )
-    if out["phase7_prediction_error_next_step_mean"] is not None and out["phase7_prediction_error_zero_motion_mean"] is not None:
-        out["phase7_prediction_gain_vs_zero_mean"] = (
-            float(out["phase7_prediction_error_zero_motion_mean"])
-            - float(out["phase7_prediction_error_next_step_mean"])
+    if out["prediction_error_next_step_mean"] is not None and out["prediction_error_zero_motion_mean"] is not None:
+        out["prediction_gain_vs_zero_mean"] = (
+            float(out["prediction_error_zero_motion_mean"])
+            - float(out["prediction_error_next_step_mean"])
         )
     else:
-        out["phase7_prediction_gain_vs_zero_mean"] = None
-    if out["phase7_prediction_error_next_step_mean"] is not None and out["phase7_prediction_error_hold_last_mean"] is not None:
-        _next_m = float(out["phase7_prediction_error_next_step_mean"])
-        _hold_m = float(out["phase7_prediction_error_hold_last_mean"])
-        out["phase7_prediction_regret_vs_hold_mean"] = _next_m - _hold_m
-        out["phase7_prediction_ratio_vs_hold_mean"] = (_next_m / _hold_m) if _hold_m > 1e-12 else None
+        out["prediction_gain_vs_zero_mean"] = None
+    if out["prediction_error_next_step_mean"] is not None and out["prediction_error_hold_last_mean"] is not None:
+        _next_m = float(out["prediction_error_next_step_mean"])
+        _hold_m = float(out["prediction_error_hold_last_mean"])
+        out["prediction_regret_vs_hold_mean"] = _next_m - _hold_m
+        out["prediction_ratio_vs_hold_mean"] = (_next_m / _hold_m) if _hold_m > 1e-12 else None
     else:
-        out["phase7_prediction_regret_vs_hold_mean"] = None
-        out["phase7_prediction_ratio_vs_hold_mean"] = None
+        out["prediction_regret_vs_hold_mean"] = None
+        out["prediction_ratio_vs_hold_mean"] = None
     out["phase8_assessment_line_count"] = phase8_line_count
     out["phase8_fellow_relation_ahead_count"] = phase8_rel_ahead_count
     out["phase8_fellow_relation_behind_count"] = phase8_rel_behind_count

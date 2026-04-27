@@ -380,7 +380,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         except Exception:
             _tactical_planner_enabled = False
     _tactical_config = TacticalPlannerConfig()
-    _phase7_requested = bool(prediction_enabled)
+    _prediction_requested = bool(prediction_enabled)
     _assessment_enabled = bool(assessment_enabled)
     _stability_guard_enabled = bool(stability_guard_enabled)
     _commit_enabled = bool(commit_abort_enabled)
@@ -434,7 +434,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 print(f"{_fbhv} Phase1 planner enabled: schedule={_phase1_schedule if _phase1_schedule else '[]'} speed_cap={_phase1_speed_cap}")
             if _tactical_planner_enabled:
                 print(f"{_fbhv} Phase3 tactical planner enabled (FREE_RUN / FOLLOW / SETUP_*) speed_cap={_phase1_speed_cap}")
-            if _phase7_requested:
+            if _prediction_requested:
                 print(f"{_fbhv} Fellow prediction enabled ([Prediction] on full-control steps)")
             if _stability_guard_enabled:
                 print(f"{_fbhv} Stability guard enabled ([Guard] command safety telemetry)")
@@ -933,7 +933,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             # but prediction/assessment are off, the planner used to receive None for
             # _a8 (silent fallback to raw OpponentSituation). Now the assessment block
             # runs whenever any smart feature is on.
-            if (self is _ego_scene) and (_phase7_requested or _assessment_enabled or _tactical_planner_enabled):
+            if (self is _ego_scene) and (_prediction_requested or _assessment_enabled or _tactical_planner_enabled):
                 _nearest_o6 = None
                 _nearest_d6 = None
                 _nearest_vs6 = 0.0
@@ -992,18 +992,18 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     )
                     self._phase2_overlap_state = _new_ov6
 
-                if _phase7_requested:
+                if _prediction_requested:
                     if _nearest_o6 is None:
-                        if hasattr(self, '_phase7_fellow_predictor'):
-                            self._phase7_fellow_predictor.reset()
+                        if hasattr(self, '_fellow_predictor'):
+                            self._fellow_predictor.reset()
                     else:
-                        if not hasattr(self, '_phase7_fellow_predictor'):
-                            self._phase7_fellow_predictor = FellowPredictor()
+                        if not hasattr(self, '_fellow_predictor'):
+                            self._fellow_predictor = FellowPredictor()
                         _fpx7 = float(_nearest_o6.position.x)
                         _fpy7 = float(_nearest_o6.position.y)
                         _fprog7 = getattr(_nearest_o6, '_waypoint_progress', None)
                         try:
-                            _p7r = self._phase7_fellow_predictor.step(
+                            _p7r = self._fellow_predictor.step(
                                 _sim_time_s,
                                 _fpx7,
                                 _fpy7,
