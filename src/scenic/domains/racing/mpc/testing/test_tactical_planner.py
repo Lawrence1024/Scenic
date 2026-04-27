@@ -1243,11 +1243,15 @@ def test_commit_protected_follow_not_released_when_emergency_risk_nonzero():
     assert st.protected_follow_active, "protected_follow_active must still be True"
 
 
-def test_commit_blocked_when_emergency_risk_nonzero():
-    """Phase 11 commit must NOT fire when emergency_risk_01 > commit_approach_risk_max.
+def test_commit_fires_at_moderate_risk_when_pass_safe_passes():
+    """SD-6: removed the commit_approach_risk_max=0.10 hesitancy gate.
 
-    Defense-in-depth against the F4 pattern where commit_candidate_ok was True at
-    emergency_risk_01=0.424 because that value was below the existing 0.48/0.55 thresholds.
+    Pre-SD-6, commit was blocked whenever (closing_flag AND risk > 0.10).
+    Risk grew above 0.10 the moment ego started closing on fellow, so the
+    gate effectively NEVER permitted commit during normal F2-style overtakes.
+    Now: as long as pass_safe (which checks risk vs the larger 0.48 ceiling)
+    permits, COMMIT fires. Geometric look-ahead (SD-3c _commit_geom_ok) and
+    SD-4 predicted_collision are the actual collision-defense layers.
     """
     cfg = TacticalPlannerConfig(
         commit_abort_enabled=True,
@@ -1276,7 +1280,7 @@ def test_commit_blocked_when_emergency_risk_nonzero():
     st.pass_intent_until_s = 999.0
     st.lateral_path_lock_side = "right"
     st.lateral_path_lock_until_s = 999.0
-    # Run with emergency_risk_01 = 0.42 (non-zero, below 0.48 pass_safe_risk_max).
+    # Run with emergency_risk_01 = 0.42 (above old 0.10 gate, below 0.48 pass_safe ceiling).
     m, ttl, cap, reason = tactical_planner_step_v1(
         st, s,
         has_opponent=True, ego_speed_mps=24.0, opponent_speed_mps=7.0,
@@ -1289,9 +1293,55 @@ def test_commit_blocked_when_emergency_risk_nonzero():
         assessment_closing_flag=True,
         assessment_emergency_risk_01=0.42,
     )
-    # Must NOT enter COMMIT — any elevated risk blocks commit entry.
-    assert m != COMMIT_PASS_RIGHT, f"Commit should be blocked when emergency_risk_01=0.42, got {m} ({reason})"
-    assert st.commit.trigger == "none"
+    # SD-6: commit MUST fire at moderate risk — the closing+risk hesitancy
+    # gate is removed. Brakes will still apply if predicted_collision fires
+    # via SD-4 EMERGENCY_STABLE.
+    assert m == COMMIT_PASS_RIGHT, f"SD-6: commit should fire at risk=0.42, got {m} ({reason})"
+
+
+def test_commit_still_blocked_when_pass_safe_risk_above_ceiling():
+    """SD-6 boundary: even after dropping commit_approach_risk_max, the
+    pass_safe_risk_max=0.48 gate inside pass_safe still blocks commit when
+    risk is genuinely high. This is the remaining risk-based brake on commit.
+    """
+    cfg = TacticalPlannerConfig(
+        commit_abort_enabled=True,
+        commit_entry_cycles=1,
+        setup_gap_dv_intercept_m=999.0, setup_gap_dv_ceiling_m=999.0,
+        commit_gap_dv_intercept_m=999.0, commit_gap_dv_ceiling_m=999.0,
+    )
+    s = _sit(
+        ahead=True,
+        overlap_state="clear_ahead",
+        collision_risk_01=0.6,  # raw above pass_safe_risk_max
+        distance_m=40.0,
+        longitudinal_m=38.0,
+        closing_speed_mps=15.0,
+        segment_context="straight",
+    )
+    st = TacticalPlannerState()
+    st.mode = "SETUP_PASS_RIGHT"
+    st.setup_commit_side = "right"
+    st.setup_commit_candidate_count = int(cfg.setup_commit_entry_cycles)
+    st.setup_commit_until_s = 999.0
+    st.pass_intent_side = "right"
+    st.pass_intent_candidate_count = int(cfg.pass_intent_entry_cycles)
+    st.pass_intent_until_s = 999.0
+    st.lateral_path_lock_side = "right"
+    st.lateral_path_lock_until_s = 999.0
+    m, ttl, cap, reason = tactical_planner_step_v1(
+        st, s,
+        has_opponent=True, ego_speed_mps=24.0, opponent_speed_mps=7.0,
+        sim_time_s=1.0, pit_mode=False, config=cfg,
+        assessment_relation="ahead",
+        assessment_gap_ok=True,
+        assessment_optimal_open=False,
+        assessment_left_open=False,
+        assessment_right_open=True,
+        assessment_closing_flag=True,
+        assessment_emergency_risk_01=0.60,  # > pass_safe_risk_max=0.48
+    )
+    assert m != COMMIT_PASS_RIGHT, f"Commit should be blocked at risk=0.60, got {m} ({reason})"
 
 
 def test_commit_relaxes_to_free_run_when_far_nonclosing_low_risk():

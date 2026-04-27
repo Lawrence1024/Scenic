@@ -221,7 +221,11 @@ class TacticalPlannerConfig:
     # to FOLLOW on optimal. Prevents the "stuck on side TTL while approaching" failure
     # mode from F2_tactical first attempt (4 sec SETUP without COMMIT → contact).
     setup_max_hold_s: float = 2.5
-    commit_approach_risk_max: float = 0.10   # close-approach risk ceiling for commit entry
+    # SD-6: commit_approach_risk_max=0.10 deleted. It was a closing+risk snapshot gate
+    # that fired from the very first tick of SETUP (risk grows above 0.10 immediately
+    # when ego closes on fellow), so COMMIT could never fire on F2-style overtakes.
+    # Redundant defense — geometry is validated by SD-3c look-ahead (_commit_geom_ok)
+    # and active brake authority is SD-4 predicted_collision. Removed per SD-6.
     # Segment-conditioned tactical intelligence
     segment_aware_enabled: bool = False
     corner_body_blocks_commit: bool = True
@@ -1350,17 +1354,18 @@ def tactical_planner_step_v1(
                             side_waypoints=side_wp,
                             lap_length_m=float(lap_length_m),
                         )
+                # SD-6: dropped the (closing_flag AND risk > 0.10) gate.
+                # Geometry is validated by _commit_geom_ok (SD-3c look-ahead);
+                # actual collision is gated by SD-4 predicted_collision (which
+                # routes through hard_abort_hazard and EMERGENCY_STABLE). The
+                # risk-snapshot gate was over-defensive and never permitted
+                # commit during normal closing approaches.
                 commit_candidate_ok = bool(
                     side_open
                     and pass_safe
                     and opening_window_available
                     and (not hard_abort_hazard)
                     and (not in_recovery_hold)
-                    and not (
-                        bool(assessment_closing_flag)
-                        and assessment_emergency_risk_01 is not None
-                        and float(assessment_emergency_risk_01) > float(config.commit_approach_risk_max)
-                    )
                     and not _seg_blocks_commit
                     and not _seg_tightens_commit
                     and _commit_speed_ok
