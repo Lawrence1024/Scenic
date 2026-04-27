@@ -2153,3 +2153,62 @@ def test_setup_timeout_bails_back_to_follow():
     assert m_after == FOLLOW, f"SETUP must bail after timeout, got {m_after}"
     assert ttl_after == "optimal"
     assert reason_after == "setup_timeout_follow"
+
+
+def test_predicted_collision_bypassed_for_stationary_lateral_clear():
+    """SD-10d regression: F9 stationary roadside fellow must NOT trigger
+    predicted_collision via PathPredict's polyline-projection bug.
+
+    Pre-SD-10d: PathPredict walked opp at fixed s on optimal_track for
+    stationary opp, but if the side TTL ego walked happened to curve near
+    the projected-opp point, min_clear dropped below threshold → false
+    collision → 292x EMERGENCY_STABLE → ego parked at v=0.
+
+    Post-SD-10d: when opp_speed <= stationary_opp_speed_mps (1.5) AND
+    |sit.lateral_m| > stationary_overlap_relief_lateral_m (2.0), bypass
+    PathPredict and report no collision regardless of polyline geometry.
+    """
+    st = TacticalPlannerState()
+    cfg = TacticalPlannerConfig()
+    # Construct a side TTL that DOES curve back into optimal at s=20m, just
+    # like F9's left TTL. Without the bypass, this would trigger predicted_collision.
+    optimal = _make_polyline(0.0, 0.0, 1.0, 0.0, 200)
+    converging_left = []
+    for i in range(200):
+        x = float(i)
+        y = -4.0 + (4.0 / 20.0) * x if x <= 20.0 else 0.0
+        converging_left.append((x, y, 0.0))
+    converging_right = []
+    for i in range(200):
+        x = float(i)
+        y = 4.0 - (4.0 / 20.0) * x if x <= 20.0 else 0.0
+        converging_right.append((x, y, 0.0))
+    # Fellow STATIONARY (opp_speed=0) and laterally OFF the racing line (lat=-5.5).
+    s = _sit(
+        ahead=True, lateral_relation="right",
+        overlap_state="clear_ahead", collision_risk_01=0.0,
+        distance_m=12.0, longitudinal_m=10.0, lateral_m=-5.5,
+        closing_speed_mps=0.0, opponent_speed_mps=0.0,
+    )
+    m, ttl, cap, reason = tactical_planner_step_v1(
+        st, s,
+        has_opponent=True, ego_speed_mps=20.0, opponent_speed_mps=0.0,
+        sim_time_s=0.0, pit_mode=False, config=cfg,
+        assessment_relation="ahead", assessment_gap_ok=True,
+        assessment_optimal_open=True,
+        assessment_left_open=True, assessment_right_open=True,
+        assessment_closing_flag=False, assessment_emergency_risk_01=0.0,
+        optimal_waypoints=optimal,
+        side_waypoints_left=converging_left, side_waypoints_right=converging_right,
+        ego_s_m=10.0, opp_s_m=10.0, lap_length_m=199.0,
+        ego_active_ttl="optimal",
+    )
+    # The bypass means predicted_collision MUST be False for this stationary
+    # laterally-clear case, regardless of how the side TTL polylines curve.
+    assert st.predicted_collision is False, (
+        f"Stationary lateral-clear fellow should not trigger predicted_collision; "
+        f"got predicted_collision={st.predicted_collision}, ego_track={st.predicted_collision_ego_track}"
+    )
+    assert st.predicted_collision_ego_track == "bypass", (
+        f"Bypass marker should be set; got ego_track={st.predicted_collision_ego_track}"
+    )

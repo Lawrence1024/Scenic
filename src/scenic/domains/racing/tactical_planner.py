@@ -506,7 +506,41 @@ def tactical_planner_step_v1(
     )
     pc_collision = False
     pc_diag: Dict = {}
-    if pc_available:
+    # SD-10d: stationary-fellow PathPredict bypass.
+    #
+    # Root cause of F9 parking failure (full_stack_20260427_104218):
+    # PathPredict walks `opp` on the OPTIMAL polyline at `opp_s + opp_speed*t`.
+    # When opp is stationary AND laterally OFF the optimal line (e.g. F9 fellow
+    # parked on roadside at lat=-5.5m, opp_s projection onto optimal stays at
+    # a fixed point), the walker compares ego's predicted xy to that PROJECTED
+    # opp position — NOT to the fellow's actual roadside xy. If the side TTL
+    # ego walks happens to curve near the projected-opp point, PathPredict
+    # reports collision (e.g. F9 t=5.85s: ego_track=left, min_clear=1.22m,
+    # predicted_collision=1) even though the real fellow is 5.5m away.
+    #
+    # That false-positive cascaded: 292x predicted_collision=1 → 584x
+    # EMERGENCY_STABLE → ego forced to v=0 → "parked next to stationary fellow".
+    #
+    # Fix: when opp is stationary AND laterally clear of the racing line,
+    # there is no collision risk regardless of polyline geometry. Bypass
+    # PathPredict and report no collision.
+    if (
+        pc_available
+        and sit is not None
+        and float(opponent_speed_mps) <= float(config.stationary_opp_speed_mps)
+        and abs(float(sit.lateral_m)) > float(config.stationary_overlap_relief_lateral_m)
+    ):
+        pc_collision = False
+        pc_diag = {
+            "reason": "stationary_lateral_clear_bypass",
+            "min_clear_m": abs(float(sit.lateral_m)),
+            "closest_t_s": 0.0,
+            "breach_count": 0,
+        }
+        # Flag track names so [PathPredict] log still emits a useful entry.
+        state.predicted_collision_ego_track = "bypass"
+        state.predicted_collision_opp_track = "bypass"
+    elif pc_available:
         # SD-7: ego_active_ttl is the source of truth for which polyline ego
         # is physically on. Pre-SD-7 we derived it from state.mode, but
         # ABORT_PASS doesn't encode the side (SD-2d keeps the commit-side TTL
