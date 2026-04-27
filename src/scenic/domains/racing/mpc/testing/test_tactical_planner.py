@@ -798,12 +798,12 @@ def test_commit_from_setup_chain_left():
         assessment_closing_flag=False,
         assessment_emergency_risk_01=0.08,
     )
-    # SD-2e: COMMIT now caps speed to opp_speed + commit_speed_margin_mps (24 + 8 = 32).
-    # The cap is bounded but non-None, replacing the unbounded charge that caused
-    # F2_tactical's right-TTL convergence overshoot.
+    # SD-3f: COMMIT cap = opp_speed + commit_speed_margin_mps (24 + 16 = 40).
+    # Raised from SD-2e's 8 m/s to 16 so the pass actually completes within
+    # commit_hold_s (the SD-2e value left ego running parallel forever).
     assert m == COMMIT_PASS_LEFT and ttl == "left"
     assert cap is not None
-    assert abs(cap - 32.0) < 0.01
+    assert abs(cap - 40.0) < 0.01
     assert reason == "commit_pass_left"
     assert st.commit.trigger == "setup_chain_commit_left"
     assert st.commit.post_event_state == COMMIT_PASS_LEFT
@@ -921,9 +921,9 @@ def test_commit_does_not_abort_on_stationary_offaxis_overlap():
         assessment_closing_flag=False,
         assessment_emergency_risk_01=0.05,
     )
-    # SD-2e: COMMIT now caps speed to opp_speed + commit_speed_margin_mps (0 + 8 = 8 m/s).
+    # SD-3f: COMMIT cap = opp_speed + commit_speed_margin_mps (0 + 16 = 16 m/s).
     assert m == COMMIT_PASS_LEFT and ttl == "left"
-    assert cap is not None and abs(cap - 8.0) < 0.01
+    assert cap is not None and abs(cap - 16.0) < 0.01
     assert reason == "commit_pass_left_hold"
     assert st.commit.abort_trigger == "none"
 

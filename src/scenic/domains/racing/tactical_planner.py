@@ -67,7 +67,11 @@ class TacticalPlannerConfig:
     # Commit/abort lifecycle
     commit_abort_enabled: bool = False
     commit_entry_cycles: int = 2
-    commit_hold_s: float = 1.2
+    # SD-3f: extended from 1.2 to 2.5 s to match the look-ahead window. Empirical
+    # math: at commit_speed_margin_mps=16 the pass needs ~2 s to complete a 15 m
+    # gap. 1.2 s was hard-aborting before relation flipped, leaving ego stuck
+    # alongside fellow indefinitely (the F2_tactical "run parallel" failure).
+    commit_hold_s: float = 2.5
     abort_hold_s: float = 0.9
     abort_risk_01: float = 0.55
     abort_ttc_s: float = 0.4   # tight: only abort on near-imminent collision
@@ -121,11 +125,15 @@ class TacticalPlannerConfig:
     # SD-3b: if |sit.lateral_m| > this when COMMIT success fires, we are already
     # laterally clear — go straight to FREE_RUN, skip HOLD. Below this, enter HOLD.
     merge_safe_lat_m: float = 2.5
-    # SD-2e: bounded speed margin during COMMIT. Was None (unbounded) which let ego
-    # accelerate to closing-rate=17 m/s — too fast for the right TTL to clear before
-    # converging back to optimal. opp_speed + 8 m/s gives a controlled side-by-side
-    # window (pass typically completes in 2-3 sec at this differential).
-    commit_speed_margin_mps: float = 8.0
+    # SD-2e/3f: bounded speed margin during COMMIT. SD-2e set this to 8 m/s
+    # to prevent the right-TTL convergence overshoot. With SD-3c/3f's look-ahead
+    # now vouching for geometry (pass_window_check rejects converging sides
+    # before commit fires), we can safely raise the margin so ego actually
+    # COMPLETES the pass within commit_hold_s instead of running parallel.
+    # Empirical math (F2): gap_at_commit ≈ 12-15m, commit_hold_s = 2.5s.
+    # Required Δv to clear with 5m post-pass buffer: (12+5)/2.5 = 6.8 m/s minimum,
+    # (15+5)/2.5 = 8 m/s. We use 16 m/s to give 2× headroom for slew-rate ramp-up.
+    commit_speed_margin_mps: float = 16.0
     # SD-2f: SETUP needs enough closing speed to satisfy pass_min_relative_speed_mps=3.0
     # (otherwise SETUP holds forever, never reaching COMMIT). follow_speed_margin_mps=2.5
     # gives only 2.5 m/s closing — below the minimum. Use 4.5 m/s during SETUP so
@@ -1152,6 +1160,31 @@ def tactical_planner_step_v1(
                 _commit_gap_ok = bool(
                     float(sit.longitudinal_m) <= _dv_commit_gap_max_m(config, dv_mps)
                 )
+                # SD-3f: also run pass_window_check on the commit_active path. The
+                # late-SETUP-entry look-ahead (SD-3c) was bypassed when the planner
+                # took the pass_intent → commit_active chain, leaving F2_tactical's
+                # converging-corner geometry undetected. When polylines unavailable,
+                # fail open (preserves backward compat with tests that don't pass them).
+                _commit_geom_ok = True
+                if (
+                    optimal_waypoints is not None
+                    and ego_s_m is not None
+                    and opp_s_m is not None
+                    and lap_length_m is not None
+                    and float(lap_length_m) > 0.0
+                ):
+                    side_wp = side_waypoints_left if side == "left" else side_waypoints_right
+                    if side_wp is not None:
+                        _commit_geom_ok, _diag = pass_window_check(
+                            side,
+                            ego_s_m=float(ego_s_m),
+                            ego_speed_mps=float(ego_speed_mps),
+                            opp_s_m=float(opp_s_m),
+                            opp_speed_mps=float(opponent_speed_mps),
+                            optimal_waypoints=optimal_waypoints,
+                            side_waypoints=side_wp,
+                            lap_length_m=float(lap_length_m),
+                        )
                 commit_candidate_ok = bool(
                     side_open
                     and pass_safe
@@ -1168,6 +1201,7 @@ def tactical_planner_step_v1(
                     and _commit_speed_ok
                     and not _opposing_commit_cooling
                     and _commit_gap_ok
+                    and _commit_geom_ok
                 )
                 if commit_candidate_ok:
                     if state.commit.side != side:
