@@ -32,7 +32,7 @@ def main() -> int:
                 "return_code",
                 "lap_completion_status",
                 "lap_time_s",
-                "assessment_assessment_line_count",
+                "assessment_line_count",
                 "assessment_fellow_relation_ahead_count",
                 "assessment_fellow_relation_behind_count",
                 "assessment_gap_ok_rate",
@@ -64,7 +64,7 @@ def main() -> int:
             fellow_harness=True,
             digest_keys=tuple(standard_benchmark_digest_keys_with_fellow()),
             extra_summary_keys=(
-                "assessment_assessment_line_count",
+                "assessment_line_count",
                 "assessment_gap_ok_rate",
                 "assessment_safe_gap_mean",
                 "assessment_optimal_open_rate",

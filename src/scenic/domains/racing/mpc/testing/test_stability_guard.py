@@ -31,7 +31,7 @@ def test_guard_ttl_switch_rate_limit_blocks_fast_flip():
     assert blocked2 is True
 
 
-def test_guard_guard_limits_steer_slew():
+def test_guard_limits_steer_slew():
     state = StabilityGuardState(last_steer_cmd_rad=0.0, last_ttl="optimal")
     cfg = StabilityGuardConfig(max_steer_rate_rad_per_s=1.0)
     d = stability_guard_step(
@@ -57,7 +57,7 @@ def test_guard_guard_limits_steer_slew():
     assert d.guard_active is True
 
 
-def test_guard_guard_enters_emergency_stable():
+def test_guard_enters_emergency_stable():
     state = StabilityGuardState(last_ttl="optimal")
     cfg = StabilityGuardConfig(
         emergency_risk_enter_01=0.8,
@@ -152,7 +152,7 @@ def test_guard_commit_pass_still_triggers_emergency_on_overlap():
     assert d.brake_cmd >= 0.60
 
 
-def test_guard_guard_reapproach_hold_suppresses_throttle_after_emergency():
+def test_guard_reapproach_hold_suppresses_throttle_after_emergency():
     state = StabilityGuardState(last_ttl="optimal")
     cfg = StabilityGuardConfig(
         emergency_risk_enter_01=0.8,

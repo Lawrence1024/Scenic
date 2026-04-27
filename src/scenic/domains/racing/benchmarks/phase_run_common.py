@@ -166,7 +166,7 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "prediction_gain_vs_zero_mean",
     "prediction_regret_vs_hold_mean",
     "prediction_ratio_vs_hold_mean",
-    "assessment_assessment_line_count",
+    "assessment_line_count",
     "assessment_fellow_relation_ahead_count",
     "assessment_fellow_relation_behind_count",
     "assessment_gap_ok_rate",
@@ -184,19 +184,19 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "hazard_setup_pass_right_count",
     "hazard_state_change_count",
     "hazard_gap_ok_rate",
-    "guard_guard_line_count",
-    "guard_guard_active_count",
+    "guard_line_count",
+    "guard_active_count",
     "guard_steer_limited_count",
     "guard_brake_limited_count",
     "guard_ttl_switch_blocked_count",
     "guard_emergency_stable_count",
     "commit_planner_line_count",
-    "commit_commit_trigger_count",
+    "commit_trigger_count",
     "commit_abort_trigger_count",
     "commit_pass_success_count",
     "commit_abort_success_count",
-    "commit_commit_pass_left_count",
-    "commit_commit_pass_right_count",
+    "commit_pass_left_count",
+    "commit_pass_right_count",
     "commit_abort_pass_count",
     "seg_seg_straight_count",
     "seg_seg_corner_entry_count",
@@ -491,19 +491,19 @@ def collect_metrics_from_log(
     hazard_reasons: List[str] = []
     hazard_gap_ok_count = 0
     hazard_gap_ok_known = 0
-    guard_guard_line_count = 0
-    guard_guard_active_count = 0
+    guard_line_count = 0
+    guard_active_count = 0
     guard_steer_limited_count = 0
     guard_brake_limited_count = 0
     guard_ttl_switch_blocked_count = 0
     guard_emergency_stable_count = 0
     commit_planner_line_count = 0
-    commit_commit_trigger_count = 0
+    commit_trigger_count = 0
     commit_abort_trigger_count = 0
     commit_pass_success_count = 0
     commit_abort_success_count = 0
-    commit_commit_pass_left_count = 0
-    commit_commit_pass_right_count = 0
+    commit_pass_left_count = 0
+    commit_pass_right_count = 0
     commit_abort_pass_count = 0
     seg_seg_straight_count = 0
     seg_seg_corner_entry_count = 0
@@ -577,9 +577,9 @@ def collect_metrics_from_log(
             if "[Guard]" in line:
                 p10 = RE_GUARD.search(line)
                 if p10:
-                    guard_guard_line_count += 1
+                    guard_line_count += 1
                     if p10.group("active") == "1":
-                        guard_guard_active_count += 1
+                        guard_active_count += 1
                     if p10.group("steer") == "1":
                         guard_steer_limited_count += 1
                     if p10.group("brake") == "1":
@@ -593,7 +593,7 @@ def collect_metrics_from_log(
                 if p11:
                     commit_planner_line_count += 1
                     if p11.group("commit") != "none":
-                        commit_commit_trigger_count += 1
+                        commit_trigger_count += 1
                     if p11.group("abort") != "none":
                         commit_abort_trigger_count += 1
                     if p11.group("pass") == "1":
@@ -602,9 +602,9 @@ def collect_metrics_from_log(
                         commit_abort_success_count += 1
                     _p11_state = str(p11.group("state") or "")
                     if _p11_state == "COMMIT_PASS_LEFT":
-                        commit_commit_pass_left_count += 1
+                        commit_pass_left_count += 1
                     elif _p11_state == "COMMIT_PASS_RIGHT":
-                        commit_commit_pass_right_count += 1
+                        commit_pass_right_count += 1
                     elif _p11_state == "ABORT_PASS":
                         commit_abort_pass_count += 1
                 p12 = RE_COMMIT.search(line)
@@ -771,7 +771,7 @@ def collect_metrics_from_log(
     else:
         out["prediction_regret_vs_hold_mean"] = None
         out["prediction_ratio_vs_hold_mean"] = None
-    out["assessment_assessment_line_count"] = assessment_line_count
+    out["assessment_line_count"] = assessment_line_count
     out["assessment_fellow_relation_ahead_count"] = assessment_rel_ahead_count
     out["assessment_fellow_relation_behind_count"] = assessment_rel_behind_count
     out["assessment_gap_ok_rate"] = (
@@ -820,19 +820,19 @@ def collect_metrics_from_log(
         if hazard_gap_ok_known > 0
         else None
     )
-    out["guard_guard_line_count"] = guard_guard_line_count
-    out["guard_guard_active_count"] = guard_guard_active_count
+    out["guard_line_count"] = guard_line_count
+    out["guard_active_count"] = guard_active_count
     out["guard_steer_limited_count"] = guard_steer_limited_count
     out["guard_brake_limited_count"] = guard_brake_limited_count
     out["guard_ttl_switch_blocked_count"] = guard_ttl_switch_blocked_count
     out["guard_emergency_stable_count"] = guard_emergency_stable_count
     out["commit_planner_line_count"] = commit_planner_line_count
-    out["commit_commit_trigger_count"] = commit_commit_trigger_count
+    out["commit_trigger_count"] = commit_trigger_count
     out["commit_abort_trigger_count"] = commit_abort_trigger_count
     out["commit_pass_success_count"] = commit_pass_success_count
     out["commit_abort_success_count"] = commit_abort_success_count
-    out["commit_commit_pass_left_count"] = commit_commit_pass_left_count
-    out["commit_commit_pass_right_count"] = commit_commit_pass_right_count
+    out["commit_pass_left_count"] = commit_pass_left_count
+    out["commit_pass_right_count"] = commit_pass_right_count
     out["commit_abort_pass_count"] = commit_abort_pass_count
     out["seg_seg_straight_count"] = seg_seg_straight_count
     out["seg_seg_corner_entry_count"] = seg_seg_corner_entry_count

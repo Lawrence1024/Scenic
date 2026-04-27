@@ -42,7 +42,7 @@ def main() -> int:
                 "hazard_setup_pass_right_count",
                 "hazard_state_change_count",
                 "hazard_gap_ok_rate",
-                "assessment_assessment_line_count",
+                "assessment_line_count",
                 "assessment_fellow_relation_ahead_count",
                 "assessment_fellow_relation_behind_count",
                 "assessment_left_open_rate",

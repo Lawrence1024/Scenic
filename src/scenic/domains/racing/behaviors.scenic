@@ -1016,8 +1016,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                             _p7r = None
 
                 if _assessment_enabled and car_heading is not None:
-                    if not hasattr(self, '_assessment_assessment_state'):
-                        self._assessment_assessment_state = RaceSituationState()
+                    if not hasattr(self, '_assessment_state'):
+                        self._assessment_state = RaceSituationState()
                     _pred_xy8 = None
                     if _p7r is not None:
                         _pred_xy8 = (float(_p7r.fellow_pred_x), float(_p7r.fellow_pred_y))
@@ -1027,9 +1027,9 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         ego_xy=(float(px), float(py)),
                         ego_heading_rad=float(car_heading),
                         predicted_opp_xy=_pred_xy8,
-                        state=self._assessment_assessment_state,
+                        state=self._assessment_state,
                     )
-                    self._assessment_assessment_state = _a8_state
+                    self._assessment_state = _a8_state
                     self._assessment_gap_ok = bool(getattr(_a8, "gap_ok", True))
                     self._assessment_overlap_flag = bool(getattr(_a8, "overlap_flag", False))
                     self._assessment_closing_flag = bool(getattr(_a8, "closing_flag", False))
@@ -1044,8 +1044,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             if _tactical_planner_enabled and self is getattr(simulation().scene, 'egoObject', None):
                 if not hasattr(self, '_tactical_tp_state'):
                     self._tactical_tp_state = TacticalPlannerState()
-                if _stability_guard_enabled and not hasattr(self, '_guard_guard_state'):
-                    self._guard_guard_state = StabilityGuardState(
+                if _stability_guard_enabled and not hasattr(self, '_guard_state'):
+                    self._guard_state = StabilityGuardState(
                         last_ttl=str(_scripted_active_ttl or "optimal")
                     )
                 _k_prev = float(getattr(self, '_last_curvature_ahead_for_tactical', 0.0) or 0.0)
@@ -1132,10 +1132,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 _ttl_tac = _ttl3
                 _cap_tac = _cap3
                 if _stability_guard_enabled and _ttl_tac in _scripted_ttl_cache:
-                    _ttl_guard_state = getattr(self, "_guard_guard_state", None)
+                    _ttl_guard_state = getattr(self, "_guard_state", None)
                     if _ttl_guard_state is None:
                         _ttl_guard_state = StabilityGuardState(last_ttl=str(_scripted_active_ttl or "optimal"))
-                        self._guard_guard_state = _ttl_guard_state
+                        self._guard_state = _ttl_guard_state
                     _ttl_guarded, _p10_ttl_switch_blocked = stability_guard_handle_ttl_switch(
                         _ttl_guard_state,
                         config=_guard_config,
@@ -2108,12 +2108,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     _reason = "coast (speed>=35mph)" if current_speed >= PIT_COAST_MIN_TARGET_MS else f"cap {PIT_MAX_THROTTLE}"
                     print(f"[Pit] step={_step_num} t={_t_log:.2f}s pit_mode=True speed={current_speed:.2f}m/s target=35mph throttle={final_throttle:.2f} ({_reason})")
             if _stability_guard_enabled and self is getattr(simulation().scene, 'egoObject', None):
-                _p10_state = getattr(self, "_guard_guard_state", None)
+                _p10_state = getattr(self, "_guard_state", None)
                 if _p10_state is None:
                     _p10_state = StabilityGuardState(
                         last_ttl=str(_scripted_active_ttl or "optimal")
                     )
-                    self._guard_guard_state = _p10_state
+                    self._guard_state = _p10_state
                 _p10_guard = stability_guard_step(
                     _p10_state,
                     config=_guard_config,
@@ -2138,8 +2138,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 self._phase_effective_planner_state = str(_p10_guard.planner_state or getattr(self, "_phase_effective_planner_state", "FREE_RUN"))
                 self._phase_effective_ttl = str(_p10_guard.active_ttl or getattr(self, "_phase_effective_ttl", _scripted_active_ttl))
                 self._phase_effective_reason = str(_p10_guard.decision_reason or getattr(self, "_phase_effective_reason", "none"))
-                self._guard_guard_active = bool(_p10_guard.guard_active)
-                self._guard_guard_reason = str(_p10_guard.guard_reason or "none")
+                self._guard_active = bool(_p10_guard.guard_active)
+                self._guard_reason = str(_p10_guard.guard_reason or "none")
                 self._guard_steer_limited = bool(_p10_guard.steer_limited)
                 self._guard_brake_limited = bool(_p10_guard.brake_limited)
                 self._guard_ttl_switch_blocked = bool(_p10_guard.ttl_switch_blocked)
