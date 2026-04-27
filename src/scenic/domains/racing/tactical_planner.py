@@ -113,6 +113,13 @@ class TacticalPlannerConfig:
     follow_speed_margin_mps: float = 2.5
     follow_tight_gap_m: float = 10.0
     follow_tight_headway_s: float = 0.6
+    # SD-10e: comfortable cruise time-headway. The follow cap uses three bands
+    # around a target_gap = max(follow_tight_gap_m, ego_speed * follow_time_headway_s):
+    #   actual > 1.2 * target_gap : close gap (cap = opp + follow_speed_margin_mps)
+    #   actual < 0.8 * target_gap : open gap (cap = opp * 0.95)
+    #   else                       : cruise   (cap = opp + 0.3)
+    # Default 1.5s mirrors published autonomous-racing literature (TUM, MIT-PITT).
+    follow_time_headway_s: float = 1.5
     blocked_headway_s: float = 1.8
     setup_min_headway_s: float = 0.6
     hard_ttc_s: float = 1.4
@@ -424,20 +431,38 @@ def tactical_planner_step_v1(
     """
     def _follow_result(reason: str) -> Tuple[str, str, Optional[float], str]:
         state.mode = FOLLOW
-        cap = float(opponent_speed_mps) + config.follow_speed_margin_mps
+        # SD-10e: time-headway adaptive cap with three hysteresis bands.
+        # target_gap is the comfortable cruise distance based on ego speed and
+        # follow_time_headway_s. The 0.8x / 1.2x dead-band prevents jerky
+        # speed adjustments when actual_gap hovers near target_gap.
         if sit is not None:
             ref_speed = max(0.0, float(ego_speed_mps), float(opponent_speed_mps))
             dynamic_tight_gap = max(
                 float(config.follow_tight_gap_m),
                 ref_speed * float(config.follow_tight_headway_s),
             )
-        else:
-            dynamic_tight_gap = float(config.follow_tight_gap_m)
-        if sit is not None and sit.distance_m < dynamic_tight_gap:
-            cap = min(
-                cap,
-                float(opponent_speed_mps) * config.follow_tight_cap_scale + 0.5,
+            ego_v = max(0.0, float(ego_speed_mps))
+            target_gap = max(
+                float(config.follow_tight_gap_m),
+                ego_v * float(config.follow_time_headway_s),
             )
+            actual_gap = float(sit.distance_m)
+            if actual_gap > 1.2 * target_gap:
+                cap = float(opponent_speed_mps) + float(config.follow_speed_margin_mps)
+            elif actual_gap < 0.8 * target_gap:
+                cap = float(opponent_speed_mps) * 0.95
+            else:
+                cap = float(opponent_speed_mps) + 0.3
+            # Tight-gap safety floor: if literally too close, never let the cap
+            # exceed opp * tight_cap_scale + 0.5 — preserves prior brake-out
+            # behavior.
+            if actual_gap < dynamic_tight_gap:
+                cap = min(
+                    cap,
+                    float(opponent_speed_mps) * float(config.follow_tight_cap_scale) + 0.5,
+                )
+        else:
+            cap = float(opponent_speed_mps) + float(config.follow_speed_margin_mps)
         cap = max(3.0, cap)
         return FOLLOW, "optimal", cap, reason
 
