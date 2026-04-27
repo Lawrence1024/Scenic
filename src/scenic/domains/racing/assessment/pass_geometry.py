@@ -131,9 +131,140 @@ def pass_window_check(
     }
 
 
+# SD-4: predicted-path-collision check for brake-trigger gating.
+# Tighter horizon (1.5s) and finer sampling (0.1s) than pass_window_check —
+# brake triggers care about IMMINENT collision, not pass-completion-window.
+DEFAULT_COLLISION_HORIZON_S = 1.5
+DEFAULT_COLLISION_SAMPLE_DT_S = 0.1
+DEFAULT_COLLISION_MIN_CLEAR_M = 1.6
+DEFAULT_COLLISION_BREACH_DEBOUNCE = 2
+
+
+def path_collision_predicted(
+    *,
+    ego_track: Sequence[Sequence[float]],
+    opp_track: Sequence[Sequence[float]],
+    ego_s_m: float,
+    ego_speed_mps: float,
+    opp_s_m: float,
+    opp_speed_mps: float,
+    lap_length_m: float,
+    horizon_s: float = DEFAULT_COLLISION_HORIZON_S,
+    sample_dt_s: float = DEFAULT_COLLISION_SAMPLE_DT_S,
+    min_clear_m: float = DEFAULT_COLLISION_MIN_CLEAR_M,
+    require_consecutive_breach: int = DEFAULT_COLLISION_BREACH_DEBOUNCE,
+) -> Tuple[bool, dict]:
+    """Predict whether ego and opp trajectories will come within min_clear_m.
+
+    SEMANTIC NOTE — mirror of pass_window_check:
+      - Returns ``True`` ⇔ COLLISION is predicted.
+      - Returns ``False`` ⇔ paths stay safely apart (or insufficient data).
+
+    For each sample t in [0, horizon_s], walks ego forward on ``ego_track`` from
+    ``ego_s_m + ego_speed_mps · t`` and opp forward on ``opp_track`` from
+    ``opp_s_m + opp_speed_mps · t``, both wrapped at lap_length_m. Computes the
+    Euclidean distance between projected positions. A "breach" is a sample where
+    distance < min_clear_m; collision is declared only after
+    ``require_consecutive_breach`` consecutive breaches (debounces single-sample
+    numerical noise at polyline sutures).
+
+    FAIL-CLOSED on missing data (shapely unavailable, empty polylines, lap=0):
+    returns ``(False, {"reason": "insufficient_data"})``. This is the OPPOSITE
+    of pass_window_check's fail-open — for brake gating we don't want missing
+    data to trigger a brake.
+
+    Used by SD-4c/4d to gate every brake-trigger in the racing planner. Snapshot
+    triggers (overlap_flag, gap_ok, risk, etc.) become fast-fail filters; this
+    function is the AUTHORITY on whether to actually brake.
+    """
+    if not ego_track or not opp_track or lap_length_m <= 0.0:
+        return False, {"reason": "insufficient_data"}
+
+    n_steps = max(2, int(float(horizon_s) / float(sample_dt_s)))
+    min_clear = float("inf")
+    closest_t = 0.0
+    breach_run = 0
+    max_breach_run = 0
+    samples: list = []
+    # A sample at less than half min_clear means the cars actually OVERLAP
+    # (not merely close). This is automatic collision regardless of debounce —
+    # protects against the high-closing-speed case where ego shoots past opp
+    # between consecutive samples and only one sample registers the contact.
+    hard_overlap_threshold = float(min_clear_m) * 0.5
+
+    for i in range(n_steps + 1):
+        t = i * float(sample_dt_s)
+        e_s = float(ego_s_m) + float(ego_speed_mps) * t
+        o_s = float(opp_s_m) + float(opp_speed_mps) * t
+        ego_xy = _xy_at_arclength(ego_track, e_s, lap_length_m)
+        opp_xy = _xy_at_arclength(opp_track, o_s, lap_length_m)
+        if ego_xy is None or opp_xy is None:
+            # Insufficient data on this sample (likely no shapely). Bail out
+            # fail-closed for the whole call.
+            return False, {"reason": "no_samples"}
+        dx = ego_xy[0] - opp_xy[0]
+        dy = ego_xy[1] - opp_xy[1]
+        d = (dx * dx + dy * dy) ** 0.5
+        samples.append((t, d))
+        if d < min_clear:
+            min_clear = d
+            closest_t = t
+        if d < float(min_clear_m):
+            breach_run += 1
+            if breach_run > max_breach_run:
+                max_breach_run = breach_run
+        else:
+            breach_run = 0
+
+    # Collision if either:
+    #   (a) at any sample the cars actually overlap (d < min_clear/2), OR
+    #   (b) at least N consecutive samples breach min_clear (debounces noise).
+    hard_overlap = bool(min_clear < hard_overlap_threshold)
+    collision = bool(hard_overlap or max_breach_run >= int(require_consecutive_breach))
+    return collision, {
+        "min_clear_m": float(min_clear),
+        "closest_t_s": float(closest_t),
+        "breach_count": int(max_breach_run),
+        "hard_overlap": hard_overlap,
+        "samples": samples,
+    }
+
+
+def select_tracks_for_state(planner_state: str, ego_active_ttl: str) -> Tuple[str, str]:
+    """Decide which polyline ego and opp are each currently on, given planner state.
+
+    Returns ``(ego_track_name, opp_track_name)`` where each name is in
+    {"optimal", "left", "right"}. Centralises the "which TTL is each car on"
+    decision so callers don't duplicate the conditional.
+
+    Assumptions:
+      - opp is always assumed to be on "optimal" (the F-bank fellow scripts
+        all drive a fixed TTL, and even when they're on left/right we treat
+        their projection onto optimal as the rear-end check basis).
+      - ego is on whatever TTL the planner currently has it on, derived from
+        ``ego_active_ttl`` and the planner_state. During SETUP/COMMIT/HOLD
+        ego is on the side TTL; during FOLLOW/FREE_RUN/ABORT ego is on
+        whatever active_ttl says.
+    """
+    state = str(planner_state or "")
+    if state in ("SETUP_PASS_LEFT", "COMMIT_PASS_LEFT", "HOLD_PASS_LEFT"):
+        return "left", "optimal"
+    if state in ("SETUP_PASS_RIGHT", "COMMIT_PASS_RIGHT", "HOLD_PASS_RIGHT"):
+        return "right", "optimal"
+    # FREE_RUN / FOLLOW / ABORT_PASS / SETUP_LEFT / SETUP_RIGHT (stale) etc.
+    ego = str(ego_active_ttl or "optimal") if str(ego_active_ttl or "") in ("optimal", "left", "right") else "optimal"
+    return ego, "optimal"
+
+
 __all__ = [
     "pass_window_check",
+    "path_collision_predicted",
+    "select_tracks_for_state",
     "DEFAULT_PASS_DURATION_S",
     "DEFAULT_SAMPLE_DT_S",
     "DEFAULT_MIN_LAT_CLEARANCE_M",
+    "DEFAULT_COLLISION_HORIZON_S",
+    "DEFAULT_COLLISION_SAMPLE_DT_S",
+    "DEFAULT_COLLISION_MIN_CLEAR_M",
+    "DEFAULT_COLLISION_BREACH_DEBOUNCE",
 ]

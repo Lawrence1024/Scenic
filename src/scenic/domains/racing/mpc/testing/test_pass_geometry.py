@@ -1,8 +1,13 @@
-"""Unit tests for SD-3a pass_window_check geometric look-ahead."""
+"""Unit tests for SD-3a pass_window_check geometric look-ahead +
+SD-4a path_collision_predicted brake-trigger gate."""
 
 import math
 
-from scenic.domains.racing.assessment import pass_window_check
+from scenic.domains.racing.assessment import (
+    pass_window_check,
+    path_collision_predicted,
+    select_tracks_for_state,
+)
 
 
 def _make_straight_polyline(x0: float, y0: float, dx: float, dy: float, n: int):
@@ -123,3 +128,116 @@ def test_pass_window_insufficient_data_fails_open():
     )
     assert ok is True
     assert diag.get("reason") == "insufficient_data"
+
+
+# ============================================================
+# SD-4a: path_collision_predicted unit tests (mirror semantics)
+# ============================================================
+
+
+def test_collision_predicted_head_on_rear_end():
+    """Both cars on same line; ego closing fast → collision predicted within 1.5s."""
+    optimal = _make_straight_polyline(0.0, 0.0, 1.0, 0.0, 200)
+    # ego at s=0 going 25 m/s; opp at s=10 going 5 m/s.
+    # Closing 20 m/s; gap 10m → collision in ~0.5s.
+    collision, diag = path_collision_predicted(
+        ego_track=optimal, opp_track=optimal,
+        ego_s_m=0.0, ego_speed_mps=25.0,
+        opp_s_m=10.0, opp_speed_mps=5.0,
+        lap_length_m=199.0,
+        horizon_s=1.5, sample_dt_s=0.1, min_clear_m=1.6,
+    )
+    assert collision is True, f"Head-on rear-end MUST predict collision; diag={diag}"
+    assert diag["min_clear_m"] < 1.6
+    assert diag["closest_t_s"] >= 0.0
+    # Hard-overlap path triggers when ego shoots through opp between samples
+    # (single sample at d=0). The debounce-bypass via hard_overlap saves us.
+    assert diag["hard_overlap"] is True
+
+
+def test_collision_predicted_parallel_non_converging_clear():
+    """ego on left TTL (y=4), opp on optimal (y=0), both going 20 m/s.
+    Lateral gap stays at 4m forever — NO collision predicted."""
+    optimal = _make_straight_polyline(0.0, 0.0, 1.0, 0.0, 200)
+    left = _make_straight_polyline(0.0, 4.0, 1.0, 0.0, 200)
+    collision, diag = path_collision_predicted(
+        ego_track=left, opp_track=optimal,
+        ego_s_m=10.0, ego_speed_mps=20.0,
+        opp_s_m=12.0, opp_speed_mps=20.0,
+        lap_length_m=199.0,
+    )
+    assert collision is False, f"Parallel non-converging MUST NOT predict collision; diag={diag}"
+    assert diag["min_clear_m"] >= 3.5  # ~4m lateral with tiny longitudinal jitter
+    assert diag["breach_count"] == 0
+
+
+def test_collision_predicted_fail_closed_on_missing_data():
+    """Missing polylines → fail-CLOSED (no collision). Opposite of pass_window_check."""
+    collision, diag = path_collision_predicted(
+        ego_track=[], opp_track=[],
+        ego_s_m=0.0, ego_speed_mps=10.0,
+        opp_s_m=0.0, opp_speed_mps=10.0,
+        lap_length_m=0.0,
+    )
+    # Critical: this returns FALSE (no brake) when data is missing, so brake
+    # triggers fall through to their snapshot fallback rather than triggering.
+    assert collision is False
+    assert diag.get("reason") == "insufficient_data"
+
+
+def test_collision_predicted_breach_debounce_filters_single_sample():
+    """A single-sample sub-min_clear breach must NOT latch a collision.
+
+    Construct ego and opp on parallel lines but with one segment of opp's
+    polyline jagged enough to drop within min_clear at exactly one sample.
+    """
+    optimal = _make_straight_polyline(0.0, 0.0, 1.0, 0.0, 200)
+    # Side polyline: parallel at y=2.0 except one suture-glitch dip to y=1.0
+    # at index ~12. With ego starting at s=10, sampling at 0.1s × 20 m/s
+    # → reaches s=12 at t=0.1, returns to y=2.0 by t=0.2.
+    side = []
+    for i in range(200):
+        x = float(i)
+        y = 2.0 if i != 12 else 1.0  # one-sample lateral dip
+        side.append((x, y, 0.0))
+    collision, diag = path_collision_predicted(
+        ego_track=side, opp_track=optimal,
+        ego_s_m=10.0, ego_speed_mps=20.0,
+        opp_s_m=10.0, opp_speed_mps=20.0,
+        lap_length_m=199.0,
+        sample_dt_s=0.1, min_clear_m=1.6,
+        require_consecutive_breach=2,
+    )
+    # Even though min_clear momentarily dips below 1.6m at the suture, only
+    # ONE sample breaches. Debounce requires 2 consecutive → no latch.
+    assert collision is False, f"Single-sample dip should not latch; diag={diag}"
+    # min_clear may or may not be below 1.6m here (Shapely interpolation may
+    # smooth between segments). The KEY assertion is breach_count.
+    assert diag["breach_count"] < 2
+
+
+def test_collision_predicted_f3_style_parallel_ttl_no_collision():
+    """F3L-style: ego on right TTL (y=-3), opp on optimal (y=0). Constant.
+    Like F3L scenario where fellow holds left lane and ego passes right —
+    must NOT predict collision."""
+    optimal = _make_straight_polyline(0.0, 0.0, 1.0, 0.0, 200)
+    right = _make_straight_polyline(0.0, -3.0, 1.0, 0.0, 200)
+    collision, diag = path_collision_predicted(
+        ego_track=right, opp_track=optimal,
+        ego_s_m=20.0, ego_speed_mps=22.0,  # ego closing
+        opp_s_m=22.0, opp_speed_mps=9.0,
+        lap_length_m=199.0,
+    )
+    assert collision is False, f"F3-style parallel pass MUST be safe; diag={diag}"
+
+
+def test_select_tracks_for_state_dispatch():
+    """select_tracks_for_state returns (left, optimal) during left-side passes,
+    (right, optimal) during right-side, (active_ttl, optimal) otherwise."""
+    assert select_tracks_for_state("COMMIT_PASS_LEFT", "optimal") == ("left", "optimal")
+    assert select_tracks_for_state("SETUP_PASS_RIGHT", "optimal") == ("right", "optimal")
+    assert select_tracks_for_state("HOLD_PASS_LEFT", "left") == ("left", "optimal")
+    assert select_tracks_for_state("FOLLOW", "optimal") == ("optimal", "optimal")
+    assert select_tracks_for_state("FREE_RUN", "right") == ("right", "optimal")
+    # Unknown / garbage active_ttl → defaults to "optimal".
+    assert select_tracks_for_state("ABORT_PASS", "garbage") == ("optimal", "optimal")
