@@ -11,6 +11,7 @@ from scenic.domains.racing.actions import SetMaxSpeedAction, SetTTLAction, SetSp
 import scenic.domains.racing.model as _racing
 import math
 import numpy as np
+import time as _wallclock_time
 
 from scenic.domains.racing.waypoints import (
     initialize_racing_waypoint_start_index,
@@ -538,6 +539,15 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
     while True:
         _fl_mpc = getattr(self, '_follow_mpc_log_prefix', '[FollowRacingLineMPC]')
         # Calculate Control Signals
+        # SD-10g: per-tick wall-clock measurement for runtime analysis. Records
+        # the wall time at tick start. Emitted as [TickTime] at end of tick
+        # alongside the sim time, so log analysis can correlate sim moments
+        # with wall-clock slowdowns. Process-relative seconds (vs absolute
+        # epoch) is more readable in log greps.
+        _wall_tick_start = _wallclock_time.perf_counter()
+        if not hasattr(self.__class__, '_wall_process_start'):
+            self.__class__._wall_process_start = _wall_tick_start
+        _wall_t_now_s = _wall_tick_start - self.__class__._wall_process_start
         current_speed = (self.speed if self.speed is not None else 0)
         _sim = simulation()
         # Planner schedule time is in simulation seconds based on simulation timestep.
@@ -2269,6 +2279,20 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     f"seg_ahead={getattr(self, '_segment_id_ahead', None)}/"
                     f"{str(getattr(self, '_segment_type_ahead', None) or 'na')} "
                     f"curve_hold={int(bool(getattr(self, '_curve_nearby_telemetry', False)))}"
+                )
+                # SD-10g: end-of-tick wall-clock measurement. Records:
+                #   wall_t = process-relative wall seconds since first tick
+                #   tick_ms = compute time spent on this control step
+                # Use perf_counter() for monotonic high-res timing. The delta
+                # is measured AT THE LAST emit so it captures the full tick
+                # cost: planner + guard + ctrl + telemetry. If a future
+                # optimization wants finer breakdown, add intermediate marks.
+                _wall_tick_end = _wallclock_time.perf_counter()
+                _wall_tick_ms = (_wall_tick_end - _wall_tick_start) * 1000.0
+                print(
+                    f"[TickTime] t={_sim_time_s:.2f}s "
+                    f"wall_t={_wall_t_now_s:.3f}s "
+                    f"tick_ms={_wall_tick_ms:.2f}"
                 )
             except Exception as _ct_e:
                 if not getattr(self, '_ctrltrace_warned', False):
