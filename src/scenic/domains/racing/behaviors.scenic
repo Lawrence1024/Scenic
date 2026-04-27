@@ -548,6 +548,18 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         if not hasattr(self.__class__, '_wall_process_start'):
             self.__class__._wall_process_start = _wall_tick_start
         _wall_t_now_s = _wall_tick_start - self.__class__._wall_process_start
+        # SD-10l: per-section accumulators (ms). Reset every tick. Emitted as
+        # [TickBreakdown] alongside [TickTime] for each control tick. Used to
+        # find which section eats the budget on big-tick events (e.g. first
+        # ttl_switch where tick_ms jumps to ~600ms — Shapely was ruled out by
+        # SD-10k pre-warm experiment, so the cost is elsewhere).
+        _sec_segmap_ms = 0.0
+        _sec_assess_opp_ms = 0.0
+        _sec_predict_ms = 0.0
+        _sec_assess_race_ms = 0.0
+        _sec_planner_ms = 0.0
+        _sec_lon_ms = 0.0
+        _sec_lat_ms = 0.0
         current_speed = (self.speed if self.speed is not None else 0)
         _sim = simulation()
         # Planner schedule time is in simulation seconds based on simulation timestep.
@@ -676,6 +688,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     self._cached_cumulative_dist_to_wp = 0.0
                 # Build segment map once (main + pit): from OpenDRIVE track or from TTL waypoints (same as visualization).
                 if not hasattr(self, '_waypoint_segment_map') or self._waypoint_segment_map is None:
+                    _sec_t_segmap_start = _wallclock_time.perf_counter()
                     try:
                         scene = simulation().scene
                         params = getattr(scene, 'params', None) or {}
@@ -701,6 +714,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     except Exception as e:
                         self._waypoint_segment_map = None
                         print(f"{_fbhv} Segment map not built: {e}; log will show segment ?")
+                    _sec_segmap_ms += (_wallclock_time.perf_counter() - _sec_t_segmap_start) * 1000.0
                 try:
                     # Initialize progress tracking if needed
                     if not hasattr(self, '_waypoint_progress'):
@@ -997,6 +1011,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     _nearest_vs6 = 0.0
 
                 if _nearest_o6 is not None and car_heading is not None:
+                    _sec_t_assess_opp_start = _wallclock_time.perf_counter()
                     _ox6 = float(_nearest_o6.position.x)
                     _oy6 = float(_nearest_o6.position.y)
                     _prog6 = getattr(self, '_waypoint_progress', None)
@@ -1024,8 +1039,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         previous_overlap_state=_prev_ov6,
                     )
                     self._opponent_overlap_state = _new_ov6
+                    _sec_assess_opp_ms += (_wallclock_time.perf_counter() - _sec_t_assess_opp_start) * 1000.0
 
                 if _prediction_requested:
+                    _sec_t_predict_start = _wallclock_time.perf_counter()
                     if _nearest_o6 is None:
                         if hasattr(self, '_fellow_predictor'):
                             self._fellow_predictor.reset()
@@ -1047,8 +1064,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         except Exception as _e_p7:
                             print(f"{_fbhv} Prediction step failed: {_e_p7}")
                             _p7r = None
+                    _sec_predict_ms += (_wallclock_time.perf_counter() - _sec_t_predict_start) * 1000.0
 
                 if _assessment_enabled and car_heading is not None:
+                    _sec_t_assess_race_start = _wallclock_time.perf_counter()
                     if not hasattr(self, '_assessment_state'):
                         self._assessment_state = RaceSituationState()
                     _pred_xy8 = None
@@ -1063,6 +1082,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         state=self._assessment_state,
                     )
                     self._assessment_state = _a8_state
+                    _sec_assess_race_ms += (_wallclock_time.perf_counter() - _sec_t_assess_race_start) * 1000.0
                     self._assessment_gap_ok = bool(getattr(_a8, "gap_ok", True))
                     self._assessment_overlap_flag = bool(getattr(_a8, "overlap_flag", False))
                     self._assessment_closing_flag = bool(getattr(_a8, "closing_flag", False))
@@ -1169,6 +1189,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     _left_wp = _scripted_ttl_cache["left"][1]
                 if _scripted_ttl_cache is not None and "right" in _scripted_ttl_cache:
                     _right_wp = _scripted_ttl_cache["right"][1]
+                _sec_t_planner_start = _wallclock_time.perf_counter()
                 _mode3, _ttl3, _cap3, _reason3 = tactical_planner_step_v1(
                     self._tactical_tp_state,
                     _sit3,
@@ -1198,6 +1219,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     # ~1s while abort_keep_ttl_lat_m holds the side line).
                     ego_active_ttl=str(_scripted_active_ttl or "optimal"),
                 )
+                _sec_planner_ms += (_wallclock_time.perf_counter() - _sec_t_planner_start) * 1000.0
                 _mode_tac = _mode3
                 _ttl_tac = _ttl3
                 _cap_tac = _cap3
@@ -1670,12 +1692,14 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             
             # Compute throttle/brake using MPC (with grade compensation if available)
             try:
+                _sec_t_lon_start = _wallclock_time.perf_counter()
                 throttle_mpc, brake_mpc = _lon_controller.run_step(
                     vehicle_state_mpc,
                     v_ref_profile,
                     None,  # curvature_profile not used in simplified model
                     grade_profile  # Road grade profile for gravity compensation
                 )
+                _sec_lon_ms += (_wallclock_time.perf_counter() - _sec_t_lon_start) * 1000.0
                 throttle_mpc = float(throttle_mpc)
                 brake_mpc = float(brake_mpc)
             except Exception as ex:
@@ -1918,6 +1942,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 # back to plain line-tracking when bounds are unavailable. See docs/frames.md.
                 _ttl_left_dist = getattr(self, 'ttl_left_dist_m', None)
                 _ttl_right_dist = getattr(self, 'ttl_right_dist_m', None)
+                _sec_t_lat_start = _wallclock_time.perf_counter()
                 steer_mpc = _lat_controller.run_step(
                     vehicle_state,
                     waypoints_for_mpc,
@@ -1928,6 +1953,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     left_dist_per_wp=_ttl_left_dist,
                     right_dist_per_wp=_ttl_right_dist,
                 )
+                _sec_lat_ms += (_wallclock_time.perf_counter() - _sec_t_lat_start) * 1000.0
                 steer_mpc = float(steer_mpc)
     
             except Exception as e:
@@ -2293,6 +2319,26 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     f"[TickTime] t={_sim_time_s:.2f}s "
                     f"wall_t={_wall_t_now_s:.3f}s "
                     f"tick_ms={_wall_tick_ms:.2f}"
+                )
+                # SD-10l: per-section breakdown for the same tick. The sum of
+                # the section ms below is typically less than tick_ms — the
+                # remainder ("other") is everything not individually wrapped:
+                # waypoint indexing, segment-classification logic, log
+                # formatting, control-action dispatch, IPC bridge sync.
+                _sec_sum_ms = (_sec_segmap_ms + _sec_assess_opp_ms
+                               + _sec_predict_ms + _sec_assess_race_ms
+                               + _sec_planner_ms + _sec_lon_ms + _sec_lat_ms)
+                _sec_other_ms = max(0.0, _wall_tick_ms - _sec_sum_ms)
+                print(
+                    f"[TickBreakdown] t={_sim_time_s:.2f}s "
+                    f"segmap={_sec_segmap_ms:.2f} "
+                    f"assess_opp={_sec_assess_opp_ms:.2f} "
+                    f"predict={_sec_predict_ms:.2f} "
+                    f"assess_race={_sec_assess_race_ms:.2f} "
+                    f"planner={_sec_planner_ms:.2f} "
+                    f"lon={_sec_lon_ms:.2f} "
+                    f"lat={_sec_lat_ms:.2f} "
+                    f"other={_sec_other_ms:.2f}"
                 )
             except Exception as _ct_e:
                 if not getattr(self, '_ctrltrace_warned', False):
