@@ -7,6 +7,8 @@ from scenic.domains.racing.tactical_planner import (
     COMMIT_PASS_RIGHT,
     FOLLOW,
     FREE_RUN,
+    HOLD_PASS_LEFT,
+    HOLD_PASS_RIGHT,
     SETUP_LEFT,
     SETUP_RIGHT,
     CommitPlannerState,
@@ -927,6 +929,12 @@ def test_commit_does_not_abort_on_stationary_offaxis_overlap():
 
 
 def test_commit_pass_success_returns_free_run():
+    """SD-3d: when fellow is laterally clear (|lateral_m| ≥ merge_safe_lat_m),
+    COMMIT success goes directly to FREE_RUN — no HOLD needed.
+
+    Covers F6/F7-style parallel-TTL passes where ego cleared laterally during
+    the COMMIT itself.
+    """
     st = TacticalPlannerState(mode=COMMIT_PASS_LEFT, last_setup_side="left")
     cfg = TacticalPlannerConfig(commit_abort_enabled=True)
     s = _sit(
@@ -936,6 +944,8 @@ def test_commit_pass_success_returns_free_run():
         collision_risk_01=0.05,
         distance_m=35.0,
         longitudinal_m=-6.0,
+        # SD-3d: laterally clear → skip HOLD, straight to FREE_RUN.
+        lateral_m=3.0,
         closing_speed_mps=0.0,
     )
     m, ttl, cap, reason = tactical_planner_step_v1(
@@ -1119,6 +1129,7 @@ def test_commit_ttl_clear_does_not_fire_while_fellow_still_ahead():
     assert st.commit.pass_success is False
 
     # Fellow drops behind — free_run success fires.
+    # SD-3d: lateral_m=3.0 > merge_safe_lat_m=2.5 → already laterally clear → skip HOLD.
     s_behind = _sit(
         ahead=False,
         lateral_relation="right",
@@ -1126,6 +1137,7 @@ def test_commit_ttl_clear_does_not_fire_while_fellow_still_ahead():
         collision_risk_01=0.05,
         distance_m=30.0,
         longitudinal_m=-5.0,
+        lateral_m=3.0,
         closing_speed_mps=0.0,
     )
     m3, ttl3, cap3, reason3 = tactical_planner_step_v1(
@@ -1794,6 +1806,106 @@ def test_pass_safe_feasibility_passes_at_matched_speed():
     # ego and the actual closing will materialize.
     assert m == SETUP_RIGHT, f"SETUP must fire at matched speed when feasible, got {m}"
     assert ttl == "right"
+
+
+def test_commit_pass_success_enters_hold_then_releases_when_clear():
+    """SD-3d: when COMMIT succeeds with ego still side-by-side (|lateral_m| < 2.5),
+    enter HOLD on the same side TTL, then release to FREE_RUN once
+    delta_s_behind exceeds hold_release_long_m AND geometry is safe.
+
+    This is the structural fix for the F2_tactical "cut back into fellow on
+    revert-to-optimal" failure mode.
+    """
+    st = TacticalPlannerState(mode=COMMIT_PASS_LEFT, last_setup_side="left")
+    st.commit.side = "left"
+    cfg = TacticalPlannerConfig(commit_abort_enabled=True)
+
+    # Tick 1: COMMIT success but still side-by-side → enter HOLD on left.
+    s_just_passed = _sit(
+        ahead=False,
+        lateral_relation="right",
+        overlap_state="clear_ahead",
+        collision_risk_01=0.05,
+        distance_m=5.0,
+        longitudinal_m=-2.0,    # ego just barely ahead
+        lateral_m=1.5,          # < merge_safe_lat_m=2.5 → still in danger
+        closing_speed_mps=0.0,
+        delta_s_m=-2.0,
+    )
+    m1, ttl1, cap1, reason1 = tactical_planner_step_v1(
+        st, s_just_passed,
+        has_opponent=True, ego_speed_mps=18.0, opponent_speed_mps=10.0,
+        sim_time_s=0.0, pit_mode=False, config=cfg,
+        assessment_relation="behind", assessment_gap_ok=True,
+        assessment_optimal_open=True,
+        assessment_left_open=True, assessment_right_open=True,
+        assessment_closing_flag=False, assessment_emergency_risk_01=0.05,
+    )
+    assert m1 == HOLD_PASS_LEFT, f"Expected HOLD_PASS_LEFT entry, got {m1}"
+    assert ttl1 == "left", "HOLD must keep the COMMIT-side TTL"
+    assert reason1 == "hold_pass_entry"
+    assert cap1 is not None and cap1 >= 11.5  # max(ego_at_entry=18, opp+1.5=11.5) = 18
+
+    # Tick 2: ego has pulled further ahead → release.
+    # hold_release_long_m(Δv=8) = 6.4 + 0.3·8 = 8.8m → delta_s_behind=10 satisfies.
+    s_clear = _sit(
+        ahead=False,
+        lateral_relation="right",
+        overlap_state="clear_ahead",
+        collision_risk_01=0.05,
+        distance_m=10.0,
+        longitudinal_m=-10.0,
+        lateral_m=1.5,           # still side_by_side per lateral check, but
+                                 # longitudinal clearance has built up
+        closing_speed_mps=0.0,
+        delta_s_m=-10.0,         # ego 10m ahead → > 8.8m hold_release threshold
+    )
+    m2, ttl2, cap2, reason2 = tactical_planner_step_v1(
+        st, s_clear,
+        has_opponent=True, ego_speed_mps=18.0, opponent_speed_mps=10.0,
+        sim_time_s=0.5, pit_mode=False, config=cfg,
+        assessment_relation="behind", assessment_gap_ok=True,
+        assessment_optimal_open=True,
+        assessment_left_open=True, assessment_right_open=True,
+        assessment_closing_flag=False, assessment_emergency_risk_01=0.05,
+    )
+    assert m2 == FREE_RUN, f"HOLD must release to FREE_RUN, got {m2}"
+    assert ttl2 == "optimal", "HOLD release returns to optimal TTL"
+    assert reason2 == "hold_release_merge_safe"
+
+
+def test_commit_pass_success_hold_aborts_on_hazard_reappearance():
+    """SD-3d: HOLD must transition to ABORT when a hard hazard reappears
+    (e.g., fellow drafts back alongside or relation flips ahead again)."""
+    st = TacticalPlannerState(mode=HOLD_PASS_LEFT, last_setup_side="left")
+    st.commit.side = "left"
+    st.commit.hold_pass_side = "left"
+    st.commit.hold_entry_s = 0.0
+    st.commit.hold_speed_at_entry_mps = 18.0
+    cfg = TacticalPlannerConfig(commit_abort_enabled=True)
+    # Fellow drafts back alongside — overlap=side_by_side triggers overlap_hazard_now.
+    s_hazard = _sit(
+        ahead=False,
+        lateral_relation="right",
+        overlap_state="side_by_side",
+        collision_risk_01=0.4,
+        distance_m=2.0,
+        longitudinal_m=-1.0,
+        lateral_m=0.5,
+        closing_speed_mps=0.0,
+        delta_s_m=-1.0,
+    )
+    m, ttl, cap, reason = tactical_planner_step_v1(
+        st, s_hazard,
+        has_opponent=True, ego_speed_mps=18.0, opponent_speed_mps=10.0,
+        sim_time_s=0.5, pit_mode=False, config=cfg,
+        assessment_relation="behind", assessment_gap_ok=False,
+        assessment_optimal_open=False,
+        assessment_left_open=False, assessment_right_open=False,
+        assessment_closing_flag=True, assessment_emergency_risk_01=0.5,
+    )
+    assert m == ABORT_PASS, f"HOLD should ABORT on hazard, got {m}"
+    assert reason == "abort_hold_hazard"
 
 
 def _make_polyline(x0, y0, dx, dy, n):

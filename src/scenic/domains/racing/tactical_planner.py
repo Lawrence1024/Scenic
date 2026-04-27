@@ -21,6 +21,10 @@ SETUP_PASS_RIGHT = "SETUP_PASS_RIGHT"
 COMMIT_PASS_LEFT = "COMMIT_PASS_LEFT"
 COMMIT_PASS_RIGHT = "COMMIT_PASS_RIGHT"
 ABORT_PASS = "ABORT_PASS"
+# SD-3d: post-pass hold states. Ego stays on the COMMIT-side TTL after
+# relation flips behind, until merge-back is geometrically + longitudinally safe.
+HOLD_PASS_LEFT = "HOLD_PASS_LEFT"
+HOLD_PASS_RIGHT = "HOLD_PASS_RIGHT"
 
 
 @dataclass
@@ -166,6 +170,12 @@ class CommitPlannerState:
     abort_until_s: float = -1.0e9  # hold timer for ABORT_PASS state
     last_side: str = ""           # side of the most recently completed commit (for cooldown)
     last_exit_s: float = -1.0e9   # sim time when last commit exited (for opposing cooldown)
+    # SD-3d: HOLD phase state. Records when ego entered HOLD and ego's speed
+    # at entry — used to compute the HOLD speed cap (freeze gain at entry,
+    # don't accelerate to optimal target during the merge-back window).
+    hold_entry_s: float = -1.0e9
+    hold_speed_at_entry_mps: float = 0.0
+    hold_pass_side: str = ""       # "left" or "right" — which side TTL HOLD is on
     # Per-cycle event flags (for logging; never drive control logic)
     trigger: str = "none"
     abort_trigger: str = "none"
@@ -649,8 +659,38 @@ def tactical_planner_step_v1(
             _clear_lateral_lock()
             return _abort_result("abort_commit_invalidated")
         # Classic success: ego has physically overtaken the fellow.
+        # SD-3d: instead of immediately switching to optimal TTL (which carries
+        # ego LATERALLY across the fellow at the moment of merge — the bug we
+        # observed in F2_tactical), enter HOLD on the same side TTL when ego is
+        # still in lateral-merge danger. HOLD waits until both longitudinal and
+        # geometric merge-back checks pass before releasing to FREE_RUN.
         if (not relation_ahead) and (not _is_release_hazard()) and (not in_recovery_hold):
             state.commit.pass_success = True
+            still_side_by_side = bool(
+                sit is not None
+                and abs(float(sit.lateral_m)) < float(config.merge_safe_lat_m)
+            )
+            if still_side_by_side:
+                # Enter HOLD on the same side TTL.
+                state.commit.hold_entry_s = float(sim_time_s)
+                state.commit.hold_speed_at_entry_mps = float(ego_speed_mps)
+                state.commit.hold_pass_side = commit_side
+                state.commit.post_event_state = (
+                    HOLD_PASS_LEFT if commit_side == "left" else HOLD_PASS_RIGHT
+                )
+                state.mode = (
+                    HOLD_PASS_LEFT if commit_side == "left" else HOLD_PASS_RIGHT
+                )
+                # Don't clear commit lifecycle yet — HOLD reuses commit.last_side.
+                _clear_setup_commit()
+                _clear_pass_intent()
+                _clear_lateral_lock()
+                hold_cap = max(
+                    float(state.commit.hold_speed_at_entry_mps),
+                    float(opponent_speed_mps) + float(config.hold_speed_floor_margin_mps),
+                )
+                return state.mode, commit_side, hold_cap, "hold_pass_entry"
+            # Already laterally clear (e.g. F6/F7 parallel-TTL passes) — go straight to FREE_RUN.
             state.commit.post_event_state = FREE_RUN
             _clear_setup_commit()
             _clear_pass_intent()
@@ -682,6 +722,78 @@ def tactical_planner_step_v1(
         if commit_side == "left":
             return _commit_result("left", "commit_pass_left_hold")
         return _commit_result("right", "commit_pass_right_hold")
+
+    # SD-3d: HOLD branch — ego successfully passed but is still in lateral merge
+    # danger. Stay on the side TTL until BOTH the longitudinal-clearance gate
+    # (delta_s_behind ≥ hold_release_long_m) AND the geometric merge-back check
+    # (pass_window_check("merge_back")) clear. This is the "convoluted exit" the
+    # user explicitly requested — not a constant K·Δv.
+    if commit_enabled and state.mode in (HOLD_PASS_LEFT, HOLD_PASS_RIGHT):
+        hold_side = state.commit.hold_pass_side or (
+            "left" if state.mode == HOLD_PASS_LEFT else "right"
+        )
+        # Hard timeout — degenerate fallback (should not normally fire).
+        hold_elapsed_s = float(sim_time_s) - float(state.commit.hold_entry_s)
+        if hold_elapsed_s > float(config.hold_max_s):
+            state.commit.post_event_state = FREE_RUN
+            _clear_commit_lifecycle()
+            state.mode = FREE_RUN
+            state.commit.hold_entry_s = -1.0e9
+            state.commit.hold_pass_side = ""
+            return FREE_RUN, "optimal", None, "hold_timeout_force_release"
+        # Hard hazard during HOLD → ABORT (e.g. fellow drafts back alongside).
+        if relation_ahead or overlap_hazard_now:
+            state.commit.abort_trigger = "hold_hazard_reappeared"
+            state.commit.post_event_state = ABORT_PASS
+            state.commit.abort_until_s = max(
+                float(state.commit.abort_until_s),
+                float(sim_time_s) + float(config.abort_hold_s),
+            )
+            state.commit.hold_entry_s = -1.0e9
+            state.commit.hold_pass_side = ""
+            _clear_setup_commit()
+            _clear_pass_intent()
+            _clear_lateral_lock()
+            return _abort_result("abort_hold_hazard")
+        # Compute the merge-back exit gate.
+        # Longitudinal: ego must be far enough ahead that fellow can't rear-end during merge.
+        delta_s_behind_m = -float(sit.delta_s_m) if sit is not None else 0.0
+        long_clear_required_m = _dv_hold_release_long_m(config, dv_mps)
+        long_ok = bool(delta_s_behind_m >= long_clear_required_m)
+        # Geometric: when polylines provided, also verify merge-back path doesn't
+        # intersect fellow's predicted trajectory.
+        merge_geom_ok = True
+        if (
+            optimal_waypoints is not None
+            and ego_s_m is not None
+            and opp_s_m is not None
+            and lap_length_m is not None
+            and float(lap_length_m) > 0.0
+        ):
+            merge_geom_ok, _diag = pass_window_check(
+                "merge_back",
+                ego_s_m=float(ego_s_m),
+                ego_speed_mps=float(ego_speed_mps),
+                opp_s_m=float(opp_s_m),
+                opp_speed_mps=float(opponent_speed_mps),
+                optimal_waypoints=optimal_waypoints,
+                side_waypoints=optimal_waypoints,  # unused in merge_back mode
+                lap_length_m=float(lap_length_m),
+                pass_duration_s=1.0,  # short window — merge takes <1 s
+            )
+        if long_ok and merge_geom_ok:
+            state.commit.post_event_state = FREE_RUN
+            _clear_commit_lifecycle()
+            state.mode = FREE_RUN
+            state.commit.hold_entry_s = -1.0e9
+            state.commit.hold_pass_side = ""
+            return FREE_RUN, "optimal", None, "hold_release_merge_safe"
+        # Stay in HOLD on the side TTL with the bounded speed cap.
+        hold_cap = max(
+            float(state.commit.hold_speed_at_entry_mps),
+            float(opponent_speed_mps) + float(config.hold_speed_floor_margin_mps),
+        )
+        return state.mode, hold_side, hold_cap, "hold_pass_hold"
 
     if commit_enabled and state.mode == ABORT_PASS:
         # Early release: opponent already behind and no active hazard → pass completed,
