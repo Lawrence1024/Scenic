@@ -346,7 +346,7 @@ def assess_nearest_opponent(
     return sit, overlap
 
 
-def format_phase2_log_line(t_sim_s: float, sit: OpponentSituation) -> str:
+def format_opponent_log_line(t_sim_s: float, sit: OpponentSituation) -> str:
     return (
         f"[Phase2] t={t_sim_s:.2f}s ahead={1 if sit.ahead else 0} "
         f"delta_s_m={sit.delta_s_m:.2f}({sit.delta_s_source}) "
@@ -362,7 +362,7 @@ __all__ = [
     "assess_nearest_opponent",
     "planner_segment_context",
     "polyline_lap_length_m",
-    "format_phase2_log_line",
+    "format_opponent_log_line",
     "waypoint_segment_run_progress",
     "stabilize_overlap_state",
     "collision_risk_short_horizon",

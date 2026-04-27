@@ -1265,7 +1265,7 @@ def test_commit_relaxes_to_free_run_when_far_nonclosing_low_risk():
 # Phase 12: segment-conditioned tactical intelligence
 # ---------------------------------------------------------------------------
 
-def _make_phase12_commit_setup_state():
+def _make_seg_commit_setup_state():
     """Helper: state with an active setup-chain (commit_until active, pass_intent active)."""
     st = TacticalPlannerState()
     st.mode = "SETUP_PASS_RIGHT"
@@ -1280,7 +1280,7 @@ def _make_phase12_commit_setup_state():
     return st
 
 
-def test_phase12_corner_body_blocks_commit():
+def test_seg_corner_body_blocks_commit():
     """Phase 12: corner_body segment must block commit entry even when all other gates pass."""
     cfg = TacticalPlannerConfig(
         commit_abort_enabled=True,
@@ -1299,7 +1299,7 @@ def test_phase12_corner_body_blocks_commit():
         closing_speed_mps=15.0,
         segment_context="corner_body",
     )
-    st = _make_phase12_commit_setup_state()
+    st = _make_seg_commit_setup_state()
     m, ttl, cap, reason = tactical_planner_step_v1(
         st, s,
         has_opponent=True, ego_speed_mps=24.0, opponent_speed_mps=9.0,
@@ -1317,7 +1317,7 @@ def test_phase12_corner_body_blocks_commit():
     assert st.segment_modifier == "blocked"
 
 
-def test_phase12_corner_entry_blocks_commit_when_risk_elevated():
+def test_seg_corner_entry_blocks_commit_when_risk_elevated():
     """Phase 12: corner_entry with collision_risk_01 > corner_entry_commit_risk_max blocks commit."""
     cfg = TacticalPlannerConfig(
         commit_abort_enabled=True,
@@ -1336,7 +1336,7 @@ def test_phase12_corner_entry_blocks_commit_when_risk_elevated():
         closing_speed_mps=15.0,
         segment_context="corner_entry",
     )
-    st = _make_phase12_commit_setup_state()
+    st = _make_seg_commit_setup_state()
     m, ttl, cap, reason = tactical_planner_step_v1(
         st, s,
         has_opponent=True, ego_speed_mps=24.0, opponent_speed_mps=9.0,
@@ -1354,7 +1354,7 @@ def test_phase12_corner_entry_blocks_commit_when_risk_elevated():
     assert st.segment_modifier == "conservative"
 
 
-def test_phase12_corner_entry_allows_commit_when_risk_low():
+def test_seg_corner_entry_allows_commit_when_risk_low():
     """Phase 12: corner_entry with collision_risk_01 <= corner_entry_commit_risk_max allows commit."""
     cfg = TacticalPlannerConfig(
         commit_abort_enabled=True,
@@ -1374,7 +1374,7 @@ def test_phase12_corner_entry_allows_commit_when_risk_low():
         closing_speed_mps=15.0,
         segment_context="corner_entry",
     )
-    st = _make_phase12_commit_setup_state()
+    st = _make_seg_commit_setup_state()
     m, ttl, cap, reason = tactical_planner_step_v1(
         st, s,
         has_opponent=True, ego_speed_mps=24.0, opponent_speed_mps=9.0,
@@ -1391,7 +1391,7 @@ def test_phase12_corner_entry_allows_commit_when_risk_low():
     assert st.segment_modifier == "conservative"
 
 
-def test_phase12_straight_unchanged_from_phase11():
+def test_seg_straight_unchanged_from_phase11():
     """Phase 12: on straight segment, behavior is identical to Phase 11 (no additional blocks)."""
     cfg = TacticalPlannerConfig(
         commit_abort_enabled=True,
@@ -1410,7 +1410,7 @@ def test_phase12_straight_unchanged_from_phase11():
         closing_speed_mps=15.0,
         segment_context="straight",
     )
-    st = _make_phase12_commit_setup_state()
+    st = _make_seg_commit_setup_state()
     m, ttl, cap, reason = tactical_planner_step_v1(
         st, s,
         has_opponent=True, ego_speed_mps=24.0, opponent_speed_mps=9.0,
@@ -1427,7 +1427,7 @@ def test_phase12_straight_unchanged_from_phase11():
     assert st.segment_modifier == "relaxed"
 
 
-def test_phase12_disabled_corner_body_does_not_block():
+def test_seg_disabled_corner_body_does_not_block():
     """Phase 12 disabled: corner_body does NOT block commit (Phase 11 behavior preserved)."""
     cfg = TacticalPlannerConfig(
         commit_abort_enabled=True,
@@ -1446,7 +1446,7 @@ def test_phase12_disabled_corner_body_does_not_block():
         closing_speed_mps=15.0,
         segment_context="corner_body",
     )
-    st = _make_phase12_commit_setup_state()
+    st = _make_seg_commit_setup_state()
     m, ttl, cap, reason = tactical_planner_step_v1(
         st, s,
         has_opponent=True, ego_speed_mps=24.0, opponent_speed_mps=9.0,

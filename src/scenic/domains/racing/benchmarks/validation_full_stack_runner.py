@@ -39,12 +39,12 @@ from scenic.domains.racing.benchmarks.phase_run_common import (
 
 # (short label, python -m module name)
 _CHILD_PHASES: Tuple[Tuple[str, str], ...] = (
-    ("phase0", "scenic.domains.racing.benchmarks.phase0_runner"),
-    ("phase1", "scenic.domains.racing.benchmarks.phase1_runner"),
-    ("phase2", "scenic.domains.racing.benchmarks.phase2_runner"),
-    ("phase3", "scenic.domains.racing.benchmarks.phase3_runner"),
-    ("phase4", "scenic.domains.racing.benchmarks.phase4_runner"),
-    ("phase5", "scenic.domains.racing.benchmarks.phase5_runner"),
+    ("phase0", "scenic.domains.racing.benchmarks.baseline_runner"),
+    ("phase1", "scenic.domains.racing.benchmarks.scripted_runner"),
+    ("phase2", "scenic.domains.racing.benchmarks.opponent_runner"),
+    ("phase3", "scenic.domains.racing.benchmarks.tactical_runner"),
+    ("phase4", "scenic.domains.racing.benchmarks.shield_runner"),
+    ("phase5", "scenic.domains.racing.benchmarks.segment_runner"),
 )
 
 _CHILD_FELLOW: Tuple[Tuple[str, str], ...] = (
@@ -56,8 +56,8 @@ _SUITE_MODULES: Dict[str, Tuple[Tuple[str, str], ...]] = {
     "all": _CHILD_PHASES + _CHILD_FELLOW,
     "phases_only": _CHILD_PHASES,
     "minimal": (
-        ("phase0", "scenic.domains.racing.benchmarks.phase0_runner"),
-        ("phase5", "scenic.domains.racing.benchmarks.phase5_runner"),
+        ("phase0", "scenic.domains.racing.benchmarks.baseline_runner"),
+        ("phase5", "scenic.domains.racing.benchmarks.segment_runner"),
         ("fellow_smoke", "scenic.domains.racing.benchmarks.fellow_runner"),
     ),
     "fellow_only": _CHILD_FELLOW,

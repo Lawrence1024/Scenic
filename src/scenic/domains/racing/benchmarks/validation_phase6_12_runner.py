@@ -8,11 +8,11 @@ into ``merged_summary.json`` and prints a single ``BENCHMARK_AI_DIGEST_*`` block
 
 Usage (repo root)::
 
-    python -m scenic.domains.racing.benchmarks.validation_phase6_12_runner
-    python -m scenic.domains.racing.benchmarks.validation_phase6_12_runner --time 1000
-    python -m scenic.domains.racing.benchmarks.validation_phase6_12_runner --suite phases_only
-    python -m scenic.domains.racing.benchmarks.validation_phase6_12_runner --continue-on-failure
-    python -m scenic.domains.racing.benchmarks.validation_phase6_12_runner --repeats 3
+    python -m scenic.domains.racing.benchmarks.validation_orchestration_12_runner
+    python -m scenic.domains.racing.benchmarks.validation_orchestration_12_runner --time 1000
+    python -m scenic.domains.racing.benchmarks.validation_orchestration_12_runner --suite phases_only
+    python -m scenic.domains.racing.benchmarks.validation_orchestration_12_runner --continue-on-failure
+    python -m scenic.domains.racing.benchmarks.validation_orchestration_12_runner --repeats 3
 
 Forwarded flags (e.g. ``--time``, ``--repeats``, ``--inter-run-delay-s``) are
 passed to every child runner.
@@ -38,13 +38,13 @@ from scenic.domains.racing.benchmarks.phase_run_common import (
 
 # (short label, python -m module name)
 _CHILD_PHASES: Tuple[Tuple[str, str], ...] = (
-    ("phase6", "scenic.domains.racing.benchmarks.phase6_runner"),
+    ("phase6", "scenic.domains.racing.benchmarks.orchestration_runner"),
     ("prediction", "scenic.domains.racing.benchmarks.prediction_runner"),
     ("phase8", "scenic.domains.racing.benchmarks.assessment_runner"),
-    ("phase9", "scenic.domains.racing.benchmarks.phase9_runner"),
+    ("phase9", "scenic.domains.racing.benchmarks.hazard_runner"),
     ("phase10", "scenic.domains.racing.benchmarks.guard_runner"),
     ("phase11", "scenic.domains.racing.benchmarks.commit_runner"),
-    ("phase12", "scenic.domains.racing.benchmarks.phase12_runner"),
+    ("phase12", "scenic.domains.racing.benchmarks.seg_runner"),
 )
 
 _SUITE_MODULES: Dict[str, Tuple[Tuple[str, str], ...]] = {
@@ -52,11 +52,11 @@ _SUITE_MODULES: Dict[str, Tuple[Tuple[str, str], ...]] = {
     "tactical": (
         ("phase10", "scenic.domains.racing.benchmarks.guard_runner"),
         ("phase11", "scenic.domains.racing.benchmarks.commit_runner"),
-        ("phase12", "scenic.domains.racing.benchmarks.phase12_runner"),
+        ("phase12", "scenic.domains.racing.benchmarks.seg_runner"),
     ),
     "corner": (
         ("phase11", "scenic.domains.racing.benchmarks.commit_runner"),
-        ("phase12", "scenic.domains.racing.benchmarks.phase12_runner"),
+        ("phase12", "scenic.domains.racing.benchmarks.seg_runner"),
     ),
 }
 
@@ -151,7 +151,7 @@ def main() -> int:
     modules = list(_SUITE_MODULES[args.suite])
 
     root = repo_root()
-    parent_id = datetime.now(timezone.utc).strftime("phase6_12_%Y%m%d_%H%M%S")
+    parent_id = datetime.now(timezone.utc).strftime("orchestration_12_%Y%m%d_%H%M%S")
     parent_rel = Path(args.out_dir) / parent_id
     parent_dir = (root / parent_rel).resolve()
     parent_dir.mkdir(parents=True, exist_ok=True)

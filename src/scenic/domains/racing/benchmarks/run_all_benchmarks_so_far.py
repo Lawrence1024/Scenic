@@ -14,7 +14,7 @@ Usage (repo root)::
 
 Order (default start is ``fellow_smoke``):
 fellow_runner -> fellow_placement_debug_runner ->
-phase0_runner -> phase1_runner -> phase2_runner -> phase3_runner -> phase4_runner -> phase5_runner -> phase6_runner -> prediction_runner -> assessment_runner -> phase9_runner -> guard_runner -> commit_runner.
+baseline_runner -> scripted_runner -> opponent_runner -> tactical_runner -> shield_runner -> segment_runner -> orchestration_runner -> prediction_runner -> assessment_runner -> hazard_runner -> guard_runner -> commit_runner.
 """
 
 from __future__ import annotations
@@ -29,16 +29,16 @@ from typing import List, Tuple
 _RUNNERS_ORDERED: Tuple[Tuple[str, str], ...] = (
     ("fellow_smoke", "scenic.domains.racing.benchmarks.fellow_runner"),
     ("fellow_placement", "scenic.domains.racing.benchmarks.fellow_placement_debug_runner"),
-    ("phase0", "scenic.domains.racing.benchmarks.phase0_runner"),
-    ("phase1", "scenic.domains.racing.benchmarks.phase1_runner"),
-    ("phase2", "scenic.domains.racing.benchmarks.phase2_runner"),
-    ("phase3", "scenic.domains.racing.benchmarks.phase3_runner"),
-    ("phase4", "scenic.domains.racing.benchmarks.phase4_runner"),
-    ("phase5", "scenic.domains.racing.benchmarks.phase5_runner"),
-    ("phase6", "scenic.domains.racing.benchmarks.phase6_runner"),
+    ("phase0", "scenic.domains.racing.benchmarks.baseline_runner"),
+    ("phase1", "scenic.domains.racing.benchmarks.scripted_runner"),
+    ("phase2", "scenic.domains.racing.benchmarks.opponent_runner"),
+    ("phase3", "scenic.domains.racing.benchmarks.tactical_runner"),
+    ("phase4", "scenic.domains.racing.benchmarks.shield_runner"),
+    ("phase5", "scenic.domains.racing.benchmarks.segment_runner"),
+    ("phase6", "scenic.domains.racing.benchmarks.orchestration_runner"),
     ("prediction", "scenic.domains.racing.benchmarks.prediction_runner"),
     ("phase8", "scenic.domains.racing.benchmarks.assessment_runner"),
-    ("phase9", "scenic.domains.racing.benchmarks.phase9_runner"),
+    ("phase9", "scenic.domains.racing.benchmarks.hazard_runner"),
     ("phase10", "scenic.domains.racing.benchmarks.guard_runner"),
     ("phase11", "scenic.domains.racing.benchmarks.commit_runner"),
 )

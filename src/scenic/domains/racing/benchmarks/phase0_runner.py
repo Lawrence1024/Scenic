@@ -14,7 +14,7 @@ def main() -> int:
         PhaseRunnerSpec(
             runner_label="Phase0Runner",
             run_id_prefix="phase0",
-            default_scenario_dir="examples/racing/phase0_benchmark",
+            default_scenario_dir="examples/racing/baseline_benchmark",
             csv_fields=(
                 "scenario",
                 "scenario_instance",
@@ -33,12 +33,12 @@ def main() -> int:
                 "eval_contact_overlap_count",
                 "eval_contact_near_count",
                 "waypoint_hits",
-                "phase0_samples",
+                "baseline_samples",
             )
             + FELLOW_HARNESS_SUMMARY_KEYS,
-            phase1_switches=False,
-            phase2_lines=False,
-            phase3_tactical=False,
+            scripted_switches=False,
+            opponent_lines=False,
+            tactical_tactical=False,
             fellow_harness=True,
             digest_keys=tuple(standard_benchmark_digest_keys_with_fellow()),
             extra_summary_keys=(

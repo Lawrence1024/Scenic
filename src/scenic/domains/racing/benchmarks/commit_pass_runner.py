@@ -51,7 +51,7 @@ def main() -> int:
                 "commit_abort_pass_count",
                 "guard_guard_active_count",
                 "guard_emergency_stable_count",
-                "phase9_state_change_count",
+                "hazard_state_change_count",
                 "collision",
                 "off_track",
                 "near_miss_count",
@@ -59,9 +59,9 @@ def main() -> int:
                 "min_opponent_distance_m",
             )
             + FELLOW_HARNESS_SUMMARY_KEYS,
-            phase1_switches=False,
-            phase2_lines=True,
-            phase3_tactical=True,
+            scripted_switches=False,
+            opponent_lines=True,
+            tactical_tactical=True,
             fellow_harness=True,
             digest_keys=tuple(standard_benchmark_digest_keys_with_fellow()),
             extra_summary_keys=(

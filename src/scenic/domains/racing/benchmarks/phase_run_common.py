@@ -6,7 +6,7 @@ in sorted filename order. Adding a new benchmark file under that directory does
 not require editing the phase runner module.
 
 When a planned phase (4–5) is implemented, update that phase's `PhaseRunnerSpec`
-in ``phase4_runner.py`` / ``phase5_runner.py`` (CSV
+in ``shield_runner.py`` / ``segment_runner.py`` (CSV
 columns, log-parser flags) and extend `collect_metrics_from_log` here if new log
 tags need KPIs. See ``examples/racing/README.md`` (Phases 4–5).
 
@@ -127,32 +127,32 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "off_track_count",
     "ttl_switch_count",
     "min_opponent_distance_m",
-    "phase0_samples",
-    "phase1_switch_count",
-    "phase1_switch_observed",
-    "phase2_line_count",
-    "phase2_overlap_count",
-    "phase2_seg_ctx_count",
-    "phase2_assess_errors",
-    "phase2_opponent_none_lines",
-    "phase3_ttl_switch_count",
-    "phase3_tactical_status_count",
-    "phase4_abort_pass_count",
-    "phase4_emergency_avoid_count",
-    "phase4_commit_pass_count",
-    "phase4_event_commit_pass_left",
-    "phase4_event_commit_pass_right",
-    "phase4_event_shield_release",
-    "phase5_tactical_line_count",
-    "phase5_ttl_switch_count",
-    "phase5_event_segment_override",
-    "phase5_event_segment_release",
-    "phase5_override_count",
-    "phase6_state_line_count",
-    "phase6_planner_line_count",
-    "phase6_guard_line_count",
-    "phase6_executor_line_count",
-    "phase6_guard_active_count",
+    "baseline_samples",
+    "scripted_switch_count",
+    "scripted_switch_observed",
+    "opponent_line_count",
+    "opponent_overlap_count",
+    "opponent_seg_ctx_count",
+    "opponent_assess_errors",
+    "opponent_opponent_none_lines",
+    "tactical_ttl_switch_count",
+    "tactical_tactical_status_count",
+    "shield_abort_pass_count",
+    "shield_emergency_avoid_count",
+    "shield_commit_pass_count",
+    "shield_event_commit_pass_left",
+    "shield_event_commit_pass_right",
+    "shield_event_shield_release",
+    "segment_tactical_line_count",
+    "segment_ttl_switch_count",
+    "segment_event_segment_override",
+    "segment_event_segment_release",
+    "segment_override_count",
+    "orchestration_state_line_count",
+    "orchestration_planner_line_count",
+    "orchestration_guard_line_count",
+    "orchestration_executor_line_count",
+    "orchestration_guard_active_count",
     "eval_contact_overlap_count",
     "eval_contact_near_count",
     "eval_contact_overlap_dspace_invalid_count",
@@ -177,13 +177,13 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "assessment_right_open_rate",
     "assessment_closing_flag_rate",
     "assessment_emergency_risk_mean",
-    "phase9_planner_line_count",
-    "phase9_free_run_count",
-    "phase9_follow_count",
-    "phase9_setup_pass_left_count",
-    "phase9_setup_pass_right_count",
-    "phase9_state_change_count",
-    "phase9_gap_ok_rate",
+    "hazard_planner_line_count",
+    "hazard_free_run_count",
+    "hazard_follow_count",
+    "hazard_setup_pass_left_count",
+    "hazard_setup_pass_right_count",
+    "hazard_state_change_count",
+    "hazard_gap_ok_rate",
     "guard_guard_line_count",
     "guard_guard_active_count",
     "guard_steer_limited_count",
@@ -198,12 +198,12 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "commit_commit_pass_left_count",
     "commit_commit_pass_right_count",
     "commit_abort_pass_count",
-    "phase12_seg_straight_count",
-    "phase12_seg_corner_entry_count",
-    "phase12_seg_corner_body_count",
-    "phase12_seg_corner_exit_count",
-    "phase12_seg_modifier_blocked_count",
-    "phase12_seg_modifier_conservative_count",
+    "seg_seg_straight_count",
+    "seg_seg_corner_entry_count",
+    "seg_seg_corner_body_count",
+    "seg_seg_corner_exit_count",
+    "seg_seg_modifier_blocked_count",
+    "seg_seg_modifier_conservative_count",
 )
 
 # Fellow traffic harness digest (see examples/racing/fellow_smoke, fellow_runner.py).
@@ -217,9 +217,9 @@ FELLOW_HARNESS_DIGEST_KEYS: Tuple[str, ...] = (
     "off_track",
     "near_miss_count",
     "min_opponent_distance_m",
-    "phase0_samples",
-    "phase2_line_count",
-    "phase2_assess_errors",
+    "baseline_samples",
+    "opponent_line_count",
+    "opponent_assess_errors",
     "fellow_placement_from_ego_offset_observed",
     "fellow_st_log_present",
     "fellow_s0",
@@ -335,20 +335,20 @@ def benchmark_digest_aggregate(results: List[Dict[str, Any]]) -> Dict[str, JsonS
             "any_collision": False,
             "any_off_track": False,
             "any_collision_eval_hull": False,
-            "max_phase3_ttl_switch_count": 0,
+            "max_tactical_ttl_switch_count": 0,
             "sum_near_miss_count": 0,
-            "max_phase2_assess_errors": 0,
+            "max_opponent_assess_errors": 0,
         }
     return {
         "scenario_count": len(results),
         "all_return_codes_zero": all(r.get("return_code") == 0 for r in results),
         "any_collision": any(r.get("collision") for r in results),
         "any_off_track": any(r.get("off_track") for r in results),
-        "max_phase3_ttl_switch_count": max(
-            int(r.get("phase3_ttl_switch_count") or 0) for r in results
+        "max_tactical_ttl_switch_count": max(
+            int(r.get("tactical_ttl_switch_count") or 0) for r in results
         ),
         "sum_near_miss_count": sum(int(r.get("near_miss_count") or 0) for r in results),
-        "max_phase2_assess_errors": max(int(r.get("phase2_assess_errors") or 0) for r in results),
+        "max_opponent_assess_errors": max(int(r.get("opponent_assess_errors") or 0) for r in results),
         "any_collision_eval_hull": any(r.get("collision_eval_hull_overlap") for r in results),
     }
 
@@ -421,9 +421,9 @@ def parse_float_or_none(value: str) -> Optional[float]:
 def collect_metrics_from_log(
     log_path: Path,
     *,
-    phase1_switches: bool = False,
-    phase2_lines: bool = False,
-    phase3_tactical: bool = False,
+    scripted_switches: bool = False,
+    opponent_lines: bool = False,
+    tactical_tactical: bool = False,
     ignore_before_s: float = 1.0,
 ) -> Dict[str, Any]:
     """Parse standard racing benchmark tags; does **not** read ``[EvalGT]`` / dSPACE sensor ground truth."""
@@ -431,41 +431,41 @@ def collect_metrics_from_log(
     ttl_seen: List[str] = []
     planner_modes: List[str] = []
     event_counts: Dict[str, int] = {}
-    phase1_switch_list: List[Dict[str, Any]] = []
+    scripted_switch_list: List[Dict[str, Any]] = []
 
-    phase2_count = 0
-    phase2_overlaps: List[str] = []
-    phase2_seg_ctx: List[str] = []
-    phase2_opponent_none_lines = 0
-    phase2_assess_errors = 0
+    opponent_count = 0
+    opponent_overlaps: List[str] = []
+    opponent_seg_ctx: List[str] = []
+    opponent_opponent_none_lines = 0
+    opponent_assess_errors = 0
 
-    phase3_switches: List[Dict[str, Any]] = []
-    phase3_modes: List[str] = []
-    phase3_ttls: List[str] = []
+    tactical_switches: List[Dict[str, Any]] = []
+    tactical_modes: List[str] = []
+    tactical_ttls: List[str] = []
 
-    phase4_abort_pass_count = 0
-    phase4_emergency_count = 0
-    phase4_commit_count = 0
-    phase4_event_commit_left = 0
-    phase4_event_commit_right = 0
-    phase4_event_abort = 0
-    phase4_event_emergency = 0
-    phase4_event_shield_release = 0
-    phase5_line_count = 0
-    phase5_ttl_switch_count = 0
-    phase5_event_segment_override = 0
-    phase5_event_segment_release = 0
-    phase5_override_count = 0
-    phase5_mode_out: List[str] = []
-    phase5_reasons: List[str] = []
-    phase6_state_line_count = 0
-    phase6_planner_line_count = 0
-    phase6_guard_line_count = 0
-    phase6_executor_line_count = 0
-    phase6_guard_active_count = 0
-    phase6_states: List[str] = []
-    phase6_ttls: List[str] = []
-    phase6_reasons: List[str] = []
+    shield_abort_pass_count = 0
+    shield_emergency_count = 0
+    shield_commit_count = 0
+    shield_event_commit_left = 0
+    shield_event_commit_right = 0
+    shield_event_abort = 0
+    shield_event_emergency = 0
+    shield_event_shield_release = 0
+    segment_line_count = 0
+    segment_ttl_switch_count = 0
+    segment_event_segment_override = 0
+    segment_event_segment_release = 0
+    segment_override_count = 0
+    segment_mode_out: List[str] = []
+    segment_reasons: List[str] = []
+    orchestration_state_line_count = 0
+    orchestration_planner_line_count = 0
+    orchestration_guard_line_count = 0
+    orchestration_executor_line_count = 0
+    orchestration_guard_active_count = 0
+    orchestration_states: List[str] = []
+    orchestration_ttls: List[str] = []
+    orchestration_reasons: List[str] = []
     eval_contact_overlap_count = 0
     eval_contact_near_count = 0
     eval_contact_overlap_dspace_invalid_count = 0
@@ -485,12 +485,12 @@ def collect_metrics_from_log(
     assessment_safe_gap_vals: List[float] = []
     assessment_actual_gap_vals: List[float] = []
     assessment_risk_vals: List[float] = []
-    phase9_line_count = 0
-    phase9_states: List[str] = []
-    phase9_ttls: List[str] = []
-    phase9_reasons: List[str] = []
-    phase9_gap_ok_count = 0
-    phase9_gap_ok_known = 0
+    hazard_line_count = 0
+    hazard_states: List[str] = []
+    hazard_ttls: List[str] = []
+    hazard_reasons: List[str] = []
+    hazard_gap_ok_count = 0
+    hazard_gap_ok_known = 0
     guard_guard_line_count = 0
     guard_guard_active_count = 0
     guard_steer_limited_count = 0
@@ -505,12 +505,12 @@ def collect_metrics_from_log(
     commit_commit_pass_left_count = 0
     commit_commit_pass_right_count = 0
     commit_abort_pass_count = 0
-    phase12_seg_straight_count = 0
-    phase12_seg_corner_entry_count = 0
-    phase12_seg_corner_body_count = 0
-    phase12_seg_corner_exit_count = 0
-    phase12_seg_modifier_blocked_count = 0
-    phase12_seg_modifier_conservative_count = 0
+    seg_seg_straight_count = 0
+    seg_seg_corner_entry_count = 0
+    seg_seg_corner_body_count = 0
+    seg_seg_corner_exit_count = 0
+    seg_seg_modifier_blocked_count = 0
+    seg_seg_modifier_conservative_count = 0
 
     _ignore_before = max(0.0, float(ignore_before_s))
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
@@ -565,15 +565,15 @@ def collect_metrics_from_log(
             if "[Planner]" in line:
                 p9 = RE_PLANNER.search(line)
                 if p9:
-                    phase9_line_count += 1
-                    phase9_states.append(p9.group("state"))
-                    phase9_ttls.append(p9.group("ttl"))
-                    phase9_reasons.append(p9.group("reason"))
+                    hazard_line_count += 1
+                    hazard_states.append(p9.group("state"))
+                    hazard_ttls.append(p9.group("ttl"))
+                    hazard_reasons.append(p9.group("reason"))
                     _ag = str(p9.group("agap") or "na").lower()
                     if _ag in ("0", "1"):
-                        phase9_gap_ok_known += 1
+                        hazard_gap_ok_known += 1
                         if _ag == "1":
-                            phase9_gap_ok_count += 1
+                            hazard_gap_ok_count += 1
             if "[Guard]" in line:
                 p10 = RE_GUARD.search(line)
                 if p10:
@@ -612,17 +612,17 @@ def collect_metrics_from_log(
                     _seg_ctx = str(p12.group("seg_ctx") or "none")
                     _seg_mod = str(p12.group("seg_modifier") or "normal")
                     if _seg_ctx == "straight":
-                        phase12_seg_straight_count += 1
+                        seg_seg_straight_count += 1
                     elif _seg_ctx == "corner_entry":
-                        phase12_seg_corner_entry_count += 1
+                        seg_seg_corner_entry_count += 1
                     elif _seg_ctx == "corner_body":
-                        phase12_seg_corner_body_count += 1
+                        seg_seg_corner_body_count += 1
                     elif _seg_ctx == "corner_exit":
-                        phase12_seg_corner_exit_count += 1
+                        seg_seg_corner_exit_count += 1
                     if _seg_mod == "blocked":
-                        phase12_seg_modifier_blocked_count += 1
+                        seg_seg_modifier_blocked_count += 1
                     elif _seg_mod == "conservative":
-                        phase12_seg_modifier_conservative_count += 1
+                        seg_seg_modifier_conservative_count += 1
             evc = RE_EVAL_CONTACT_EVENT.search(line)
             if evc:
                 sev = evc.group("sev")
@@ -649,10 +649,10 @@ def collect_metrics_from_log(
                 ev = e.group("event")
                 event_counts[ev] = event_counts.get(ev, 0) + 1
                 continue
-            if phase1_switches:
+            if scripted_switches:
                 p1 = RE_PHASE1_SWITCH.search(line)
                 if p1:
-                    phase1_switch_list.append(
+                    scripted_switch_list.append(
                         {
                             "t_s": float(p1.group("t")),
                             "from": p1.group("from"),
@@ -660,23 +660,23 @@ def collect_metrics_from_log(
                         }
                     )
                     continue
-            if phase2_lines and "[Phase2]" in line:
-                phase2_count += 1
+            if opponent_lines and "[Phase2]" in line:
+                opponent_count += 1
                 if RE_PHASE2_OPP_NONE.search(line):
-                    phase2_opponent_none_lines += 1
+                    opponent_opponent_none_lines += 1
                 if "[Phase2]" in line and "assess_error" in line:
-                    phase2_assess_errors += 1
+                    opponent_assess_errors += 1
                 om = RE_PHASE2_OVERLAP.search(line)
                 if om:
-                    phase2_overlaps.append(om.group("v"))
+                    opponent_overlaps.append(om.group("v"))
                 sm = RE_PHASE2_SEG.search(line)
                 if sm:
-                    phase2_seg_ctx.append(sm.group("v"))
+                    opponent_seg_ctx.append(sm.group("v"))
                 continue
-            if phase3_tactical:
+            if tactical_tactical:
                 p3s = RE_PHASE3_TTL_SWITCH.search(line)
                 if p3s:
-                    phase3_switches.append(
+                    tactical_switches.append(
                         {
                             "t_s": float(p3s.group("t")),
                             "from": p3s.group("from"),
@@ -687,13 +687,13 @@ def collect_metrics_from_log(
                     continue
                 p3st = RE_PHASE3_STATUS.search(line)
                 if p3st:
-                    phase3_modes.append(p3st.group("mode"))
-                    phase3_ttls.append(p3st.group("ttl"))
+                    tactical_modes.append(p3st.group("mode"))
+                    tactical_ttls.append(p3st.group("ttl"))
                     continue
 
     out: Dict[str, Any] = {
         "min_opponent_distance_m": min_opp_dist,
-        "phase0_samples": len(ttl_seen),
+        "baseline_samples": len(ttl_seen),
         "ttls_observed": sorted(set(ttl_seen)),
         "planner_modes_observed": sorted(set(planner_modes)),
         "ttl_switch_count": int(event_counts.get("ttl_switch", 0)),
@@ -701,45 +701,45 @@ def collect_metrics_from_log(
         "collision_count": int(event_counts.get("collision", 0)),
         "off_track_count": int(event_counts.get("off_track", 0)),
     }
-    if phase1_switches:
-        out["phase1_switch_observed"] = bool(len(phase1_switch_list) > 0)
-        out["phase1_switch_count"] = len(phase1_switch_list)
-        out["phase1_switches"] = phase1_switch_list
-    if phase2_lines:
-        out["phase2_line_count"] = phase2_count
-        out["phase2_opponent_none_lines"] = phase2_opponent_none_lines
-        out["phase2_assess_errors"] = phase2_assess_errors
-        out["phase2_overlap_count"] = len(phase2_overlaps)
-        out["phase2_seg_ctx_count"] = len(phase2_seg_ctx)
-        out["phase2_overlaps_observed"] = sorted(set(phase2_overlaps))
-        out["phase2_seg_ctx_observed"] = sorted(set(phase2_seg_ctx))
-    if phase3_tactical:
-        out["phase3_ttl_switch_count"] = len(phase3_switches)
-        out["phase3_tactical_status_count"] = len(phase3_modes)
-        out["phase3_switches"] = phase3_switches
-        out["phase3_modes_observed"] = sorted(set(phase3_modes))
-        out["phase3_ttls_observed"] = sorted(set(phase3_ttls))
-    out["phase4_abort_pass_count"] = phase4_event_abort
-    out["phase4_emergency_avoid_count"] = phase4_event_emergency
-    out["phase4_commit_pass_count"] = phase4_event_commit_left + phase4_event_commit_right
-    out["phase4_event_commit_pass_left"] = phase4_event_commit_left
-    out["phase4_event_commit_pass_right"] = phase4_event_commit_right
-    out["phase4_event_shield_release"] = phase4_event_shield_release
-    out["phase5_tactical_line_count"] = phase5_line_count
-    out["phase5_ttl_switch_count"] = phase5_ttl_switch_count
-    out["phase5_event_segment_override"] = phase5_event_segment_override
-    out["phase5_event_segment_release"] = phase5_event_segment_release
-    out["phase5_override_count"] = phase5_override_count
-    out["phase5_modes_observed"] = sorted(set(phase5_mode_out))
-    out["phase5_reasons_observed"] = sorted(set(phase5_reasons))
-    out["phase6_state_line_count"] = phase6_state_line_count
-    out["phase6_planner_line_count"] = phase6_planner_line_count
-    out["phase6_guard_line_count"] = phase6_guard_line_count
-    out["phase6_executor_line_count"] = phase6_executor_line_count
-    out["phase6_guard_active_count"] = phase6_guard_active_count
-    out["phase6_states_observed"] = sorted(set(phase6_states))
-    out["phase6_ttls_observed"] = sorted(set(phase6_ttls))
-    out["phase6_reasons_observed"] = sorted(set(phase6_reasons))
+    if scripted_switches:
+        out["scripted_switch_observed"] = bool(len(scripted_switch_list) > 0)
+        out["scripted_switch_count"] = len(scripted_switch_list)
+        out["scripted_switches"] = scripted_switch_list
+    if opponent_lines:
+        out["opponent_line_count"] = opponent_count
+        out["opponent_opponent_none_lines"] = opponent_opponent_none_lines
+        out["opponent_assess_errors"] = opponent_assess_errors
+        out["opponent_overlap_count"] = len(opponent_overlaps)
+        out["opponent_seg_ctx_count"] = len(opponent_seg_ctx)
+        out["opponent_overlaps_observed"] = sorted(set(opponent_overlaps))
+        out["opponent_seg_ctx_observed"] = sorted(set(opponent_seg_ctx))
+    if tactical_tactical:
+        out["tactical_ttl_switch_count"] = len(tactical_switches)
+        out["tactical_tactical_status_count"] = len(tactical_modes)
+        out["tactical_switches"] = tactical_switches
+        out["tactical_modes_observed"] = sorted(set(tactical_modes))
+        out["tactical_ttls_observed"] = sorted(set(tactical_ttls))
+    out["shield_abort_pass_count"] = shield_event_abort
+    out["shield_emergency_avoid_count"] = shield_event_emergency
+    out["shield_commit_pass_count"] = shield_event_commit_left + shield_event_commit_right
+    out["shield_event_commit_pass_left"] = shield_event_commit_left
+    out["shield_event_commit_pass_right"] = shield_event_commit_right
+    out["shield_event_shield_release"] = shield_event_shield_release
+    out["segment_tactical_line_count"] = segment_line_count
+    out["segment_ttl_switch_count"] = segment_ttl_switch_count
+    out["segment_event_segment_override"] = segment_event_segment_override
+    out["segment_event_segment_release"] = segment_event_segment_release
+    out["segment_override_count"] = segment_override_count
+    out["segment_modes_observed"] = sorted(set(segment_mode_out))
+    out["segment_reasons_observed"] = sorted(set(segment_reasons))
+    out["orchestration_state_line_count"] = orchestration_state_line_count
+    out["orchestration_planner_line_count"] = orchestration_planner_line_count
+    out["orchestration_guard_line_count"] = orchestration_guard_line_count
+    out["orchestration_executor_line_count"] = orchestration_executor_line_count
+    out["orchestration_guard_active_count"] = orchestration_guard_active_count
+    out["orchestration_states_observed"] = sorted(set(orchestration_states))
+    out["orchestration_ttls_observed"] = sorted(set(orchestration_ttls))
+    out["orchestration_reasons_observed"] = sorted(set(orchestration_reasons))
     out["eval_contact_overlap_count"] = eval_contact_overlap_count
     out["eval_contact_near_count"] = eval_contact_near_count
     out["eval_contact_overlap_dspace_invalid_count"] = eval_contact_overlap_dspace_invalid_count
@@ -798,26 +798,26 @@ def collect_metrics_from_log(
     out["assessment_emergency_risk_mean"] = (
         (sum(assessment_risk_vals) / len(assessment_risk_vals)) if assessment_risk_vals else None
     )
-    out["phase9_planner_line_count"] = phase9_line_count
-    out["phase9_free_run_count"] = sum(1 for s in phase9_states if s == "FREE_RUN")
-    out["phase9_follow_count"] = sum(1 for s in phase9_states if s == "FOLLOW")
-    out["phase9_setup_pass_left_count"] = sum(
-        1 for s in phase9_states if s in ("SETUP_LEFT", "SETUP_PASS_LEFT")
+    out["hazard_planner_line_count"] = hazard_line_count
+    out["hazard_free_run_count"] = sum(1 for s in hazard_states if s == "FREE_RUN")
+    out["hazard_follow_count"] = sum(1 for s in hazard_states if s == "FOLLOW")
+    out["hazard_setup_pass_left_count"] = sum(
+        1 for s in hazard_states if s in ("SETUP_LEFT", "SETUP_PASS_LEFT")
     )
-    out["phase9_setup_pass_right_count"] = sum(
-        1 for s in phase9_states if s in ("SETUP_RIGHT", "SETUP_PASS_RIGHT")
+    out["hazard_setup_pass_right_count"] = sum(
+        1 for s in hazard_states if s in ("SETUP_RIGHT", "SETUP_PASS_RIGHT")
     )
     _changes = 0
-    for i in range(1, len(phase9_states)):
-        if phase9_states[i] != phase9_states[i - 1]:
+    for i in range(1, len(hazard_states)):
+        if hazard_states[i] != hazard_states[i - 1]:
             _changes += 1
-    out["phase9_state_change_count"] = _changes
-    out["phase9_states_observed"] = sorted(set(phase9_states))
-    out["phase9_ttls_observed"] = sorted(set(phase9_ttls))
-    out["phase9_reasons_observed"] = sorted(set(phase9_reasons))
-    out["phase9_gap_ok_rate"] = (
-        (float(phase9_gap_ok_count) / float(phase9_gap_ok_known))
-        if phase9_gap_ok_known > 0
+    out["hazard_state_change_count"] = _changes
+    out["hazard_states_observed"] = sorted(set(hazard_states))
+    out["hazard_ttls_observed"] = sorted(set(hazard_ttls))
+    out["hazard_reasons_observed"] = sorted(set(hazard_reasons))
+    out["hazard_gap_ok_rate"] = (
+        (float(hazard_gap_ok_count) / float(hazard_gap_ok_known))
+        if hazard_gap_ok_known > 0
         else None
     )
     out["guard_guard_line_count"] = guard_guard_line_count
@@ -834,12 +834,12 @@ def collect_metrics_from_log(
     out["commit_commit_pass_left_count"] = commit_commit_pass_left_count
     out["commit_commit_pass_right_count"] = commit_commit_pass_right_count
     out["commit_abort_pass_count"] = commit_abort_pass_count
-    out["phase12_seg_straight_count"] = phase12_seg_straight_count
-    out["phase12_seg_corner_entry_count"] = phase12_seg_corner_entry_count
-    out["phase12_seg_corner_body_count"] = phase12_seg_corner_body_count
-    out["phase12_seg_corner_exit_count"] = phase12_seg_corner_exit_count
-    out["phase12_seg_modifier_blocked_count"] = phase12_seg_modifier_blocked_count
-    out["phase12_seg_modifier_conservative_count"] = phase12_seg_modifier_conservative_count
+    out["seg_seg_straight_count"] = seg_seg_straight_count
+    out["seg_seg_corner_entry_count"] = seg_seg_corner_entry_count
+    out["seg_seg_corner_body_count"] = seg_seg_corner_body_count
+    out["seg_seg_corner_exit_count"] = seg_seg_corner_exit_count
+    out["seg_seg_modifier_blocked_count"] = seg_seg_modifier_blocked_count
+    out["seg_seg_modifier_conservative_count"] = seg_seg_modifier_conservative_count
     return out
 
 
@@ -1109,9 +1109,9 @@ def run_one_scenario_with_collect(
     out_log: Path,
     sim_steps: int,
     *,
-    phase1_switches: bool = False,
-    phase2_lines: bool = False,
-    phase3_tactical: bool = False,
+    scripted_switches: bool = False,
+    opponent_lines: bool = False,
+    tactical_tactical: bool = False,
     fellow_harness: bool = False,
     fellow_placement_debug: bool = False,
     scenic_extra_args: Optional[Sequence[str]] = None,
@@ -1123,9 +1123,9 @@ def run_one_scenario_with_collect(
     base.update(
         collect_metrics_from_log(
             out_log,
-            phase1_switches=phase1_switches,
-            phase2_lines=phase2_lines,
-            phase3_tactical=phase3_tactical,
+            scripted_switches=scripted_switches,
+            opponent_lines=opponent_lines,
+            tactical_tactical=tactical_tactical,
             ignore_before_s=analysis_ignore_before_s,
         )
     )
@@ -1150,9 +1150,9 @@ class PhaseRunnerSpec:
     default_scenario_dir: str
     default_sim_steps: int = 2000
     default_scenario_names: Sequence[str] = field(default_factory=tuple)
-    phase1_switches: bool = False
-    phase2_lines: bool = False
-    phase3_tactical: bool = False
+    scripted_switches: bool = False
+    opponent_lines: bool = False
+    tactical_tactical: bool = False
     fellow_harness: bool = False
     fellow_placement_debug: bool = False
     scenic_extra_args: Tuple[str, ...] = ()
@@ -1270,9 +1270,9 @@ def run_phase_main(spec: PhaseRunnerSpec) -> int:
             scenario,
             log_path,
             int(args.time),
-            phase1_switches=spec.phase1_switches,
-            phase2_lines=spec.phase2_lines,
-            phase3_tactical=spec.phase3_tactical,
+            scripted_switches=spec.scripted_switches,
+            opponent_lines=spec.opponent_lines,
+            tactical_tactical=spec.tactical_tactical,
             fellow_harness=spec.fellow_harness,
             fellow_placement_debug=spec.fellow_placement_debug,
             scenic_extra_args=spec.scenic_extra_args or None,
