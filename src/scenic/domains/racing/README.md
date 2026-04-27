@@ -818,12 +818,12 @@ src/scenic/domains/racing/
 ├── benchmarks/              # Benchmark runners and log analysis
 │   ├── phase_run_common.py  #   Log parser (RE_PLANNER, RE_ASSESSMENT, RE_GUARD, RE_COMMIT …)
 │   ├── f_scenario_bank.py   #   Scenario name banks per runner
-│   ├── phase0_runner.py … phase3_runner.py          # original-architecture runners
-│   ├── phase3_on_phase0_runner.py                   # cross-check runner
-│   ├── phase7_runner.py … phase12_runner.py         # new-architecture (post-Phase 6 restructure)
+│   ├── baseline_runner.py … tactical_runner.py          # original-architecture runners
+│   ├── phase3_on_baseline_runner.py                   # cross-check runner
+│   ├── phase7_runner.py … segment_aware_runner.py         # new-architecture (post-Phase 6 restructure)
 │   ├── full_stack_runner.py                         # complete intelligence stack (all F-scenarios)
 │   ├── validation_full_stack_runner.py              # full-stack stress/validation campaign
-│   ├── validation_phase6_12_runner.py               # phase 6-12 regression suite
+│   ├── validation_orchestration_runner.py               # phase 6-12 regression suite
 │   ├── fellow_runner.py                             # fellow harness smoke tests
 │   └── fellow_placement_debug_runner.py             # fellow placement diagnostics
 ├── mpc/                     # MPC/MPCC lateral + longitudinal controllers

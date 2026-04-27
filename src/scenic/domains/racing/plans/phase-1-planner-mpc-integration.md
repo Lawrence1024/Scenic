@@ -10,7 +10,7 @@
   - `target_speed_cap=<m/s>`
 - Runtime TTL switching supports `optimal`, `left`, `right` with waypoint/segment-map reset and TTL preload from `ttlFolder`.
 - Initial active TTL aligns with the scenario’s starting `ttlFileName` when `ttl_selection` is unset (so scripted schedules like `left→right` and `right→optimal` log the correct `from`/`to`).
-- Manual switch scenarios live in `examples/racing/phase1_planner/`; automation via `python -m scenic.domains.racing.benchmarks.phase1_runner`.
+- Manual switch scenarios live in `examples/racing/phase1_planner/`; automation via `python -m scenic.domains.racing.benchmarks.scripted_runner`.
 - Validation run example: `phase1_20260409_152551` — all three scenarios reported one Phase 1 switch, lap completed, no collision/off-track flags.
 
 ## Goal
@@ -50,7 +50,7 @@ For each switch:
 
 - [x] Planner output contract is defined and used by ego control path (`planner_enabled`, `ttl_schedule`, `target_speed_cap` on `FollowRacingLineMPCBehavior`).
 - [x] Active TTL can be switched during run without controller reset failures (waypoints + segment map rebuilt on switch).
-- [x] Three manual-switch tests pass with stable tracking (`01_optimal_to_left`, `02_left_to_right`, `03_right_to_optimal` via `phase1_runner`).
+- [x] Three manual-switch tests pass with stable tracking (`01_optimal_to_left`, `02_left_to_right`, `03_right_to_optimal` via `scripted_runner`).
 - [x] Integration works on main-track lap behavior (dSPACE racing model, Laguna Seca TTL set).
 
 ## Handoff to Phase 2

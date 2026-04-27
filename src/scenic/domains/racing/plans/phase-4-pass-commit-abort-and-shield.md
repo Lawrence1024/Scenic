@@ -2,7 +2,7 @@
 
 ## Prerequisites (handoff from Phase 3)
 
-Phase 3 is **closed** for conservative tactical behavior: `tactical_planner_enabled`, modes **FREE_RUN / FOLLOW / SETUP_***, hysteresis, Phase 2 assessment in the loop, and a **dSPACE-validated** run of the Phase 0 scenario bank with tactical on ego (`phase3_runner` → `examples/racing/phase3_tactical/`). Aggregated sign-off run observed **no collisions, no off-track, no near-miss events** at default **3000** simulation steps per scenario.
+Phase 3 is **closed** for conservative tactical behavior: `tactical_planner_enabled`, modes **FREE_RUN / FOLLOW / SETUP_***, hysteresis, Phase 2 assessment in the loop, and a **dSPACE-validated** run of the Phase 0 scenario bank with tactical on ego (`tactical_runner` → `examples/racing/phase3_tactical/`). Aggregated sign-off run observed **no collisions, no off-track, no near-miss events** at default **3000** simulation steps per scenario.
 
 Phase 4 **adds** explicit commit/abort/shield; it does **not** re-validate Phase 3. New benchmarks should target **pass completion**, **abort when the corridor closes**, and **shield preemption** (see Exit Checklist below).
 

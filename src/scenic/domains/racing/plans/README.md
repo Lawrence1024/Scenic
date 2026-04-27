@@ -6,10 +6,10 @@ This folder breaks the master roadmap in `overall_plan.md` into actionable per-p
 
 ## Roadmap status
 
-- **Phase 0** — complete (baseline metrics, scenario bank, `phase0_runner`).
-- **Phase 1** — complete (scripted TTL schedule + MPC handoff, `phase1_runner`, three validated switches).
+- **Phase 0** — complete (baseline metrics, scenario bank, `baseline_runner`).
+- **Phase 1** — complete (scripted TTL schedule + MPC handoff, `scripted_runner`, three validated switches).
 - **Phase 2** — complete (situation assessment module, snapshot tests, `[Phase2]` logs).
-- **Phase 3** — complete (tactical planner + `tactical_planner_enabled`; Phase 0–aligned bank via `phase3_runner` on `examples/racing/phase3_tactical/`, `BENCHMARK_AI_DIGEST` / `summary.json`). See [Phase 3 plan](./phase-3-smart-follow-and-stable-ttl.md#validated-benchmarks-dspace).
+- **Phase 3** — complete (tactical planner + `tactical_planner_enabled`; Phase 0–aligned bank via `tactical_runner` on `examples/racing/phase3_tactical/`, `BENCHMARK_AI_DIGEST` / `summary.json`). See [Phase 3 plan](./phase-3-smart-follow-and-stable-ttl.md#validated-benchmarks-dspace).
 - **Phase 4** — complete (pass commit/abort/shield in `pass_commit_shield.py` + `pass_commit_shield_enabled`; seven-scenario bank in `examples/racing/phase4_pass_shield/` validated via `phase4_runner`); [plan](./phase-4-pass-commit-abort-and-shield.md).
 - **Phase 5** — complete (segment-aware shaping in `phase5_segment_tactics.py` + `phase5_segment_tactics_enabled`; benchmark bank `examples/racing/phase5_segments/` including `07`–`08` corner cases and `09`–`10` straight-opening symmetry; `phase5_runner` + digest KPIs). Validated run record and follow-ups: [Phase 5 plan](./phase-5-segment-aware-tactics.md#validated-benchmarks-record).
 - **Phase 6** — complete as orchestration/observability baseline (phase6 orchestration shells + per-cycle `[Phase6*]` logs, shared F-bank `examples/racing/f_shared/`). Note: `phase6_runner` was not carried forward; use `phase7_runner` or `full_stack_runner` for F-bank runs.
@@ -18,7 +18,7 @@ This folder breaks the master roadmap in `overall_plan.md` into actionable per-p
 - **Phase 9** — complete as tactical baseline (Phase-8-informed tactical planner path + `[Phase9Planner]` telemetry + `phase9_runner`; legacy tactical overlays retired in Phase 9 authority mode; setup-pass intent consistently observed in occupancy scenarios. Full pass commit/abort lifecycle intentionally deferred to Phase 11).
 - **Phase 10** — complete as stability baseline (`[Phase10Guard]` guard path, emergency-stable containment, and post-emergency re-approach suppression wired in `phase10_runner`; validated clean on `F2/F4/F5/F6/F7` at 15 s windows in deterministic runs).
 - **Phase 11** — complete (explicit commit/abort lifecycle in tactical planner, `[Phase11Planner]` telemetry, and `phase11_runner` benchmark path; F4/F5 safe abort and F6/F7 pass success validated; closing+emergency-risk structural guards added).
-- **Phase 12** — skeleton in place (`segment_aware_enabled` flag + `segment_modifier` state field in `tactical_planner.py`; `phase12_runner` exists); full segment-conditioned commit gating not yet implemented.
+- **Phase 12** — skeleton in place (`segment_aware_enabled` flag + `segment_modifier` state field in `tactical_planner.py`; `segment_aware_runner` exists); full segment-conditioned commit gating not yet implemented.
 
 ## Phase Plans
 
@@ -46,7 +46,7 @@ This folder breaks the master roadmap in `overall_plan.md` into actionable per-p
 
 **Benchmark runners:** New `*.scenic` files under each phase’s example folder are picked up automatically by that phase’s runner (no filename list in code). Runners print a **`BENCHMARK_AI_DIGEST_*`** JSON block plus `summary.json` / `summary.csv` under `benchmarks/results/<run_id>/`, and after each scenario a **`Log file:`** line with the absolute path to that run’s captured stdout/stderr (under `results/<run_id>/logs/<stem>.log`).
 
-Available runners (under `benchmarks/`): `phase0_runner`, `phase1_runner`, `phase2_runner`, `phase3_runner`, `phase3_on_phase0_runner`, `phase7_runner` – `phase12_runner`, `full_stack_runner` (all F-scenarios, complete intelligence stack), `validation_full_stack_runner` (stress/validation campaign), `validation_phase6_12_runner` (phase 6-12 regression), `fellow_runner` (fellow harness smoke), `fellow_placement_debug_runner`. Note: `phase4_runner`, `phase5_runner`, and `phase6_runner` were not carried forward into the new architecture.
+Available runners (under `benchmarks/`): `baseline_runner`, `scripted_runner`, `opponent_runner`, `tactical_runner`, `phase3_on_baseline_runner`, `phase7_runner` – `segment_aware_runner`, `full_stack_runner` (all F-scenarios, complete intelligence stack), `validation_full_stack_runner` (stress/validation campaign), `validation_orchestration_runner` (phase 6-12 regression), `fellow_runner` (fellow harness smoke), `fellow_placement_debug_runner`. Note: `phase4_runner`, `phase5_runner`, and `phase6_runner` were not carried forward into the new architecture.
 **Runtime policy (required):** keep benchmark windows short. Use **10 s default** (`--time 1000`) and **15 s max** (`--time 1500`) for phase bring-up/regression checks. Do not run 20 s+ by default; only exceed 15 s with an explicit, documented reason in the phase note or PR.
 **Wall-clock expectation (required):** simulation runs at about **11x real-time cost** on this setup (about **11 seconds wall-clock per 1 simulated second**). A **20 s** simulation therefore takes about **220 seconds** wall-clock. This is expected behavior; even small simulated-time changes can create large real-time runtime differences.
 **Execution workflow (required):** the assistant should **not** run simulations directly. When simulation evidence is needed, the assistant provides the exact command and the user runs it; analysis proceeds from the returned digest/logs.

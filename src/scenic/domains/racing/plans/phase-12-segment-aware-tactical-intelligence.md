@@ -77,7 +77,7 @@ Use matched scenario variants:
 Runner guidance:
 
 ```bash
-python -m scenic.domains.racing.benchmarks.phase12_runner --time 1000
+python -m scenic.domains.racing.benchmarks.segment_aware_runner --time 1000
 ```
 
 Comparative review should explicitly report:

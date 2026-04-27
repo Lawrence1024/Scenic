@@ -117,7 +117,7 @@ Use this section **before** a hardware run to set expectations, and **after** a 
 
 **Not a pass/fail spec:** predictions describe *likely* behavior given geometry and relative motion; stochastic seeding, MPC transients, and dSPACE timing can shift a run from “usually clean” to “borderline contact” without implying a broken stack.
 
-### `phase0_runner` (`examples/racing/phase0_benchmark/`)
+### `baseline_runner` (`examples/racing/phase0_benchmark/`)
 
 | File | Geometry / relative motion | Predicted outcome |
 |------|------------------------------|-------------------|
@@ -129,7 +129,7 @@ Use this section **before** a hardware run to set expectations, and **after** a 
 | `05_opponent_just_ahead_corner.scenic` | Fellow **ahead 12 m**, **55 mph** vs ego **60 mph** | Longitudinal closing ≈ **5 mph (~2.2 m/s)**. Over 30 s simulated horizon, closure **~66 m** if unconstrained—so ego must **brake or follow** in a short gap into a corner: **`off_track`** or follow stress **more likely** than in `01`; **`min_opponent_distance_m`** can become small under heavy braking. |
 | `06_side_by_side_start.scenic` | Fellow **ahead 8 m**, fellow **`ttl_left`** at **62 mph** vs ego optimal **60 mph** | **Tight** initial gap; fellow slightly faster on a **different** TTL → **side-by-side / overlap** dynamics. Expect **low `waypoint_hits`** or **`off_track`** more often than `01–03`; **`collision` false** if lateral separation holds, but **borderline** contacts are more plausible than in `01`. |
 
-### `phase1_runner` (`examples/racing/phase1_planner/`)
+### `scripted_runner` (`examples/racing/phase1_planner/`)
 
 All three use **`planner_enabled=True`** and a **single scripted TTL switch at simulation time 10 s** (`ttl_schedule`). Ego starts on different TTLs; the switch forces a **large lateral transition** on a ~30 s horizon.
 
@@ -139,13 +139,13 @@ All three use **`planner_enabled=True`** and a **single scripted TTL switch at s
 | `02_left_to_right.scenic` | `10:right` (ego starts **`ttl_left`**) | Same pattern as `01`. |
 | `03_right_to_optimal.scenic` | `10:optimal` (ego starts **`ttl_right`**) | Same pattern as `01`. |
 
-### `phase2_runner` (`examples/racing/phase2_assessment/`)
+### `opponent_runner` (`examples/racing/phase2_assessment/`)
 
 | File | Notes | Predicted outcome |
 |------|-------|-------------------|
 | `01_smoke_opponent.scenic` | Same layout as phase 0 `01` (ahead 40 m, geometric 60 mph); **Phase 2 assessment** logging | **`phase2_line_count` / overlap / seg_ctx** non-zero and consistent across **`phase0_samples`**; **`phase2_assess_errors`** 0. **`off_track`** may still appear (same ego path as phase 0 bank). |
 
-### `phase3_runner` (`examples/racing/phase3_tactical/`)
+### `tactical_runner` (`examples/racing/phase3_tactical/`)
 
 Mirrors phase 0 bank but ego has **`tactical_planner_enabled=True`** (no pass/shield unless noted in file).
 
@@ -240,10 +240,10 @@ Mirror existing benchmarks:
 
 ### Proposed default sequence
 
-1. `phase0_runner`  
-2. `phase1_runner` (scripted switches—sanity)  
-3. `phase2_runner`  
-4. `phase3_runner`  
+1. `baseline_runner`  
+2. `scripted_runner` (scripted switches—sanity)  
+3. `opponent_runner`  
+4. `tactical_runner`  
 5. `phase4_runner`  
 6. `phase5_runner`  
 7. `fellow_runner` (subset if `--suite minimal`)  
