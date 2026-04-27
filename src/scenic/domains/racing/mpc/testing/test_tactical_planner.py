@@ -101,7 +101,7 @@ def test_setup_left_when_opponent_on_right():
     assert ttl3 == "left"
     # SETUP now caps speed to opponent + margin when opponent is ahead
     assert cap3 is not None
-    assert cap3 <= 35.0  # should be opponent_speed (30) + margin (2.5) = 32.5
+    assert cap3 <= 35.0  # SD-2f: opponent_speed (30) + setup_speed_margin (4.5) = 34.5
 
 
 def test_pit_forces_free_run():
@@ -1668,6 +1668,7 @@ def test_commit_blocked_when_gap_too_large():
         commit_entry_cycles=1,
         commit_max_speed_mps=40.0,
         commit_max_longitudinal_m=40.0,
+        setup_max_longitudinal_m=40.0,  # SD-2f: also bypass setup gap gate for this test
         setup_commit_entry_cycles=1,
         pass_intent_entry_cycles=1,
         setup_reentry_cooldown_s=0.0,
@@ -1719,3 +1720,88 @@ def test_commit_blocked_when_gap_too_large():
     )
     assert m_close == COMMIT_PASS_LEFT, f"Commit must fire at 35m gap, got {m_close}"
     assert ttl_close == "left"
+
+
+def test_setup_blocked_when_fellow_too_far():
+    """SD-2f: SETUP entry must be gated by setup_max_longitudinal_m.
+
+    F2_tactical first attempt entered SETUP at gap=42m and physically converged
+    on the right TTL toward the fellow over 4 sec → contact. Stay in FOLLOW until
+    close enough that SETUP→COMMIT can complete in 1-2 cycles.
+    """
+    st = TacticalPlannerState()
+    # Disable ahead_relax so we don't take the FREE_RUN escape; we want to verify
+    # the SD-2f gap-gate path specifically.
+    cfg = TacticalPlannerConfig(
+        setup_max_longitudinal_m=28.0,
+        ahead_relax_free_run_enabled=False,
+    )
+    s = _sit(
+        lateral_relation="right",
+        collision_risk_01=0.05,
+        segment_context="straight",
+        overlap_state="clear_ahead",
+        distance_m=32.0,
+        longitudinal_m=30.0,  # > 28 → SETUP blocked by SD-2f
+        closing_speed_mps=5.0,
+        ahead=True,
+    )
+    # Run several cycles to let candidate counter accumulate; SETUP still must not fire.
+    for t in (0.0, 0.05, 0.10, 0.15, 0.20):
+        m, ttl, _, reason = tactical_planner_step_v1(
+            st, s,
+            has_opponent=True, ego_speed_mps=14.0, opponent_speed_mps=9.0,
+            sim_time_s=t, pit_mode=False, config=cfg,
+            assessment_relation="ahead",
+            assessment_gap_ok=True, assessment_optimal_open=False,
+            assessment_left_open=False, assessment_right_open=True,
+            assessment_closing_flag=True, assessment_emergency_risk_01=0.05,
+        )
+    assert m == FOLLOW, f"SETUP must be blocked when fellow >28m away, got {m}"
+    assert reason == "setup_too_far_follow"
+
+
+def test_setup_timeout_bails_back_to_follow():
+    """SD-2f: SETUP must time out if it can't reach COMMIT within setup_max_hold_s.
+
+    Safety net for the F2_tactical-style failure where SETUP holds on a side TTL
+    while ego physically converges with the fellow → contact. After the timeout,
+    bail back to FOLLOW on optimal so the lateral motion stops.
+    """
+    st = TacticalPlannerState(mode=SETUP_LEFT, last_setup_side="left",
+                              setup_entry_s=0.0)
+    cfg = TacticalPlannerConfig(setup_max_hold_s=2.0, setup_max_longitudinal_m=999.0)
+    s = _sit(
+        lateral_relation="right",  # fellow on right → preferred pass side = left
+        collision_risk_01=0.05,
+        overlap_state="clear_ahead",
+        distance_m=20.0,
+        longitudinal_m=20.0,
+        closing_speed_mps=5.0,
+        ahead=True,
+    )
+    # Inside the hold window — SETUP should still be active.
+    m_inside, ttl_inside, _, _ = tactical_planner_step_v1(
+        st, s,
+        has_opponent=True, ego_speed_mps=14.0, opponent_speed_mps=9.0,
+        sim_time_s=1.5, pit_mode=False, config=cfg,
+        assessment_relation="ahead",
+        assessment_gap_ok=True, assessment_optimal_open=False,
+        assessment_left_open=True, assessment_right_open=False,
+        assessment_closing_flag=True, assessment_emergency_risk_01=0.30,
+    )
+    assert m_inside == SETUP_LEFT, f"SETUP should hold inside timeout, got {m_inside}"
+
+    # Past the timeout — must bail to FOLLOW on optimal.
+    m_after, ttl_after, _, reason_after = tactical_planner_step_v1(
+        st, s,
+        has_opponent=True, ego_speed_mps=14.0, opponent_speed_mps=9.0,
+        sim_time_s=2.6, pit_mode=False, config=cfg,
+        assessment_relation="ahead",
+        assessment_gap_ok=True, assessment_optimal_open=False,
+        assessment_left_open=True, assessment_right_open=False,
+        assessment_closing_flag=True, assessment_emergency_risk_01=0.30,
+    )
+    assert m_after == FOLLOW, f"SETUP must bail after timeout, got {m_after}"
+    assert ttl_after == "optimal"
+    assert reason_after == "setup_timeout_follow"

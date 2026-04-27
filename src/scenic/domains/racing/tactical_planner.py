@@ -75,11 +75,26 @@ class TacticalPlannerConfig:
     # not from far back. 22 m ≈ 4-5 car lengths — enough room for the lateral shift but
     # not so far that the right-TTL geometry can curve back into ego before passing.
     commit_max_longitudinal_m: float = 22.0  # only commit when within this longitudinal gap
+    # SD-2f: don't even enter SETUP when fellow is far away. SETUP performs the lateral
+    # shift to a side TTL; doing it from 40+ m away means ego physically converges with
+    # the fellow on a side line for several seconds before COMMIT can fire (observed
+    # F2_tactical first attempt: 4 sec SETUP→contact). 28 m = commit_max_longitudinal +
+    # ~6 m buffer, so SETUP fires close enough that COMMIT triggers within 1-2 cycles.
+    setup_max_longitudinal_m: float = 28.0
     # SD-2e: bounded speed margin during COMMIT. Was None (unbounded) which let ego
     # accelerate to closing-rate=17 m/s — too fast for the right TTL to clear before
     # converging back to optimal. opp_speed + 8 m/s gives a controlled side-by-side
     # window (pass typically completes in 2-3 sec at this differential).
     commit_speed_margin_mps: float = 8.0
+    # SD-2f: SETUP needs enough closing speed to satisfy pass_min_relative_speed_mps=3.0
+    # (otherwise SETUP holds forever, never reaching COMMIT). follow_speed_margin_mps=2.5
+    # gives only 2.5 m/s closing — below the minimum. Use 4.5 m/s during SETUP so
+    # closing-speed gate clears and the cycle progresses SETUP→COMMIT cleanly.
+    setup_speed_margin_mps: float = 4.5
+    # SD-2f: hard timeout — if SETUP holds this long without COMMIT firing, bail back
+    # to FOLLOW on optimal. Prevents the "stuck on side TTL while approaching" failure
+    # mode from F2_tactical first attempt (4 sec SETUP without COMMIT → contact).
+    setup_max_hold_s: float = 2.5
     commit_approach_risk_max: float = 0.10   # close-approach risk ceiling for commit entry
     # Segment-conditioned tactical intelligence
     segment_aware_enabled: bool = False
@@ -127,6 +142,9 @@ class TacticalPlannerState:
     lateral_path_lock_until_s: float = -1.0e9
     commit: CommitPlannerState = field(default_factory=CommitPlannerState)
     segment_modifier: str = "normal"  # "blocked" / "conservative" / "relaxed" / "normal"
+    # SD-2f: timestamp when SETUP was entered. Used for the setup_max_hold_s timeout
+    # bail-out (back to FOLLOW on optimal) when SETUP doesn't reach COMMIT in time.
+    setup_entry_s: float = -1.0e9
 
 
 def apply_ttl_key_to_agent(agent, ttl_key: str, ttl_cache: dict, file_by_sel: Dict[str, str]) -> bool:
@@ -225,11 +243,17 @@ def tactical_planner_step_v1(
 
     def _setup_result(side: str, reason: str) -> Tuple[str, str, Optional[float], str]:
         state.last_setup_side = side
-        # When opponent is ahead, cap approach speed so ego doesn't charge at full
-        # target speed during the lateral transition.  Once COMMIT fires, cap is removed.
+        # SD-2f: cap during SETUP must allow closing speed >= pass_min_relative_speed_mps,
+        # otherwise pass_safe stays False forever and COMMIT never fires (observed
+        # F2_tactical first attempt: SETUP cap=opp+2.5 → closing=2.5 < pass_min=3.0 →
+        # pass_safe=False → 4 sec SETUP → contact). Use setup_speed_margin_mps which
+        # defaults to 4.5 (1.5 m/s of headroom over the 3.0 minimum).
         cap: Optional[float] = None
         if relation_ahead and sit is not None:
-            cap = max(3.0, float(opponent_speed_mps) + config.follow_speed_margin_mps)
+            cap = max(3.0, float(opponent_speed_mps) + float(config.setup_speed_margin_mps))
+        # SD-2f: stamp SETUP entry time for the timeout bail-out below.
+        if state.mode not in (SETUP_LEFT, SETUP_RIGHT):
+            state.setup_entry_s = float(sim_time_s)
         if side == "left":
             state.mode = SETUP_LEFT
             return SETUP_LEFT, "left", cap, reason
@@ -281,6 +305,9 @@ def tactical_planner_step_v1(
         cap: Optional[float] = None
         if relation_ahead and sit is not None:
             cap = max(3.0, float(opponent_speed_mps) + float(config.commit_speed_margin_mps))
+        # SD-2f: leaving SETUP — clear the entry timestamp so a future SETUP gets a
+        # fresh timeout window.
+        state.setup_entry_s = -1.0e9
         if side == "left":
             state.mode = COMMIT_PASS_LEFT
             return COMMIT_PASS_LEFT, "left", cap, reason
@@ -826,12 +853,19 @@ def tactical_planner_step_v1(
     )
 
     # Arm pass intent from FOLLOW/SETUP when opening is consistently good.
+    # SD-2f: also require gap proximity — pass_intent should not arm if fellow
+    # is too far away. Otherwise the pass_intent → commit_active → setup chain
+    # promotes ego into SETUP from far range, defeating the SETUP gap gate below.
     intent_candidate_ok = bool(
         pass_safe
         and opening_window_available
         and preferred_side in ("left", "right")
         and (closing_speed_pos_mps >= float(config.setup_commit_min_closing_mps))
         and (not in_recovery_hold)
+        and (
+            sit is None
+            or float(sit.longitudinal_m) <= float(config.setup_max_longitudinal_m)
+        )
     )
     if intent_candidate_ok:
         if state.pass_intent_side != preferred_side:
@@ -997,6 +1031,34 @@ def tactical_planner_step_v1(
             state.setup_candidate_side = ""
             state.setup_candidate_count = 0
             return _follow_result("setup_reentry_cooldown_hold")
+
+    # SD-2f: don't enter SETUP from too far away. SETUP performs the lateral shift
+    # to a side TTL; doing it from 40+ m means ego converges with fellow on a side
+    # line for several seconds before COMMIT can fire. Stay in FOLLOW until close
+    # enough that SETUP→COMMIT can complete in 1-2 cycles.
+    if (
+        state.mode not in (SETUP_LEFT, SETUP_RIGHT)
+        and sit is not None
+        and float(sit.longitudinal_m) > float(config.setup_max_longitudinal_m)
+    ):
+        state.setup_candidate_side = ""
+        state.setup_candidate_count = 0
+        return _follow_result("setup_too_far_follow")
+
+    # SD-2f: SETUP timeout. If SETUP has held for setup_max_hold_s without reaching
+    # COMMIT (typically because closing speed is too low or geometry is bad), bail
+    # back to FOLLOW on optimal. Prevents the "stuck on side TTL while approaching"
+    # failure mode (F2_tactical first attempt: 4 sec SETUP → contact).
+    if state.mode in (SETUP_LEFT, SETUP_RIGHT) and float(state.setup_entry_s) > -1.0e8:
+        if float(sim_time_s) - float(state.setup_entry_s) > float(config.setup_max_hold_s):
+            state.last_setup_exit_sim_time_s = float(sim_time_s)
+            state.setup_entry_s = -1.0e9
+            state.setup_candidate_side = ""
+            state.setup_candidate_count = 0
+            _clear_setup_commit()
+            _clear_pass_intent()
+            _clear_lateral_lock()
+            return _follow_result("setup_timeout_follow")
 
     target_side = preferred_side
 
