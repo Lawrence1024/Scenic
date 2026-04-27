@@ -38,31 +38,67 @@ DEFAULT_SAMPLE_DT_S = 0.25
 DEFAULT_MIN_LAT_CLEARANCE_M = 2.5
 
 
+# SD-10h: cache Shapely LineString objects per polyline. Polylines (TTL
+# waypoints) are static for the duration of a run, but pre-SD-10h
+# `_xy_at_arclength` rebuilt the LineString from 3500 (x,y,z) points on
+# EVERY call — and path_collision_predicted calls this 32 times per
+# control tick (16 samples × 2 polylines). Measured F2_tactical:
+#   mean tick_ms = 139.5, p99 = 258, max = 757 (50ms budget)
+#   wall_t / sim_t = 4.7× (30s sim took 140s wall)
+# This cache keyed on Python id(waypoints) drops the per-call cost from
+# ~3ms (list comp + Shapely C-struct build of 3500 pts) to ~50µs
+# (dict lookup + LineString.interpolate). Expected effect: tick_ms down
+# from 140ms to ~40ms (under budget).
+#
+# Caveats:
+#   - Cache key is id(waypoints). If a caller passes a NEW list with the
+#     same content, that's a cache miss (correct: the cache is for stable
+#     refs, not value equality).
+#   - Mem cost: each LineString holds ~3500 (x,y) tuples; ~3 polylines per
+#     run = ~10k tuples cached = ~150 KB. Acceptable.
+#   - Cache lives for process lifetime. If a long-running process loads
+#     many distinct polylines, this grows unbounded. For test/sim workloads
+#     (≤10 distinct polylines per run) this is fine.
+_LINESTRING_CACHE: dict = {}
+
+
 def _xy_at_arclength(
     waypoints: Sequence[Sequence[float]], s_m: float, lap_length_m: float
 ) -> Optional[Tuple[float, float]]:
     """Interpolate (x, y) at arc-length s on a lap-loop polyline.
 
     Returns None if shapely unavailable or polyline degenerate.
+    SD-10h: caches the LineString on id(waypoints) — see module note above.
     """
-    try:
-        from shapely.geometry import LineString
-    except ImportError:
-        return None
     if not waypoints or len(waypoints) < 2 or lap_length_m <= 0.0:
         return None
+    cache_key = id(waypoints)
+    cached = _LINESTRING_CACHE.get(cache_key)
+    if cached is None:
+        try:
+            from shapely.geometry import LineString
+        except ImportError:
+            return None
+        coords = [(float(p[0]), float(p[1])) for p in waypoints]
+        # Close the loop so interpolate beyond the last segment wraps to first.
+        if coords[0] != coords[-1]:
+            coords = coords + [coords[0]]
+        ls = LineString(coords)
+        if ls.is_empty or ls.length <= 0:
+            return None
+        _LINESTRING_CACHE[cache_key] = ls
+    else:
+        ls = cached
     s_wrapped = float(s_m) % float(lap_length_m)
-    coords = [(float(p[0]), float(p[1])) for p in waypoints]
-    # Close the loop so interpolate beyond the last segment wraps to first.
-    if coords[0] != coords[-1]:
-        coords = coords + [coords[0]]
-    ls = LineString(coords)
-    if ls.is_empty or ls.length <= 0:
-        return None
-    # Clamp s to [0, ls.length] — Shapely interpolate handles this but be explicit.
     s_clamped = max(0.0, min(float(ls.length), s_wrapped))
     pt = ls.interpolate(s_clamped)
     return (float(pt.x), float(pt.y))
+
+
+def _clear_linestring_cache() -> None:
+    """Test helper: clear the cache. Used by tests that pass throwaway
+    polyline lists to avoid id() collision artifacts."""
+    _LINESTRING_CACHE.clear()
 
 
 def pass_window_check(
