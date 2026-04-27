@@ -258,6 +258,94 @@ def test_roadside_stationary_partial_overlap_does_not_max_out_emergency_risk():
     assert a.emergency_risk_01 < 0.55
 
 
+def test_centered_slow_opponent_at_safe_range_yields_asymmetric_opening():
+    """SD-2a-bias: centered slow fellow at meaningful range opens exactly one side.
+
+    Pre-bias behavior: |lat|<1.5 unconditionally blocked both corridors, locking
+    the planner into protected_follow_active forever (XOR gate at
+    tactical_planner.py:381 needs exactly one side open). Post-bias: bucket by
+    danger and open right by default for the safe centered case.
+    """
+    a, _st = assess_race_situation(
+        sit=_sit(
+            ahead=True,
+            delta_s_m=44.0,
+            lateral_m=0.0,
+            long_m=44.0,
+            closing_mps=2.0,
+            overlap="clear_ahead",
+            risk=0.05,
+            opponent_speed_mps=9.0,
+        ),
+        ego_speed_mps=11.0,
+        ego_xy=(0.0, 0.0),
+        ego_heading_rad=0.0,
+        predicted_opp_xy=(44.0, 0.0),
+        state=RaceSituationState(),
+    )
+    # gap=44m (well clear of close_quarters<12), closing=2 m/s (not hot_closing>8),
+    # opp_speed/ego_speed=0.82 (>0.5 but closing fails the hot_closing AND-clause).
+    # Right-bias: left blocked, right open. Asymmetric opening unlocks the planner.
+    assert a.left_open is False
+    assert a.right_open is True
+    assert (a.left_open ^ a.right_open) is True  # asymmetric_opening for tactical_planner
+
+
+def test_centered_close_quarters_keeps_strict_both_blocked():
+    """SD-2a-bias safety: a centered fellow inside 12 m must NOT be opened.
+
+    Close-quarters geometry is genuine rear-end danger; the bucket falls back
+    to the original both-blocked behavior so the planner cannot try a pass.
+    """
+    a, _st = assess_race_situation(
+        sit=_sit(
+            ahead=True,
+            delta_s_m=8.0,
+            lateral_m=0.0,
+            long_m=8.0,
+            closing_mps=3.0,
+            overlap="clear_ahead",
+            risk=0.20,
+            opponent_speed_mps=15.0,
+        ),
+        ego_speed_mps=18.0,
+        ego_xy=(0.0, 0.0),
+        ego_heading_rad=0.0,
+        predicted_opp_xy=(8.0, 0.0),
+        state=RaceSituationState(),
+    )
+    assert a.left_open is False
+    assert a.right_open is False
+
+
+def test_centered_hot_closing_keeps_strict_both_blocked():
+    """SD-2a-bias safety: centered fellow with high closing + comparable speed must stay blocked.
+
+    Hot closing (closing > 8 m/s AND opponent still ≥ 50% ego speed) means
+    we're rear-ending a moving target — a pass attempt here is dangerous, not
+    an overtake opportunity.
+    """
+    a, _st = assess_race_situation(
+        sit=_sit(
+            ahead=True,
+            delta_s_m=20.0,
+            lateral_m=0.0,
+            long_m=20.0,
+            closing_mps=12.0,
+            overlap="clear_ahead",
+            risk=0.30,
+            opponent_speed_mps=15.0,
+        ),
+        ego_speed_mps=27.0,
+        ego_xy=(0.0, 0.0),
+        ego_heading_rad=0.0,
+        predicted_opp_xy=(20.0, 0.0),
+        state=RaceSituationState(),
+    )
+    assert a.left_open is False
+    assert a.right_open is False
+
+
 def test_stateful_emergency_risk_emphasizes_overlap_and_closing_gap():
     a, _st = assess_race_situation(
         sit=_sit(

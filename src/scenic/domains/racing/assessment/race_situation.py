@@ -136,8 +136,20 @@ def _compute_corridor_open_flags(
     pred_long_m: float,
     pred_lat_m: float,
     overlap_flag: bool,
+    closing_speed_mps: float = 0.0,
+    opponent_speed_mps: float = 0.0,
+    ego_speed_mps: float = 0.0,
 ) -> Tuple[bool, bool, bool]:
-    """Corridor occupancy semantics from projected relative pose."""
+    """Corridor occupancy semantics from projected relative pose.
+
+    SD-2a-bias: centered slow opponents at safe range are converted from
+    "both-blocked" to "asymmetric (right-biased) open" so the planner's
+    XOR-based ``opening_window_available`` gate can fire and release
+    ``protected_follow_active``. Strict both-blocked is still returned for
+    close-quarters (long < 12 m) and hot-closing (closing > 8 m/s and
+    opponent still ≥ 50% ego speed) geometry — those represent genuine
+    rear-end danger that should not be re-labelled as a pass opportunity.
+    """
 
     optimal_open = True
     left_open = True
@@ -153,12 +165,33 @@ def _compute_corridor_open_flags(
             left_open = False
         if float(pred_lat_m) <= -0.8:
             right_open = False
-        # Near-center opponent: insufficient lateral clearance for either-side pass.
-        # Two IAC cars (~2m wide each) need ≥3m lateral offset for safe side-by-side.
-        # When fellow is within ±1.5m of ego's line, block both pass corridors.
+        # SD-2a-bias: near-center opponent. Used to be unconditional both-blocked,
+        # but that locks the planner into protected_follow forever (XOR gate at
+        # tactical_planner.py:381 needs exactly one side open). Bucket by danger.
         if abs(float(pred_lat_m)) < 1.5:
-            left_open = False
-            right_open = False
+            close_quarters = float(pred_long_m) < 12.0
+            hot_closing = (
+                float(closing_speed_mps) > 8.0
+                and float(opponent_speed_mps) > 0.5 * float(ego_speed_mps)
+            )
+            if close_quarters or hot_closing:
+                # Genuine rear-end danger — strict both-blocked (original behavior).
+                left_open = False
+                right_open = False
+            else:
+                # Far + slow + cold-closing: open EXACTLY one side (asymmetric).
+                # Right-biased by default (typical race-track passing convention).
+                # Tiny lateral tilt picks the OPPOSITE side (pass on the side the
+                # fellow is NOT drifting toward).
+                if float(pred_lat_m) > 0.05:
+                    left_open = False
+                    right_open = True
+                elif float(pred_lat_m) < -0.05:
+                    left_open = True
+                    right_open = False
+                else:
+                    left_open = False
+                    right_open = True
         # Overlap state means neither side should be considered confidently open.
         if overlap_flag and abs(float(pred_lat_m)) <= 1.4:
             left_open = False
@@ -343,6 +376,9 @@ def assess_race_situation(
         pred_long_m=pred_long,
         pred_lat_m=float(sit.lateral_m),
         overlap_flag=overlap_flag,
+        closing_speed_mps=float(getattr(sit, "closing_speed_mps", 0.0)),
+        opponent_speed_mps=float(getattr(sit, "opponent_speed_mps", 0.0)),
+        ego_speed_mps=float(ego_speed_mps),
     )
     # SD-2a hysteresis. Raw "open" passes through and arms the hold counter; raw "closed"
     # is overridden to "open" while hold_remaining > 0 (and we are NOT in an overlap-flag
