@@ -31,6 +31,20 @@ HOLD_PASS_LEFT = "HOLD_PASS_LEFT"
 HOLD_PASS_RIGHT = "HOLD_PASS_RIGHT"
 
 
+# SD-4c: ego is in an active overtake maneuver (lateral shift / pass / merge-hold)
+# when in any of these states. During such a maneuver, snapshot-heuristic brake
+# triggers (overlap_flag, gap_ok, closing_flag, risk thresholds) are SUPPRESSED —
+# only path_collision_predicted has authority to interrupt. Rationale: once we
+# decide to pass, hesitating in parallel is more dangerous than committing.
+def _is_decisive_maneuver(planner_state: str) -> bool:
+    return str(planner_state or "") in (
+        SETUP_LEFT, SETUP_RIGHT,
+        SETUP_PASS_LEFT, SETUP_PASS_RIGHT,
+        COMMIT_PASS_LEFT, COMMIT_PASS_RIGHT,
+        HOLD_PASS_LEFT, HOLD_PASS_RIGHT,
+    )
+
+
 @dataclass
 class TacticalPlannerConfig:
     """Tunable thresholds (meters, seconds, m/s)."""
@@ -504,7 +518,15 @@ def tactical_planner_step_v1(
             ref_speed * float(config.blocked_headway_s),
         )
         close_hazard = sit.distance_m < dynamic_blocked_gap
-        return bool(overlap_hazard or close_hazard)
+        snapshot = bool(overlap_hazard or close_hazard)
+        # SD-4c: gate on predicted-path-collision when available. Snapshot stays
+        # as a fast-fail filter; predicted_collision is the authority. During
+        # decisive maneuvers, snapshot is suppressed entirely.
+        if not bool(state.predicted_collision_available):
+            return snapshot
+        if _is_decisive_maneuver(state.mode):
+            return bool(state.predicted_collision)
+        return bool(snapshot and state.predicted_collision)
 
     def _is_release_hazard() -> bool:
         if sit is None:
@@ -522,7 +544,13 @@ def tactical_planner_step_v1(
         # parallel TTL).  The car is not on a collision course with ego's path; blocking
         # pass success on proximity alone prevents the overtake from ever completing.
         tight_gap_hazard = sit.distance_m < dynamic_tight_gap and not asymmetric_opening
-        return bool(overlap_hazard or tight_gap_hazard)
+        snapshot = bool(overlap_hazard or tight_gap_hazard)
+        # SD-4c: gate on predicted-path-collision when available.
+        if not bool(state.predicted_collision_available):
+            return snapshot
+        if _is_decisive_maneuver(state.mode):
+            return bool(state.predicted_collision)
+        return bool(snapshot and state.predicted_collision)
 
     if pit_mode:
         state.mode = FREE_RUN
@@ -584,7 +612,16 @@ def tactical_planner_step_v1(
             >= float(config.stationary_overlap_relief_lateral_m)
         )
     )
-    overlap_hazard_now = bool(overlap_hazard_raw and (not stationary_overlap_relief))
+    overlap_hazard_now_snapshot = bool(overlap_hazard_raw and (not stationary_overlap_relief))
+    # SD-4c: gate the recovery-hold latch on predicted-path-collision when
+    # available. Snapshot stays as fast-fail filter; predicted_collision is
+    # the authority. During decisive maneuvers, snapshot is suppressed entirely.
+    if not bool(state.predicted_collision_available):
+        overlap_hazard_now = bool(overlap_hazard_now_snapshot)
+    elif _is_decisive_maneuver(state.mode):
+        overlap_hazard_now = bool(state.predicted_collision)
+    else:
+        overlap_hazard_now = bool(overlap_hazard_now_snapshot and state.predicted_collision)
     if overlap_hazard_now:
         state.recovery_hold_until_s = max(
             float(state.recovery_hold_until_s),
@@ -635,7 +672,7 @@ def tactical_planner_step_v1(
         and (not _is_release_hazard())
         and (not in_recovery_hold)
     )
-    hard_hazard_now = bool(
+    hard_hazard_now_snapshot = bool(
         in_recovery_hold
         or overlap_hazard_now
         # Proximity/TTC terms suppressed for parallel-TTL fellows (asymmetric_opening).
@@ -646,6 +683,13 @@ def tactical_planner_step_v1(
         or emergency_risk_high
         or ((assessment_gap_ok is False) and (not opening_window_available))
     )
+    # SD-4c: gate hard_hazard_now on predicted-path-collision when available.
+    if not bool(state.predicted_collision_available):
+        hard_hazard_now = bool(hard_hazard_now_snapshot)
+    elif _is_decisive_maneuver(state.mode):
+        hard_hazard_now = bool(state.predicted_collision)
+    else:
+        hard_hazard_now = bool(hard_hazard_now_snapshot and state.predicted_collision)
     lateral_lock_side = str(state.lateral_path_lock_side or "")
     lateral_lock_active = bool(
         lateral_lock_side in ("left", "right")
@@ -653,7 +697,7 @@ def tactical_planner_step_v1(
         and (not hard_hazard_now)
     )
 
-    safety_pressure = bool(
+    safety_pressure_snapshot = bool(
         ((assessment_gap_ok is False) and (not opening_window_available))
         or (bool(assessment_closing_flag) and (not opening_window_available))
         or emergency_risk_high
@@ -665,6 +709,16 @@ def tactical_planner_step_v1(
         or (sit.distance_m < dynamic_tight_gap_m and not asymmetric_opening)
         or (ttc_s < float(config.hard_ttc_s) and not asymmetric_opening)
     )
+    # SD-4c: gate safety_pressure on predicted-path-collision when available.
+    # During decisive maneuvers, the snapshot is suppressed entirely — the user's
+    # explicit ask: "if you decide to overtake, you really have to speed up,
+    # hesitating is only causing in crashes". Predicted_collision is the AUTHORITY.
+    if not bool(state.predicted_collision_available):
+        safety_pressure = bool(safety_pressure_snapshot)
+    elif _is_decisive_maneuver(state.mode):
+        safety_pressure = bool(state.predicted_collision)
+    else:
+        safety_pressure = bool(safety_pressure_snapshot and state.predicted_collision)
     commit_enabled = bool(config.commit_abort_enabled)
     hard_abort_hazard = bool(
         in_recovery_hold
