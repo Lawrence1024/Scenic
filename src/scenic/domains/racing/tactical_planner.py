@@ -7,8 +7,9 @@ and an optional follow speed cap. Called each control cycle from the racing beha
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Sequence, Tuple
 
+from scenic.domains.racing.assessment.pass_geometry import pass_window_check
 from scenic.domains.racing.situation_assessment import OpponentSituation
 
 FREE_RUN = "FREE_RUN"
@@ -269,11 +270,26 @@ def tactical_planner_step_v1(
     assessment_right_open: Optional[bool] = None,
     assessment_closing_flag: Optional[bool] = None,
     assessment_emergency_risk_01: Optional[float] = None,
+    # SD-3c: optional polyline/arc-length kwargs for the pass_window_check
+    # geometric look-ahead. When all five are provided, SETUP entry rejects
+    # any pass-side TTL whose geometry converges with the fellow's path
+    # within the predicted pass duration. Default None preserves existing
+    # tests (look-ahead skipped, prior preference logic stands).
+    optimal_waypoints: Optional[Sequence] = None,
+    side_waypoints_left: Optional[Sequence] = None,
+    side_waypoints_right: Optional[Sequence] = None,
+    ego_s_m: Optional[float] = None,
+    opp_s_m: Optional[float] = None,
+    lap_length_m: Optional[float] = None,
 ) -> Tuple[str, str, Optional[float], str]:
     """Return ``(mode, ttl_key, speed_cap, decision_reason)``.
 
     Accepts assessment inputs (relation, gap safety, corridor openness, emergency risk)
     from the race situation assessment layer and maps them into a TTL choice.
+
+    SD-3c: when polyline/s kwargs are provided, the SETUP-entry decision
+    consults ``pass_window_check`` to reject geometrically-doomed passes
+    before initiating the lateral shift.
     """
     def _follow_result(reason: str) -> Tuple[str, str, Optional[float], str]:
         state.mode = FOLLOW
@@ -1160,6 +1176,49 @@ def tactical_planner_step_v1(
     else:
         state.setup_candidate_side = target_side
         state.setup_candidate_count = 0
+
+    # SD-3c: geometric look-ahead. If the candidate pass-side TTL converges
+    # with fellow's path inside the predicted pass duration, reject this side
+    # before initiating the lateral shift. If both sides fail, stay in FOLLOW.
+    # Polyline kwargs are Optional — when not provided (e.g. by existing tests),
+    # the check is skipped and the prior preference logic stands.
+    polyline_inputs_present = (
+        optimal_waypoints is not None
+        and ego_s_m is not None
+        and opp_s_m is not None
+        and lap_length_m is not None
+        and float(lap_length_m) > 0.0
+    )
+    if polyline_inputs_present and state.mode not in (SETUP_LEFT, SETUP_RIGHT):
+        def _side_window_ok(s: str) -> Tuple[bool, dict]:
+            wp = side_waypoints_left if s == "left" else side_waypoints_right
+            if wp is None:
+                return True, {"reason": "no_side_polyline"}
+            return pass_window_check(
+                s,
+                ego_s_m=float(ego_s_m),
+                ego_speed_mps=float(ego_speed_mps),
+                opp_s_m=float(opp_s_m),
+                opp_speed_mps=float(opponent_speed_mps),
+                optimal_waypoints=optimal_waypoints,
+                side_waypoints=wp,
+                lap_length_m=float(lap_length_m),
+            )
+        target_ok, target_diag = _side_window_ok(target_side)
+        if not target_ok:
+            other = "left" if target_side == "right" else "right"
+            other_ok, _other_diag = _side_window_ok(other)
+            if other_ok:
+                # Switch sides — the geometry permits the opposite side.
+                target_side = other
+            else:
+                # Both sides rejected — pass is geometrically infeasible. Stay in FOLLOW.
+                state.setup_candidate_side = ""
+                state.setup_candidate_count = 0
+                _clear_setup_commit()
+                _clear_pass_intent()
+                _clear_lateral_lock()
+                return _follow_result("pass_window_unsafe_both_sides")
 
     if state.setup_commit_side and state.setup_commit_side != target_side:
         _clear_setup_commit()

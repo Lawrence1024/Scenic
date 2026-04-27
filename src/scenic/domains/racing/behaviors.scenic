@@ -32,6 +32,7 @@ from scenic.domains.racing.segments import (
 from scenic.domains.racing.constants import DELTA_MAX_RAD
 from scenic.domains.racing.mode import RACING_MODE_MAIN, RACING_MODE_PIT
 from scenic.domains.racing.situation_assessment import (
+    _arc_length_project_xy,
     assess_nearest_opponent,
     format_opponent_log_line,
     polyline_lap_length_m,
@@ -1111,6 +1112,31 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 _a_right_open = getattr(_a8, "right_open", None) if _a8 is not None else None
                 _a_closing = getattr(_a8, "closing_flag", None) if _a8 is not None else None
                 _a_emerg_risk = getattr(_a8, "emergency_risk_01", None) if _a8 is not None else None
+                # SD-3c: thread optimal/left/right TTL polylines and ego/opp arc-lengths
+                # into the planner so it can run pass_window_check geometric look-ahead
+                # before initiating a SETUP. Skipped (None) if any TTL is missing — the
+                # planner falls back to its prior preference logic when polylines absent.
+                _opt_wp = None
+                _left_wp = None
+                _right_wp = None
+                _opt_lap_len = None
+                _opt_ego_s = None
+                _opt_opp_s = None
+                if _scripted_ttl_cache is not None and "optimal" in _scripted_ttl_cache:
+                    _opt_wp = _scripted_ttl_cache["optimal"][1]
+                    _opt_lap_len = polyline_lap_length_m(_opt_wp) if _opt_wp else None
+                    if _opt_lap_len and _opt_lap_len > 0.0:
+                        _opt_ego_s = _arc_length_project_xy(float(px), float(py), _opt_wp)
+                        if _nearest_o3 is not None:
+                            _opt_opp_s = _arc_length_project_xy(
+                                float(_nearest_o3.position.x),
+                                float(_nearest_o3.position.y),
+                                _opt_wp,
+                            )
+                if _scripted_ttl_cache is not None and "left" in _scripted_ttl_cache:
+                    _left_wp = _scripted_ttl_cache["left"][1]
+                if _scripted_ttl_cache is not None and "right" in _scripted_ttl_cache:
+                    _right_wp = _scripted_ttl_cache["right"][1]
                 _mode3, _ttl3, _cap3, _reason3 = tactical_planner_step_v1(
                     self._tactical_tp_state,
                     _sit3,
@@ -1127,6 +1153,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     assessment_right_open=_a_right_open,
                     assessment_closing_flag=_a_closing,
                     assessment_emergency_risk_01=_a_emerg_risk,
+                    optimal_waypoints=_opt_wp,
+                    side_waypoints_left=_left_wp,
+                    side_waypoints_right=_right_wp,
+                    ego_s_m=_opt_ego_s,
+                    opp_s_m=_opt_opp_s,
+                    lap_length_m=_opt_lap_len,
                 )
                 _mode_tac = _mode3
                 _ttl_tac = _ttl3

@@ -1796,6 +1796,112 @@ def test_pass_safe_feasibility_passes_at_matched_speed():
     assert ttl == "right"
 
 
+def _make_polyline(x0, y0, dx, dy, n):
+    return [(x0 + i * dx, y0 + i * dy, 0.0) for i in range(n)]
+
+
+def test_setup_rejects_side_when_pass_window_geometry_unsafe():
+    """SD-3c: when pass_window_check returns False, SETUP must skip that side.
+
+    Right TTL converges with optimal at s=20m → pass_window_check rejects right.
+    Left TTL is parallel and clear → planner switches target to left.
+
+    Avoids triggering safety_pressure (which would short-circuit to
+    protected_follow_envelope) by using asymmetric corridor + closing_flag=False.
+    """
+    st = TacticalPlannerState(
+        # Already past candidate persistence so SETUP can fire this tick.
+        setup_candidate_side="right", setup_candidate_count=10,
+    )
+    cfg = TacticalPlannerConfig(
+        ahead_relax_free_run_enabled=False,
+        # Permissive Δv gates so look-ahead is the only blocker.
+        setup_gap_dv_intercept_m=999.0, setup_gap_dv_ceiling_m=999.0,
+        commit_gap_dv_intercept_m=999.0, commit_gap_dv_ceiling_m=999.0,
+    )
+    # Optimal: y=0 straight. Right TTL: starts y=4 then converges to y=0 at x=20.
+    optimal = _make_polyline(0.0, 0.0, 1.0, 0.0, 200)
+    right = []
+    for i in range(200):
+        x = float(i)
+        y = 4.0 - (4.0 / 20.0) * x if x <= 20.0 else 0.0
+        right.append((x, y, 0.0))
+    left = _make_polyline(0.0, 4.0, 1.0, 0.0, 200)  # parallel, clear
+    s = _sit(
+        lateral_relation="left",   # fellow drifting left → preferred = right
+        collision_risk_01=0.05,
+        overlap_state="clear_ahead",
+        distance_m=20.0, longitudinal_m=20.0,
+        closing_speed_mps=2.0, ahead=True,
+    )
+    m, ttl, cap, reason = tactical_planner_step_v1(
+        st, s,
+        has_opponent=True, ego_speed_mps=14.0, opponent_speed_mps=9.0,
+        sim_time_s=0.0, pit_mode=False, config=cfg,
+        assessment_relation="ahead", assessment_gap_ok=True,
+        assessment_optimal_open=False,
+        # Asymmetric (R only) → asymmetric_opening=True → safety_pressure suppressed.
+        assessment_left_open=False, assessment_right_open=True,
+        assessment_closing_flag=False, assessment_emergency_risk_01=0.05,
+        optimal_waypoints=optimal,
+        side_waypoints_left=left, side_waypoints_right=right,
+        ego_s_m=10.0, opp_s_m=12.0, lap_length_m=199.0,
+    )
+    # Right was preferred but its geometry converges → planner switches to left.
+    assert ttl == "left", f"Geometry should redirect SETUP to left, got ttl={ttl}, reason={reason}"
+    assert m == SETUP_LEFT
+
+
+def test_setup_blocked_when_both_pass_windows_geometry_unsafe():
+    """SD-3c: when both sides converge with fellow's path, stay in FOLLOW.
+
+    Both side TTLs converge to optimal at s=20m → pass_window_check rejects both.
+    Planner returns FOLLOW with reason="pass_window_unsafe_both_sides".
+    """
+    st = TacticalPlannerState(
+        setup_candidate_side="right", setup_candidate_count=10,
+    )
+    cfg = TacticalPlannerConfig(
+        ahead_relax_free_run_enabled=False,
+        setup_gap_dv_intercept_m=999.0, setup_gap_dv_ceiling_m=999.0,
+        commit_gap_dv_intercept_m=999.0, commit_gap_dv_ceiling_m=999.0,
+    )
+    optimal = _make_polyline(0.0, 0.0, 1.0, 0.0, 200)
+    converging_right = []
+    converging_left = []
+    for i in range(200):
+        x = float(i)
+        if x <= 20.0:
+            y_r = 4.0 - (4.0 / 20.0) * x
+            y_l = -4.0 + (4.0 / 20.0) * x
+        else:
+            y_r = 0.0
+            y_l = 0.0
+        converging_right.append((x, y_r, 0.0))
+        converging_left.append((x, y_l, 0.0))
+    s = _sit(
+        lateral_relation="left",
+        collision_risk_01=0.05,
+        overlap_state="clear_ahead",
+        distance_m=20.0, longitudinal_m=20.0,
+        closing_speed_mps=2.0, ahead=True,
+    )
+    m, ttl, cap, reason = tactical_planner_step_v1(
+        st, s,
+        has_opponent=True, ego_speed_mps=14.0, opponent_speed_mps=9.0,
+        sim_time_s=0.0, pit_mode=False, config=cfg,
+        assessment_relation="ahead", assessment_gap_ok=True,
+        assessment_optimal_open=False,
+        assessment_left_open=False, assessment_right_open=True,
+        assessment_closing_flag=False, assessment_emergency_risk_01=0.05,
+        optimal_waypoints=optimal,
+        side_waypoints_left=converging_left, side_waypoints_right=converging_right,
+        ego_s_m=10.0, opp_s_m=12.0, lap_length_m=199.0,
+    )
+    assert m == FOLLOW, f"Both sides converging → must stay in FOLLOW, got {m}"
+    assert reason == "pass_window_unsafe_both_sides"
+
+
 def test_setup_blocked_when_fellow_too_far():
     """SD-2f / SD-3b: SETUP entry must be gated by Δv-derived gap formula.
 
