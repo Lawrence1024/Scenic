@@ -133,3 +133,95 @@ grep -c "decision_reason=contact_recovery_hold"       # MUST be 0
 - F3L/F3R: commit counts within ±20% of pre-redesign baseline
 - F4: collision=0, no pass attempts (look-ahead should reject)
 - F1/F5/F6/F7/F8/F9: collision unchanged from baseline
+
+### SD-10 (surgical restructure + perf cycle, 2026-04-27)
+
+After 9+ SD-N patch cycles, F-bank evidence flagged structural problems:
+F7 ttl ping-pong + 287× pit_mode_guard, F9 false predicted_collision parking ego at v=0,
+plus a runtime regression (~140ms tick_ms vs ~10ms budget). Six surgical stages, each
+independently revertible:
+
+- **SD-10a** Dead-code purge: surfaced 2 hardcoded hysteresis literals as
+  `setup_entry_persistence_cycles` / `follow_pressure_threshold_cycles` config fields.
+- **SD-10c** F7 fix: pit_mode hysteresis (3-tick consecutive) + `setup_min_dwell_s`
+  prevents transient pit_mode flicker from cancelling SETUP within 0.75s.
+  F-bank: 287× pit_mode_guard → 0; ttl ping-pong gone.
+- **SD-10d** F9 fix: stationary-fellow PathPredict bypass when
+  `opp_speed ≤ stationary_opp_speed_mps AND |lateral_m| > stationary_overlap_relief_lateral_m`.
+  F-bank: 292× false predicted_collision → 0; ego no longer parks at v=0.
+- **SD-10b** Unify SETUP entry counters: `pass_intent_candidate_count` +
+  `setup_commit_candidate_count` → single `opening_confidence_count`. Cuts SETUP
+  arming latency from 4 ticks to `max(pass_intent_entry_cycles, setup_commit_entry_cycles)`
+  (=2). Required moving the `setup_max_hold_s` timeout check upstream of `commit_active`
+  so the faster arming can't preempt it.
+- **SD-10e** Time-headway adaptive FOLLOW cap: 3-band hysteresis around
+  `target_gap = max(follow_tight_gap_m, ego_speed * follow_time_headway_s)`.
+  Per published racing literature; replaces fixed `opp + 2.5` cap that ping-ponged
+  near the gap boundary.
+
+#### Performance cycle (parallel to behavior fixes)
+
+- **SD-10g** Per-tick wall-clock instrumentation: `[TickTime]` log line.
+- **SD-10h** Cache Shapely LineString in `pass_geometry._xy_at_arclength` keyed on
+  `id(waypoints)`. Per-call: 1.875 ms uncached → 0.02 ms cached (94×).
+- **SD-10i / SD-10l** Per-section `[TickBreakdown]` instrumentation (segmap, assess_opp,
+  predict, assess_race, planner, lon, lat, other). Found the ttl_switch lag was
+  ~500 ms `build_waypoint_segment_map_from_ttl` rebuild, not Shapely or OSQP.
+- **SD-10j** Cache LineString + lap-length in `situation_assessment._arc_length_project_xy`
+  / `polyline_lap_length_m`. Hybrid cache key `(id, n, first_xy, last_xy)` — `id` alone
+  is unsafe because Python recycles ids after GC.
+- **SD-10o** Warm-start delays: when `_ensure_cosim_started` detects an existing IPC
+  client pid alive, `_setupRun` uses shortened "warm" pauses
+  (`pre_download_delay_warm_s`, `post_modeldesk_download_delay_warm_s`,
+  `post_connect_settle_warm_s`). Cold start: 30 s of fixed sleeps; warm start: 2 s.
+  Saves ~28 s per warm scenic invocation.
+
+Reverted (failed approaches kept in history for the lessons):
+- **SD-10k** Pre-warm Shapely caches at TTL preload — no measurable effect on the
+  ttl_switch lag, confirming Shapely was not the bottleneck. Pointed at SD-10l
+  instrumentation to find the real culprit.
+- **SD-10m / SD-10n** Pre-build segment maps per TTL — user noted the racing track
+  and segments should be XODR-derived (not TTL-keyed). Cleaner approach deferred
+  to a future cycle (segment lookup keyed on road/arc-length rather than per-polyline
+  waypoint index).
+
+#### F-bank result (full_stack_20260427_230918, all 10 scenarios)
+
+| Scenario | Collision | Note |
+|---|---|---|
+| F1 | False | correct (fellow behind) |
+| F2 | False | overtake successful (1 pass_success) |
+| F3L | False | overtake successful, no hesitation |
+| F3R | False | overtake successful |
+| F4 | True | sudden-stop rear-end (known limitation; no SETUP attempt) |
+| F5 | False | correct (stayed behind) |
+| F6 | False | overtake successful |
+| F7 | False | clean FOLLOW, no ttl ping-pong |
+| F8 | False | corner-conservative (correct, by design) |
+| F9 | False | cautious crawl past stationary fellow — see below |
+
+#### Known limitations after SD-10
+
+- **F4 sudden-stop rear-end**: ego brakes via SD-4 EMERGENCY_STABLE but stopping
+  distance from cruise speed exceeds available gap. No structural fix — the
+  scenario is "fellow stops without warning at 9m gap"; physically tight.
+- **F9 stationary-obstacle cautious cruise**: a chicken-and-egg deadlock when
+  fellow is stationary AND classified as `ahead=1` (forward in ego's heading frame)
+  AND laterally on/near the racing line. Sequence:
+  1. FOLLOW cap = `max(3.0, opp_speed + follow_speed_margin_mps)` = `max(3.0, 0+2.5)` = 3.0 m/s
+  2. ego_speed stays low → Δv ≈ ego_speed → `setup_gap_max(Δv) ≈ 1.4·Δv + 14` ≈ 14 m
+  3. actual longitudinal_m to stationary fellow ≈ 38 m at start
+  4. `setup_too_far_follow` gate fires → stay in FOLLOW → cap stays at 3.0 m/s
+  Ego does eventually pass (lateral clearance 5-6 m, no contact), just slowly. SD-10d
+  fixed the EMERGENCY_STABLE part; the FOLLOW-cap part is a separate structural issue,
+  candidate for a future "static-obstacle FREE_RUN bypass" patch.
+
+#### Performance bottom line
+
+| Metric | Pre-SD-10 | Post-SD-10 |
+|---|---|---|
+| Steady-state tick_ms (p50) | 23.5 ms | 10–12 ms |
+| Steady-state tick_ms (mean) | 31 ms | 12–14 ms |
+| ttl_switch lag (peak tick_ms) | 530–600 ms | unchanged (segmap rebuild — see SD-10m revert) |
+| Cold-start delay | ~38 s | ~38 s (cold path unchanged) |
+| Warm-start delay | ~38 s | ~10 s (SD-10o) |
