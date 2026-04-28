@@ -144,12 +144,11 @@ class TacticalPlannerConfig:
     setup_partial_overlap_lateral_m: float = 1.8
     setup_reentry_cooldown_s: float = 0.5
     contact_recovery_hold_s: float = 1.0
-    protected_follow_release_cycles: int = 2
-    setup_commit_entry_cycles: int = 2
-    setup_commit_hold_s: float = 1.2
-    setup_commit_min_closing_mps: float = 0.3
-    pass_intent_entry_cycles: int = 2
-    pass_intent_hold_s: float = 1.6
+    # SD-13c: removed snapshot-only config fields:
+    #   protected_follow_release_cycles (snapshot safety latch)
+    #   setup_commit_entry_cycles / setup_commit_hold_s (SETUP arming chain)
+    #   pass_intent_entry_cycles / pass_intent_hold_s (SETUP arming chain)
+    #   setup_commit_min_closing_mps (snapshot SETUP entry gate)
     lateral_path_lock_hold_s: float = 1.6
     # Commit/abort lifecycle
     commit_abort_enabled: bool = False
@@ -245,12 +244,9 @@ class TacticalPlannerConfig:
     # ttl ping-pong is destabilizing — better to commit for ~1s and let the
     # COMMIT entry decide whether to proceed.
     setup_min_dwell_s: float = 1.0
-    # SD-10a: configurable hysteresis thresholds. Pre-SD-10a these were hardcoded
-    # `setup_candidate_count<3` and `follow_pressure_count>=3` literals scattered
-    # in the planner body, which made them invisible to test overrides and config
-    # tuning. Surfaced as proper config fields so they're discoverable and tunable.
-    setup_entry_persistence_cycles: int = 3
-    follow_pressure_threshold_cycles: int = 3
+    # SD-13c: removed setup_entry_persistence_cycles and
+    # follow_pressure_threshold_cycles — both were snapshot SETUP entry
+    # hysteresis tuning knobs, no longer used after Phase 7-9 deletion.
     # SD-6: commit_approach_risk_max=0.10 deleted. It was a closing+risk snapshot gate
     # that fired from the very first tick of SETUP (risk grows above 0.10 immediately
     # when ego closes on fellow), so COMMIT could never fire on F2-style overtakes.
@@ -337,22 +333,14 @@ class TacticalPlannerState:
     last_setup_side: str = "left"
     last_flip_sim_time_s: float = -1.0e9
     last_setup_exit_sim_time_s: float = -1.0e9
-    setup_candidate_side: str = ""
-    setup_candidate_count: int = 0
-    follow_pressure_count: int = 0
-    protected_follow_active: bool = False
-    protected_follow_clear_count: int = 0
+    # SD-13c: removed snapshot-only state fields:
+    #   setup_candidate_side / setup_candidate_count (snapshot SETUP entry persistence)
+    #   follow_pressure_count (snapshot follow-pressure latch counter)
+    #   protected_follow_active / protected_follow_clear_count (snapshot safety latch)
+    #   setup_commit_side / setup_commit_until_s (SETUP arming, replaced by direct COMMIT routing)
+    #   pass_intent_side / pass_intent_until_s (SETUP arming chain)
+    #   opening_confidence_count (SETUP arming hysteresis)
     recovery_hold_until_s: float = -1.0e9
-    setup_commit_side: str = ""
-    setup_commit_until_s: float = -1.0e9
-    pass_intent_side: str = ""
-    pass_intent_until_s: float = -1.0e9
-    # SD-10b: unified opening-confidence counter. Replaces the redundant
-    # pass_intent_candidate_count + setup_commit_candidate_count chain. Both
-    # measured the same "opening is consistent" signal but had separate
-    # 2-tick build-ups, doubling SETUP arming latency to 4 ticks. Now arms
-    # in max(pass_intent_entry_cycles, setup_commit_entry_cycles) ticks.
-    opening_confidence_count: int = 0
     lateral_path_lock_side: str = ""
     lateral_path_lock_until_s: float = -1.0e9
     commit: CommitPlannerState = field(default_factory=CommitPlannerState)
@@ -547,21 +535,17 @@ def tactical_planner_step_v1(
         return SETUP_RIGHT, "right", cap, reason
 
     def _clear_safety_latches() -> None:
-        state.protected_follow_active = False
-        state.protected_follow_clear_count = 0
+        # SD-13c: protected_follow_* fields removed; only recovery_hold survives.
         state.recovery_hold_until_s = -1.0e9
 
     def _clear_setup_commit() -> None:
-        state.setup_commit_side = ""
-        state.setup_commit_until_s = -1.0e9
-        # SD-10b: opening_confidence_count drives both pass_intent and
-        # setup_commit arming, so clearing either resets it.
-        state.opening_confidence_count = 0
+        # SD-13c: setup_commit_*/opening_confidence_count fields removed.
+        # Helper kept as a no-op for callers that haven't been updated yet.
+        pass
 
     def _clear_pass_intent() -> None:
-        state.pass_intent_side = ""
-        state.pass_intent_until_s = -1.0e9
-        state.opening_confidence_count = 0
+        # SD-13c: pass_intent_* fields removed. No-op.
+        pass
 
     def _clear_lateral_lock() -> None:
         state.lateral_path_lock_side = ""
@@ -788,19 +772,12 @@ def tactical_planner_step_v1(
         """
         if name == "stay_optimal":
             state.mode = FREE_RUN
-            state.setup_candidate_side = ""
-            state.setup_candidate_count = 0
-            state.follow_pressure_count = 0
             _clear_safety_latches()
-            _clear_setup_commit()
-            _clear_pass_intent()
             _clear_lateral_lock()
             _clear_commit_lifecycle()
             return FREE_RUN, "optimal", None, "strategy_stay_optimal"
         if name == "follow_fellow":
             state.mode = FOLLOW
-            state.setup_candidate_side = ""
-            state.setup_candidate_count = 0
             # Cruise at opp+0.3 — no 3.0 m/s floor (was the F9 deadlock).
             cap_val = max(0.0, float(opponent_speed_mps) + 0.3)
             return FOLLOW, "optimal", cap_val, "strategy_follow_fellow"
@@ -845,28 +822,10 @@ def tactical_planner_step_v1(
 
     _reset_commit_cycle_flags()
 
-    def _is_proximity_hazard() -> bool:
-        if sit is None:
-            return False
-        overlap_hazard = sit.overlap_state in ("partial_overlap", "side_by_side")
-        # Distance-based hazard only applies when opponent is ahead; an opponent
-        # behind ego is receding and does not constitute a forward proximity hazard.
-        if not relation_ahead:
-            return bool(overlap_hazard)
-        ref_speed = max(0.0, float(ego_speed_mps), float(opponent_speed_mps))
-        dynamic_blocked_gap = max(
-            float(config.follow_tight_gap_m),
-            float(config.blocked_distance_m),
-            ref_speed * float(config.blocked_headway_s),
-        )
-        close_hazard = sit.distance_m < dynamic_blocked_gap
-        snapshot = bool(overlap_hazard or close_hazard)
-        return _apply_predicted_collision_gate(
-            snapshot,
-            planner_state=state.mode,
-            predicted_collision=state.predicted_collision,
-            predicted_collision_available=state.predicted_collision_available,
-        )
+    # SD-13c: removed _is_proximity_hazard helper. It was only consumed by
+    # the deleted snapshot Phase 7 (`opponent_behind` block) and is now
+    # unreferenced. The COMMIT/HOLD/ABORT lifecycle uses _is_release_hazard
+    # for in-flight hazard checks.
 
     def _is_release_hazard() -> bool:
         if sit is None:
@@ -894,12 +853,7 @@ def tactical_planner_step_v1(
 
     if not has_opponent or sit is None:
         state.mode = FREE_RUN
-        state.setup_candidate_side = ""
-        state.setup_candidate_count = 0
-        state.follow_pressure_count = 0
         _clear_safety_latches()
-        _clear_setup_commit()
-        _clear_pass_intent()
         _clear_lateral_lock()
         _clear_commit_lifecycle()
         return FREE_RUN, "optimal", None, "no_opponent"
@@ -946,12 +900,7 @@ def tactical_planner_step_v1(
     # original pre-SD-12a behavior for non-tactical / non-prediction scenarios.
     if pit_mode:
         state.mode = FREE_RUN
-        state.setup_candidate_side = ""
-        state.setup_candidate_count = 0
-        state.follow_pressure_count = 0
         _clear_safety_latches()
-        _clear_setup_commit()
-        _clear_pass_intent()
         _clear_lateral_lock()
         _clear_commit_lifecycle()
         return FREE_RUN, "optimal", None, "pit_mode_guard"
@@ -960,12 +909,7 @@ def tactical_planner_step_v1(
         if state.mode in (SETUP_LEFT, SETUP_RIGHT):
             state.last_setup_exit_sim_time_s = float(sim_time_s)
         state.mode = FREE_RUN
-        state.setup_candidate_side = ""
-        state.setup_candidate_count = 0
-        state.follow_pressure_count = 0
         _clear_safety_latches()
-        _clear_setup_commit()
-        _clear_pass_intent()
         _clear_lateral_lock()
         _clear_commit_lifecycle()
         return FREE_RUN, "optimal", None, "opponent_far_free_run"
@@ -996,8 +940,6 @@ def tactical_planner_step_v1(
             float(state.recovery_hold_until_s),
             float(sim_time_s) + float(config.contact_recovery_hold_s),
         )
-        state.protected_follow_active = True
-        state.protected_follow_clear_count = 0
     in_recovery_hold = float(sim_time_s) < float(state.recovery_hold_until_s)
     # emergency_risk_high is computed after asymmetric_opening (below)
     asymmetric_opening = bool(left_open_now) ^ bool(right_open_now)
@@ -1368,68 +1310,16 @@ def tactical_planner_step_v1(
         _clear_commit_lifecycle()
         return _follow_result("abort_recover_follow")
 
-    if relation_ahead and safety_pressure:
-        state.protected_follow_active = True
-        state.protected_follow_clear_count = 0
-    elif state.protected_follow_active:
-        # Structural opening-release rule:
-        # keep FOLLOW while hazards are present, but allow release into setup
-        # when a pass opening is stably clear even if opponent remains ahead.
-        opening_stably_clear = bool(
-            relation_ahead
-            and opening_window_available
-            and ((assessment_gap_ok is True) or asymmetric_opening)
-            and ((not bool(assessment_closing_flag)) or asymmetric_opening)
-            and not (
-                bool(assessment_closing_flag)
-                and assessment_emergency_risk_01 is not None
-                and float(assessment_emergency_risk_01) > 0.25
-            )
-            and not (config.segment_aware_enabled and _seg_modifier == "blocked")
-        )
-        clear_now = opening_stably_clear or (
-            (not relation_ahead) and (not _is_release_hazard()) and (not in_recovery_hold)
-        )
-        if clear_now:
-            state.protected_follow_clear_count += 1
-        else:
-            state.protected_follow_clear_count = 0
-        if state.protected_follow_clear_count >= int(config.protected_follow_release_cycles):
-            state.protected_follow_active = False
-            state.protected_follow_clear_count = 0
+    # SD-13c: removed protected_follow latch — it was a snapshot-driven
+    # safety latch that arming on `safety_pressure` (snapshot heuristic).
+    # With strategy authority owning entry decisions, the snapshot
+    # safety_pressure signal is no longer trustworthy in isolation. SD-4's
+    # predicted_collision is the brake authority; strategy says when to
+    # SETUP/COMMIT. No need for a parallel snapshot safety state.
 
     if in_recovery_hold:
         _clear_commit_lifecycle()
-        state.setup_candidate_side = ""
-        state.setup_candidate_count = 0
-        state.follow_pressure_count += 1
         return _follow_result("contact_recovery_hold")
-
-    if state.protected_follow_active:
-        _clear_commit_lifecycle()
-        _commit_side_pre = str(state.setup_commit_side or "")
-        _intent_side_pre = str(state.pass_intent_side or "")
-        _lock_side_pre = str(state.lateral_path_lock_side or "")
-        _hold_side_pre = _lock_side_pre if _lock_side_pre in ("left", "right") else (
-            _commit_side_pre if _commit_side_pre in ("left", "right") else _intent_side_pre
-        )
-        _hold_active_pre = bool(
-            _hold_side_pre in ("left", "right")
-            and (
-                lateral_lock_active
-                or float(sim_time_s) < float(state.setup_commit_until_s)
-                or float(sim_time_s) < float(state.pass_intent_until_s)
-            )
-            and (not in_recovery_hold)
-            and (not emergency_risk_high)
-            and (not _is_release_hazard())
-        )
-        if _hold_active_pre:
-            return _setup_result(_hold_side_pre, f"lateral_path_lock_{_hold_side_pre}_hold")
-        state.setup_candidate_side = ""
-        state.setup_candidate_count = 0
-        state.follow_pressure_count += 1
-        return _follow_result("protected_follow_envelope")
 
     # SD-13b: defensive fallback. With the snapshot Phase 7-9 entry chain
     # deleted, execution can only reach here when:
