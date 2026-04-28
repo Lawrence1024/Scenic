@@ -235,8 +235,11 @@ def test_authority_does_not_fire_when_mode_is_commit():
 # ---------------------------------------------------------------------------
 
 def test_flag_off_completely_bypasses_authority():
-    """With use_strategy_authority=False, the strategy is computed (telemetry)
-    but the snapshot path runs unchanged."""
+    """With use_strategy_authority=False, the strategy is computed (telemetry
+    only) but does not drive the planner. Post-SD-13b, the snapshot entry
+    chain is gone, so the fallback returns _follow_result with the marker
+    reason `strategy_inactive_follow_fallback` (not a `strategy_*` authority
+    reason)."""
     cfg = TacticalPlannerConfig(use_strategy_authority=False)
     st = TacticalPlannerState()
     sit = _sit(longitudinal_m=30.0, lateral_m=-5.0, opponent_speed_mps=0.0)
@@ -244,10 +247,10 @@ def test_flag_off_completely_bypasses_authority():
     (m, ttl, cap, r), _ = _step_with_capture(
         st, sit, config=cfg, fellow_traj=fellow_traj
     )
-    # Snapshot path: distance < relevance_dist_m, sit.ahead → FOLLOW or SETUP path,
-    # NOT a "strategy_*" reason.
-    assert not r.startswith("strategy_")
-    # But strategy was still computed for telemetry.
+    # The fallback marker indicates strategy authority did NOT drive — distinct
+    # from "strategy_stay_optimal" / "strategy_pass_*" which mean it did.
+    assert r == "strategy_inactive_follow_fallback"
+    # Strategy was still computed for telemetry.
     assert st.strategy_selected_name == "stay_optimal"
 
 
