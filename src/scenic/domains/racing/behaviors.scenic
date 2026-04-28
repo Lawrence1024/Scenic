@@ -409,6 +409,21 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         except Exception:
             _segment_aware_enabled = False
     _tactical_config.segment_aware_enabled = bool(_segment_aware_enabled)
+    # SD-11e: thread the strategy-authority flag from .scenic params into the
+    # tactical config so `--param use_strategy_authority True` actually flips
+    # the authority branch on. Mirrors the existing assessment_enabled pattern.
+    try:
+        _params_for_strategy = getattr(simulation().scene, 'params', None) or {}
+        _v_use_strategy = _params_for_strategy.get("use_strategy_authority", None)
+        if _v_use_strategy is not None:
+            if isinstance(_v_use_strategy, bool):
+                _tactical_config.use_strategy_authority = bool(_v_use_strategy)
+            else:
+                _tactical_config.use_strategy_authority = str(_v_use_strategy).strip().lower() in ("true", "1", "yes", "on")
+    except Exception:
+        pass
+    if _tactical_config.use_strategy_authority:
+        print(f"{_fbhv} SD-11e strategy authority ENABLED (use_strategy_authority=True)")
     if _segment_aware_enabled:
         # Segment-aware gating via fine-grained modifiers;
         # disable the legacy straight-only blanket gate so corner passes are possible.
