@@ -123,6 +123,82 @@ class FellowPredictor:
         self._last_pred_xy = None
         self._last_pred_s = None
 
+    def trajectory(
+        self,
+        horizon_s: float,
+        sample_dt_s: float,
+    ) -> list[Tuple[float, float, float, Optional[float]]]:
+        """SD-11a: multi-step CV extrapolation over [0, horizon_s].
+
+        Reuses the same blended (last-segment + recency-weighted-history)
+        velocity that ``step()`` computes for its single-sample prediction —
+        no new estimator. Walks forward at constant velocity from the most
+        recent observation.
+
+        Returns a list of ``(t_offset_s, x, y, s_or_None)`` tuples with
+        ``t_offset_s`` in {0, dt, 2*dt, ..., k*dt} where ``k = floor(horizon_s/dt)``.
+        Length is ``k + 1``. ``samples[0]`` is the current observation (no motion);
+        ``samples[i]`` for ``i >= 1`` is the CV-extrapolated pose at ``i*dt``.
+
+        Degenerate cases:
+          - No history: returns ``[]``.
+          - Single observation OR zero-length last segment: returns the
+            current observation repeated at every sample (zero motion).
+
+        Used by SD-11b's strategy simulator to predict where the fellow
+        will be over the planning horizon, under the assumption that
+        the fellow continues its current behavior.
+        """
+        if not self._hist:
+            return []
+
+        h = max(0.0, float(horizon_s))
+        dt = max(1e-6, float(sample_dt_s))
+        n_steps = int(h / dt)
+
+        t_now, x_now, y_now, s_now = self._hist[-1]
+
+        vx = 0.0
+        vy = 0.0
+        vs: Optional[float] = None
+        if len(self._hist) >= 2:
+            t0, x0, y0, s0 = self._hist[-2]
+            t1, x1, y1, s1 = self._hist[-1]
+            dt_seg = float(t1 - t0)
+            if dt_seg > 1e-9:
+                vx_seg = (x1 - x0) / dt_seg
+                vy_seg = (y1 - y0) / dt_seg
+                v_hist = self._recency_weighted_velocity_xy()
+                if v_hist is not None:
+                    w_hist = 0.35
+                    vx = (1.0 - w_hist) * vx_seg + w_hist * v_hist[0]
+                    vy = (1.0 - w_hist) * vy_seg + w_hist * v_hist[1]
+                else:
+                    vx = vx_seg
+                    vy = vy_seg
+                if s1 is not None and s0 is not None:
+                    vs_seg = (float(s1) - float(s0)) / dt_seg
+                    vs_hist = self._recency_weighted_velocity_s()
+                    if vs_hist is not None:
+                        w_hist_s = 0.35
+                        vs = (1.0 - w_hist_s) * vs_seg + w_hist_s * vs_hist
+                    else:
+                        vs = vs_seg
+
+        samples: list[Tuple[float, float, float, Optional[float]]] = []
+        for i in range(n_steps + 1):
+            t_off = i * dt
+            x_i = float(x_now) + vx * t_off
+            y_i = float(y_now) + vy * t_off
+            s_i: Optional[float] = None
+            if s_now is not None:
+                if vs is not None:
+                    s_i = float(s_now) + vs * t_off
+                else:
+                    s_i = float(s_now)
+            samples.append((float(t_off), float(x_i), float(y_i), s_i))
+        return samples
+
     def step(
         self,
         sim_time_s: float,
