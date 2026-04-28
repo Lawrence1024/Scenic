@@ -440,31 +440,55 @@ RacingCar (racing)
     └── Simulator-specific extensions (e.g., DSPACERacingCar)
 ```
 
-### Intelligence Pipeline (4 Layers)
+### Intelligence Pipeline (post-SD-13: trajectory-prediction-driven)
 
-When `tactical_planner_enabled=True`, `FollowRacingLineMPCBehavior` runs a 4-layer opponent-aware planning stack each control cycle:
+When `tactical_planner_enabled=True` AND `prediction_enabled=True`,
+`FollowRacingLineMPCBehavior` runs an opponent-aware planning stack each
+control cycle. Post-SD-13 the planner is **strategy-driven** rather than
+snapshot-driven — see `docs/racing_smart_driving.md` for the full SD-11/12/13
+cycle history.
 
 ```
 Layer 1 — Perception   : situation_assessment.py
                           assess_nearest_opponent() → OpponentSituation
+                          (sit.delta_s_m / sit.lateral_m / sit.ahead now feed
+                           ONLY the lifecycle, not entry decisions)
                           Log tag: [Phase2]
 
 Layer 2 — Assessment   : assessment/race_situation.py
                           assess_race_situation()   → RaceSituationAssessment
                           Log tag: [Assessment]
 
-Layer 3 — Planning     : tactical_planner.py
-                          tactical_planner_step_v1() → (mode, ttl_key, speed_cap, reason)
-                          Modes: FREE_RUN / FOLLOW / SETUP_LEFT / SETUP_RIGHT /
-                                 COMMIT_PASS_LEFT / COMMIT_PASS_RIGHT / ABORT_PASS
+Layer 3a — Trajectory   : prediction/fellow_predictor.py FellowPredictor.trajectory()
+           Prediction      → multi-step CV-extrapolated fellow trajectory
+                          Log tag: [Prediction]
+
+Layer 3b — Strategy    : prediction/strategy_simulator.py simulate_strategy()
+           Selection       × {stay_optimal, follow_fellow, pass_left, pass_right}
+                          → 4 StrategyOutcomes (reachable_progress, min_clearance, ...)
+                          Then planner/strategy_selector.py select_strategy()
+                          → SelectedStrategy (the chosen plan + diagnostics)
+                          Log tag: [Strategy]
+
+Layer 3c — Planning    : tactical_planner.py tactical_planner_step_v1()
+                          Strategy authority owns the entry decision
+                          (FREE_RUN / FOLLOW / COMMIT_PASS_*); the lifecycle
+                          (COMMIT_PASS_* → HOLD_PASS_* → FREE_RUN, with ABORT
+                          on hard hazards) executes the chosen plan.
+                          Modes: FREE_RUN / FOLLOW / COMMIT_PASS_{LEFT,RIGHT} /
+                                 HOLD_PASS_{LEFT,RIGHT} / ABORT_PASS
+                          (SETUP_LEFT / SETUP_RIGHT constants survive as
+                          legacy aliases for _canonical_mode but are no
+                          longer entered by any code path post-SD-13.)
                           Log tags: [Planner], [Commit], [Hazard]
 
 Layer 4 — Safety       : safety/stability_guard.py
                           stability_guard_step()    → StabilityGuardDecision
+                          Independent SD-4 emergency-brake authority via
+                          path_collision_predicted (1.5s horizon). Two-key
+                          safety: strategy commits, SD-4 vetoes.
                           Log tag: [Guard]
 ```
-
-Prediction (Layer 0.5): `prediction/fellow_predictor.py` feeds `FellowPredictor` step results into the assessment layer. Log tag: `[Prediction]`.
 
 ### Design Principles
 
@@ -563,7 +587,7 @@ chaser.behavior = OvertakingBehavior(leader, aggressive=True)
 - Manual transmission protocol (`HasManualTransmission`)
 - Racing controllers: **MPC** (lateral MPCC + longitudinal) when `getRacingControllers(agent, use_mpc=True)`; otherwise optimized PID from driving domain
 - MPC module: MPCC lateral controller, longitudinal MPC, reference builder, speed profile, result_data analysis (see `mpc/README.md`)
-- **Opponent-aware 4-layer intelligence pipeline**: Perception (`situation_assessment.py`) → Assessment (`assessment/race_situation.py`) → Planning (`tactical_planner.py`) → Safety (`safety/stability_guard.py`). Enabled via `tactical_planner_enabled=True`. Tactical modes: FREE_RUN / FOLLOW / SETUP_LEFT / SETUP_RIGHT / COMMIT_PASS_LEFT / COMMIT_PASS_RIGHT / ABORT_PASS. Asymmetric-opening detection correctly suppresses safety pressure when the fellow is on a parallel TTL (fixes braking in F3L/F3R scenarios). Status: `plans/README.md`.
+- **Opponent-aware trajectory-prediction-driven planning** (post-SD-13): Perception (`situation_assessment.py`) → Assessment (`assessment/race_situation.py`) → Trajectory Prediction (`prediction/fellow_predictor.py`) → Strategy Selection (`prediction/strategy_simulator.py` + `planner/strategy_selector.py`) → Planning (`tactical_planner.py`) → Safety (`safety/stability_guard.py`). Enabled via `tactical_planner_enabled=True` + `prediction_enabled=True`. Tactical modes: FREE_RUN / FOLLOW / COMMIT_PASS_{LEFT,RIGHT} / HOLD_PASS_{LEFT,RIGHT} / ABORT_PASS. The strategy authority simulates each candidate (stay_optimal / follow_fellow / pass_left / pass_right) over a 10s horizon and picks the fastest safe one — replacing the legacy snapshot-driven SETUP entry chain. Two-key safety: strategy commits a plan, SD-4's 1.5s `path_collision_predicted` vetoes mid-flight if needed. Full cycle history: `docs/racing_smart_driving.md`.
 
 ### ⚠️ Partially Implemented / Stubs
 
@@ -818,14 +842,21 @@ src/scenic/domains/racing/
 ├── actions.py               # Racing actions
 ├── simulators.py            # Racing simulator interfaces (getRacingControllers with use_mpc)
 ├── situation_assessment.py  # Layer 1: assess_nearest_opponent() → OpponentSituation
-├── tactical_planner.py      # Layer 3: tactical_planner_step_v1() → (mode, ttl, cap, reason)
+├── tactical_planner.py      # Layer 3c: tactical_planner_step_v1() → (mode, ttl, cap, reason)
 │                            #   TacticalPlannerConfig, TacticalPlannerState, CommitPlannerState
+│                            #   Strategy authority + COMMIT/HOLD/ABORT lifecycle
 ├── README.md                # This file (complete reference)
-├── assessment/              # Layer 2: race situation assessment
+├── assessment/              # Layer 2: race situation assessment + pass geometry
 │   ├── race_situation.py    #   assess_race_situation() → RaceSituationAssessment
+│   ├── pass_geometry.py     #   path_collision_predicted (SD-4 emergency brake),
+│   │                        #   pass_window_check, _xy_at_arclength (cached)
 │   └── __init__.py
-├── prediction/              # Fellow next-step pose predictor
-│   ├── fellow_predictor.py  #   FellowPredictor, format_prediction_log_line
+├── prediction/              # Layer 3a: trajectory prediction + Layer 3b: strategy simulator
+│   ├── fellow_predictor.py  #   FellowPredictor.step + .trajectory (CV multi-step)
+│   ├── strategy_simulator.py#   simulate_strategy() per candidate over 10s horizon
+│   └── __init__.py
+├── planner/                 # Layer 3b: strategy selector
+│   ├── strategy_selector.py #   select_strategy() — pure ranking function
 │   └── __init__.py
 ├── safety/                  # Layer 4: stability guard
 │   ├── stability_guard.py   #   stability_guard_step() → StabilityGuardDecision
