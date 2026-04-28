@@ -271,6 +271,10 @@ class TacticalPlannerConfig:
     strategy_accel_mps2: float = 4.0
     strategy_post_pass_buffer_m: float = 5.0
     strategy_lane_change_s: float = 1.5
+    # SD-11e hysteresis: a strategy must be picked for this many consecutive
+    # ticks before being honored. Prevents frame-to-frame flips from noisy
+    # fellow velocity estimates. Default 2 = ~100ms at 20Hz control.
+    strategy_commit_cycles: int = 2
 
 
 # SD-3b: Δv-derived gate helpers. All clamped to a sane band so a freak
@@ -362,6 +366,13 @@ class TacticalPlannerState:
     strategy_selected_reason: str = ""
     strategy_min_clearances: dict = field(default_factory=dict)
     strategy_reachable_progress: dict = field(default_factory=dict)
+    # SD-11e: hysteresis tracking. strategy_committed_name is the strategy that
+    # has actually been HONORED by the planner (committed to execute);
+    # strategy_commit_run_count is the consecutive-tick count of the same
+    # selection. The authority branch only fires when the selection has
+    # persisted strategy_commit_cycles ticks.
+    strategy_committed_name: str = ""
+    strategy_commit_run_count: int = 0
 
 
 def apply_ttl_key_to_agent(agent, ttl_key: str, ttl_cache: dict, file_by_sel: Dict[str, str]) -> bool:
@@ -774,6 +785,77 @@ def tactical_planner_step_v1(
             abort_ttl = commit_side_now
         return ABORT_PASS, abort_ttl, None, reason
 
+    def _strategy_to_planner_output(
+        name: str,
+    ) -> Tuple[str, str, Optional[float], str]:
+        """SD-11e: map a SelectedStrategy.name to (mode, ttl, cap, reason).
+
+        - stay_optimal  -> FREE_RUN, optimal, cap=None
+        - follow_fellow -> FOLLOW, optimal, cap=opp+0.3 (no 3.0 floor — let MPC stop)
+        - pass_left/right -> seed lifecycle for the existing SETUP/COMMIT progression
+                             via _setup_result, returning SETUP_PASS_{side}.
+        Unknown -> defensive fallback to FREE_RUN.
+        """
+        if name == "stay_optimal":
+            state.mode = FREE_RUN
+            state.setup_candidate_side = ""
+            state.setup_candidate_count = 0
+            state.follow_pressure_count = 0
+            _clear_safety_latches()
+            _clear_setup_commit()
+            _clear_pass_intent()
+            _clear_lateral_lock()
+            _clear_commit_lifecycle()
+            return FREE_RUN, "optimal", None, "strategy_stay_optimal"
+        if name == "follow_fellow":
+            state.mode = FOLLOW
+            state.setup_candidate_side = ""
+            state.setup_candidate_count = 0
+            # Cruise at opp+0.3 — no 3.0 m/s floor (was the F9 deadlock).
+            cap_val = max(0.0, float(opponent_speed_mps) + 0.3)
+            return FOLLOW, "optimal", cap_val, "strategy_follow_fellow"
+        if name in ("pass_left", "pass_right"):
+            side = "left" if name == "pass_left" else "right"
+            # Seed the existing pass_intent / setup_commit lifecycle so the
+            # next tick's snapshot path can carry the plan through to COMMIT
+            # without starting confidence build-up from zero.
+            state.pass_intent_side = side
+            state.pass_intent_until_s = max(
+                float(state.pass_intent_until_s),
+                float(sim_time_s) + float(config.pass_intent_hold_s),
+            )
+            state.setup_commit_side = side
+            state.setup_commit_until_s = max(
+                float(state.setup_commit_until_s),
+                float(sim_time_s) + float(config.setup_commit_hold_s),
+            )
+            state.opening_confidence_count = max(
+                int(config.pass_intent_entry_cycles),
+                int(config.setup_commit_entry_cycles),
+            )
+            state.last_setup_side = side
+            state.lateral_path_lock_side = side
+            state.lateral_path_lock_until_s = max(
+                float(state.lateral_path_lock_until_s),
+                float(sim_time_s) + float(config.lateral_path_lock_hold_s),
+            )
+            # Mirror _setup_result without relying on its enclosing-scope
+            # `relation_ahead` (which is computed later in the planner).
+            # Strategy authority is reached only when sit is not None
+            # (no_opponent guard preempts), and the strategy pipeline
+            # confirmed an opponent — so cap = opp + setup_margin.
+            if state.mode not in (SETUP_LEFT, SETUP_RIGHT):
+                state.setup_entry_s = float(sim_time_s)
+            cap_setup = max(3.0, float(opponent_speed_mps) + float(config.setup_speed_margin_mps))
+            if side == "left":
+                state.mode = SETUP_LEFT
+                return SETUP_LEFT, "left", cap_setup, f"strategy_pass_{side}"
+            state.mode = SETUP_RIGHT
+            return SETUP_RIGHT, "right", cap_setup, f"strategy_pass_{side}"
+        # Unknown strategy name → defensive fallback.
+        state.mode = FREE_RUN
+        return FREE_RUN, "optimal", None, "strategy_unknown"
+
     _reset_commit_cycle_flags()
 
     def _is_proximity_hazard() -> bool:
@@ -846,6 +928,35 @@ def tactical_planner_step_v1(
         _clear_lateral_lock()
         _clear_commit_lifecycle()
         return FREE_RUN, "optimal", None, "no_opponent"
+
+    # SD-11e: strategy authority. When use_strategy_authority is True AND a
+    # strategy was selected this tick (SD-11d wired the pipeline), it
+    # overrides the snapshot-driven FOLLOW-vs-FREE_RUN-vs-SETUP entry chain
+    # below. Hysteresis: require strategy_commit_cycles consecutive ticks of
+    # the same selection before honoring it (prevents frame-to-frame flips
+    # from noisy fellow velocity).
+    #
+    # IMPORTANT: only fires when state.mode is FREE_RUN or FOLLOW. Mid-flight
+    # SETUP/COMMIT/HOLD/ABORT execution is left to the existing lifecycle
+    # branches below — strategy authority owns the ENTRY decision; the
+    # state machine owns the EXECUTION. Two-key safety: SD-4's 1.5s
+    # path_collision_predicted runs every tick regardless and can abort
+    # mid-execution via hard_abort_hazard.
+    if (
+        bool(config.use_strategy_authority)
+        and state.strategy_selected_name
+    ):
+        # Track consecutive-tick run of the same selection.
+        if state.strategy_selected_name == state.strategy_committed_name:
+            state.strategy_commit_run_count = int(state.strategy_commit_run_count) + 1
+        else:
+            state.strategy_committed_name = str(state.strategy_selected_name)
+            state.strategy_commit_run_count = 1
+        if (
+            state.strategy_commit_run_count >= int(config.strategy_commit_cycles)
+            and state.mode in (FREE_RUN, FOLLOW)
+        ):
+            return _strategy_to_planner_output(state.strategy_selected_name)
 
     if sit.distance_m > config.relevance_dist_m:
         if state.mode in (SETUP_LEFT, SETUP_RIGHT):
