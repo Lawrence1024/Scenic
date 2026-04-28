@@ -259,10 +259,13 @@ class TacticalPlannerConfig:
     corner_body_blocks_commit: bool = True
     corner_entry_commit_risk_max: float = 0.30
     # SD-11d: trajectory-based strategy authority. When use_strategy_authority
-    # is False (default) the strategy pipeline runs in TELEMETRY-ONLY mode —
-    # it computes/logs the chosen strategy each tick but does not affect the
-    # planner's mode/ttl/cap output. SD-11e flips authority to True.
-    use_strategy_authority: bool = False
+    # is False the strategy pipeline runs in TELEMETRY-ONLY mode — it
+    # computes/logs the chosen strategy each tick but does not affect the
+    # planner's mode/ttl/cap output. SD-11e flipped authority on; SD-11g
+    # (this commit) flips the default to True after F2/F9 validation.
+    # Override via `param use_strategy_authority False` to fall back to the
+    # snapshot path for A/B comparison.
+    use_strategy_authority: bool = True
     strategy_horizon_s: float = 10.0
     strategy_sample_dt_s: float = 0.5
     strategy_min_clearance_m: float = 2.5

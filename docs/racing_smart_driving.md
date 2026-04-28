@@ -310,17 +310,19 @@ abort_until_s, contact_recovery, predicted_collision_gate) preserved unchanged.
 - **Zero hard-brake ticks** (`brake>0.3`) in the entire 30 s run
 - Max speed 37.47 m/s, min after 5 s = 12.08 m/s — no scared braking
 
-**How to opt in:**
+**Default flip:** as of SD-11g (commit immediately after SD-11f),
+`use_strategy_authority` defaults to **True**. The snapshot path stays alive
+and is tested as a regression net (set `--param use_strategy_authority False`
+for A/B comparison or rollback).
+
+**How to A/B compare against the snapshot path:**
 
 ```
 scenic <scenario> --2d --model scenic.simulators.dspace.racing_model
     --simulate --count 1 --time 3000
-    --param use_strategy_authority True
-    *>run.log
+    --param use_strategy_authority False
+    *>baseline.log
 ```
-
-Default still off (`use_strategy_authority=False`) for safe rollback. Snapshot
-path stays alive and tested for regression net.
 
 **Tests:** 41 new across `test_fellow_predictor_trajectory.py` (8),
 `test_strategy_simulator.py` (11), `test_strategy_selector.py` (10),
