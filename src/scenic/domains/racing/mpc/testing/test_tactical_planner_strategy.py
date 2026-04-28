@@ -251,6 +251,56 @@ def test_flag_off_completely_bypasses_authority():
 # Strategy selection change resets hysteresis count.
 # ---------------------------------------------------------------------------
 
+def test_sd12a_strategy_preempts_pit_mode_guard():
+    """SD-12a regression: F6-style false-positive pit_mode must NOT preempt
+    strategy authority when there's a real opponent. Pre-SD-12a, the
+    pit_mode_guard fired first and returned FREE_RUN unconditionally, leading
+    to F6 collision when segment classifier false-positived pit_mode for 91
+    sustained ticks during the collision approach.
+    """
+    cfg = TacticalPlannerConfig(use_strategy_authority=True, strategy_commit_cycles=1)
+    st = TacticalPlannerState()
+    st.strategy_selected_name = "stay_optimal"
+    st.strategy_committed_name = "stay_optimal"
+    st.strategy_commit_run_count = 1  # already committed
+    sit = _sit(longitudinal_m=20.0, lateral_m=-5.0, opponent_speed_mps=0.0)
+    opt, left, right = _common_polylines()
+    # pit_mode=True (false positive) — pre-SD-12a this would force pit_mode_guard.
+    result = tactical_planner_step_v1(
+        st, sit,
+        has_opponent=True, ego_speed_mps=20.0, opponent_speed_mps=0.0,
+        sim_time_s=0.0, pit_mode=True, config=cfg,
+        optimal_waypoints=opt, side_waypoints_left=left, side_waypoints_right=right,
+        ego_s_m=0.0, opp_s_m=20.0, lap_length_m=599.0,
+        ego_active_ttl="optimal",
+        fellow_trajectory=None,
+    )
+    mode, ttl, cap, reason = result
+    # SD-12a: strategy wins; reason is strategy_*, NOT pit_mode_guard.
+    assert reason.startswith("strategy_"), f"strategy must preempt pit_mode_guard, got reason={reason}"
+    assert mode == FREE_RUN
+    assert cap is None
+
+
+def test_sd12a_pit_mode_still_fires_when_strategy_inactive():
+    """SD-12a regression net: when strategy authority is OFF (or no strategy
+    was computed), pit_mode_guard must still fire as the first early-return
+    after no_opponent (preserves pre-SD-11 behavior for non-tactical
+    scenarios)."""
+    cfg = TacticalPlannerConfig(use_strategy_authority=False)  # OFF
+    st = TacticalPlannerState()
+    sit = _sit(longitudinal_m=20.0, lateral_m=-5.0)
+    result = tactical_planner_step_v1(
+        st, sit,
+        has_opponent=True, ego_speed_mps=20.0, opponent_speed_mps=0.0,
+        sim_time_s=0.0, pit_mode=True, config=cfg,
+        # No polylines/trajectory — strategy compute block also skipped.
+    )
+    mode, ttl, cap, reason = result
+    assert reason == "pit_mode_guard"
+    assert mode == FREE_RUN
+
+
 def test_changing_selection_resets_run_count():
     cfg = TacticalPlannerConfig(use_strategy_authority=True, strategy_commit_cycles=3)
     st = TacticalPlannerState()

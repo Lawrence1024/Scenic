@@ -908,18 +908,6 @@ def tactical_planner_step_v1(
             predicted_collision_available=state.predicted_collision_available,
         )
 
-    if pit_mode:
-        state.mode = FREE_RUN
-        state.setup_candidate_side = ""
-        state.setup_candidate_count = 0
-        state.follow_pressure_count = 0
-        _clear_safety_latches()
-        _clear_setup_commit()
-        _clear_pass_intent()
-        _clear_lateral_lock()
-        _clear_commit_lifecycle()
-        return FREE_RUN, "optimal", None, "pit_mode_guard"
-
     if not has_opponent or sit is None:
         state.mode = FREE_RUN
         state.setup_candidate_side = ""
@@ -932,19 +920,27 @@ def tactical_planner_step_v1(
         _clear_commit_lifecycle()
         return FREE_RUN, "optimal", None, "no_opponent"
 
-    # SD-11e: strategy authority. When use_strategy_authority is True AND a
-    # strategy was selected this tick (SD-11d wired the pipeline), it
-    # overrides the snapshot-driven FOLLOW-vs-FREE_RUN-vs-SETUP entry chain
-    # below. Hysteresis: require strategy_commit_cycles consecutive ticks of
-    # the same selection before honoring it (prevents frame-to-frame flips
-    # from noisy fellow velocity).
+    # SD-12a: strategy authority preempts pit_mode_guard. Pre-SD-12a, pit_mode
+    # was the FIRST gate and would force FREE_RUN regardless of any obstacle —
+    # which on F-bank scenarios (none in pit lane) was a SUSTAINED false
+    # positive from the segment classifier. F6 collision: 91 ticks of false
+    # pit_mode preempted the strategy's correct pass_right pick, ego ran into
+    # the fellow despite a 4-5m clear opening.
+    #
+    # SD-11e: when use_strategy_authority is True AND a strategy was selected
+    # this tick (SD-11d wired the pipeline), it overrides snapshot decisions.
+    # Hysteresis: strategy_commit_cycles consecutive ticks of same pick
+    # required before honoring (prevents frame-to-frame flips from noisy
+    # fellow velocity).
     #
     # IMPORTANT: only fires when state.mode is FREE_RUN or FOLLOW. Mid-flight
     # SETUP/COMMIT/HOLD/ABORT execution is left to the existing lifecycle
-    # branches below — strategy authority owns the ENTRY decision; the
-    # state machine owns the EXECUTION. Two-key safety: SD-4's 1.5s
-    # path_collision_predicted runs every tick regardless and can abort
-    # mid-execution via hard_abort_hazard.
+    # branches below — strategy owns the ENTRY decision; the state machine
+    # owns the EXECUTION. Two-key safety: SD-4's 1.5s path_collision_predicted
+    # runs every tick regardless and can abort mid-execution via
+    # hard_abort_hazard. Pit speed cap is enforced separately at the MPC
+    # layer (behaviors.scenic ~line 1523), so genuine pit operation stays
+    # safe even when strategy preempts the planner's pit_mode_guard.
     if (
         bool(config.use_strategy_authority)
         and state.strategy_selected_name
@@ -960,6 +956,21 @@ def tactical_planner_step_v1(
             and state.mode in (FREE_RUN, FOLLOW)
         ):
             return _strategy_to_planner_output(state.strategy_selected_name)
+
+    # Pit-mode guard: fires only when strategy authority didn't take over
+    # (no strategy computed, or hysteresis still in build-up). Preserves the
+    # original pre-SD-12a behavior for non-tactical / non-prediction scenarios.
+    if pit_mode:
+        state.mode = FREE_RUN
+        state.setup_candidate_side = ""
+        state.setup_candidate_count = 0
+        state.follow_pressure_count = 0
+        _clear_safety_latches()
+        _clear_setup_commit()
+        _clear_pass_intent()
+        _clear_lateral_lock()
+        _clear_commit_lifecycle()
+        return FREE_RUN, "optimal", None, "pit_mode_guard"
 
     if sit.distance_m > config.relevance_dist_m:
         if state.mode in (SETUP_LEFT, SETUP_RIGHT):
