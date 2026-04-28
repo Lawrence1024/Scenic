@@ -47,6 +47,16 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 
+# Force stdout/stderr to UTF-8 so any non-ASCII chars don't crash when the
+# runner's output is redirected to a file under PowerShell on Windows
+# (default cp1252 codec can't encode Unicode like '->' arrows or em-dashes).
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
+
 # ---------------------------------------------------------------------------
 # Per-sample metric extraction
 # ---------------------------------------------------------------------------
@@ -224,7 +234,7 @@ def run_one_sample(
         "--seed", str(seed),
         "--time", str(time_steps),
     ] + list(extra_args)
-    print(f"[SampledRunner] sample {sample_idx:03d} seed={seed} → {out_log.name}")
+    print(f"[SampledRunner] sample {sample_idx:03d} seed={seed} -> {out_log.name}")
     print(f"[SampledRunner]   cmd: {' '.join(cmd)}")
     t0 = time.perf_counter()
     with out_log.open("wb") as fh:
