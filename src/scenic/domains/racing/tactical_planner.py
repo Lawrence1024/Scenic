@@ -169,9 +169,11 @@ class TacticalPlannerConfig:
     ahead_relax_free_run_enabled: bool = True
     ahead_relax_min_gap_m: float = 32.0
     ahead_relax_max_risk_01: float = 0.12
-    stationary_overlap_relief_enabled: bool = True
-    stationary_opp_speed_mps: float = 1.5
-    stationary_overlap_relief_lateral_m: float = 2.0
+    # SD-12c: removed stationary_overlap_relief_enabled / stationary_opp_speed_mps
+    # / stationary_overlap_relief_lateral_m. The speed=0 special case is gone;
+    # path_collision_predicted now uses opp_trajectory (FellowPredictor output)
+    # as source of truth, computing real geometric clearance regardless of
+    # opp_speed.
     commit_success_time_s: float = 2.0
     commit_max_speed_mps: float = 999.0  # effectively disabled; use opposing_commit_cooldown instead
     opposing_commit_cooldown_s: float = 4.0
@@ -593,41 +595,13 @@ def tactical_planner_step_v1(
     )
     pc_collision = False
     pc_diag: Dict = {}
-    # SD-10d: stationary-fellow PathPredict bypass.
-    #
-    # Root cause of F9 parking failure (full_stack_20260427_104218):
-    # PathPredict walks `opp` on the OPTIMAL polyline at `opp_s + opp_speed*t`.
-    # When opp is stationary AND laterally OFF the optimal line (e.g. F9 fellow
-    # parked on roadside at lat=-5.5m, opp_s projection onto optimal stays at
-    # a fixed point), the walker compares ego's predicted xy to that PROJECTED
-    # opp position — NOT to the fellow's actual roadside xy. If the side TTL
-    # ego walks happens to curve near the projected-opp point, PathPredict
-    # reports collision (e.g. F9 t=5.85s: ego_track=left, min_clear=1.22m,
-    # predicted_collision=1) even though the real fellow is 5.5m away.
-    #
-    # That false-positive cascaded: 292x predicted_collision=1 → 584x
-    # EMERGENCY_STABLE → ego forced to v=0 → "parked next to stationary fellow".
-    #
-    # Fix: when opp is stationary AND laterally clear of the racing line,
-    # there is no collision risk regardless of polyline geometry. Bypass
-    # PathPredict and report no collision.
-    if (
-        pc_available
-        and sit is not None
-        and float(opponent_speed_mps) <= float(config.stationary_opp_speed_mps)
-        and abs(float(sit.lateral_m)) > float(config.stationary_overlap_relief_lateral_m)
-    ):
-        pc_collision = False
-        pc_diag = {
-            "reason": "stationary_lateral_clear_bypass",
-            "min_clear_m": abs(float(sit.lateral_m)),
-            "closest_t_s": 0.0,
-            "breach_count": 0,
-        }
-        # Flag track names so [PathPredict] log still emits a useful entry.
-        state.predicted_collision_ego_track = "bypass"
-        state.predicted_collision_opp_track = "bypass"
-    elif pc_available:
+    # SD-10d (REMOVED in SD-12c): the stationary-fellow PathPredict bypass is
+    # no longer needed. With the FellowPredictor.trajectory() now threaded into
+    # path_collision_predicted via opp_trajectory (SD-12c), the polyline-projection
+    # false positive that caused the F9 parking failure is fixed at the source.
+    # Stationary fellow → CV velocity ≈ 0 → trajectory samples all at the same
+    # observed xy → real geometric clearance computed correctly.
+    if pc_available:
         # SD-7: ego_active_ttl is the source of truth for which polyline ego
         # is physically on. Pre-SD-7 we derived it from state.mode, but
         # ABORT_PASS doesn't encode the side (SD-2d keeps the commit-side TTL
@@ -664,6 +638,12 @@ def tactical_planner_step_v1(
                 opp_s_m=float(opp_s_m),
                 opp_speed_mps=float(opponent_speed_mps),
                 lap_length_m=float(lap_length_m),
+                # SD-12c: pass FellowPredictor's CV-extrapolated trajectory as
+                # the source of truth for opp xy. Removes the F9-style false
+                # positive (stationary fellow off-line wrongly projected onto
+                # optimal polyline by the fallback path) without needing the
+                # SD-10d speed=0 special case.
+                opp_trajectory=fellow_trajectory,
             )
             state.predicted_collision_ego_track = ego_track_name
             state.predicted_collision_opp_track = opp_track_name
@@ -996,19 +976,11 @@ def tactical_planner_step_v1(
     right_open_now = True if assessment_right_open is None else bool(assessment_right_open)
     opening_any = bool(left_open_now or right_open_now)
     overlap_hazard_raw = sit.overlap_state in ("partial_overlap", "side_by_side")
-    stationary_overlap_relief = bool(
-        bool(config.stationary_overlap_relief_enabled)
-        and overlap_hazard_raw
-        and relation_ahead
-        and opening_any
-        and (not bool(assessment_closing_flag))
-        and (opponent_speed_mps <= float(config.stationary_opp_speed_mps))
-        and (
-            abs(float(sit.lateral_m))
-            >= float(config.stationary_overlap_relief_lateral_m)
-        )
-    )
-    overlap_hazard_now_snapshot = bool(overlap_hazard_raw and (not stationary_overlap_relief))
+    # SD-12c: removed the stationary_overlap_relief special case. With strategy
+    # authority (SD-11e/SD-12a) and opp_trajectory threaded into PathPredict
+    # (SD-12c), stationary off-line fellows no longer trigger spurious
+    # overlap_hazard. The snapshot path still uses overlap_hazard_raw directly.
+    overlap_hazard_now_snapshot = bool(overlap_hazard_raw)
     overlap_hazard_now = _apply_predicted_collision_gate(
         overlap_hazard_now_snapshot,
         planner_state=state.mode,

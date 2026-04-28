@@ -855,11 +855,15 @@ def test_commit_abort_reverts_to_optimal_when_laterally_clear():
 
 
 def test_commit_does_not_abort_on_stationary_offaxis_overlap():
+    """SD-12c: in COMMIT_PASS_LEFT with a stationary fellow laterally clear,
+    COMMIT must hold (not abort). Pre-SD-12c this was achieved via the
+    stationary_overlap_relief snapshot hack. Post-SD-12c the same outcome
+    comes from the proper fix: opp_trajectory threading lets PathPredict
+    compute real geometric clearance, predicted_collision=False, and
+    _apply_predicted_collision_gate suppresses the snapshot hazard.
+    """
     st = TacticalPlannerState(mode=COMMIT_PASS_LEFT, last_setup_side="left")
-    cfg = TacticalPlannerConfig(
-        commit_abort_enabled=True,
-        stationary_overlap_relief_enabled=True,
-    )
+    cfg = TacticalPlannerConfig(commit_abort_enabled=True)
     s = _sit(
         ahead=True,
         overlap_state="partial_overlap",
@@ -869,6 +873,12 @@ def test_commit_does_not_abort_on_stationary_offaxis_overlap():
         lateral_m=3.6,
         closing_speed_mps=0.0,
     )
+    # SD-12c: supply polylines + stationary fellow trajectory so
+    # path_collision_predicted correctly says no collision.
+    optimal = _make_polyline(0.0, 0.0, 1.0, 0.0, 200)
+    left_wp = _make_polyline(0.0, 5.0, 1.0, 0.0, 200)
+    right_wp = _make_polyline(0.0, -5.0, 1.0, 0.0, 200)
+    fellow_traj = [(i * 0.1, 6.0, 3.6, None) for i in range(16)]
     m, ttl, cap, reason = tactical_planner_step_v1(
         st,
         s,
@@ -885,6 +895,14 @@ def test_commit_does_not_abort_on_stationary_offaxis_overlap():
         assessment_right_open=False,
         assessment_closing_flag=False,
         assessment_emergency_risk_01=0.05,
+        optimal_waypoints=optimal,
+        side_waypoints_left=left_wp,
+        side_waypoints_right=right_wp,
+        ego_s_m=0.0,
+        opp_s_m=6.0,
+        lap_length_m=199.0,
+        ego_active_ttl="left",
+        fellow_trajectory=fellow_traj,
     )
     # SD-3f: COMMIT cap = opp_speed + commit_speed_margin_mps (0 + 16 = 16 m/s).
     assert m == COMMIT_PASS_LEFT and ttl == "left"
@@ -2125,24 +2143,22 @@ def test_setup_timeout_bails_back_to_follow():
     assert reason_after == "setup_timeout_follow"
 
 
-def test_predicted_collision_bypassed_for_stationary_lateral_clear():
-    """SD-10d regression: F9 stationary roadside fellow must NOT trigger
-    predicted_collision via PathPredict's polyline-projection bug.
+def test_predicted_collision_correctly_handles_stationary_lateral_clear_via_opp_trajectory():
+    """SD-12c regression: F9 stationary roadside fellow must NOT trigger
+    predicted_collision when opp_trajectory is supplied (the FellowPredictor
+    output). Replaces the SD-10d speed=0 special-case bypass.
 
-    Pre-SD-10d: PathPredict walked opp at fixed s on optimal_track for
-    stationary opp, but if the side TTL ego walked happened to curve near
-    the projected-opp point, min_clear dropped below threshold → false
-    collision → 292x EMERGENCY_STABLE → ego parked at v=0.
-
-    Post-SD-10d: when opp_speed <= stationary_opp_speed_mps (1.5) AND
-    |sit.lateral_m| > stationary_overlap_relief_lateral_m (2.0), bypass
-    PathPredict and report no collision regardless of polyline geometry.
+    The fix is now at the source: path_collision_predicted uses opp_trajectory
+    (CV-extrapolated true xy from FellowPredictor) instead of a polyline
+    projection. Stationary fellow → CV velocity ≈ 0 → trajectory samples all
+    sit at the observed off-line xy → real geometric clearance computed
+    correctly, no false positive regardless of how the side TTL polyline
+    curves.
     """
     st = TacticalPlannerState()
     cfg = TacticalPlannerConfig()
-    # Construct a side TTL that DOES curve back into optimal at s=20m, just
-    # like F9's left TTL. Without the bypass, this would trigger predicted_collision.
     optimal = _make_polyline(0.0, 0.0, 1.0, 0.0, 200)
+    # Side TTL that curves back into optimal at s=20m (the F9 geometry).
     converging_left = []
     for i in range(200):
         x = float(i)
@@ -2153,13 +2169,18 @@ def test_predicted_collision_bypassed_for_stationary_lateral_clear():
         x = float(i)
         y = 4.0 - (4.0 / 20.0) * x if x <= 20.0 else 0.0
         converging_right.append((x, y, 0.0))
-    # Fellow STATIONARY (opp_speed=0) and laterally OFF the racing line (lat=-5.5).
+    # Fellow STATIONARY (opp_speed=0) at lat=-5.5m off the racing line.
     s = _sit(
         ahead=True, lateral_relation="right",
         overlap_state="clear_ahead", collision_risk_01=0.0,
         distance_m=12.0, longitudinal_m=10.0, lateral_m=-5.5,
         closing_speed_mps=0.0, opponent_speed_mps=0.0,
     )
+    # SD-12c: provide the fellow trajectory as a CV-extrapolated zero-motion
+    # series at the fellow's actual roadside xy. Fellow is at (10, -5.5)
+    # in the world frame (matches sit.longitudinal_m=10, sit.lateral_m=-5.5
+    # with ego at origin heading +x).
+    fellow_traj = [(i * 0.1, 10.0, -5.5, None) for i in range(16)]  # 1.5s @ 0.1dt
     m, ttl, cap, reason = tactical_planner_step_v1(
         st, s,
         has_opponent=True, ego_speed_mps=20.0, opponent_speed_mps=0.0,
@@ -2172,13 +2193,18 @@ def test_predicted_collision_bypassed_for_stationary_lateral_clear():
         side_waypoints_left=converging_left, side_waypoints_right=converging_right,
         ego_s_m=10.0, opp_s_m=10.0, lap_length_m=199.0,
         ego_active_ttl="optimal",
+        fellow_trajectory=fellow_traj,
     )
-    # The bypass means predicted_collision MUST be False for this stationary
-    # laterally-clear case, regardless of how the side TTL polylines curve.
+    # Per SD-12c the prediction layer correctly computes geometric clearance
+    # vs the fellow's true xy (5.5m away laterally) — no collision predicted.
     assert st.predicted_collision is False, (
         f"Stationary lateral-clear fellow should not trigger predicted_collision; "
-        f"got predicted_collision={st.predicted_collision}, ego_track={st.predicted_collision_ego_track}"
+        f"got predicted_collision={st.predicted_collision}, "
+        f"min_clear={st.predicted_collision_min_clear_m}, "
+        f"ego_track={st.predicted_collision_ego_track}"
     )
-    assert st.predicted_collision_ego_track == "bypass", (
-        f"Bypass marker should be set; got ego_track={st.predicted_collision_ego_track}"
+    # Min clear should be roughly the lateral offset (5.5m).
+    assert st.predicted_collision_min_clear_m >= 4.0, (
+        f"Min clearance should reflect 5.5m lateral offset, "
+        f"got min_clear={st.predicted_collision_min_clear_m}"
     )

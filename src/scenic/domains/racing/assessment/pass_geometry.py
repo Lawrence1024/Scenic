@@ -204,6 +204,7 @@ def path_collision_predicted(
     sample_dt_s: float = DEFAULT_COLLISION_SAMPLE_DT_S,
     min_clear_m: float = DEFAULT_COLLISION_MIN_CLEAR_M,
     require_consecutive_breach: int = DEFAULT_COLLISION_BREACH_DEBOUNCE,
+    opp_trajectory: Optional[Sequence[Tuple[float, float, float, Optional[float]]]] = None,
 ) -> Tuple[bool, dict]:
     """Predict whether ego and opp trajectories will come within min_clear_m.
 
@@ -212,12 +213,21 @@ def path_collision_predicted(
       - Returns ``False`` ⇔ paths stay safely apart (or insufficient data).
 
     For each sample t in [0, horizon_s], walks ego forward on ``ego_track`` from
-    ``ego_s_m + ego_speed_mps · t`` and opp forward on ``opp_track`` from
-    ``opp_s_m + opp_speed_mps · t``, both wrapped at lap_length_m. Computes the
-    Euclidean distance between projected positions. A "breach" is a sample where
-    distance < min_clear_m; collision is declared only after
-    ``require_consecutive_breach`` consecutive breaches (debounces single-sample
-    numerical noise at polyline sutures).
+    ``ego_s_m + ego_speed_mps · t``. Opponent xy at each sample comes from one of
+    two sources:
+      - ``opp_trajectory`` (PREFERRED, SD-12c): list of ``(t, x, y, s)`` from
+        FellowPredictor.trajectory(). Uses the fellow's true observed xy
+        propagated by CV velocity. Handles stationary fellow off-line correctly
+        (the F9 case) without any speed=0 special case.
+      - polyline projection (FALLBACK): ``opp_s_m + opp_speed_mps · t`` mapped
+        through ``_xy_at_arclength(opp_track, ...)``. Used when opp_trajectory
+        is None (backward compat for tests / callers that don't thread it).
+        Known limitation: misclassifies stationary off-line fellow as a
+        polyline-projected ON-line obstacle.
+
+    A "breach" is a sample where distance < min_clear_m; collision is declared
+    only after ``require_consecutive_breach`` consecutive breaches (debounces
+    single-sample numerical noise at polyline sutures).
 
     FAIL-CLOSED on missing data (shapely unavailable, empty polylines, lap=0):
     returns ``(False, {"reason": "insufficient_data"})``. This is the OPPOSITE
@@ -243,12 +253,31 @@ def path_collision_predicted(
     # between consecutive samples and only one sample registers the contact.
     hard_overlap_threshold = float(min_clear_m) * 0.5
 
+    # SD-12c: build a fast index for opp_trajectory lookup if provided.
+    _use_opp_traj = bool(opp_trajectory) and len(opp_trajectory) > 0
+
+    def _opp_xy_at(t_off: float):
+        if _use_opp_traj:
+            # Find the trajectory sample closest in time. Linear scan bounded
+            # by trajectory length (~21 for 10s @ 0.5dt — cheap).
+            best_i = 0
+            best_dt = abs(opp_trajectory[0][0] - t_off)
+            for j in range(1, len(opp_trajectory)):
+                d_t = abs(opp_trajectory[j][0] - t_off)
+                if d_t < best_dt:
+                    best_dt = d_t
+                    best_i = j
+            return (float(opp_trajectory[best_i][1]),
+                    float(opp_trajectory[best_i][2]))
+        # Fallback: polyline projection
+        o_s = float(opp_s_m) + float(opp_speed_mps) * t_off
+        return _xy_at_arclength(opp_track, o_s, lap_length_m)
+
     for i in range(n_steps + 1):
         t = i * float(sample_dt_s)
         e_s = float(ego_s_m) + float(ego_speed_mps) * t
-        o_s = float(opp_s_m) + float(opp_speed_mps) * t
         ego_xy = _xy_at_arclength(ego_track, e_s, lap_length_m)
-        opp_xy = _xy_at_arclength(opp_track, o_s, lap_length_m)
+        opp_xy = _opp_xy_at(t)
         if ego_xy is None or opp_xy is None:
             # Insufficient data on this sample (likely no shapely). Bail out
             # fail-closed for the whole call.
