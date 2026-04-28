@@ -806,42 +806,39 @@ def tactical_planner_step_v1(
             return FOLLOW, "optimal", cap_val, "strategy_follow_fellow"
         if name in ("pass_left", "pass_right"):
             side = "left" if name == "pass_left" else "right"
-            # Seed the existing pass_intent / setup_commit lifecycle so the
-            # next tick's snapshot path can carry the plan through to COMMIT
-            # without starting confidence build-up from zero.
-            state.pass_intent_side = side
-            state.pass_intent_until_s = max(
-                float(state.pass_intent_until_s),
-                float(sim_time_s) + float(config.pass_intent_hold_s),
+            # SD-13a: route DIRECTLY to COMMIT_PASS_*, skipping SETUP entirely.
+            # The strategy pipeline (SD-11b) already validated geometry over
+            # the 10s horizon — SETUP's snapshot-based gradual confidence
+            # build is unnecessary and was the cause of the F6 ping-pong
+            # (snapshot path's opponent_not_blocking wiped SETUP every other
+            # tick because strategy gate excluded SETUP modes).
+            #
+            # Going straight to COMMIT_PASS_* lets the lifecycle's COMMIT
+            # branch (Phase 3) carry the maneuver through pass_success →
+            # HOLD → FREE_RUN naturally on subsequent ticks. SD-4 emergency
+            # brake (predicted_collision) still aborts mid-flight if needed.
+            state.commit.side = side
+            state.commit.start_s = float(sim_time_s)
+            state.commit.until_s = max(
+                float(state.commit.until_s),
+                float(sim_time_s) + float(config.commit_hold_s),
             )
-            state.setup_commit_side = side
-            state.setup_commit_until_s = max(
-                float(state.setup_commit_until_s),
-                float(sim_time_s) + float(config.setup_commit_hold_s),
-            )
-            state.opening_confidence_count = max(
-                int(config.pass_intent_entry_cycles),
-                int(config.setup_commit_entry_cycles),
-            )
+            # Mark candidate count as already-met so the COMMIT branch's
+            # candidate-count gates pass on the next tick.
+            state.commit.candidate_count = int(config.commit_entry_cycles)
             state.last_setup_side = side
             state.lateral_path_lock_side = side
             state.lateral_path_lock_until_s = max(
                 float(state.lateral_path_lock_until_s),
                 float(sim_time_s) + float(config.lateral_path_lock_hold_s),
             )
-            # Mirror _setup_result without relying on its enclosing-scope
-            # `relation_ahead` (which is computed later in the planner).
-            # Strategy authority is reached only when sit is not None
-            # (no_opponent guard preempts), and the strategy pipeline
-            # confirmed an opponent — so cap = opp + setup_margin.
-            if state.mode not in (SETUP_LEFT, SETUP_RIGHT):
-                state.setup_entry_s = float(sim_time_s)
-            cap_setup = max(3.0, float(opponent_speed_mps) + float(config.setup_speed_margin_mps))
+            # COMMIT cap = opp + commit_speed_margin_mps (matches _commit_result).
+            cap_commit = max(3.0, float(opponent_speed_mps) + float(config.commit_speed_margin_mps))
             if side == "left":
-                state.mode = SETUP_LEFT
-                return SETUP_LEFT, "left", cap_setup, f"strategy_pass_{side}"
-            state.mode = SETUP_RIGHT
-            return SETUP_RIGHT, "right", cap_setup, f"strategy_pass_{side}"
+                state.mode = COMMIT_PASS_LEFT
+                return COMMIT_PASS_LEFT, "left", cap_commit, f"strategy_pass_{side}"
+            state.mode = COMMIT_PASS_RIGHT
+            return COMMIT_PASS_RIGHT, "right", cap_commit, f"strategy_pass_{side}"
         # Unknown strategy name → defensive fallback.
         state.mode = FREE_RUN
         return FREE_RUN, "optimal", None, "strategy_unknown"

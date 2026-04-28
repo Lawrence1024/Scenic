@@ -143,30 +143,34 @@ def test_hysteresis_blocks_authority_until_commit_cycles_reached():
 # Overtake: pass_left strategy seeds the SETUP/COMMIT lifecycle.
 # ---------------------------------------------------------------------------
 
-def test_pass_left_authority_returns_setup_left_and_seeds_lifecycle():
+def test_pass_authority_returns_commit_pass_and_seeds_lifecycle():
+    """SD-13a: when strategy picks pass_left/right, planner returns
+    COMMIT_PASS_* directly (no SETUP intermediate). Strategy already
+    validated geometry — SETUP's gradual-confidence build is unnecessary.
+    Lifecycle commit fields seeded so COMMIT branch carries the maneuver
+    on subsequent ticks.
+    """
     cfg = TacticalPlannerConfig(use_strategy_authority=True, strategy_commit_cycles=1)
     st = TacticalPlannerState()
     sit = _sit(longitudinal_m=15.0, lateral_m=0.0, opponent_speed_mps=8.0)
-    # Bias the strategy toward pass_left by giving fellow lateral motion to the right
-    # (so left side is clearly safer — but with parallel polylines, simulator may pick
-    # either side). Use fellow on optimal (y=0) and accept either pass_*.
     fellow_traj = _moving_fellow_traj(15.0, 0.0, 8.0, 0.0)
     (m, ttl, cap, r), _ = _step_with_capture(
         st, sit, config=cfg, ego_speed=20.0, opp_speed=8.0, fellow_traj=fellow_traj
     )
-    # Strategy may pick stay_optimal (no obstacle on optimal at horizon) OR pass_*.
-    # Whichever it picks, authority should honor it.
     if st.strategy_selected_name in ("pass_left", "pass_right"):
-        assert m in (SETUP_LEFT, SETUP_RIGHT, COMMIT_PASS_LEFT, COMMIT_PASS_RIGHT)
-        # When pass_left, seeded state should have lifecycle fields set.
-        if st.strategy_selected_name == "pass_left":
-            assert st.pass_intent_side == "left"
-            assert st.setup_commit_side == "left"
-            assert st.lateral_path_lock_side == "left"
-            assert st.opening_confidence_count >= int(cfg.pass_intent_entry_cycles)
+        assert m in (COMMIT_PASS_LEFT, COMMIT_PASS_RIGHT), (
+            f"SD-13a: pass_* must route to COMMIT_PASS_*, got {m}"
+        )
+        side = "left" if st.strategy_selected_name == "pass_left" else "right"
+        assert ttl == side
+        assert st.commit.side == side
+        assert st.lateral_path_lock_side == side
+        # commit_speed_margin_mps default is 16, so cap = opp(8) + 16 = 24
+        expected_cap = max(3.0, 8.0 + cfg.commit_speed_margin_mps)
+        assert abs(cap - expected_cap) < 0.01
         assert r.startswith("strategy_pass_")
     else:
-        # stay_optimal also acceptable for this geometry
+        # stay_optimal acceptable for this geometry too
         assert m == FREE_RUN
         assert r == "strategy_stay_optimal"
 
