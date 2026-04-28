@@ -1339,7 +1339,9 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     _p11_abort_success = bool(getattr(_commit_st, "abort_success", False)) if _commit_st is not None else False
                     _p11_post_state = str(getattr(_commit_st, "post_event_state", "none") or "none") if _commit_st is not None else "none"
                     _p11_commit_cand = int(getattr(_commit_st, "candidate_count", 0)) if _commit_st is not None else 0
-                    _p11_protected_follow = bool(getattr(self._tactical_tp_state, "protected_follow_active", False))
+                    # SD-14: protected_follow_active field deleted in SD-13c.
+                    # The log slot stays at 0 for backward-compat with downstream
+                    # log parsers; can be removed once those are updated.
                     _seg_ctx = str(getattr(_sit3, "segment_context", "none") or "none") if _sit3 is not None else "none"
                     _seg_modifier = str(getattr(self._tactical_tp_state, "segment_modifier", "normal") or "normal")
                     print(
@@ -1348,7 +1350,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         f"commit_trigger={_p11_commit_trigger} abort_trigger={_p11_abort_trigger} "
                         f"pass_success={1 if _p11_pass_success else 0} abort_success={1 if _p11_abort_success else 0} "
                         f"post_event_state={_p11_post_state} "
-                        f"commit_cand_count={_p11_commit_cand} protected_follow={1 if _p11_protected_follow else 0} "
+                        f"commit_cand_count={_p11_commit_cand} protected_follow=0 "
                         f"seg_ctx={_seg_ctx} seg_modifier={_seg_modifier}"
                     )
                 if getattr(self, '_full_control_ticks', 0) % 50 == 0:

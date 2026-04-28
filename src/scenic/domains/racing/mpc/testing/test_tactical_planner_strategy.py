@@ -18,8 +18,6 @@ from scenic.domains.racing.tactical_planner import (
     COMMIT_PASS_RIGHT,
     FOLLOW,
     FREE_RUN,
-    SETUP_LEFT,
-    SETUP_RIGHT,
     TacticalPlannerConfig,
     TacticalPlannerState,
     tactical_planner_step_v1,

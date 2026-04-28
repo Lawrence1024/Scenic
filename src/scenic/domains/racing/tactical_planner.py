@@ -515,37 +515,18 @@ def tactical_planner_step_v1(
         cap = max(3.0, cap)
         return FOLLOW, "optimal", cap, reason
 
-    def _setup_result(side: str, reason: str) -> Tuple[str, str, Optional[float], str]:
-        state.last_setup_side = side
-        # SD-2f: cap during SETUP must allow closing speed >= pass_min_relative_speed_mps,
-        # otherwise pass_safe stays False forever and COMMIT never fires (observed
-        # F2_tactical first attempt: SETUP cap=opp+2.5 → closing=2.5 < pass_min=3.0 →
-        # pass_safe=False → 4 sec SETUP → contact). Use setup_speed_margin_mps which
-        # defaults to 4.5 (1.5 m/s of headroom over the 3.0 minimum).
-        cap: Optional[float] = None
-        if relation_ahead and sit is not None:
-            cap = max(3.0, float(opponent_speed_mps) + float(config.setup_speed_margin_mps))
-        # SD-2f: stamp SETUP entry time for the timeout bail-out below.
-        if state.mode not in (SETUP_LEFT, SETUP_RIGHT):
-            state.setup_entry_s = float(sim_time_s)
-        if side == "left":
-            state.mode = SETUP_LEFT
-            return SETUP_LEFT, "left", cap, reason
-        state.mode = SETUP_RIGHT
-        return SETUP_RIGHT, "right", cap, reason
+    # SD-14: removed _setup_result helper. Strategy authority routes pass_*
+    # directly to COMMIT_PASS_* (SD-13a), so SETUP_* states are no longer
+    # entered by any code path. The SETUP_LEFT/SETUP_RIGHT module constants
+    # remain only for _canonical_mode's aliasing of legacy state.mode values
+    # (set by older code paths now deleted; constants kept for the alias map).
+    # SD-14: removed _clear_setup_commit / _clear_pass_intent helpers and
+    # their 4 caller pairs. They were no-ops after SD-13c (the state fields
+    # they cleared were deleted). All callers have been removed.
 
     def _clear_safety_latches() -> None:
         # SD-13c: protected_follow_* fields removed; only recovery_hold survives.
         state.recovery_hold_until_s = -1.0e9
-
-    def _clear_setup_commit() -> None:
-        # SD-13c: setup_commit_*/opening_confidence_count fields removed.
-        # Helper kept as a no-op for callers that haven't been updated yet.
-        pass
-
-    def _clear_pass_intent() -> None:
-        # SD-13c: pass_intent_* fields removed. No-op.
-        pass
 
     def _clear_lateral_lock() -> None:
         state.lateral_path_lock_side = ""
@@ -1096,8 +1077,6 @@ def tactical_planner_step_v1(
             )
             state.commit.abort_trigger = "commit_invalidated_hazard"
             state.commit.post_event_state = ABORT_PASS
-            _clear_setup_commit()
-            _clear_pass_intent()
             _clear_lateral_lock()
             return _abort_result("abort_commit_invalidated")
         # Classic success: ego has physically overtaken the fellow.
@@ -1126,8 +1105,6 @@ def tactical_planner_step_v1(
                 HOLD_PASS_LEFT if commit_side == "left" else HOLD_PASS_RIGHT
             )
             # Don't clear commit lifecycle yet — HOLD reuses commit.last_side.
-            _clear_setup_commit()
-            _clear_pass_intent()
             _clear_lateral_lock()
             hold_cap = max(
                 float(state.commit.hold_speed_at_entry_mps),
@@ -1149,8 +1126,6 @@ def tactical_planner_step_v1(
         ):
             state.commit.pass_success = True
             state.commit.post_event_state = FREE_RUN
-            _clear_setup_commit()
-            _clear_pass_intent()
             _clear_lateral_lock()
             _clear_commit_lifecycle()
             state.mode = FREE_RUN
@@ -1187,8 +1162,6 @@ def tactical_planner_step_v1(
             )
             state.commit.hold_entry_s = -1.0e9
             state.commit.hold_pass_side = ""
-            _clear_setup_commit()
-            _clear_pass_intent()
             _clear_lateral_lock()
             return _abort_result("abort_hold_hazard")
         # Compute the merge-back exit gate.
@@ -1265,8 +1238,6 @@ def tactical_planner_step_v1(
                 state.mode = (
                     HOLD_PASS_LEFT if commit_side_for_hold == "left" else HOLD_PASS_RIGHT
                 )
-                _clear_setup_commit()
-                _clear_pass_intent()
                 _clear_lateral_lock()
                 hold_cap = max(
                     float(state.commit.hold_speed_at_entry_mps),
@@ -1275,8 +1246,6 @@ def tactical_planner_step_v1(
                 return state.mode, commit_side_for_hold, hold_cap, "hold_pass_entry_from_abort"
             # Already laterally clear OR no commit side recorded → original behavior.
             state.commit.post_event_state = FREE_RUN
-            _clear_setup_commit()
-            _clear_pass_intent()
             _clear_lateral_lock()
             _clear_commit_lifecycle()
             state.mode = FREE_RUN
@@ -1292,8 +1261,6 @@ def tactical_planner_step_v1(
         if (not relation_ahead) and (not _is_release_hazard()) and (not in_recovery_hold):
             state.commit.abort_success = True
             state.commit.post_event_state = FREE_RUN
-            _clear_setup_commit()
-            _clear_pass_intent()
             _clear_lateral_lock()
             _clear_commit_lifecycle()
             state.mode = FREE_RUN
