@@ -318,3 +318,67 @@ structured record shape no longer breaks falsification.
 debugger; numeric columns should match within rounding for fields
 that have a record source. Per-sample log files should still be
 human-readable (the prints were not removed).
+
+**Aside found during verification.** The regex path was double-counting
+`commit_pass_*_count` and `commit_abort_pass_count` because
+`decision_reason=...` substrings appear in BOTH the `[Commit]` and
+`[Planner]` log lines. The records path (which only walks the `Commit`
+record stream) gave the canonical count — half the regex value. SD-20
+incidentally fixed this. Cross-cycle comparison: only compare SD-20+
+runs to other SD-20+ runs on those two columns.
+
+### SD-21 — Drop regex pipeline entirely; rename module to `metrics.py`
+
+**What was wrong.** SD-20 left a regex fallback alive in `parse_sample`
+for the case where `records=None`. The fallback existed only to support
+the subprocess-style `sampled_runner.py` (which can't access the
+simulation object). With `verifai_runner.py` now superseding the
+subprocess flow via `--sampler halton/random` for uniform-coverage runs
+and `--sampler ce/bo` for active falsification, the regex code was
+unreachable in practice and just legacy weight.
+
+**What landed.**
+
+- Added `_record_event` calls at the four remaining always-regex sites
+  so every `SampleMetrics` field is records-driven:
+  - `placement.py`: `'EgoStart'` (one entry per run, scene setup) and
+    `'FellowPlacement'` (gap_m, lat_m, s, t).
+  - `behaviors.scenic`: `'Guard'` alongside the existing
+    `format_stability_guard_log_line` print (so
+    `guard_emergency_stable_count` no longer needs substring counting).
+  - `lap_time_s` is left at `None` in `SampleMetrics` — no behavior
+    emits a `LapTime` record today and the regex was already non-matching
+    on the verifai_runner stdout. The field is preserved on the dataclass
+    so `summary.csv`'s schema is unchanged; future scenarios can populate
+    it via a record event in the lap-completion code.
+- `parse_sample` is now records-only. `_decode_log`, every `_RE_*`
+  constant, and the `records is None` dispatch branch were deleted.
+- `sampled_runner.py` was renamed to `metrics.py` (git mv preserves
+  history). Its subprocess CLI (`main`, `run_one_sample`, the argparse
+  block) was deleted along with `import re / argparse / subprocess /
+  shutil / sys`. What remains: `SampleMetrics`, `_records_extract`,
+  `parse_sample`, `write_summary_csv`, `write_summary_text`. About
+  half the original line count.
+- `verifai_runner.py` and `monitors.py` import paths updated. The
+  `records=None` defensive path in verifai_runner now treats a missing
+  `simulation.result.records` as a failed sample (logs a progress line,
+  trips the consecutive-failures circuit breaker) rather than silently
+  falling back to regex on the captured stdout.
+- Docs updated: `docs/falsification_pipeline.md` lost its "Two parser
+  bugs" history section, the "What the summary columns actually mean"
+  table now points at record tags instead of log lines, and the file
+  map reflects the rename. Example .scenic docstrings (S1_falsify,
+  S1_fellow_left_ahead) updated to point at `verifai_runner.py
+  --sampler halton`.
+
+**Why this matters.** The contract between the simulator and the
+falsifier is now `simulation.records` — a Python data structure — and
+nothing else. Adding a new metric: write a `_record_event(tag, payload)`
+call alongside the existing print, and add an extractor branch in
+`metrics._records_extract`. There is no second contract to keep in sync.
+
+**Verification notes.** A 5-sample CE smoke after SD-21 should produce
+the same numeric distribution as the SD-20 smoke (`summary.csv` columns
+are unchanged in shape; only the implementation moved). Per-sample log
+files retain the full `[Commit]`/`[Strategy]`/`[BoundsCheck]`/etc.
+prints because those stayed in place — only the parser was deleted.

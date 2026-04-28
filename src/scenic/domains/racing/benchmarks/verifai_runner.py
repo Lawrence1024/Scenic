@@ -1,9 +1,7 @@
-"""SD-16: in-process active-falsification driver for the racing domain.
+"""SD-16/SD-20/SD-21: in-process falsification driver for the racing domain.
 
-Sits alongside `sampled_runner.py`. Where sampled_runner spawns a fresh
-Scenic subprocess per sample (uniform/halton sampling, bulletproof per-sample
-isolation, ~38 s cosim cold-start tax per iteration), this driver compiles
-the scenario ONCE and loops in-process so the cosim bridge stays warm:
+Compiles the scenario ONCE and loops in-process so the cosim bridge stays
+warm. Each iteration:
 
     seed = base_seed
     scenario = scenarioFromFile(...)
@@ -11,16 +9,19 @@ the scenario ONCE and loops in-process so the cosim bridge stays warm:
     feedback = None
     for i in range(count):
         scene = scenario.generate(feedback=feedback)   # VerifAI sampler reads feedback
-        run simulator.simulate(scene); capture stdout
-        metrics = parse_sample(captured_log)
+        sim = simulator.simulate(scene); capture stdout to logs/
+        metrics = parse_sample(records=sim.result.records)
         feedback = monitor(metrics)                    # robustness scalar
         if feedback <= violation_threshold: append to error_table
 
-Active samplers (cross-entropy, Bayesian opt) update their internal model
-on each feedback and bias the next sample toward parameter regions where
-the previous sample came closest to violation. After ~50-200 iterations
-the campaign concentrates on the corners of the input space that break
-the planner -- targeted edge-case discovery rather than uniform coverage.
+`--sampler {halton, random}` covers the uniform-sampling use case; CE / BO
+add active falsification feedback. The previous subprocess-style runner
+(``sampled_runner.py``) was deleted in SD-21 once verifai_runner with
+``--sampler halton`` superseded it.
+
+Metric extraction is purely structural — every SampleMetrics field is
+derived from ``simulation.result.records``. Per-sample stdout is still
+captured to ``logs/sample_NNN.log`` for human debugging only.
 
 USAGE:
     # 1) Smoke -- Halton sampler is deterministic; proves wiring.
@@ -78,7 +79,7 @@ import scenic
 from scenic.core.distributions import RejectionException
 
 from scenic.domains.racing.benchmarks import monitors
-from scenic.domains.racing.benchmarks.sampled_runner import (
+from scenic.domains.racing.benchmarks.metrics import (
     SampleMetrics,
     parse_sample,
     write_summary_csv,
@@ -484,22 +485,26 @@ def main() -> int:
             ok, simulation = _run_one_simulation(simulator, scene, args.time_steps, sample_idx)
         elapsed = time.perf_counter() - t_sim0
 
-        # Persist captured stdout so parse_sample reads from the same source
-        # of truth as sampled_runner.py would.
+        # Persist captured stdout for human debugging only — metric
+        # extraction reads `simulation.result.records`, never the log file.
         log_path.write_text(buf.getvalue(), encoding="utf-8")
 
-        # SD-20b: prefer the structured `simulation.result.records` channel
-        # over regex parsing. The records dict is populated by `_record_event`
-        # calls in behaviors.scenic and the direct append in simulator.py
-        # alongside the existing prints (so the human-readable log still works
-        # for debugging). Falls back to log regex when the simulation object
-        # isn't available (early failure, no result attached).
+        # SD-20/SD-21: structured records are the only metric source.
+        # ``simulation.result.records`` is populated by ``_record_event`` in
+        # behaviors.scenic and direct ``self.records[...].append`` in the
+        # dSPACE simulator + placement modules.
         records = None
-        try:
-            if simulation is not None and getattr(simulation, "result", None) is not None:
-                records = simulation.result.records
-        except Exception:
-            records = None
+        if simulation is not None and getattr(simulation, "result", None) is not None:
+            records = simulation.result.records
+        if records is None:
+            # Sim never produced a result (early IPC failure, rejection during
+            # setup). Treat as a failed sample so the circuit breaker can fire.
+            _progress(
+                f"[VerifaiRunner]   no records available (simulation produced no "
+                f"result); marking sample as failed."
+            )
+            ok = False
+            records = {}
         rc = 0 if ok else 1
         metrics = parse_sample(sample_idx, seed, log_path, rc, records=records)
         samples.append(metrics)

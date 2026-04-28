@@ -7,10 +7,10 @@ in [20, 60] m ahead and a fixed +5 m left of ego (so fellow rides the
 left racing line).
 
 This is the first scenario in the sampled bank (the falsifiable pipeline).
-Run via the dedicated runner:
-    python src/scenic/domains/racing/benchmarks/sampled_runner.py \\
+Run via the in-process driver in halton mode for uniform coverage:
+    python src/scenic/domains/racing/benchmarks/verifai_runner.py \\
         examples/racing/sampled/S1_fellow_left_ahead.scenic \\
-        --count 10 --seed 42 --time 3000
+        --sampler halton --monitor min --count 10 --seed 42 --time 3000
 
 OR a single sample directly:
     scenic examples/racing/sampled/S1_fellow_left_ahead.scenic --2d \\

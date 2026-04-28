@@ -426,6 +426,20 @@ def place_fellow(sim, obj):
                     route_pref = ego_route
                     use_racing_offset = True
                     print(f"[Placement] {vehicle_name}: racing (s,t) from ego + {st_offset} -> s={s_val:.2f}, t={t_val:.2f} (same route as ego)")
+                    # SD-21a: structured record alongside the print so monitors
+                    # don't have to regex-parse the [Placement] line.
+                    try:
+                        _gap = st_offset[0] if isinstance(st_offset, (tuple, list)) and len(st_offset) >= 1 else None
+                        _lat = st_offset[1] if isinstance(st_offset, (tuple, list)) and len(st_offset) >= 2 else None
+                        sim.records['FellowPlacement'].append((sim.currentTime, {
+                            'name': str(vehicle_name),
+                            'gap_m': (float(_gap) if _gap is not None else None),
+                            'lat_m': (float(_lat) if _lat is not None else None),
+                            's': float(s_val),
+                            't': float(t_val),
+                        }))
+                    except Exception:
+                        pass
                 else:
                     print(f"[Placement] {vehicle_name}: _racing_st_offset={st_offset} ignored (ego _route_s_t or _route not set yet; place ego first)")
             else:
@@ -494,6 +508,15 @@ def place_fellow(sim, obj):
                         if diff > 20:
                             msg += f" | MISMATCH {diff:.0f}deg -> 'ahead of ego' will be off road (ego heading aligned in simulator)"
                     print(msg)
+                    # SD-21a: structured record alongside the [Ego debug] print.
+                    try:
+                        sim.records['EgoStart'].append((sim.currentTime, {
+                            'x': float(ex),
+                            'y': float(ey),
+                            'heading_deg': float(yaw_deg),
+                        }))
+                    except Exception:
+                        pass
             except Exception as e:
                 print(f"[Ego debug] Could not log ego: {e}")
             sim._placement_ego_debug_logged = True

@@ -2349,6 +2349,15 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 self._guard_ttl_switch_blocked = bool(_p10_guard.ttl_switch_blocked)
                 self._guard_emergency_stable_mode = bool(_p10_guard.emergency_stable_mode)
                 print(format_stability_guard_log_line(_sim_time_s, _p10_guard))
+                _record_event('Guard', {
+                    't': float(_sim_time_s),
+                    'guard_active': bool(_p10_guard.guard_active),
+                    'guard_reason': str(_p10_guard.guard_reason or "none"),
+                    'steer_limited': bool(_p10_guard.steer_limited),
+                    'brake_limited': bool(_p10_guard.brake_limited),
+                    'ttl_switch_blocked': bool(_p10_guard.ttl_switch_blocked),
+                    'emergency_stable_mode': bool(_p10_guard.emergency_stable_mode),
+                })
             # RC-1: consolidated controller-trace per tick. Read-only telemetry; safe to remove.
             # Captures POST-stability-guard (truly final) commands plus the upstream values
             # the executor used. Some fields are populated by code paths that don't always

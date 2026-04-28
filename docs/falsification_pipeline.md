@@ -1,9 +1,10 @@
 # Falsification pipeline for the racing domain
 
-**Status (SD-16):** Phase 1 (region-based placement), Phase 2 (sampled
-test bank + subprocess runner), and Phase 3 (VerifAI active falsification)
-are landed. The full pipeline runs end-to-end against the cosim bridge
-without external orchestration.
+**Status (SD-16/SD-20/SD-21):** the full pipeline runs end-to-end against
+the cosim bridge without external orchestration. SD-20 routed every eval
+signal through Scenic's ``simulation.records`` channel; SD-21 deleted the
+log-parsing path entirely so monitors are no longer coupled to stdout
+format. The single in-process driver is ``verifai_runner.py``.
 
 ## What "falsifiable" means here
 
@@ -57,88 +58,70 @@ samples on the left racing line, ego with `ttl_optimal_xodr.csv` samples
 on the optimal racing line. Explicit `at (x,y)` or `on mainTrack` still
 override the default the same as before.
 
-### Batch runner
-`src/scenic/domains/racing/benchmarks/sampled_runner.py`:
+### Sampled-bank runs are just a verifai_runner mode
+
+The earlier subprocess-style ``sampled_runner.py`` was deleted in SD-21.
+For uniform-style coverage runs (no active falsifier), point
+``verifai_runner.py`` at a sampled scenario with ``--sampler halton`` or
+``--sampler random``:
 
 ```bash
-python src/scenic/domains/racing/benchmarks/sampled_runner.py \
+python src/scenic/domains/racing/benchmarks/verifai_runner.py \
     examples/racing/sampled/S1_fellow_left_ahead.scenic \
-    --count 10 --seed 42 --time 3000
+    --sampler halton --monitor min --count 10 --seed 42 --time 3000
 ```
 
-Output mirrors `full_stack_<timestamp>/`:
+Output layout:
 
 ```
-benchmarks/results/sampled_<TIMESTAMP>/
+benchmarks/results/verifai_<TIMESTAMP>/
     S1_fellow_left_ahead.scenic       # snapshot of the file used
-    logs/sample_001.log
+    logs/sample_001.log               # captured stdout (debug only; not parsed)
     logs/sample_002.log
     ...
     summary.csv                        # one row per sample
     summary.txt                        # human-readable digest
+    error_table.csv                    # samples with rho <= violation_threshold
 ```
 
-Sample i uses `seed = base_seed + i`, so any single failing sample can
-be re-run alone with the same seed.
+Sample i uses ``seed = base_seed + i`` for log/csv labelling, so any single
+failing sample can be re-run alone (the actual Scenic RNG state is
+seeded once at compile time; see "Compounding RNG state" below).
 
 ### Determinism
-Holding `--seed` fixed makes the entire sampled bank reproducible run-to-run.
-Vary the seed (or the per-sample offset rule) to widen coverage.
+Holding ``--seed`` fixed makes the entire campaign reproducible
+run-to-run. Vary the seed (or the per-sample offset rule) to widen
+coverage.
 
-### What the summary columns actually mean
+### Where each `summary.csv` column comes from
 
-`summary.csv`/`summary.txt` are parsed straight from the per-sample logs.
-The signal-to-column mapping is non-obvious enough to be worth pinning
-down -- earlier versions of the runner had two parser bugs (now fixed) that
-made the summaries silently wrong:
+Every column is derived structurally from ``simulation.result.records`` —
+no log parsing. The records are populated by ``_record_event(tag, payload)``
+calls in ``behaviors.scenic`` (alongside the existing prints) and by
+direct ``self.records[...].append(...)`` in the dSPACE simulator and
+placement modules.
 
-| Column | Source line in log | Notes |
+| Column | Record tag | Notes |
 |---|---|---|
-| `collision` | `[EvalEvent] type=eval_contact` | TRUE OBB-overlap event from the eval pipeline. Trustworthy. (Falls back to `bbox_gap_m<0` only if no eval_contact lines are present.) |
-| `ego_start_xy` | first `[Ego debug] xy=(x, y) -> ...` | Resolved ego (x, y) at simulation start. |
-| `opp_start_xy` | `[Placement] Fellow_0: ... -> s=<s>, t=<t>` | Race-frame coords; the ego-relative `_racing_st_offset` is reproducible across runs even if the absolute (x, y) varies. |
-| `sampled_gap_m` | first paren in same `[Placement] Fellow_0: ... + (gap, lat) -> ...` | The float Scenic sampled out of `Range(20, 60)` for this run. |
-| `commit_pass_left_count` / `_right_count` | `decision_reason=commit_pass_*_hold` and `=strategy_pass_*` | TICK count, not maneuver count -- a single 2 s overtake yields ~40 ticks. Use this as "did the planner attempt this side?" not "how many overtakes." |
-| `commit_pass_success_count` | `pass_success=1` field on `[Commit]` lines | DISCRETE count -- the lifecycle clears the flag after one tick, so this is the number of completed overtakes. |
-| `commit_abort_pass_count` | `decision_reason=abort_*` (pass / hold / commit_invalidated / recover_follow) | TICK count again. |
-| `selected_*` | `[Strategy] t=... selected=<name>` | TICK count of the strategy selector's choice (the policy-side, before lifecycle execution). |
+| `collision` | `EvalEvent` (type=eval_contact) | TRUE OBB-overlap event. Falls back to `bbox_gap_m<0` from `EvalGT` if no eval_contact entry. |
+| `bbox_gap_m_min` | `EvalGT` | Continuous min over OBB clearances. |
+| `track_clearance_m` | `BoundsCheck` | Signed distance to nearest geofence; +X = inside, -X = past edge. |
+| `off_track` | `BoundsCheck` (any in_track=False) | Boolean. |
+| `ego_start_xy` | `EgoStart` (one entry, scene setup) | Resolved ego (x, y) at sim start. |
+| `opp_start_xy` | `FellowPlacement` | Race-frame `(s, t)`; ego-anchored `_racing_st_offset` is reproducible. |
+| `sampled_gap_m` | `FellowPlacement` (gap_m) | The float Scenic sampled out of `Range(20, 60)` for this run. |
+| `commit_pass_left_count` / `_right_count` | `Commit` (decision_reason=commit_pass_*_hold ∪ strategy_pass_*) | TICK count, not maneuver count — a single 2 s overtake yields ~40 ticks. Use as "did the planner attempt this side?" |
+| `commit_pass_success_count` | `Commit` (pass_success=True) | DISCRETE count — the lifecycle clears the flag after one tick. |
+| `commit_abort_pass_count` | `Commit` (decision_reason=abort_*) | TICK count again. |
+| `guard_emergency_stable_count` | `Guard` (emergency_stable_mode=True) | TICK count of emergency-stable mode. |
+| `selected_*` | `Strategy` (selected=<name>) | TICK count of the strategy selector's choice. |
+| `tick_count` / `tick_ms_p50` | `TickTime` | Behaviour-tick wallclock perf. |
 
 **Interpretation rule of thumb:** if `commit_pass_left_count` is high but
 `commit_pass_success_count` is 0, the planner kept TRYING to overtake on
-the left and never succeeded -- usually because `commit_abort_pass_count`
-is also high (the SD-4 emergency-brake gate or the lifecycle's
-`commit_invalidated_hazard` keeps killing the maneuver). That's a
-falsification signal: the layout is reachable by the planner's intent but
-not survivable by its execution.
-
-### Two parser bugs that previously hid real failures
-
-Both fixed in 2026-04-27; if you see results from before that date, treat
-them as suspect:
-
-1. **Encoding mismatch.** The runner captures the child subprocess's stdout
-   straight off the pipe (UTF-8 / ASCII). The parser was decoding those
-   bytes as UTF-16-LE -- which Python's `errors="replace"` accepts silently,
-   yielding garbage with `?` placeholders that no regex matches. Result:
-   every numeric metric came back zero and the summary printed `gap=?
-   lap=? p50_ms=?` for every sample. Fix: BOM-sniff first, then default
-   to UTF-8 (`_decode_log` in `sampled_runner.py`).
-
-2. **Signal regexes wrong for the SD-13 planner.** The original parser was
-   written against pre-SD-13 log conventions:
-   - It looked for `decision_reason=pass_success_free_run`, but the SD-13
-     planner emits `pass_success=1` as a field on `[Commit]` lines instead.
-   - It looked for `[Placement] ... resolved ... (x, y)` but the actual
-     line is `[Placement] Fellow_0: racing (s,t) from ego + (gap, lat) -> s=..., t=...`.
-   - It looked for `[Ego] set position xy=(...)` but the actual line is
-     `[Ego debug] xy=(...) -> ...`.
-   Result: collision and overtake counts were both zero in the summary
-   even when they had clearly happened in the log. Fix: regexes updated
-   to match the SD-13 log format.
-
-If you re-derive metrics from logs by hand (or write a new analysis
-script), key off the source lines in the table above, not the legacy
-patterns.
+the left and never succeeded — usually because `commit_abort_pass_count`
+is also high. That's a falsification signal: the layout is reachable by
+the planner's intent but not survivable by its execution.
 
 ---
 
@@ -196,28 +179,29 @@ cat src/scenic/domains/racing/benchmarks/results/verifai_*/error_table.csv
 ```
 
 Each row in `error_table.csv` records the VerifAI-sampled parameter
-values (e.g. `{"param0": 28.4}`) plus the parsed `SampleMetrics`. To
+values (e.g. `{"param0": 28.4}`) plus the resulting `SampleMetrics`. To
 reproduce a single failure: copy the parameter value into the .scenic
-file (or run `sampled_runner.py` with the failing iteration's seed).
+file and re-run with the same seed.
 
 ### Output layout
 
 ```
 src/scenic/domains/racing/benchmarks/results/verifai_<TIMESTAMP>/
     S1_falsify.scenic           # snapshot of the file used
-    logs/sample_001.log         # captured stdout per iteration
+    logs/sample_001.log         # captured stdout per iteration (debug only)
     logs/sample_002.log
     ...
-    summary.csv                 # one row per sample (same schema as sampled_runner)
+    summary.csv                 # one row per sample
     summary.txt                 # human-readable digest
     error_table.csv             # violations only, ranked by robustness ascending
 ```
 
 ### Monitor reference
 
-All monitors read the parsed `SampleMetrics` from `sampled_runner.py`'s
-`parse_sample`. Convention: **lower value = closer to violation,
-negative = violated.** The runner picks one via `--monitor NAME`.
+All monitors read `SampleMetrics`, which is built from
+`simulation.result.records` by `metrics.parse_sample`. Convention:
+**lower value = closer to violation, negative = violated.** The runner
+picks one via `--monitor NAME`.
 
 | Name | Signal | Robustness gradient |
 |---|---|---|
@@ -253,14 +237,14 @@ that active samplers need to converge.
 - **Bridge warmth:** the in-process driver compiles the scenario once
   and keeps the IPC client connection alive across ALL samples. The
   first sample pays the ~10-38 s cosim cold-start tax; subsequent
-  samples pay only the simulation time. The legacy
-  `sampled_runner.py` (subprocess per sample) pays cold-start every
-  time -- use it only when you specifically want per-sample isolation.
-- **Two runners, one parser:** both `sampled_runner.py` and
-  `verifai_runner.py` produce `summary.csv` rows via the same
-  `parse_sample` function. The schemas are identical (verifai_runner
-  adds `error_table.csv` on the side). Analysis tooling that reads
-  `summary.csv` works on both.
+  samples pay only the simulation time.
+- **Records, not logs:** monitors read `SampleMetrics` built from
+  `simulation.result.records`. The per-sample stdout is captured to
+  `logs/sample_NNN.log` for human debugging only — nothing in the
+  metric pipeline parses it. Adding a new metric means adding a
+  `_record_event(tag, payload)` call alongside the existing print and
+  a corresponding extractor in
+  `src/scenic/domains/racing/benchmarks/metrics.py::_records_extract`.
 - **Compounding RNG state:** non-VerifAI distributions in the .scenic
   file (e.g. `Uniform` over the ego TTL position) advance per Scenic's
   global RNG, which is seeded once at compile time. Iteration N's ego
@@ -304,9 +288,9 @@ examples/racing/falsifiable/
     S1_falsify.scenic                     # Phase 3 active-falsification target (VerifaiRange)
 
 src/scenic/domains/racing/benchmarks/
-    sampled_runner.py                     # Phase 2 subprocess runner (uniform/halton)
-    verifai_runner.py                     # Phase 3 in-process active-falsification driver
-    monitors.py                           # Phase 3 robustness functions
+    verifai_runner.py                     # In-process driver (sampler ∈ {halton, random, ce, bo})
+    metrics.py                            # SampleMetrics + records-driven parse_sample + summary writers
+    monitors.py                           # Robustness functions consumed by verifai_runner
 
 docs/
     falsification_pipeline.md             # This file

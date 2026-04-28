@@ -7,13 +7,13 @@ VerifAI's sampler space (`scenic.core.external_params.VerifaiSampler`),
 so an outer falsification loop can drive the gap toward layouts that
 break the ego planner.
 
-The legacy `Range`-based S1 stays untouched in `examples/racing/sampled/`
-for the subprocess-style `sampled_runner.py`. This file targets the
-in-process VerifAI driver:
+The plain `Range`-based S1 stays untouched in `examples/racing/sampled/`;
+it can also be run through `verifai_runner.py` with `--sampler halton`
+for uniform-coverage style runs. This file targets active falsification:
 
     python src/scenic/domains/racing/benchmarks/verifai_runner.py \\
         examples/racing/falsifiable/S1_falsify.scenic \\
-        --sampler ce --monitor min --count 50 --seed 42 --time 3000
+        --sampler ce --monitor safety --count 50 --seed 42 --time 3000
 
 The runner overrides `verifaiSamplerType` via its `--sampler` flag, so
 this file does NOT pin a sampler -- it is sampler-agnostic and works with

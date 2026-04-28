@@ -1,6 +1,6 @@
-"""SD-16: monitor (robustness) functions for the VerifAI active falsifier.
+"""SD-16/SD-20/SD-21: monitor (robustness) functions for the VerifAI active falsifier.
 
-Each monitor takes a parsed `SampleMetrics` from the previous simulation and
+Each monitor takes a `SampleMetrics` from the previous simulation and
 returns a robustness scalar (or tuple, for multi-objective). The convention,
 matching VerifAI's cross-entropy and Bayesian-optimization samplers, is:
 
@@ -13,17 +13,16 @@ threads its return value back into the next `scenario.generate(feedback=...)`
 call. Active samplers update their internal model on each feedback and bias
 subsequent samples toward parameter regions that minimize the score.
 
-The monitors deliberately operate on the parsed SampleMetrics dataclass --
-NOT on raw simulator state -- so the source of truth for every robustness
-signal is the same `parse_sample` regex pipeline that `sampled_runner.py`
-uses for its `summary.csv`. One parser, two consumers; no metric drift.
+Monitors operate on `SampleMetrics`, which since SD-20 is built purely from
+`simulation.result.records` (no log parsing). The contract between the
+simulator and the monitor is the records dict, not the stdout format.
 """
 
 from __future__ import annotations
 
 from typing import Callable, Tuple, Union
 
-from scenic.domains.racing.benchmarks.sampled_runner import SampleMetrics
+from scenic.domains.racing.benchmarks.metrics import SampleMetrics
 
 Robustness = Union[float, Tuple[float, ...]]
 MonitorFn = Callable[[SampleMetrics], Robustness]
