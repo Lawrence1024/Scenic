@@ -225,3 +225,125 @@ Reverted (failed approaches kept in history for the lessons):
 | ttl_switch lag (peak tick_ms) | 530–600 ms | unchanged (segmap rebuild — see SD-10m revert) |
 | Cold-start delay | ~38 s | ~38 s (cold path unchanged) |
 | Warm-start delay | ~38 s | ~10 s (SD-10o) |
+
+### SD-11 (trajectory-prediction-as-primary-authority restructure, 2026-04-27)
+
+**Motivation:** The SD-10 cycle shipped clean F-bank results but F9 surfaced a
+deep architectural gap that no patch fixed: ego cruised at 3 m/s for ~10 s
+past a stationary fellow at lat=−5.5 m, even though every tick logged
+`predicted_collision=0`. Root cause:
+
+- `path_collision_predicted` (1.5 s horizon) was wired only as a **brake-trigger
+  gate** — when snapshot heuristics wanted to brake, prediction could VETO.
+- **No code path consulted prediction to GREEN-LIGHT speed.** The planner picked
+  FOLLOW vs FREE_RUN purely from `sit.distance_m < relevance_dist_m=95 m AND
+  sit.ahead`. Result: prediction was half-wired — could withhold a brake, but
+  couldn't unblock acceleration when the geometry was clear.
+
+**User directive:** "Predict where the fellow is going to go and where we are
+going to go. Only when the prediction is about to collide in a reasonable
+amount of future distance, do we chicken out and abort. Surprises handled by
+emergency braking. Look at what we have and think through how to restructure —
+instead of adding patches left and right."
+
+**Design — two-key safety:** SD-11 makes a 10 s trajectory-rollout prediction
+the **primary** decision authority for the FOLLOW-vs-FREE_RUN-vs-SETUP entry
+choice. SD-4's existing 1.5 s `path_collision_predicted` stays untouched as
+the **independent emergency-brake** layer. Strategy commits, SD-4 vetoes.
+
+**Stages (all in commits e6e5345f → ffae91fb):**
+
+- **SD-11a** Multi-step `FellowPredictor.trajectory(horizon_s, sample_dt_s)`
+  returning a list of `(t, x, y, s)` tuples. Reuses the existing recency-weighted
+  CV velocity estimator (no new estimator). Pure additive method.
+- **SD-11b** Ego-strategy trajectory simulator
+  (`prediction/strategy_simulator.py`). For each candidate
+  (`stay_optimal` / `follow_fellow` / `pass_left` / `pass_right`), simulates ego
+  forward over the horizon and reports `(reachable_progress, reachable_speed,
+  min_clearance, completed)`. Strategy speed profiles are simple piecewise
+  ramps; pass_* uses a 3-phase profile (lane-change → alongside → merge-back).
+  Reuses the cached `_xy_at_arclength` from `pass_geometry`.
+- **SD-11c** Pure-function strategy selector
+  (`planner/strategy_selector.py`). Filter by `min_clearance >= 2.5 m`,
+  rank by `reachable_progress`, tiebreak `stay_optimal > pass_* > follow_fellow`.
+  Soft-fallback chain: hard-filter empty → try `follow_fellow` at 1.5 m → else
+  `stay_optimal` last-resort (SD-4 catches it).
+- **SD-11d** Dual-planner shim, telemetry-only. Strategy pipeline runs every
+  tick and logs `[Strategy] selected=... reason=... clearances={...} progress={...}`.
+  No behavior change with `use_strategy_authority=False` (default).
+- **SD-11e** Strategy authority. When `use_strategy_authority=True`, a new
+  branch fires immediately after the no_opponent guard:
+  `stay_optimal → FREE_RUN`, `follow_fellow → FOLLOW (cap=opp+0.3, NO 3.0 m/s
+  floor — was the F9 deadlock cause)`, `pass_* → SETUP_PASS_{side}` with full
+  lifecycle seeding. Hysteresis (`strategy_commit_cycles=2`) requires the same
+  selection for N consecutive ticks before honoring. Authority **never preempts
+  mid-flight execution** — only fires when `state.mode in (FREE_RUN, FOLLOW)`.
+- **SD-11e fix** Threaded the `use_strategy_authority` Scenic param into
+  `TacticalPlannerConfig` (the original commit forgot the param reader, so
+  the flag was a no-op until this fix landed in `behaviors.scenic`).
+- **SD-11f** F-bank validation. F9.scenic updated to enable
+  `tactical_planner_enabled=True` and `prediction_enabled=True` so the F9
+  deadlock and its SD-11 fix are reproducible by running this file directly.
+
+**Default horizon: 10 s with sample_dt_s=0.5** — chosen to cover a full
+overtake (approach ≤ 4 s + lateral shift ~1.5 s + side-by-side ~3 s + merge
+~1.5 s ≈ 10 s, matching F1 DRS overtake duration). At ego_speed=30 m/s this is
+300 m forward — well within the cached 3500-pt polyline. Compute: 4 strategies
+× 20 samples × 2 polyline calls × ~50 µs cached `_xy_at_arclength` ≈ **16 ms/tick**
+within the 50 ms control budget. Beyond ~12 s, prediction noise (linear
+extrapolation of recency-weighted velocity) starts to dominate signal.
+
+**State machine preserved as executor:** the 6 states
+(FREE_RUN/FOLLOW/SETUP_PASS_*/COMMIT_PASS_*/HOLD_PASS_*/ABORT_PASS) all stay.
+The strategy authority owns the **entry decision**; the existing lifecycle
+owns **execution**. All SD-2..SD-10 safety latches (setup_min_dwell, hold_max_s,
+abort_until_s, contact_recovery, predicted_collision_gate) preserved unchanged.
+
+**F2_tactical validation (commit ffae91fb, real run):**
+
+- Startup confirmed: `[FollowRacingLineMPCBehavior ego] SD-11e strategy authority ENABLED`
+- 880 `decision_reason=strategy_*` lines (878 `strategy_stay_optimal` + 2 `strategy_pass_right`)
+- 36 `pass_right` + 42 `pass_left` strategy selections → only **2 honored** as
+  authority firings (hysteresis correctly filtered single-tick blips)
+- **One full overtake completed** at t=6.70 s — `pass_success=1`,
+  `pass_success_free_run`, returned to FREE_RUN at full speed
+- **Zero hard-brake ticks** (`brake>0.3`) in the entire 30 s run
+- Max speed 37.47 m/s, min after 5 s = 12.08 m/s — no scared braking
+
+**How to opt in:**
+
+```
+scenic <scenario> --2d --model scenic.simulators.dspace.racing_model
+    --simulate --count 1 --time 3000
+    --param use_strategy_authority True
+    *>run.log
+```
+
+Default still off (`use_strategy_authority=False`) for safe rollback. Snapshot
+path stays alive and tested for regression net.
+
+**Tests:** 41 new across `test_fellow_predictor_trajectory.py` (8),
+`test_strategy_simulator.py` (11), `test_strategy_selector.py` (10),
+`test_tactical_planner_sd11d.py` (5), `test_tactical_planner_strategy.py` (7).
+Total racing suite: **177 pass** (was 136 pre-SD-11).
+
+**Reuse map (no rebuilding):**
+
+| Primitive | File | SD-11 reuse |
+|---|---|---|
+| `_xy_at_arclength` (cached LineString) | `assessment/pass_geometry.py:65` | Both ego and fellow walks in strategy_simulator |
+| `_recency_weighted_velocity_xy` | `prediction/fellow_predictor.py:50` | CV velocity for trajectory extrapolation |
+| `_apply_predicted_collision_gate` | `tactical_planner.py:79` | UNCHANGED — SD-4 emergency layer keeps firing |
+| `path_collision_predicted` (1.5s horizon) | `assessment/pass_geometry.py:194` | UNCHANGED — independent emergency brake |
+| Existing 6-state machine | `tactical_planner.py` | EXECUTOR — strategy seeds it, lifecycle counters carry plan across ticks |
+
+**Known limitations / deferred:**
+
+- **State-machine simplification** (~450 LOC of internal phase 3–9 chain
+  becomes deletable once strategy authority is the norm) — deferred to
+  SD-11g pending a clean F-bank baseline with the flag default-on.
+- **F-bank scenarios other than F2/F9** still need to verify SD-11 doesn't
+  regress (F3L/F3R/F6 overtakes, F4 sudden-stop emergency brake, F5/F7/F8
+  conservative behavior).
+- **Default flip** — `use_strategy_authority` stays `False` until full
+  F-bank validation completes.
