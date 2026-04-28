@@ -166,49 +166,236 @@ def _decode_log(path: Path) -> str:
     return raw.decode("utf-8", "replace")
 
 
-def parse_sample(idx: int, seed: int, log_path: Path, return_code: int) -> SampleMetrics:
-    """Extract per-sample metrics from one Scenic+sim log."""
-    text = _decode_log(log_path) if log_path.exists() else ""
+_RECORD_TAGS = (
+    'EvalGT', 'EvalEvent', 'EvalEventDiag', 'EvalContact',
+    'Commit', 'Strategy', 'TickTime', 'BoundsCheck',
+)
 
-    # Collision: trust `[EvalEvent] type=eval_contact` (true OBB overlap).
-    # Fall back to the per-tick bbox_gap_m<=0 check only if eval_contact
-    # was not emitted (older logs); the legacy check can flag transient
-    # numerical zeros, so it is the secondary signal.
-    # Same loop also tracks the minimum bbox_gap_m for the continuous
-    # robustness signal used by VerifAI's active samplers (verifai_runner).
-    collision = bool(_RE_EVAL_CONTACT.search(text))
-    bbox_gap_m_min: Optional[float] = None
-    for m in _RE_BBOX_GAP.finditer(text):
+
+def _records_extract(records) -> dict:
+    """SD-20b: extract eval/timing/strategy/bounds metrics from records dict.
+
+    `records` is the in-memory `simulation.records` defaultdict (or its
+    `SimulationResult.records` snapshot), where each tag key maps to a
+    list of `(currentTime, payload_dict)` entries appended by the
+    `_record_event(tag, payload)` helper in behaviors.scenic and the
+    direct `self.records[...]` append in simulator.py.
+
+    Returns a dict of the metrics this function knows how to derive
+    structurally (no string parsing). Caller merges with regex-derived
+    fields for things that don't go through records (lap_time,
+    [Placement], [Ego debug], emergency_stable_mode).
+    """
+    def _entries(tag):
         try:
-            v = float(m.group(1))
-        except ValueError:
+            entries = records.get(tag, []) if hasattr(records, 'get') else records[tag]
+        except Exception:
+            entries = []
+        return [p for (_t, p) in (entries or []) if isinstance(p, dict)]
+
+    out: dict = {}
+
+    # Collision: any EvalEvent with type=eval_contact. (Records-side counterpart
+    # of the regex on `[EvalEvent] type=eval_contact`.)
+    collision = any(p.get('type') == 'eval_contact' for p in _entries('EvalEvent'))
+
+    # bbox_gap_m_min: across all EvalGT entries (skip None entries).
+    gap_min: Optional[float] = None
+    for p in _entries('EvalGT'):
+        v = p.get('bbox_gap_m')
+        if v is None:
             continue
-        if bbox_gap_m_min is None or v < bbox_gap_m_min:
-            bbox_gap_m_min = v
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            continue
+        if gap_min is None or v < gap_min:
+            gap_min = v
+        # Same fallback the regex path used: bbox_gap_m <= 0 also flags collision.
         if not collision and v < 0.0:
             collision = True
 
-    off_track = bool(_RE_OFF_TRACK.search(text))
-
-    # Continuous off-track robustness from `[BoundsCheck]` lines. For each
-    # tick the signed margin is `+min(d_in,d_out)` when inside, `-min(d_in,d_out)`
-    # when outside (depth of excursion past the nearest edge). The run-level
-    # signal is the minimum margin observed -- "the worst the ego ever got."
-    # Lower = closer to / deeper-in violation; >= 0 = safe.
-    track_clearance_m: Optional[float] = None
-    for bm in _RE_BOUNDS.finditer(text):
+    # Off-track + track clearance from BoundsCheck.
+    off_track = False
+    clearance: Optional[float] = None
+    for p in _entries('BoundsCheck'):
+        in_track = bool(p.get('in_track', True))
+        if not in_track:
+            off_track = True
         try:
-            d_in = float(bm.group(1))
-            d_out = float(bm.group(2))
-            in_track = bm.group(3) == "1"
-        except ValueError:
+            d_in = float(p.get('d_in_m'))
+            d_out = float(p.get('d_out_m'))
+        except (TypeError, ValueError):
             continue
         edge_dist = min(d_in, d_out)
         margin = edge_dist if in_track else -edge_dist
-        if track_clearance_m is None or margin < track_clearance_m:
-            track_clearance_m = margin
+        if clearance is None or margin < clearance:
+            clearance = margin
 
-    # Lap time (last value).
+    # Commit lifecycle counts.
+    pass_success_count = 0
+    pass_left_count = 0
+    pass_right_count = 0
+    abort_count = 0
+    for p in _entries('Commit'):
+        if p.get('pass_success'):
+            pass_success_count += 1
+        reason = str(p.get('decision_reason', '') or '')
+        if reason in ('commit_pass_left_hold', 'strategy_pass_left'):
+            pass_left_count += 1
+        elif reason in ('commit_pass_right_hold', 'strategy_pass_right'):
+            pass_right_count += 1
+        elif reason in ('abort_pass', 'abort_hold', 'abort_commit_invalidated', 'abort_recover_follow'):
+            abort_count += 1
+
+    # Strategy distribution.
+    sel_counts = {"stay_optimal": 0, "follow_fellow": 0, "pass_left": 0, "pass_right": 0}
+    for p in _entries('Strategy'):
+        name = str(p.get('selected', '') or '')
+        if name in sel_counts:
+            sel_counts[name] += 1
+
+    # Per-tick wallclock timing.
+    tick_ms_values: List[float] = []
+    for p in _entries('TickTime'):
+        v = p.get('tick_ms')
+        if v is None:
+            continue
+        try:
+            tick_ms_values.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    tick_ms_p50 = None
+    if tick_ms_values:
+        sorted_v = sorted(tick_ms_values)
+        tick_ms_p50 = sorted_v[len(sorted_v) // 2]
+
+    out.update(dict(
+        collision=collision,
+        off_track=off_track,
+        bbox_gap_m_min=gap_min,
+        track_clearance_m=clearance,
+        commit_pass_success_count=pass_success_count,
+        commit_pass_left_count=pass_left_count,
+        commit_pass_right_count=pass_right_count,
+        commit_abort_pass_count=abort_count,
+        selected_stay_optimal=sel_counts["stay_optimal"],
+        selected_follow_fellow=sel_counts["follow_fellow"],
+        selected_pass_left=sel_counts["pass_left"],
+        selected_pass_right=sel_counts["pass_right"],
+        tick_count=len(tick_ms_values),
+        tick_ms_p50=tick_ms_p50,
+    ))
+    return out
+
+
+def parse_sample(
+    idx: int,
+    seed: int,
+    log_path: Path,
+    return_code: int,
+    *,
+    records=None,
+) -> SampleMetrics:
+    """Extract per-sample metrics from one Scenic+sim log.
+
+    SD-20b: when ``records`` is provided (from
+    ``simulation.result.records``), the eval/timing/strategy/bounds
+    fields are read structurally from the in-memory records dict; the
+    log is still parsed for fields that don't go through records
+    (``lap_time_s``, ``ego_start_xy``, ``opp_start_xy``,
+    ``sampled_gap_m``, ``guard_emergency_stable_count``). When
+    ``records is None`` (subprocess path in sampled_runner; older logs)
+    every field is regex-parsed from the log as before.
+    """
+    text = _decode_log(log_path) if log_path.exists() else ""
+    use_records = records is not None
+
+    if use_records:
+        # Records-driven path: structural extraction for the fields where
+        # we have a parallel `_record_event(...)` source of truth.
+        rec = _records_extract(records)
+        collision = rec['collision']
+        off_track = rec['off_track']
+        bbox_gap_m_min = rec['bbox_gap_m_min']
+        track_clearance_m = rec['track_clearance_m']
+        commit_pass_success = rec['commit_pass_success_count']
+        commit_pass_left = rec['commit_pass_left_count']
+        commit_pass_right = rec['commit_pass_right_count']
+        commit_abort = rec['commit_abort_pass_count']
+        sel_counts = {
+            'stay_optimal': rec['selected_stay_optimal'],
+            'follow_fellow': rec['selected_follow_fellow'],
+            'pass_left': rec['selected_pass_left'],
+            'pass_right': rec['selected_pass_right'],
+        }
+        tick_count_records = rec['tick_count']
+        tick_ms_p50 = rec['tick_ms_p50']
+    else:
+        # Legacy regex path: parse everything from the captured stdout log.
+        # Collision: trust `[EvalEvent] type=eval_contact` (true OBB overlap).
+        # Fall back to the per-tick bbox_gap_m<=0 check only if eval_contact
+        # was not emitted (older logs); the legacy check can flag transient
+        # numerical zeros, so it is the secondary signal.
+        # Same loop also tracks the minimum bbox_gap_m for the continuous
+        # robustness signal used by VerifAI's active samplers.
+        collision = bool(_RE_EVAL_CONTACT.search(text))
+        bbox_gap_m_min = None
+        for m in _RE_BBOX_GAP.finditer(text):
+            try:
+                v = float(m.group(1))
+            except ValueError:
+                continue
+            if bbox_gap_m_min is None or v < bbox_gap_m_min:
+                bbox_gap_m_min = v
+            if not collision and v < 0.0:
+                collision = True
+
+        off_track = bool(_RE_OFF_TRACK.search(text))
+
+        # Continuous off-track robustness from `[BoundsCheck]` lines.
+        track_clearance_m = None
+        for bm in _RE_BOUNDS.finditer(text):
+            try:
+                d_in = float(bm.group(1))
+                d_out = float(bm.group(2))
+                in_track = bm.group(3) == "1"
+            except ValueError:
+                continue
+            edge_dist = min(d_in, d_out)
+            margin = edge_dist if in_track else -edge_dist
+            if track_clearance_m is None or margin < track_clearance_m:
+                track_clearance_m = margin
+
+        # Lifecycle counts.
+        commit_pass_success = len(_RE_PASS_SUCCESS.findall(text))
+        commit_pass_left = text.count("decision_reason=commit_pass_left_hold") + text.count("decision_reason=strategy_pass_left")
+        commit_pass_right = text.count("decision_reason=commit_pass_right_hold") + text.count("decision_reason=strategy_pass_right")
+        commit_abort = text.count("decision_reason=abort_pass") + text.count("decision_reason=abort_hold") + text.count("decision_reason=abort_commit_invalidated") + text.count("decision_reason=abort_recover_follow")
+
+        # Strategy distribution.
+        sel_counts = {"stay_optimal": 0, "follow_fellow": 0, "pass_left": 0, "pass_right": 0}
+        for m in _RE_STRATEGY_SELECTED.finditer(text):
+            name = m.group(1)
+            if name in sel_counts:
+                sel_counts[name] += 1
+
+        # Per-tick wallclock timing.
+        tick_ms_values: List[float] = []
+        for m in _RE_TICKTIME.finditer(text):
+            try:
+                tick_ms_values.append(float(m.group(2)))
+            except ValueError:
+                pass
+        tick_ms_p50 = None
+        if tick_ms_values:
+            sorted_v = sorted(tick_ms_values)
+            tick_ms_p50 = sorted_v[len(sorted_v) // 2]
+        tick_count_records = len(tick_ms_values)
+
+    # Always-regex fields (no record source emitted today): lap time, ego
+    # debug start, fellow Placement line, emergency_stable_mode counter.
+    # These remain log-parsed regardless of whether records was supplied.
     lap_time = None
     for m in _RE_LAP_TIME.finditer(text):
         try:
@@ -216,17 +403,11 @@ def parse_sample(idx: int, seed: int, log_path: Path, return_code: int) -> Sampl
         except ValueError:
             pass
 
-    # First ego position observed (`[Ego debug] xy=(<x>, <y>) -> ...`).
     ego_xy = None
     em = _RE_EGO_POS.search(text)
     if em:
         ego_xy = f"({em.group(1)}, {em.group(2)})"
 
-    # Fellow placement and sampled gap: parse the canonical placement line
-    # `[Placement] Fellow_0: racing (s,t) from ego + (<gap>, <lat>) -> s=<s>, t=<t>`.
-    # gap = the longitudinal offset Scenic resolved from `Range(20, 60)`;
-    # opp_start_xy = the resulting race-frame (s, t) coords (no x,y until
-    # placement.py executes, but s/t is reproducible across runs).
     fellow_xy = None
     gap_m = None
     fm = _RE_FELLOW_RESOLVED.search(text)
@@ -237,35 +418,7 @@ def parse_sample(idx: int, seed: int, log_path: Path, return_code: int) -> Sampl
             pass
         fellow_xy = f"s={fm.group(3)}, t={fm.group(4)}"
 
-    # Lifecycle counts. Each `decision_reason=...` line is one planner tick,
-    # so these counts are tick-counts in that state, NOT discrete maneuver
-    # counts. `pass_success_count` IS a discrete count (one tick per
-    # successful overtake completion; the lifecycle clears the flag
-    # immediately after).
-    commit_pass_success = len(_RE_PASS_SUCCESS.findall(text))
-    commit_pass_left = text.count("decision_reason=commit_pass_left_hold") + text.count("decision_reason=strategy_pass_left")
-    commit_pass_right = text.count("decision_reason=commit_pass_right_hold") + text.count("decision_reason=strategy_pass_right")
-    commit_abort = text.count("decision_reason=abort_pass") + text.count("decision_reason=abort_hold") + text.count("decision_reason=abort_commit_invalidated") + text.count("decision_reason=abort_recover_follow")
     guard_emergency = text.count("emergency_stable_mode=1")
-
-    # Strategy distribution.
-    sel_counts = {"stay_optimal": 0, "follow_fellow": 0, "pass_left": 0, "pass_right": 0}
-    for m in _RE_STRATEGY_SELECTED.finditer(text):
-        name = m.group(1)
-        if name in sel_counts:
-            sel_counts[name] += 1
-
-    # Per-tick wallclock timing.
-    tick_ms_values: List[float] = []
-    for m in _RE_TICKTIME.finditer(text):
-        try:
-            tick_ms_values.append(float(m.group(2)))
-        except ValueError:
-            pass
-    tick_ms_p50 = None
-    if tick_ms_values:
-        sorted_v = sorted(tick_ms_values)
-        tick_ms_p50 = sorted_v[len(sorted_v) // 2]
 
     return SampleMetrics(
         sample_index=idx,
@@ -288,7 +441,7 @@ def parse_sample(idx: int, seed: int, log_path: Path, return_code: int) -> Sampl
         selected_follow_fellow=sel_counts["follow_fellow"],
         selected_pass_left=sel_counts["pass_left"],
         selected_pass_right=sel_counts["pass_right"],
-        tick_count=len(tick_ms_values),
+        tick_count=tick_count_records,
         tick_ms_p50=tick_ms_p50,
         track_clearance_m=track_clearance_m,
     )

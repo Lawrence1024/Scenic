@@ -1583,6 +1583,21 @@ class DSpaceSimulation(RacingSimulation):
                             print(f"[BoundsCheck] t={_t_log:.2f}s pos=({_bx:.2f},{_by:.2f}) "
                                   f"src={_pos_source} d_in={_d_in:.2f}m d_out={_d_out:.2f}m "
                                   f"in_track={int(_in_track)} [{_flag}]{_diag}")
+                            # SD-20a: parallel record emit so VerifAI monitors can read
+                            # this without regex-parsing the stdout log. Stdout stays
+                            # for human debugging; structured channel for automation.
+                            try:
+                                self.records['BoundsCheck'].append((self.currentTime, {
+                                    't': _t_log,
+                                    'x': _bx,
+                                    'y': _by,
+                                    'src': _pos_source,
+                                    'd_in_m': float(_d_in),
+                                    'd_out_m': float(_d_out),
+                                    'in_track': bool(_in_track),
+                                }))
+                            except Exception:
+                                pass
                             self._bounds_check_last_log_step = _step_idx
                             self._bounds_check_last_in_track = _in_track
             except Exception:

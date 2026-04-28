@@ -234,8 +234,14 @@ def _extract_verifai_values(scenario) -> Dict[str, float]:
 # Per-iteration simulation
 # ---------------------------------------------------------------------------
 
-def _run_one_simulation(simulator, scene, time_steps: int, sample_idx: int) -> bool:
-    """Invoke the simulator on one sampled scene; return True iff it ran."""
+def _run_one_simulation(simulator, scene, time_steps: int, sample_idx: int):
+    """Invoke the simulator on one sampled scene.
+
+    SD-20b: returns ``(ok, simulation)``. ``simulation`` is the Scenic
+    `Simulation` object (or `None` on failure / rejection); the caller
+    reads ``simulation.result.records`` to feed parse_sample's structured
+    path. ``ok`` matches the previous bool return.
+    """
     try:
         simulation = simulator.simulate(
             scene,
@@ -246,8 +252,9 @@ def _run_one_simulation(simulator, scene, time_steps: int, sample_idx: int) -> b
     except Exception as exc:
         traceback.print_exc()
         _progress(f"[VerifaiRunner] simulate() raised: {exc}")
-        return False
-    return simulation is not None
+        return False, None
+    ok = simulation is not None
+    return ok, simulation
 
 
 # ---------------------------------------------------------------------------
@@ -474,15 +481,27 @@ def main() -> int:
         buf = io.StringIO()
         t_sim0 = time.perf_counter()
         with _tee_stdout(buf, quiet=args.quiet):
-            ok = _run_one_simulation(simulator, scene, args.time_steps, sample_idx)
+            ok, simulation = _run_one_simulation(simulator, scene, args.time_steps, sample_idx)
         elapsed = time.perf_counter() - t_sim0
 
         # Persist captured stdout so parse_sample reads from the same source
         # of truth as sampled_runner.py would.
         log_path.write_text(buf.getvalue(), encoding="utf-8")
 
+        # SD-20b: prefer the structured `simulation.result.records` channel
+        # over regex parsing. The records dict is populated by `_record_event`
+        # calls in behaviors.scenic and the direct append in simulator.py
+        # alongside the existing prints (so the human-readable log still works
+        # for debugging). Falls back to log regex when the simulation object
+        # isn't available (early failure, no result attached).
+        records = None
+        try:
+            if simulation is not None and getattr(simulation, "result", None) is not None:
+                records = simulation.result.records
+        except Exception:
+            records = None
         rc = 0 if ok else 1
-        metrics = parse_sample(sample_idx, seed, log_path, rc)
+        metrics = parse_sample(sample_idx, seed, log_path, rc, records=records)
         samples.append(metrics)
 
         rho = monitor(metrics)

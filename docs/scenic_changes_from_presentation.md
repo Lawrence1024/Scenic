@@ -26,45 +26,7 @@ the numbered list stays useful as a forward-looking ledger.
 
 ## 3. VerifAI monitors read parsed stdout, not in-memory state
 
-**Current:** the falsification loop in
-`src/scenic/domains/racing/benchmarks/verifai_runner.py:main()` runs
-the simulator, captures stdout to `logs/sample_NNN.log` via a `_Tee`
-context manager, then calls `parse_sample()` from
-`sampled_runner.py` to regex-extract a `SampleMetrics` dataclass.
-Monitor functions in `monitors.py` consume that dataclass and emit
-a robustness scalar, which the runner feeds back to VerifAI as
-`feedback` for the next sample.
-
-**Why it's worth questioning:** the contract between the simulator
-and the monitor is **the stdout log format**. If anyone changes a
-log line — adds a field, renames a key, drops debounce noise — our
-monitors silently break (they regex-match against literal patterns
-like `[EvalGT]`, `[Commit]`, `[BoundsCheck]`).
-
-This is also not how VerifAI is *intended* to be used. VerifAI's
-clean pattern is:
-- The simulator emits per-step data into an in-memory structure
-  (Scenic exposes `simulation.records` for this).
-- Monitor functions read directly from `simulation.records`,
-  return robustness.
-- No string parsing. The contract is a Python data structure.
-
-**Fix shape:** route the per-tick eval signals through
-`simulation.records` (Scenic's `record` clause / the `simulation.result.records`
-dict on the Python side). The emitting code is in
-`src/scenic/domains/racing/tactical_planner.py` and
-`src/scenic/domains/racing/assessment/pass_geometry.py` — both
-currently `print()` to stdout. Adding a parallel `simulation.record_event(...)`
-call (or a simulation-level callback) keeps the human-readable log
-AND gives monitors a structured channel.
-
-Then `monitors.py` can drop its dependency on `parse_sample` and
-read directly from `simulation.records`.
-
-**Why we hadn't done it:** speed-of-delivery for SD-15/16. Log
-parsing was already in `sampled_runner.py` and we wanted the
-verifai_runner to share parsing infrastructure. Now that the
-pipeline is landed, the in-memory route is a clean follow-up.
+*Resolved in SD-20. See `## Done` section below.*
 
 ---
 
@@ -290,3 +252,69 @@ aesthetic improvement.
 **Verification notes.** Compile any scenario with
 `new RacingCar on raceTrack` and inspect — should land on either
 the main loop or the pit lane.
+
+### #3 — VerifAI monitors read structured records, not parsed stdout (SD-20)
+
+**What was wrong.** The contract between the simulator and the
+falsification monitor was the stdout log format: `verifai_runner.py`
+captured every sample's stdout, wrote `logs/sample_NNN.log`, then
+called `parse_sample()` to regex-extract a `SampleMetrics`. Any
+change to a `[EvalGT]` / `[Commit]` / `[BoundsCheck]` / `[Strategy]` /
+`[TickTime]` / `[EvalEvent]` log line — added field, renamed key,
+debounce tweak — would silently break monitors. Also not how Scenic
+or VerifAI intend the contract: Scenic exposes `simulation.records`
+(a `defaultdict(list)`) precisely for in-memory monitor inputs.
+
+**What landed (Stage 20a).** Each emit site now writes to
+`simulation.records[tag]` *alongside* the existing `print()`. The
+print stays as the human debug log; monitors get a structured channel.
+
+- `behaviors.scenic` adds a small `_record_event(tag, payload)` helper
+  near the top that does
+  `simulation().records[tag].append((sim.currentTime, dict(payload)))`
+  with a try/except so a missing simulation context (replay,
+  scene-only smoke) never breaks the print.
+- The helper is invoked alongside the prints for `[Commit]`,
+  `[TickTime]`, `[EvalEvent]`, `[EvalEventDiag]`, `[EvalGT]`,
+  `[EvalContact]` (six call sites in behaviors.scenic).
+- `[Strategy]` is special: the print lives inside `tactical_planner.py`,
+  but the planner is pure-Python (no veneer import). The behavior
+  emits the record from its own context right after
+  `tactical_planner_step_v1` returns, reading `state.strategy_*`
+  fields the planner already stashes. This keeps the planner pure.
+- `simulator.py` (the dSPACE simulator) appends directly to
+  `self.records['BoundsCheck']` since it has the simulation as `self`;
+  no helper needed.
+
+**What landed (Stage 20b).** `parse_sample()` in `sampled_runner.py`
+gained a keyword-only `records=None` argument:
+
+- When `records` is provided, eval/timing/strategy/bounds/commit
+  fields are derived structurally by walking the records dict via a
+  new `_records_extract(records)` helper. Same `SampleMetrics` shape;
+  no regex.
+- When `records is None` (subprocess path used by `sampled_runner.py`,
+  older logs) every field is regex-parsed from the log as before.
+- Fields that have no record source — `lap_time_s`, `ego_start_xy`,
+  `opp_start_xy`, `sampled_gap_m`, `guard_emergency_stable_count` —
+  are still log-parsed regardless of the records path.
+- `_run_one_simulation` in `verifai_runner.py` now returns
+  `(ok, simulation)`. `main()` reads `simulation.result.records` and
+  passes it as `records=` to `parse_sample`, so VerifAI's monitor
+  pipeline now sources from the in-memory channel.
+
+**Stage 20c (no change).** `sampled_runner.py`'s subprocess path runs
+`scenic` as a child process and only sees the log file — no
+Simulation object reachable. The regex path stays as the fallback for
+that runner.
+
+**Why this matters.** Falsifier monitors no longer depend on the
+literal stdout format. A future log-line edit that doesn't change the
+structured record shape no longer breaks falsification.
+
+**Verification notes.** Re-run a small CE smoke
+(`--sampler ce --monitor safety --count 5 --time 1500`). Compare its
+`summary.csv` to the regex-only path by setting `records=None` in a
+debugger; numeric columns should match within rounding for fields
+that have a record source. Per-sample log files should still be
+human-readable (the prints were not removed).

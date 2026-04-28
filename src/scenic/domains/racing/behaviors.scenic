@@ -86,6 +86,23 @@ _PHASE1_TTL_FILE_BY_SELECTION = {
 }
 
 
+# SD-20a: parallel structured-record channel for monitors.
+#
+# Eval/diagnostic events are printed to stdout for human debugging, AND
+# routed through `simulation().records[tag]` so VerifAI monitors can read
+# the same data without regex-parsing the log. Each entry is appended as
+# `(currentTime, dict_payload)` matching Scenic's `record EXPR as NAME`
+# convention. Wrapped in try/except so a missing simulation context (e.g.
+# scene-only smoke tests, replay) never breaks the parallel print.
+def _record_event(tag, payload):
+    try:
+        sim = simulation()
+        if sim is not None:
+            sim.records[tag].append((sim.currentTime, dict(payload)))
+    except Exception:
+        pass
+
+
 def _parse_segment_type_from_name(seg_name):
     """RC-7a: parse 'curve' or 'straight' from a segment name string.
 
@@ -1284,6 +1301,19 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 self._phase_effective_planner_state = str(_canonical_mode(_mode_tac) or "FREE_RUN")
                 self._phase_effective_ttl = str(_scripted_active_ttl or "optimal")
                 self._phase_effective_reason = str(_eff_reason or "none")
+                # SD-20a: parallel record emit for [Strategy]. The planner already
+                # printed it (in tactical_planner.py); we emit the same data
+                # structurally so monitors can read it without regex. Skip when
+                # the planner had insufficient inputs (selected_name == "").
+                _strat_name_rec = str(getattr(self._tactical_tp_state, "strategy_selected_name", "") or "")
+                if _strat_name_rec:
+                    _record_event('Strategy', {
+                        't': float(_sim_time_s),
+                        'selected': _strat_name_rec,
+                        'reason': str(getattr(self._tactical_tp_state, "strategy_selected_reason", "") or ""),
+                        'clearances': dict(getattr(self._tactical_tp_state, "strategy_min_clearances", {}) or {}),
+                        'progress': dict(getattr(self._tactical_tp_state, "strategy_reachable_progress", {}) or {}),
+                    })
                 # SD-4b: emit [PathPredict] telemetry for the predicted_collision
                 # computation done inside tactical_planner_step_v1. Used to verify
                 # that the gate fires on F4-style sudden-stop scenarios and stays
@@ -1353,6 +1383,20 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         f"commit_cand_count={_p11_commit_cand} protected_follow=0 "
                         f"seg_ctx={_seg_ctx} seg_modifier={_seg_modifier}"
                     )
+                    _record_event('Commit', {
+                        't': float(_sim_time_s),
+                        'planner_state': _canonical_mode(_mode3),
+                        'chosen_ttl': str(_scripted_active_ttl),
+                        'decision_reason': str(_reason3),
+                        'commit_trigger': _p11_commit_trigger,
+                        'abort_trigger': _p11_abort_trigger,
+                        'pass_success': bool(_p11_pass_success),
+                        'abort_success': bool(_p11_abort_success),
+                        'post_event_state': _p11_post_state,
+                        'commit_cand_count': int(_p11_commit_cand),
+                        'seg_ctx': _seg_ctx,
+                        'seg_modifier': _seg_modifier,
+                    })
                 if getattr(self, '_full_control_ticks', 0) % 50 == 0:
                     print(f"{_fl_mpc} [Tactical] t={_sim_time_s:.2f}s mode={_mode3} ttl={_scripted_active_ttl} cap={self._tactical_speed_cap}")
             
@@ -2350,6 +2394,11 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     f"wall_t={_wall_t_now_s:.3f}s "
                     f"tick_ms={_wall_tick_ms:.2f}"
                 )
+                _record_event('TickTime', {
+                    't': float(_sim_time_s),
+                    'wall_t_s': float(_wall_t_now_s),
+                    'tick_ms': float(_wall_tick_ms),
+                })
                 # SD-10l: per-section breakdown for the same tick. The sum of
                 # the section ms below is typically less than tick_ms — the
                 # remainder ("other") is everything not individually wrapped:
@@ -2556,6 +2605,14 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     f"bbox_gap_m={_os_step} dspace_obj1_m={_ds_step} "
                     f"dspace_valid={1 if _cflags_step.get('dspace_valid', False) else 0}"
                 )
+                _record_event('EvalEvent', {
+                    't': float(t_log),
+                    'type': 'eval_contact',
+                    'severity': str(_risk_step),
+                    'bbox_gap_m': (float(_obb_sep_step) if _obb_sep_step is not None else None),
+                    'dspace_obj1_m': (float(_gt_d_step) if eval_dspace_dist_object_1_valid(_gt_d_step) else None),
+                    'dspace_valid': bool(_cflags_step.get('dspace_valid', False)),
+                })
                 print(
                     f"[EvalEventDiag] t={t_log:.2f}s severity={_risk_step} "
                     f"ego_speed_mps={float(current_speed):.3f} opp_center_dist_m={_opp_d_step} "
@@ -2563,6 +2620,19 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     f"overlap_state={_ov_dbg} seg={_seg_dbg} ahead_hint={_ahead_dbg} "
                     f"bbox_gap_m={_os_step} dspace_obj1_m={_ds_step}"
                 )
+                _record_event('EvalEventDiag', {
+                    't': float(t_log),
+                    'severity': str(_risk_step),
+                    'ego_speed_mps': float(current_speed),
+                    'opp_center_dist_m': (float(nearest_dist) if nearest_dist is not None else None),
+                    'rel_speed_mps': (float(nearest_rel_speed) if nearest_rel_speed is not None else None),
+                    'rel_longitudinal_m': (float(nearest_rel_longitudinal) if nearest_rel_longitudinal is not None else None),
+                    'overlap_state': _ov_dbg,
+                    'seg': _seg_dbg,
+                    'ahead_hint': int(_ahead_dbg),
+                    'bbox_gap_m': (float(_obb_sep_step) if _obb_sep_step is not None else None),
+                    'dspace_obj1_m': (float(_gt_d_step) if eval_dspace_dist_object_1_valid(_gt_d_step) else None),
+                })
         # Log step summary every 50 steps; include t= and OpenDRIVE-based segment for segment performance analysis
         if self._behavior_step_count % 50 == 0:
             sim = simulation()
@@ -2673,6 +2743,15 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     f"bbox_gap_m={_os} nearest_opp_center_dist_m={_nds} "
                     f"center_minus_bbox_m={_cmo} center_minus_gt_m={_dcmg} bbox_minus_gt_m={_omg}"
                 )
+                _record_event('EvalGT', {
+                    't': float(t_log),
+                    'dspace_obj1_raw_m': (float(_gt_d) if _gt_d is not None else None),
+                    'dspace_valid': bool(_gt_valid),
+                    'bbox_gap_m': (float(_obb_sep) if _obb_sep is not None else None),
+                    'nearest_opp_center_dist_m': (float(nearest_dist) if nearest_dist is not None else None),
+                    'center_minus_bbox_m': (float(_center_minus_obb) if _center_minus_obb is not None else None),
+                    'bbox_minus_gt_m': (float(_obb_minus_gt) if _obb_minus_gt is not None else None),
+                })
                 print(
                     f"[EvalContact] t={t_log:.2f}s risk={_risk} "
                     f"bbox_gap_m={_os} dspace_valid={1 if _gt_valid else 0} "
@@ -2681,6 +2760,16 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     f"near_hull={1 if _cflags['near_obb'] else 0} "
                     f"near_sensor={1 if _cflags['near_sensor'] else 0}"
                 )
+                _record_event('EvalContact', {
+                    't': float(t_log),
+                    'risk': str(_risk),
+                    'bbox_gap_m': (float(_obb_sep) if _obb_sep is not None else None),
+                    'dspace_valid': bool(_gt_valid),
+                    'overlap_hull': bool(_cflags.get('overlap_obb', False)),
+                    'overlap_sensor': bool(_cflags.get('overlap_sensor', False)),
+                    'near_hull': bool(_cflags.get('near_obb', False)),
+                    'near_sensor': bool(_cflags.get('near_sensor', False)),
+                })
             # Phase 2: race-semantics opponent state (planner inputs; same cadence as Phase 0 line).
             try:
                 if nearest_obj is not None and car_heading is not None:
