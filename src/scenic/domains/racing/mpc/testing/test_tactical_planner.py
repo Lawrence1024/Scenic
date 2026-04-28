@@ -911,12 +911,12 @@ def test_commit_does_not_abort_on_stationary_offaxis_overlap():
     assert st.commit.abort_trigger == "none"
 
 
-def test_commit_pass_success_returns_free_run():
-    """SD-3d: when fellow is laterally clear (|lateral_m| ≥ merge_safe_lat_m),
-    COMMIT success goes directly to FREE_RUN — no HOLD needed.
-
-    Covers F6/F7-style parallel-TTL passes where ego cleared laterally during
-    the COMMIT itself.
+def test_commit_pass_success_enters_hold_for_merge_back_ramp():
+    """SD-12b: COMMIT success ALWAYS enters HOLD_PASS_{side} (even when
+    laterally clear) so MPC has merge_back_ramp_s of smoothing for the
+    side-TTL → optimal lateral transition. Pre-SD-12b laterally-clear
+    pass_success returned FREE_RUN immediately, causing the F3L/F3R
+    "massive swerl back" the user observed (one-tick ttl snap).
     """
     st = TacticalPlannerState(mode=COMMIT_PASS_LEFT, last_setup_side="left")
     cfg = TacticalPlannerConfig(commit_abort_enabled=True)
@@ -927,7 +927,7 @@ def test_commit_pass_success_returns_free_run():
         collision_risk_01=0.05,
         distance_m=35.0,
         longitudinal_m=-6.0,
-        # SD-3d: laterally clear → skip HOLD, straight to FREE_RUN.
+        # Laterally clear (used to skip HOLD pre-SD-12b; now always enters HOLD).
         lateral_m=3.0,
         closing_speed_mps=0.0,
     )
@@ -948,10 +948,10 @@ def test_commit_pass_success_returns_free_run():
         assessment_closing_flag=False,
         assessment_emergency_risk_01=0.05,
     )
-    assert m == FREE_RUN and ttl == "optimal" and cap is None
-    assert reason == "pass_success_free_run"
+    assert m == HOLD_PASS_LEFT and ttl == "left"
+    assert reason == "hold_pass_entry"
     assert st.commit.pass_success is True
-    assert st.commit.post_event_state == FREE_RUN
+    assert st.commit.hold_pass_side == "left"
 
 
 def test_commit_abort_success_recovers_to_follow_when_pressure_clears():
@@ -1111,8 +1111,11 @@ def test_commit_ttl_clear_does_not_fire_while_fellow_still_ahead():
     assert m2 == COMMIT_PASS_LEFT and ttl2 == "left"
     assert st.commit.pass_success is False
 
-    # Fellow drops behind — free_run success fires.
-    # SD-3d: lateral_m=3.0 > merge_safe_lat_m=2.5 → already laterally clear → skip HOLD.
+    # Fellow drops behind — pass_success fires.
+    # SD-12b: ALL pass_success now routes through HOLD_PASS_{side} for
+    # merge_back_ramp_s before releasing to FREE_RUN (not just side-by-side
+    # cases). Even with lateral_m=3.0 > merge_safe_lat_m=2.5, ego enters
+    # HOLD first so MPC has a smoothing window for the side→optimal flip.
     s_behind = _sit(
         ahead=False,
         lateral_relation="right",
@@ -1135,8 +1138,8 @@ def test_commit_ttl_clear_does_not_fire_while_fellow_still_ahead():
         assessment_closing_flag=False,
         assessment_emergency_risk_01=0.05,
     )
-    assert m3 == FREE_RUN and ttl3 == "optimal"
-    assert reason3 == "pass_success_free_run"
+    assert m3 == HOLD_PASS_LEFT and ttl3 == "left"
+    assert reason3 == "hold_pass_entry"
     assert st.commit.pass_success is True
 
 
@@ -1886,6 +1889,8 @@ def test_commit_pass_success_enters_hold_then_releases_when_clear():
 
     # Tick 2: ego has pulled further ahead → release.
     # hold_release_long_m(Δv=8) = 6.4 + 0.3·8 = 8.8m → delta_s_behind=10 satisfies.
+    # SD-12b: also wait merge_back_ramp_s=0.8s after hold_entry to satisfy
+    # the new ramp gate. sim_time=1.0s gives elapsed=1.0 > 0.8.
     s_clear = _sit(
         ahead=False,
         lateral_relation="right",
@@ -1901,7 +1906,7 @@ def test_commit_pass_success_enters_hold_then_releases_when_clear():
     m2, ttl2, cap2, reason2 = tactical_planner_step_v1(
         st, s_clear,
         has_opponent=True, ego_speed_mps=18.0, opponent_speed_mps=10.0,
-        sim_time_s=0.5, pit_mode=False, config=cfg,
+        sim_time_s=1.0, pit_mode=False, config=cfg,
         assessment_relation="behind", assessment_gap_ok=True,
         assessment_optimal_open=True,
         assessment_left_open=True, assessment_right_open=True,
@@ -1910,6 +1915,51 @@ def test_commit_pass_success_enters_hold_then_releases_when_clear():
     assert m2 == FREE_RUN, f"HOLD must release to FREE_RUN, got {m2}"
     assert ttl2 == "optimal", "HOLD release returns to optimal TTL"
     assert reason2 == "hold_release_merge_safe"
+
+
+def test_sd12b_hold_release_blocked_until_merge_back_ramp_s():
+    """SD-12b regression: HOLD must NOT release to FREE_RUN within
+    merge_back_ramp_s of hold_entry, even when long_ok and merge_geom_ok
+    are satisfied. Gives MPC a smoothing window for the side→optimal
+    lateral transition (the F3L/F3R "massive swerl" fix).
+    """
+    st = TacticalPlannerState(mode=HOLD_PASS_LEFT, last_setup_side="left")
+    st.commit.side = "left"
+    st.commit.hold_pass_side = "left"
+    st.commit.hold_entry_s = 0.0
+    st.commit.hold_speed_at_entry_mps = 18.0
+    cfg = TacticalPlannerConfig(commit_abort_enabled=True, merge_back_ramp_s=0.8)
+    s_clear = _sit(
+        ahead=False, lateral_relation="right",
+        overlap_state="clear_ahead", collision_risk_01=0.05,
+        distance_m=10.0, longitudinal_m=-10.0,
+        lateral_m=3.0, closing_speed_mps=0.0,
+        delta_s_m=-10.0,
+    )
+    # Tick at 0.5s (within 0.8s ramp) — release blocked even though geometry OK.
+    m_within, ttl_within, _, reason_within = tactical_planner_step_v1(
+        st, s_clear,
+        has_opponent=True, ego_speed_mps=18.0, opponent_speed_mps=10.0,
+        sim_time_s=0.5, pit_mode=False, config=cfg,
+        assessment_relation="behind", assessment_gap_ok=True,
+        assessment_optimal_open=True, assessment_left_open=True,
+        assessment_right_open=True, assessment_closing_flag=False,
+        assessment_emergency_risk_01=0.05,
+    )
+    assert m_within == HOLD_PASS_LEFT and ttl_within == "left"
+    assert reason_within == "hold_pass_hold"
+    # Tick at 1.0s (past 0.8s ramp) — release fires.
+    m_past, ttl_past, _, reason_past = tactical_planner_step_v1(
+        st, s_clear,
+        has_opponent=True, ego_speed_mps=18.0, opponent_speed_mps=10.0,
+        sim_time_s=1.0, pit_mode=False, config=cfg,
+        assessment_relation="behind", assessment_gap_ok=True,
+        assessment_optimal_open=True, assessment_left_open=True,
+        assessment_right_open=True, assessment_closing_flag=False,
+        assessment_emergency_risk_01=0.05,
+    )
+    assert m_past == FREE_RUN and ttl_past == "optimal"
+    assert reason_past == "hold_release_merge_safe"
 
 
 def test_commit_pass_success_hold_aborts_on_hazard_reappearance():

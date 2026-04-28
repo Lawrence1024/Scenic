@@ -280,6 +280,13 @@ class TacticalPlannerConfig:
     # ticks before being honored. Prevents frame-to-frame flips from noisy
     # fellow velocity estimates. Default 2 = ~100ms at 20Hz control.
     strategy_commit_cycles: int = 2
+    # SD-12b: minimum HOLD duration after pass_success before allowing
+    # release to FREE_RUN. Ensures the side-TTL → optimal flip is smoothed
+    # (MPC has a ramp window to settle) instead of snapping at one tick.
+    # User observed "massive swerl back into front of opponent" on F3L/F3R
+    # when laterally-clear pass-success skipped HOLD entirely. Default 0.8s
+    # at 20Hz control = 16 ticks of MPC smoothing on the merge.
+    merge_back_ramp_s: float = 0.8
 
 
 # SD-3b: Δv-derived gate helpers. All clamped to a sane band so a freak
@@ -1162,38 +1169,32 @@ def tactical_planner_step_v1(
         # geometric merge-back checks pass before releasing to FREE_RUN.
         if (not relation_ahead) and (not _is_release_hazard()) and (not in_recovery_hold):
             state.commit.pass_success = True
-            still_side_by_side = bool(
-                sit is not None
-                and abs(float(sit.lateral_m)) < float(config.merge_safe_lat_m)
+            # SD-12b: ALWAYS enter HOLD_PASS_{commit_side} after a successful
+            # pass, even when laterally clear. The HOLD branch's release gate
+            # (long_ok && merge_geom_ok && hold_elapsed_s >= merge_back_ramp_s)
+            # ensures MPC has at least merge_back_ramp_s to smooth the
+            # side-TTL → optimal transition. Pre-SD-12b the laterally-clear
+            # branch returned FREE_RUN immediately, causing the F3L/F3R
+            # "massive swerl back" the user observed (MPC snapped from
+            # right TTL to optimal in one tick).
+            state.commit.hold_entry_s = float(sim_time_s)
+            state.commit.hold_speed_at_entry_mps = float(ego_speed_mps)
+            state.commit.hold_pass_side = commit_side
+            state.commit.post_event_state = (
+                HOLD_PASS_LEFT if commit_side == "left" else HOLD_PASS_RIGHT
             )
-            if still_side_by_side:
-                # Enter HOLD on the same side TTL.
-                state.commit.hold_entry_s = float(sim_time_s)
-                state.commit.hold_speed_at_entry_mps = float(ego_speed_mps)
-                state.commit.hold_pass_side = commit_side
-                state.commit.post_event_state = (
-                    HOLD_PASS_LEFT if commit_side == "left" else HOLD_PASS_RIGHT
-                )
-                state.mode = (
-                    HOLD_PASS_LEFT if commit_side == "left" else HOLD_PASS_RIGHT
-                )
-                # Don't clear commit lifecycle yet — HOLD reuses commit.last_side.
-                _clear_setup_commit()
-                _clear_pass_intent()
-                _clear_lateral_lock()
-                hold_cap = max(
-                    float(state.commit.hold_speed_at_entry_mps),
-                    float(opponent_speed_mps) + float(config.hold_speed_floor_margin_mps),
-                )
-                return state.mode, commit_side, hold_cap, "hold_pass_entry"
-            # Already laterally clear (e.g. F6/F7 parallel-TTL passes) — go straight to FREE_RUN.
-            state.commit.post_event_state = FREE_RUN
+            state.mode = (
+                HOLD_PASS_LEFT if commit_side == "left" else HOLD_PASS_RIGHT
+            )
+            # Don't clear commit lifecycle yet — HOLD reuses commit.last_side.
             _clear_setup_commit()
             _clear_pass_intent()
             _clear_lateral_lock()
-            _clear_commit_lifecycle()
-            state.mode = FREE_RUN
-            return FREE_RUN, "optimal", None, "pass_success_free_run"
+            hold_cap = max(
+                float(state.commit.hold_speed_at_entry_mps),
+                float(opponent_speed_mps) + float(config.hold_speed_floor_margin_mps),
+            )
+            return state.mode, commit_side, hold_cap, "hold_pass_entry"
         # TTL-clear success: ego has been stably committed to the open passing TTL
         # long enough that the manoeuvre is complete. Covers parallel-TTL scenarios
         # (F6/F7) where the fellow cruises at comparable speed and never physically
@@ -1277,7 +1278,12 @@ def tactical_planner_step_v1(
                 lap_length_m=float(lap_length_m),
                 pass_duration_s=1.0,  # short window — merge takes <1 s
             )
-        if long_ok and merge_geom_ok:
+        # SD-12b: gate release on a minimum ramp window (default 0.8s) so the
+        # MPC has time to smooth the side-TTL → optimal lateral transition.
+        # Without this, F3L/F3R laterally-clear pass-success snapped ttl in
+        # one tick → "massive swerl back" steering jump.
+        ramp_satisfied = bool(hold_elapsed_s >= float(config.merge_back_ramp_s))
+        if long_ok and merge_geom_ok and ramp_satisfied:
             state.commit.post_event_state = FREE_RUN
             _clear_commit_lifecycle()
             state.mode = FREE_RUN
