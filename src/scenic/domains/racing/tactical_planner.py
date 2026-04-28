@@ -41,6 +41,13 @@ from scenic.domains.racing.assessment.pass_geometry import (
     path_collision_predicted,
     select_tracks_for_state,
 )
+from scenic.domains.racing.prediction.strategy_simulator import (
+    ALL_STRATEGIES as _ALL_STRATEGIES,
+    simulate_strategy as _simulate_strategy,
+)
+from scenic.domains.racing.planner.strategy_selector import (
+    select_strategy as _select_strategy,
+)
 from scenic.domains.racing.situation_assessment import OpponentSituation
 
 FREE_RUN = "FREE_RUN"
@@ -251,6 +258,19 @@ class TacticalPlannerConfig:
     segment_aware_enabled: bool = False
     corner_body_blocks_commit: bool = True
     corner_entry_commit_risk_max: float = 0.30
+    # SD-11d: trajectory-based strategy authority. When use_strategy_authority
+    # is False (default) the strategy pipeline runs in TELEMETRY-ONLY mode —
+    # it computes/logs the chosen strategy each tick but does not affect the
+    # planner's mode/ttl/cap output. SD-11e flips authority to True.
+    use_strategy_authority: bool = False
+    strategy_horizon_s: float = 10.0
+    strategy_sample_dt_s: float = 0.5
+    strategy_min_clearance_m: float = 2.5
+    strategy_soft_clearance_m: float = 1.5
+    strategy_target_speed_mps: float = 45.0
+    strategy_accel_mps2: float = 4.0
+    strategy_post_pass_buffer_m: float = 5.0
+    strategy_lane_change_s: float = 1.5
 
 
 # SD-3b: Δv-derived gate helpers. All clamped to a sane band so a freak
@@ -334,6 +354,14 @@ class TacticalPlannerState:
     predicted_collision_breach_count: int = 0
     predicted_collision_ego_track: str = ""
     predicted_collision_opp_track: str = ""
+    # SD-11d: per-tick result from the trajectory-based strategy pipeline.
+    # Populated whenever optimal_waypoints + fellow_trajectory are available;
+    # used as TELEMETRY when use_strategy_authority=False, and as the primary
+    # decision input when use_strategy_authority=True (SD-11e).
+    strategy_selected_name: str = ""
+    strategy_selected_reason: str = ""
+    strategy_min_clearances: dict = field(default_factory=dict)
+    strategy_reachable_progress: dict = field(default_factory=dict)
 
 
 def apply_ttl_key_to_agent(agent, ttl_key: str, ttl_cache: dict, file_by_sel: Dict[str, str]) -> bool:
@@ -423,6 +451,12 @@ def tactical_planner_step_v1(
     # collision predictions → spurious EMERGENCY_STABLE → parallel braking.
     # Defaults to None for backward compat (falls back to state-derived).
     ego_active_ttl: Optional[str] = None,
+    # SD-11d: predicted fellow trajectory over the planning horizon, from
+    # FellowPredictor.trajectory(). When supplied alongside polylines and
+    # arc-lengths, the planner runs the strategy pipeline (telemetry-only
+    # when use_strategy_authority=False; primary decision when True per
+    # SD-11e). Defaults to None for backward compat.
+    fellow_trajectory: Optional[Sequence[Tuple[float, float, float, Optional[float]]]] = None,
 ) -> Tuple[str, str, Optional[float], str]:
     """Return ``(mode, ttl_key, speed_cap, decision_reason)``.
 
@@ -626,6 +660,81 @@ def tactical_planner_step_v1(
     state.predicted_collision_min_clear_m = float(pc_diag.get("min_clear_m", 0.0))
     state.predicted_collision_closest_t_s = float(pc_diag.get("closest_t_s", 0.0))
     state.predicted_collision_breach_count = int(pc_diag.get("breach_count", 0))
+
+    # SD-11d: trajectory-based strategy pipeline (telemetry-only here; SD-11e
+    # makes it authoritative). Computes one StrategyOutcome per candidate
+    # (stay_optimal / follow_fellow / pass_left / pass_right) over a 10s
+    # default horizon, then picks the fastest safe one. Result is stashed on
+    # state for downstream code to consume (when use_strategy_authority=True)
+    # and emitted as a [Strategy] log line for A/B comparison vs the existing
+    # snapshot path.
+    if (
+        fellow_trajectory is not None
+        and len(fellow_trajectory) > 0
+        and optimal_waypoints is not None
+        and ego_s_m is not None
+        and opp_s_m is not None
+        and lap_length_m is not None
+        and float(lap_length_m) > 0.0
+    ):
+        _polylines_for_strategy = {
+            "optimal": optimal_waypoints,
+            "left": side_waypoints_left,
+            "right": side_waypoints_right,
+        }
+        _strategy_kw = dict(
+            ego_s_m=float(ego_s_m),
+            ego_speed_mps=float(ego_speed_mps),
+            opp_s_m=float(opp_s_m),
+            opp_speed_mps=float(opponent_speed_mps),
+            fellow_traj=fellow_trajectory,
+            polylines=_polylines_for_strategy,
+            lap_length_m=float(lap_length_m),
+            horizon_s=float(config.strategy_horizon_s),
+            sample_dt_s=float(config.strategy_sample_dt_s),
+            target_speed_mps=float(config.strategy_target_speed_mps),
+            accel_mps2=float(config.strategy_accel_mps2),
+            setup_speed_margin_mps=float(config.setup_speed_margin_mps),
+            commit_speed_margin_mps=float(config.commit_speed_margin_mps),
+            post_pass_buffer_m=float(config.strategy_post_pass_buffer_m),
+            lane_change_s=float(config.strategy_lane_change_s),
+        )
+        _outcomes = []
+        for _strat in _ALL_STRATEGIES:
+            # pass_* with missing side polyline returns a failure outcome;
+            # selector still ranks it last via the clearance filter.
+            _outcomes.append(_simulate_strategy(_strat, **_strategy_kw))
+        _selected = _select_strategy(
+            _outcomes,
+            min_clearance_m=float(config.strategy_min_clearance_m),
+            soft_clearance_m=float(config.strategy_soft_clearance_m),
+        )
+        state.strategy_selected_name = str(_selected.name)
+        state.strategy_selected_reason = str(_selected.reason)
+        state.strategy_min_clearances = {
+            o.strategy: float(o.min_clearance_m) for o in _outcomes
+        }
+        state.strategy_reachable_progress = {
+            o.strategy: float(o.reachable_progress_at_horizon_m) for o in _outcomes
+        }
+        # Telemetry print (one line per tick when strategy was computed).
+        _clear_str = " ".join(
+            f"{k}={v:.2f}" for k, v in state.strategy_min_clearances.items()
+        )
+        _prog_str = " ".join(
+            f"{k}={v:.1f}" for k, v in state.strategy_reachable_progress.items()
+        )
+        print(
+            f"[Strategy] t={float(sim_time_s):.2f}s selected={state.strategy_selected_name}"
+            f" reason={state.strategy_selected_reason}"
+            f" clearances={{{_clear_str}}}"
+            f" progress={{{_prog_str}}}"
+        )
+    else:
+        # Strategy not computed (insufficient inputs) — leave state fields at
+        # their carried-over values. Downstream SD-11e branch will fall back
+        # to the snapshot path when state.strategy_selected_name is "".
+        pass
 
     def _commit_result(side: str, reason: str) -> Tuple[str, str, Optional[float], str]:
         # SD-2e: cap speed during COMMIT so ego maintains a controlled differential

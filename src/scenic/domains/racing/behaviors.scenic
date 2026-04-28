@@ -1189,6 +1189,18 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     _left_wp = _scripted_ttl_cache["left"][1]
                 if _scripted_ttl_cache is not None and "right" in _scripted_ttl_cache:
                     _right_wp = _scripted_ttl_cache["right"][1]
+                # SD-11d: pull a multi-step fellow trajectory from the predictor
+                # if available. Used by the strategy pipeline inside the planner.
+                # The horizon comes from config so .scenic files can override.
+                _fellow_traj_for_strategy = None
+                if hasattr(self, '_fellow_predictor') and _nearest_o3 is not None:
+                    try:
+                        _fellow_traj_for_strategy = self._fellow_predictor.trajectory(
+                            horizon_s=float(_tactical_config.strategy_horizon_s),
+                            sample_dt_s=float(_tactical_config.strategy_sample_dt_s),
+                        )
+                    except Exception as _e_traj:
+                        _fellow_traj_for_strategy = None
                 _sec_t_planner_start = _wallclock_time.perf_counter()
                 _mode3, _ttl3, _cap3, _reason3 = tactical_planner_step_v1(
                     self._tactical_tp_state,
@@ -1218,6 +1230,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     # ABORT_PASS (post-COMMIT, ego may still be on side TTL for
                     # ~1s while abort_keep_ttl_lat_m holds the side line).
                     ego_active_ttl=str(_scripted_active_ttl or "optimal"),
+                    fellow_trajectory=_fellow_traj_for_strategy,
                 )
                 _sec_planner_ms += (_wallclock_time.perf_counter() - _sec_t_planner_start) * 1000.0
                 _mode_tac = _mode3
