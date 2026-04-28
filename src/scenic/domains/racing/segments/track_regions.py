@@ -21,6 +21,30 @@ from typing import Any, List, Optional, Tuple
 
 from scenic.core.regions import PolygonalRegion, PolylineRegion, regionFromShapelyObject, nowhere
 
+
+def ttl_category(ttl_file_name: Optional[str]) -> Optional[str]:
+    """Classify a TTL filename as ``'main'``, ``'pit'``, or ``None``.
+
+    Mirrors the same string-match used at ``tracks.py:343-350`` for pit-road
+    identification: any TTL filename containing ``'pit'`` (case-insensitive)
+    is the pit TTL; any other non-empty filename is a main TTL
+    (``ttl_optimal_xodr.csv`` / ``ttl_left_xodr.csv`` / ``ttl_right_xodr.csv``).
+    A ``None`` or empty filename returns ``None`` — there is no implicit
+    track context, which the unified ``trackRegion`` helper interprets as
+    "fall back to mainTrack" for the no-segment case or "use the pit + main
+    union" for axis-region requests.
+
+    Used by:
+    - ``model.scenic`` ``trackRegion(ttlFileName, segment)`` to pick the
+      cross-product polygon when a segment filter is requested.
+    - ``simulators/dspace/modeldesk/placement.py`` to detect the four
+      contradiction cases (explicit ``main*`` placement with pit TTL,
+      explicit ``pit*`` placement with main TTL).
+    """
+    if not ttl_file_name:
+        return None
+    return "pit" if "pit" in str(ttl_file_name).lower() else "main"
+
 # Default buffer: meters on each side of the segment centerline
 MAIN_TRACK_BUFFER_M = 6.0
 PIT_TRACK_BUFFER_M = 1.5
@@ -305,6 +329,267 @@ def create_ttl_region_from_file(
     if not pts or len(pts) < 2:
         return None
     return _polyline_from_waypoints(pts)
+
+
+# --------------------------------------------------------------------------
+# SD-24: curve/straight track regions
+# --------------------------------------------------------------------------
+
+# Slivers smaller than this (m^2) are dropped after polygon slicing — they
+# are usually polygon-arithmetic artifacts at cut-line intersections, not
+# meaningful track sections.
+_MIN_SLICE_AREA_M2 = 1.0
+
+# Length (m) of the perpendicular cut line at each segment boundary.
+# Needs to comfortably exceed any road's drivable width. Laguna Seca's
+# widest section is ~12 m; 200 m is overkill-safe for any race track.
+_CUT_LINE_LENGTH_M = 200.0
+
+
+def _make_perpendicular_cut(line_string, s_value: float, length: float = _CUT_LINE_LENGTH_M):
+    """Build a perpendicular cut line through the centerline at arc-length ``s_value``.
+
+    The line passes through ``line_string.interpolate(s_value)`` and is
+    perpendicular to the local tangent direction. Returns a Shapely
+    ``LineString`` of length ``length``, centered on the cut point, or
+    ``None`` if the cut would be at the very start or end of the centerline
+    (no interior tangent there).
+    """
+    from shapely.geometry import LineString
+
+    if s_value <= 0 or s_value >= line_string.length:
+        return None
+    pt = line_string.interpolate(s_value)
+    # Local tangent: small offset before and after the cut point.
+    eps = min(0.5, line_string.length / 1000.0)
+    s_a = max(0.0, s_value - eps)
+    s_b = min(line_string.length, s_value + eps)
+    pt_a = line_string.interpolate(s_a)
+    pt_b = line_string.interpolate(s_b)
+    dx = pt_b.x - pt_a.x
+    dy = pt_b.y - pt_a.y
+    norm = (dx * dx + dy * dy) ** 0.5
+    if norm < 1e-9:
+        return None
+    # Rotate tangent (dx, dy) by 90deg to get perpendicular direction.
+    perp_x = -dy / norm
+    perp_y = dx / norm
+    half = length / 2.0
+    p1 = (pt.x - perp_x * half, pt.y - perp_y * half)
+    p2 = (pt.x + perp_x * half, pt.y + perp_y * half)
+    return LineString([p1, p2])
+
+
+def _label_at_arc_length(segments: List[Tuple[float, float, str]], s_value: float) -> str:
+    """Return the segment label whose ``[s_start, s_end]`` range contains ``s_value``.
+
+    Falls back to the last segment's label if ``s_value`` is past the end
+    (within Shapely's projection tolerance).
+    """
+    for s_start, s_end, label in segments:
+        if s_start <= s_value <= s_end:
+            return label
+    return segments[-1][2] if segments else "straight"
+
+
+def slice_road_polygon_at_segments(
+    road: Any,
+    segments: List[Tuple[float, float, str]],
+    road_category: str,
+) -> List[dict]:
+    """Subdivide a road's drivable polygon into per-segment slices.
+
+    A single XODR road can contain multiple curve/straight segments (e.g.
+    Laguna Seca's main loop is one road with curves AND straights all
+    over it). This helper takes the road's drivable polygon and partitions
+    it at perpendicular cut lines drawn through each interior segment
+    boundary, then labels each resulting piece by projecting its centroid
+    onto the centerline and looking up which segment's arc-length range
+    contains the projected ``s``.
+
+    Args:
+        road: A Scenic ``Road`` object with ``.polygon`` (Shapely
+            ``Polygon`` / ``MultiPolygon``) and a centerline obtainable
+            via ``segment_map._get_road_centerline(road)``.
+        segments: Output of ``_build_curve_straight_segments`` for this
+            road's centerline. Each tuple is ``(s_start, s_end, label)``
+            where ``label in {'curve', 'straight'}``.
+        road_category: ``'main'`` or ``'pit'`` — the parent track side.
+
+    Returns:
+        A list of dicts ``{'label': str, 'polygon': shapely.Polygon,
+        'category': str}``. May be empty if the road has no usable
+        centerline or polygon. Slivers smaller than ``_MIN_SLICE_AREA_M2``
+        are dropped (polygon-arithmetic artifacts).
+    """
+    from scenic.domains.racing.segments.segment_map import _get_road_centerline
+    from shapely.ops import split
+
+    polygon = getattr(road, "polygon", None)
+    if polygon is None or polygon.is_empty:
+        return []
+    centerline = _get_road_centerline(road)
+    if centerline is None or not segments:
+        return []
+    line_string = getattr(centerline, "lineString", None)
+    if line_string is None or line_string.length < 1e-6:
+        return []
+
+    # Single-segment road: no slicing needed.
+    if len(segments) == 1:
+        return [{
+            "label": segments[0][2],
+            "polygon": polygon,
+            "category": road_category,
+        }]
+
+    # Build cut lines at every interior boundary.
+    cut_lines = []
+    for i in range(len(segments) - 1):
+        s_b = float(segments[i][1])  # equals segments[i+1][0]
+        cut = _make_perpendicular_cut(line_string, s_b)
+        if cut is not None:
+            cut_lines.append(cut)
+
+    # Iteratively split. Each cut may fail to cross a piece (e.g. it lies
+    # outside that piece's bounds) — Shapely returns the piece intact in
+    # that case, which is fine.
+    pieces = [polygon]
+    for cl in cut_lines:
+        new_pieces = []
+        for piece in pieces:
+            try:
+                result = split(piece, cl)
+                geoms = list(getattr(result, "geoms", [result]))
+                new_pieces.extend(geoms)
+            except Exception:
+                new_pieces.append(piece)
+        pieces = new_pieces
+
+    # Label each piece by centroid arc-length.
+    out: List[dict] = []
+    for piece in pieces:
+        if piece.is_empty or piece.area < _MIN_SLICE_AREA_M2:
+            continue
+        try:
+            s_val = float(line_string.project(piece.centroid))
+        except Exception:
+            # Centroid projection failed; assign to whichever segment is
+            # closer to the piece's representative point.
+            try:
+                rp = piece.representative_point()
+                s_val = float(line_string.project(rp))
+            except Exception:
+                s_val = 0.0
+        label = _label_at_arc_length(segments, s_val)
+        out.append({
+            "label": label,
+            "polygon": piece,
+            "category": road_category,
+        })
+    return out
+
+
+def build_curve_straight_regions_from_opendrive(track: Any) -> dict:
+    """Build the six curve/straight Scenic regions from a RacingTrack.
+
+    Runs the per-station classifier from ``segments/segment_map.py`` over
+    every main + pit road, slices each road's polygon at the segment
+    boundaries (via :func:`slice_road_polygon_at_segments`), and unions
+    the slices into:
+
+    - ``curve``: all curve slices, both pit + main
+    - ``straight``: all straight slices, both pit + main
+    - ``mainCurve``: curve slices on main racing roads only
+    - ``mainStraight``: straight slices on main racing roads only
+    - ``pitCurve``: curve slices on pit roads only (often empty at LGS)
+    - ``pitStraight``: straight slices on pit roads only
+
+    Pit regions are subtracted by the union of main slices to enforce the
+    same "main wins on overlap" rule used by ``mainTrack`` / ``pitTrack``.
+
+    Returns:
+        dict mapping each region name above to a Scenic ``Region``
+        (``PolygonalRegion`` or ``nowhere`` if the corresponding bucket
+        was empty). Always returns all six keys.
+    """
+    from scenic.domains.racing.segments.segment_map import (
+        _build_curve_straight_segments,
+        _get_road_centerline,
+    )
+    import shapely.ops
+
+    main_roads = list(getattr(track, "_mainRacingRoads", None) or [])
+    pit_roads = list(getattr(track, "_pitRoads", None) or [])
+
+    # Bucket per (category, label).
+    buckets: dict = {
+        ("main", "curve"): [],
+        ("main", "straight"): [],
+        ("pit", "curve"): [],
+        ("pit", "straight"): [],
+    }
+    for road in main_roads:
+        cl = _get_road_centerline(road)
+        if cl is None:
+            continue
+        segs = _build_curve_straight_segments(cl)
+        for slc in slice_road_polygon_at_segments(road, segs, "main"):
+            buckets[("main", slc["label"])].append(slc["polygon"])
+    for road in pit_roads:
+        cl = _get_road_centerline(road)
+        if cl is None:
+            continue
+        segs = _build_curve_straight_segments(cl)
+        for slc in slice_road_polygon_at_segments(road, segs, "pit"):
+            buckets[("pit", slc["label"])].append(slc["polygon"])
+
+    def _union_to_region(polys):
+        if not polys:
+            return None
+        if len(polys) == 1:
+            return regionFromShapelyObject(polys[0])
+        return regionFromShapelyObject(shapely.ops.unary_union(polys))
+
+    main_curve = _union_to_region(buckets[("main", "curve")])
+    main_straight = _union_to_region(buckets[("main", "straight")])
+    pit_curve = _union_to_region(buckets[("pit", "curve")])
+    pit_straight = _union_to_region(buckets[("pit", "straight")])
+
+    # Main-wins-on-overlap: subtract the union of main slices from each pit
+    # region. Mirrors the same rule applied to mainTrack / pitTrack at
+    # build_track_regions_from_opendrive.
+    main_union_polys = (
+        buckets[("main", "curve")] + buckets[("main", "straight")]
+    )
+    if main_union_polys:
+        main_union_geom = shapely.ops.unary_union(main_union_polys)
+        main_union_region = regionFromShapelyObject(main_union_geom)
+        if pit_curve is not None:
+            try:
+                pit_curve = pit_curve.difference(main_union_region)
+            except Exception:
+                pass
+        if pit_straight is not None:
+            try:
+                pit_straight = pit_straight.difference(main_union_region)
+            except Exception:
+                pass
+
+    # Axis regions: union of main + pit slices per label.
+    curve_polys = buckets[("main", "curve")] + buckets[("pit", "curve")]
+    straight_polys = buckets[("main", "straight")] + buckets[("pit", "straight")]
+    curve = _union_to_region(curve_polys)
+    straight = _union_to_region(straight_polys)
+
+    return {
+        "curve": curve if curve is not None else nowhere,
+        "straight": straight if straight is not None else nowhere,
+        "mainCurve": main_curve if main_curve is not None else nowhere,
+        "mainStraight": main_straight if main_straight is not None else nowhere,
+        "pitCurve": pit_curve if pit_curve is not None else nowhere,
+        "pitStraight": pit_straight if pit_straight is not None else nowhere,
+    }
 
 
 def create_track_regions(

@@ -20,7 +20,12 @@ from scenic.domains.racing.tracks import RacingTrack, createRacingTrack
 from scenic.domains.racing.behaviors import *
 from scenic.domains.racing.actions import *
 from scenic.core.regions import UnionRegion
-from scenic.domains.racing.segments.track_regions import create_track_regions, create_ttl_region_from_file
+from scenic.domains.racing.segments.track_regions import (
+    create_track_regions,
+    create_ttl_region_from_file,
+    build_curve_straight_regions_from_opendrive,
+    ttl_category as _ttl_category,
+)
 
 ## Racing-specific parameters
 
@@ -91,6 +96,14 @@ _mainTrack, _pitTrack, _ = create_track_regions(
 mainTrack: Region = _mainTrack
 pitTrack: Region = _pitTrack
 
+# SD-24c: expose the track regions via params so the simulator's placement
+# code (placement.py:place_ego, place_fellow) can do polygon-membership tests
+# (mainTrack.containsPoint vs pitTrack.containsPoint) for the contradiction
+# warning without re-running unionAll. Set as params (not just module
+# globals) because placement.py reaches the regions via sim.scene.params.
+param mainTrackRegion = _mainTrack
+param pitTrackRegion = _pitTrack
+
 # SD-19c: union of main + pit so users can write `new RacingCar on raceTrack`
 # (any drivable surface) without spelling out the union. We chose the alias
 # approach over subclassing RacingTrack from PolygonalRegion because it
@@ -98,6 +111,22 @@ pitTrack: Region = _pitTrack
 # existing __init__ semantics. RacingTrack remains a Python wrapper; raceTrack
 # is the Region for `on` specifiers. Uses UnionRegion (already imported above).
 raceTrack: Region = UnionRegion(_mainTrack, _pitTrack) if (_mainTrack and _pitTrack) else (_mainTrack or _pitTrack or mainTrack)
+
+# SD-24: curve / straight track regions, built from the per-station curvature
+# classifier in segments/segment_map.py and sliced into per-segment polygons by
+# segments/track_regions.py:slice_road_polygon_at_segments. Six top-level
+# Regions plus the unified `trackRegion(ttlFileName, segment)` helper below.
+# - curve / straight: full union (both pit + main) — use when no implicit track context.
+# - mainCurve / mainStraight / pitCurve / pitStraight: cross-product polygons.
+#   These are the building blocks `trackRegion(...)` references internally and
+#   are also exposed for explicit composition.
+_cs_regions = build_curve_straight_regions_from_opendrive(_track)
+curve: Region        = _cs_regions['curve']
+straight: Region     = _cs_regions['straight']
+mainCurve: Region    = _cs_regions['mainCurve']
+mainStraight: Region = _cs_regions['mainStraight']
+pitCurve: Region     = _cs_regions['pitCurve']
+pitStraight: Region  = _cs_regions['pitStraight']
 
 # ttl: PolylineRegion from param ttlFileName (random point exactly on that TTL).
 # Fallback to mainTrack if no ttlFolder/ttl.
@@ -108,18 +137,63 @@ _ttl = create_ttl_region_from_file(
 ) if globalParameters.ttlFolder else None
 ttl: Region = _ttl if _ttl else mainTrack
 
-# Helper for per-car TTL file: new RacingCar on ttlRegion('ttl_optimal_xodr.csv')
-# Also called by RacingCar's `position` default with self.ttlFileName -- when
-# that is None or ttlFolder is unset, fall back to mainTrack so unset cars
-# still get a valid sampling region.
-# SD-19b: returns a PolylineRegion now (was a buffered PolygonalRegion). Each
-# `new Point on ttlRegion(...)` sample lands EXACTLY on the racing line.
+# SD-24: unified placement-region pipeline.
+#
+# Replaces the old `ttlRegion(name)` helper. Decision tree:
+#
+#     ttlFileName | segment   | result
+#     ------------+-----------+-------------------------------------------
+#     'optimal'   | None      | TTL polyline                  (today)
+#     'optimal'   | 'curve'   | TTL polyline ∩ mainCurve
+#     'optimal'   | 'straight'| TTL polyline ∩ mainStraight
+#     'pit'       | None      | TTL polyline                  (today)
+#     'pit'       | 'curve'   | TTL polyline ∩ pitCurve
+#     'pit'       | 'straight'| TTL polyline ∩ pitStraight
+#     None        | None      | mainTrack                     (today's fallback)
+#     None        | 'curve'   | curve   (full union, both pit + main)
+#     None        | 'straight'| straight
+#
+# All branches return a Region. RacingCar's `position` default routes through
+# this helper (no-segment case = today's behaviour, byte-identical), and
+# users can pass `segment='curve'` / `'straight'` to filter. The
+# cross-product regions (`mainCurve` etc.) above are still exposed as
+# top-level names for users who want explicit polygon access without the
+# pipeline.
+def trackRegion(ttlFileName, segment=None):
+    cat = _ttl_category(ttlFileName)
+    # Step 1+2: choose base region from TTL availability.
+    if ttlFileName and globalParameters.ttlFolder:
+        base = create_ttl_region_from_file(
+            globalParameters.ttlFolder, ttlFileName
+        )
+        if base is None:
+            base = mainTrack
+    else:
+        base = mainTrack
+    # Step 3: optional segment filter.
+    if segment is None:
+        return base
+    if segment == 'curve':
+        if cat == 'main':
+            return base.intersect(mainCurve)
+        if cat == 'pit':
+            return base.intersect(pitCurve)
+        return curve
+    if segment == 'straight':
+        if cat == 'main':
+            return base.intersect(mainStraight)
+        if cat == 'pit':
+            return base.intersect(pitStraight)
+        return straight
+    # Unknown segment string — fall back to base for forward-compat.
+    return base
+
+# Backwards-compat alias so legacy scenarios written against
+# `on ttlRegion(self.ttlFileName)` keep working unchanged. SD-24 routes all
+# callers through `trackRegion`; this is the same behaviour for the
+# no-segment case.
 def ttlRegion(ttlFileName):
-    if not globalParameters.ttlFolder or not ttlFileName:
-        return mainTrack
-    return create_ttl_region_from_file(
-        globalParameters.ttlFolder, ttlFileName
-    ) or mainTrack
+    return trackRegion(ttlFileName)
 
 # Backward compatibility: mainRacingRoad and pitLaneRoad alias to mainTrack and pitTrack
 mainRacingRoad: Region = mainTrack
@@ -167,12 +241,14 @@ class RacingCar(Car):
 
     # Default racing properties
     speed: 25  # Higher default speed for racing (90 km/h)
-    # Integrated "on ttl" placement: when this car has a ttlFileName, sample
-    # uniformly over the buffered TTL polygon for THAT file (each car uses
-    # its own ttl). When unset, fall back to the entire mainRacingRoad.
-    # Explicit specifiers (e.g. `new RacingCar at (x, y)` or
-    # `new RacingCar on mainTrack`) still override this default normally.
-    position: new Point on ttlRegion(self.ttlFileName)
+    # SD-24: routed through the unified `trackRegion(ttlFileName, segment)`
+    # pipeline. Behaviour for the no-segment default is byte-identical to
+    # the pre-SD-24 `ttlRegion(self.ttlFileName)`: sample on the TTL polyline
+    # if a ttlFileName is set, fall back to mainTrack otherwise. Users who
+    # want a curve / straight filter can override the default with
+    # `with position new Point on trackRegion(self.ttlFileName, 'curve')`.
+    # Explicit `at (x, y)` / `on mainTrack` etc. still override normally.
+    position: new Point on trackRegion(self.ttlFileName)
     requireVisible: False
     
     # Racing identification

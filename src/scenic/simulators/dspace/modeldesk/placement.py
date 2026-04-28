@@ -23,6 +23,75 @@ def t_for_dspace_lateral(t_val: float) -> float:
     return float(t_val)
 
 
+def _maybe_warn_placement_contradiction(sim, obj, x, y, vehicle_label):
+    """SD-24c: emit a [Placement] [WARN] line when a car's TTL category and its
+    placed (x, y) classification disagree.
+
+    Silent when:
+        - The car has no `ttlFileName` set (no implicit context).
+        - The placed (x, y) is consistent with the TTL category.
+        - The placed (x, y) lies in neither mainTrack nor pitTrack (off-track
+          placement; the BoundsCheck pipeline owns that diagnostic).
+        - mainTrackRegion / pitTrackRegion params are unavailable (e.g.
+          legacy maps without RacingTrack).
+
+    Emits a `'PlacementContradiction'` record alongside the print so monitors
+    can filter on it. See ``docs/scenic_changes_from_presentation.md`` SD-24
+    for the full 4-cell contradiction matrix.
+    """
+    try:
+        from scenic.domains.racing.segments.track_regions import ttl_category
+    except Exception:
+        return  # racing domain unavailable; silently skip
+
+    ttl_name = getattr(obj, "ttlFileName", None)
+    cat_ttl = ttl_category(ttl_name)
+    if cat_ttl is None:
+        return  # no implicit context to contradict
+
+    params = getattr(getattr(sim, "scene", None), "params", None) or {}
+    main_region = params.get("mainTrackRegion")
+    pit_region = params.get("pitTrackRegion")
+    if main_region is None or pit_region is None:
+        return
+
+    try:
+        from scenic.core.vectors import Vector
+        pt = Vector(float(x), float(y))
+        in_main = bool(main_region.containsPoint(pt))
+        in_pit = bool(pit_region.containsPoint(pt))
+    except Exception:
+        return
+
+    if cat_ttl == "main" and in_pit and not in_main:
+        cat_pos = "pit"
+    elif cat_ttl == "pit" and in_main and not in_pit:
+        cat_pos = "main"
+    else:
+        # Consistent (ttl=main, in_main=True) OR off-track entirely
+        # (in_main=False AND in_pit=False) OR ambiguous (both true at a
+        # junction). None of those should fire the warning.
+        return
+
+    print(
+        f"[Placement] [WARN] {vehicle_label} with ttlFileName='{ttl_name}' "
+        f"(category={cat_ttl}) was placed at ({float(x):.2f}, {float(y):.2f}) "
+        f"classified as {cat_pos}. Continuing anyway -- this may be "
+        f"intentional for a falsification scenario."
+    )
+    try:
+        sim.records["PlacementContradiction"].append((sim.currentTime, {
+            "name": str(vehicle_label),
+            "ttl_file_name": str(ttl_name) if ttl_name else None,
+            "ttl_category": cat_ttl,
+            "placed_x": float(x),
+            "placed_y": float(y),
+            "placed_category": cat_pos,
+        }))
+    except Exception:
+        pass
+
+
 def _racing_st_offset_to_deltas(offset):
     """Convert _racing_st_offset to (delta_s, delta_t) in meters relative to ego.
     offset can be:
@@ -174,6 +243,13 @@ def place_ego(sim, obj):
         scenic_x, scenic_y = obj.position.x, obj.position.y
         _xodr_path = get_map_path(getattr(getattr(sim, "scene", None), "params", None) or {})
         work_x, work_y = xodr_to_rd(scenic_x, scenic_y, _xodr_path)
+
+        # SD-24c: contradiction warning when the car's TTL category disagrees
+        # with the polygon classification of its placed (x, y). Fires only
+        # for the four mismatch cases (main TTL on pit polygon, or pit TTL
+        # on main polygon); silent otherwise. See docstring on
+        # _maybe_warn_placement_contradiction for the full predicate.
+        _maybe_warn_placement_contradiction(sim, obj, scenic_x, scenic_y, "ego")
 
         # 2) Determine route: prefer TTL-based (distance to main vs pitlane; if similar, prefer main).
         # _route_pref_from_ttl_distances compares against TTL CSVs which live in RD frame, so
@@ -383,6 +459,12 @@ def place_fellow(sim, obj):
         scenic_x, scenic_y = obj.position.x, obj.position.y
         _xodr_path = get_map_path(getattr(getattr(sim, "scene", None), "params", None) or {})
         work_x, work_y = xodr_to_rd(scenic_x, scenic_y, _xodr_path)
+
+        # SD-24c: contradiction warning when the fellow's TTL category
+        # disagrees with the polygon classification of its placed (x, y).
+        # Same predicate as the ego check; see place_ego for the full
+        # docstring reference.
+        _maybe_warn_placement_contradiction(sim, obj, scenic_x, scenic_y, vehicle_name)
 
         # 2) Determine route: TTL centerlines (ttl_main_road.csv vs ttl_pitlane.csv) live in
         # RD frame, so feed them the translated work_x/work_y.

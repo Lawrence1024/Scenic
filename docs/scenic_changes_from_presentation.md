@@ -32,28 +32,7 @@ the numbered list stays useful as a forward-looking ledger.
 
 ## 4. Corner-segment placement specifier missing
 
-**Symptom:** `examples/racing/f_shared/F8_corner_entry_fellow_ahead_optimal.scenic`
-and `F10`/`F11`/`F12` are nearly byte-identical to `F6`/`F7` —
-**only the ego start coordinates differ**. The user can't write
-"put ego at a corner entry" abstractly; they have to look up the
-corner's (x, y) and hardcode it.
-
-**Why this matters:** falsification over corner-vs-straight
-behavior is a natural axis (we should be able to vary the corner
-the layout starts in). Today that's a manual scenario duplication
-per corner.
-
-**Fix shape:** a `CornerSegment` region (or a more general
-`Segment(curvature_range=..., length_range=...)`) that classifies
-roads by curvature and exposes them as Region. Then:
-```
-ego = new RacingCar on cornerSegment(curvature=Range(0.05, 0.15))
-```
-
-The classifier already exists in
-`src/scenic/domains/racing/segments/` (the `RaceSegment` machinery
-in `segments/tracks.py` and the segment-aware planner code). What's
-missing is exposing the classifier outputs as Scenic regions.
+*Resolved in SD-24. See `## Done` section below.*
 
 ---
 
@@ -475,3 +454,93 @@ dynamics into sub-cm trajectory drift. That's the noise floor under
 tight tolerances and is orthogonal to the maneuver-start
 synchronization addressed here. For falsification purposes it's
 well below any meaningful safety threshold.
+
+### SD-24 — Curve / straight track regions + unified `trackRegion(...)` pipeline
+
+**What was wrong.** Item #4 on the original change-list. Falsifying
+corner-vs-straight behaviour required duplicating scenarios per
+corner (`F8`/`F10`/`F11`/`F12` were byte-identical to `F6`/`F7` save
+for hardcoded ego `(x, y)` coordinates). There was no abstraction
+for "place ego on a corner" — the curvature classifier in
+`segments/segment_map.py` (`_build_curve_straight_segments`,
+threshold 0.011) existed and the planner consumed it via
+`_waypoint_segment_map`, but its output wasn't exposed as Scenic
+regions, and there was no way to drive a falsifier along the
+corner-vs-straight axis. Separately, the existing per-vehicle
+placement helper (`ttlRegion(self.ttlFileName)`) was destined to grow
+sibling helpers for curve and straight, splitting one decision tree
+across three sibling functions.
+
+**What landed.**
+
+- *Stage 24a — sub-road polygon slicing* in
+  `src/scenic/domains/racing/segments/track_regions.py`:
+  - `slice_road_polygon_at_segments(road, segments, road_category)`
+    — uses Shapely's `split()` with perpendicular cut lines at each
+    interior segment boundary to partition a road's drivable polygon
+    into per-segment slices. Each piece is labelled by projecting
+    its centroid onto the centerline and looking up the segment that
+    contains the projected `s`.
+  - `build_curve_straight_regions_from_opendrive(track)` — runs the
+    slicer over every main + pit road, unions the slices into six
+    Scenic Regions: `curve`, `straight`, `mainCurve`, `mainStraight`,
+    `pitCurve`, `pitStraight`. Applies the same "main wins on
+    overlap" rule that `mainTrack`/`pitTrack` already use.
+  - On Laguna Seca: 9 main curve pieces (~8.4k m²) + 11 main
+    straight pieces (~32.4k m²) + 2 pit curves + 2 pit straights.
+    Areas roughly match the visual track geometry.
+
+- *Stage 24b — region exposure + unified placement pipeline* in
+  `src/scenic/domains/racing/model.scenic`:
+  - Six new top-level `Region` names bound after `raceTrack`.
+  - `ttl_category(ttlFileName)` helper added to
+    `track_regions.py` (re-used from both Scenic and the simulator)
+    classifies a TTL filename as `'main'` or `'pit'` via the same
+    `'pit' in name.lower()` predicate already used at
+    `tracks.py:343-350` for pit-road identification.
+  - `trackRegion(ttlFileName=None, segment=None)` — the unified
+    9-cell decision table replacing the old `ttlRegion(...)` helper.
+    `ttlRegion` is kept as a one-line backward-compat alias.
+  - `RacingCar.position` default routed through `trackRegion(...)`.
+    The no-segment case (the default) is byte-identical to the
+    pre-SD-24 behaviour: TTL polyline if a TTL is set, mainTrack
+    fallback otherwise.
+
+- *Stage 24c — placement contradiction warning* in
+  `src/scenic/simulators/dspace/modeldesk/placement.py`:
+  - `_maybe_warn_placement_contradiction(sim, obj, x, y, label)`
+    fires a `[Placement] [WARN]` line + a parallel
+    `'PlacementContradiction'` record entry when the car's TTL
+    category disagrees with the polygon classification of its
+    placed `(x, y)`. The four mismatch cases (main TTL on
+    `pitCurve`/`pitStraight`/`pitTrack`; pit TTL on
+    `mainCurve`/`mainStraight`/`mainTrack`) are explicitly covered.
+  - Routing placement through `trackRegion(...)` makes
+    contradictions structurally impossible — the warning only fires
+    for users who deliberately bypass the unified pipeline via
+    explicit cross-product names. No rejection; the user might be
+    deliberately stressing the planner.
+
+- *Stage 24d — example scenarios:*
+  - `examples/racing/sampled/smoke_on_curve.scenic` — three-car
+    compile-only smoke demonstrating TTL-aware curve placement
+    (ego on optimal-TTL ∩ mainCurve), TTL-agnostic curve placement
+    (fellow on full curve union), and explicit cross-product
+    placement (car3 on mainStraight).
+  - `examples/racing/falsifiable/F_curve_falsify.scenic` —
+    replaces the F8/F10/F11/F12 family of hardcoded-corner
+    scenarios with a single VerifaiRange-driven scenario that
+    samples uniformly across all main-loop curves on the optimal
+    racing line.
+
+**Verification.** Compile-only via Python (avoids Scenic CLI's
+visualizer window): both new scenarios sample correctly, with three
+seeds producing three distinct ego positions clustered around
+Laguna Seca corners. Three example ego positions for
+`smoke_on_curve.scenic`: (540.77, -14.52), (-57.46, -218.18),
+(502.77, 8.48). Per-region areas after slicing: mainCurve = 8443.9
+m² (9 pieces), mainStraight = 32359.6 m² (11 pieces), pitCurve =
+935.7 m² (2 pieces), pitStraight = 6740.4 m² (2 pieces). Stage 2
+warning verification (e.g. running `with ttlFileName 'ttl_pit_xodr.csv'`
++ `on mainStraight`) requires a live simulator and is documented in
+the smoke scenario's docstring; not exercised in this commit.
