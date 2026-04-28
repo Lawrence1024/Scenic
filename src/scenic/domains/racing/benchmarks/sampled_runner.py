@@ -73,6 +73,11 @@ class SampleMetrics:
     collision: bool
     off_track: bool
     lap_time_s: Optional[float]
+    # Continuous robustness signal -- minimum bbox_gap_m observed in this run.
+    # Smaller value = closer to a collision; <=0 means OBBs touched/overlapped
+    # at least once. Optional because logs without an [EvalGT] stream (early
+    # crashes, scene-only smoke tests) won't have any matches.
+    bbox_gap_m_min: Optional[float]
     # Positions
     ego_start_xy: Optional[str]
     opp_start_xy: Optional[str]
@@ -91,21 +96,40 @@ class SampleMetrics:
     # Per-tick perf
     tick_count: int
     tick_ms_p50: Optional[float]
+    # Continuous off-track robustness, derived from `[BoundsCheck]` lines.
+    # Unified signed-distance signal:
+    #     in_track=1 frame  ->  margin = +min(d_in, d_out)   (distance to nearest edge; positive)
+    #     in_track=0 frame  ->  margin = -min(d_in, d_out)   (depth past nearest edge; negative)
+    # `track_clearance_m` is the MIN of `margin` across all frames in the run,
+    # so lower = closer to / deeper-in violation. Optional because logs without
+    # a `[BoundsCheck]` stream (scene-only smoke tests) have no frames.
+    track_clearance_m: Optional[float] = None
 
 
 _RE_TICKTIME = re.compile(r"\[TickTime\] t=([\d.]+)s wall_t=[\d.]+s tick_ms=([\d.]+)")
 _RE_STRATEGY_SELECTED = re.compile(r"\[Strategy\] t=[\d.]+s selected=([a-z_]+)")
-_RE_BBOX_GAP = re.compile(r"\[EvalGT\][^\n]*bbox_gap_m=(-?[\d.]+)")
+_RE_BBOX_GAP = re.compile(r"bbox_gap_m=(-?[\d.]+)")
 _RE_LAP_TIME = re.compile(r"lap_time_s=([\d.]+)")
 # Ego start: first `[Ego debug] xy=(<x>, <y>) -> ...` (note `[Ego debug]`, not `[Ego] debug`)
 _RE_EGO_POS = re.compile(r"\[Ego debug\] xy=\(([-\d.]+),\s*([-\d.]+)\)")
 # Fellow placement format: `[Placement] Fellow_<n>: racing (s,t) from ego + (<gap>, <lat>) -> s=<s>, t=<t>`.
 # Capture s,t (the resolved race-frame coords) as the start position string and the gap (first paren value)
 # separately for the sampled_gap_m column.
+# `<gap>` may be a plain float (`41.85`) when sampled by Scenic's `Range`, OR
+# wrapped as `np.float64(41.85)` when sampled by VerifAI's sampler -- the
+# wrapper is consumed by the optional non-capturing prefix `(?:np\.float64\()?`
+# and the optional inner `\)?` after the captured number.
 _RE_FELLOW_RESOLVED = re.compile(
-    r"\[Placement\] Fellow_\d+:[^\n]*from ego \+ \(([-\d.]+),\s*([-\d.]+)\)[^\n]*->\s*s=([-\d.]+),\s*t=([-\d.]+)"
+    r"\[Placement\] Fellow_\d+:[^\n]*from ego \+ "
+    r"\((?:np\.float64\()?(-?[\d.]+)\)?,\s*(-?[\d.]+)\)"
+    r"[^\n]*->\s*s=([-\d.]+),\s*t=([-\d.]+)"
 )
 _RE_OFF_TRACK = re.compile(r"in_track=0|out_of_track")
+# Continuous off-track signal: every `[BoundsCheck]` line carries d_in
+# (distance to inner edge), d_out (distance to outer edge), and in_track.
+# Both d_in/d_out are unsigned magnitudes; sign of off-trackness comes
+# from in_track. Used by `track_clearance` / `safety_min` monitors.
+_RE_BOUNDS = re.compile(r"\[BoundsCheck\][^\n]*?d_in=(-?[\d.]+)m d_out=(-?[\d.]+)m in_track=([01])")
 # `pass_success=1` is the SD-13 commit-success flag emitted on the lifecycle's
 # success-tick (`[Commit] ... pass_success=1`). Tick count of this is the
 # overtake-completion count for the run.
@@ -150,17 +174,39 @@ def parse_sample(idx: int, seed: int, log_path: Path, return_code: int) -> Sampl
     # Fall back to the per-tick bbox_gap_m<=0 check only if eval_contact
     # was not emitted (older logs); the legacy check can flag transient
     # numerical zeros, so it is the secondary signal.
+    # Same loop also tracks the minimum bbox_gap_m for the continuous
+    # robustness signal used by VerifAI's active samplers (verifai_runner).
     collision = bool(_RE_EVAL_CONTACT.search(text))
-    if not collision:
-        for m in _RE_BBOX_GAP.finditer(text):
-            try:
-                if float(m.group(1)) < 0.0:
-                    collision = True
-                    break
-            except ValueError:
-                continue
+    bbox_gap_m_min: Optional[float] = None
+    for m in _RE_BBOX_GAP.finditer(text):
+        try:
+            v = float(m.group(1))
+        except ValueError:
+            continue
+        if bbox_gap_m_min is None or v < bbox_gap_m_min:
+            bbox_gap_m_min = v
+        if not collision and v < 0.0:
+            collision = True
 
     off_track = bool(_RE_OFF_TRACK.search(text))
+
+    # Continuous off-track robustness from `[BoundsCheck]` lines. For each
+    # tick the signed margin is `+min(d_in,d_out)` when inside, `-min(d_in,d_out)`
+    # when outside (depth of excursion past the nearest edge). The run-level
+    # signal is the minimum margin observed -- "the worst the ego ever got."
+    # Lower = closer to / deeper-in violation; >= 0 = safe.
+    track_clearance_m: Optional[float] = None
+    for bm in _RE_BOUNDS.finditer(text):
+        try:
+            d_in = float(bm.group(1))
+            d_out = float(bm.group(2))
+            in_track = bm.group(3) == "1"
+        except ValueError:
+            continue
+        edge_dist = min(d_in, d_out)
+        margin = edge_dist if in_track else -edge_dist
+        if track_clearance_m is None or margin < track_clearance_m:
+            track_clearance_m = margin
 
     # Lap time (last value).
     lap_time = None
@@ -229,6 +275,7 @@ def parse_sample(idx: int, seed: int, log_path: Path, return_code: int) -> Sampl
         collision=collision,
         off_track=off_track,
         lap_time_s=lap_time,
+        bbox_gap_m_min=bbox_gap_m_min,
         ego_start_xy=ego_xy,
         opp_start_xy=fellow_xy,
         sampled_gap_m=gap_m,
@@ -243,6 +290,7 @@ def parse_sample(idx: int, seed: int, log_path: Path, return_code: int) -> Sampl
         selected_pass_right=sel_counts["pass_right"],
         tick_count=len(tick_ms_values),
         tick_ms_p50=tick_ms_p50,
+        track_clearance_m=track_clearance_m,
     )
 
 
@@ -290,7 +338,8 @@ def run_one_sample(
 def write_summary_csv(out_csv: Path, samples: List[SampleMetrics]) -> None:
     fields = [
         "sample_index", "seed", "return_code", "log_path",
-        "collision", "off_track", "lap_time_s",
+        "collision", "off_track", "lap_time_s", "bbox_gap_m_min",
+        "track_clearance_m",
         "ego_start_xy", "opp_start_xy", "sampled_gap_m",
         "commit_pass_success_count", "commit_pass_left_count",
         "commit_pass_right_count", "commit_abort_pass_count",

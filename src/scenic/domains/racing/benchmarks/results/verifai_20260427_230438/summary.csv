@@ -1,0 +1,4 @@
+sample_index,seed,return_code,log_path,collision,off_track,lap_time_s,bbox_gap_m_min,ego_start_xy,opp_start_xy,sampled_gap_m,commit_pass_success_count,commit_pass_left_count,commit_pass_right_count,commit_abort_pass_count,guard_emergency_stable_count,selected_stay_optimal,selected_follow_fellow,selected_pass_left,selected_pass_right,tick_count,tick_ms_p50
+1,42,0,src\scenic\domains\racing\benchmarks\results\verifai_20260427_230438\logs\sample_001.log,False,True,,14.934,"(-89.3245, -474.5014)","s=991.51, t=7.44",40.0,0,0,0,0,0,300,0,0,0,300,15.94
+2,43,0,src\scenic\domains\racing\benchmarks\results\verifai_20260427_230438\logs\sample_002.log,False,True,,15.738,"(173.1432, -592.2706)","s=1833.44, t=0.85",30.0,0,0,0,0,0,300,0,0,0,300,18.69
+3,44,0,src\scenic\domains\racing\benchmarks\results\verifai_20260427_230438\logs\sample_003.log,True,False,,0.0,"(-124.3136, -491.4068)","s=959.11, t=5.88",50.0,0,212,0,78,0,290,0,9,1,300,11.82

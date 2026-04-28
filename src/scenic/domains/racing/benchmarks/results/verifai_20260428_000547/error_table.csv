@@ -1,0 +1,11 @@
+sample_index,seed,rho,sampled_values_json,collision,bbox_gap_m_min,off_track,commit_pass_success_count,commit_abort_pass_count,log_path
+1,42,-7.63,"{""param0"": 41.85071752556834}",True,0.0,True,0,72,src\scenic\domains\racing\benchmarks\results\verifai_20260428_000547\logs\sample_001.log
+8,49,-7.37,"{""param0"": 36.91611989237483}",False,19.628,True,0,0,src\scenic\domains\racing\benchmarks\results\verifai_20260428_000547\logs\sample_008.log
+9,50,-7.32,"{""param0"": 22.951370890396625}",True,0.748,True,0,0,src\scenic\domains\racing\benchmarks\results\verifai_20260428_000547\logs\sample_009.log
+6,47,-7.3,"{""param0"": 21.89648731982193}",False,15.73,True,0,0,src\scenic\domains\racing\benchmarks\results\verifai_20260428_000547\logs\sample_006.log
+10,51,-7.15,"{""param0"": 41.84084747974254}",False,8.129,True,1,0,src\scenic\domains\racing\benchmarks\results\verifai_20260428_000547\logs\sample_010.log
+7,48,-7.06,"{""param0"": 38.87094276549789}",False,1.918,True,0,0,src\scenic\domains\racing\benchmarks\results\verifai_20260428_000547\logs\sample_007.log
+3,44,-3.89,"{""param0"": 23.12287837021776}",True,0.0,True,0,68,src\scenic\domains\racing\benchmarks\results\verifai_20260428_000547\logs\sample_003.log
+2,43,-1.71,"{""param0"": 43.94822547835545}",False,6.691,True,0,0,src\scenic\domains\racing\benchmarks\results\verifai_20260428_000547\logs\sample_002.log
+5,46,-1.18,"{""param0"": 23.107247868871127}",True,0.0,True,0,74,src\scenic\domains\racing\benchmarks\results\verifai_20260428_000547\logs\sample_005.log
+4,45,-1.15,"{""param0"": 39.073402457022226}",False,3.582,True,0,0,src\scenic\domains\racing\benchmarks\results\verifai_20260428_000547\logs\sample_004.log

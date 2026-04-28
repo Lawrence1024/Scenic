@@ -1,9 +1,9 @@
 # Falsification pipeline for the racing domain
 
-**Status (SD-15):** Phase 1 (region-based placement) and Phase 2 (sampled
-test bank + batch runner) are landed. Phase 3 (VerifAI integration) is
-documented here but deferred until baseline overtake quality is high enough
-that finding edge cases is the actual problem.
+**Status (SD-16):** Phase 1 (region-based placement), Phase 2 (sampled
+test bank + subprocess runner), and Phase 3 (VerifAI active falsification)
+are landed. The full pipeline runs end-to-end against the cosim bridge
+without external orchestration.
 
 ## What "falsifiable" means here
 
@@ -142,108 +142,154 @@ patterns.
 
 ---
 
-## VerifAI integration (Phase 3, deferred)
+## VerifAI integration (Phase 3)
 
 [VerifAI](https://verifai.readthedocs.io/) is a Scenic-companion library
 that turns a Scenic scenario into an active falsification loop:
 
-1. The scenario declares the parameter space (the same `Range(...)` and
-   `on mainTrack` distributions we already have).
-2. VerifAI's outer loop samples those parameters using a
-   **failure-biased sampler** (Bayesian Optimization, cross-entropy,
-   simulated annealing, or random — each is a swappable backend).
-3. For each sample VerifAI runs the simulation, reads a **monitor**
-   (a function or specification that returns "satisfied" or
-   "violated" + a real-valued robustness score).
-4. The sampler updates its surrogate model and biases the next batch
-   of samples toward the parameter regions where robustness was lowest
-   (most likely to violate).
+1. The scenario declares the parameter space using `VerifaiRange(...)` /
+   `VerifaiOptions(...)` in place of plain `Range(...)`. Scenic's compiler
+   auto-promotes any scenario containing those to use `VerifaiSampler`
+   (`scenic.core.external_params.VerifaiSampler`).
+2. The outer loop (our `verifai_runner.py`) samples those parameters
+   using a **failure-biased sampler** -- Halton (deterministic
+   quasi-random), cross-entropy (active), Bayesian opt (active),
+   random -- each swappable via `--sampler {halton,ce,bo,random}`.
+3. For each sample the simulation runs once; afterwards a **monitor**
+   reads the canonical `SampleMetrics` and returns a robustness scalar
+   (lower = closer to violation; negative = violated).
+4. The sampler updates its surrogate on each feedback and biases the
+   next sample toward parameter regions where robustness was lowest --
+   targeted edge-case discovery rather than uniform coverage.
 
-The result is targeted edge-case discovery rather than uniform coverage:
-VerifAI converges on the corners of the parameter space that break the
-ego, not the easy ones it already passes.
+### Quickstart
 
-### What we'd need to add to integrate
+Prerequisites: VEOS + ModelDesk + ControlDesk launched externally
+(the Scenic process spawns its own IPC client and connects). VerifAI
+installed (`pip install verifai`; already listed under the `test-full`
+extra in `pyproject.toml`).
 
-**(a) Monitor blocks.** Define falsification specifications. For SD-15's
-S1 scenario the natural ones are:
+```bash
+# 1. Import smoke (no simulator, no VEOS).
+python -c "from scenic.core.external_params import VerifaiSampler, VerifaiRange; print('ok')"
 
-```python
-# Pseudo-syntax — exact API depends on VerifAI version
-monitor no_collision:
-    while True:
-        require min_opponent_distance > 0.0    # bbox_gap_m > 0
+# 2. Halton smoke -- deterministic, no learning, proves end-to-end wiring.
+#    Bridge cold on sample 1, warm on samples 2+.
+python src/scenic/domains/racing/benchmarks/verifai_runner.py \
+    examples/racing/falsifiable/S1_falsify.scenic \
+    --sampler halton --monitor min --count 3 --seed 42 --time 1500
 
-monitor overtake_completes:
-    eventually within 25.0:
-        commit_pass_success_count >= 1
+# 3. Cross-entropy wiring test (small budget; proves feedback is threaded).
+#    Use `--monitor safety` so CE has a continuous gradient on BOTH the
+#    collision and off-track specs (see "Monitor reference" below).
+python src/scenic/domains/racing/benchmarks/verifai_runner.py \
+    examples/racing/falsifiable/S1_falsify.scenic \
+    --sampler ce --monitor safety --count 10 --seed 42 --time 1500
 
-monitor no_emergency_stable:
-    require guard_emergency_stable_count == 0
+# 4. Real falsification campaign (overnight; ~1 min/sample with warm bridge).
+python src/scenic/domains/racing/benchmarks/verifai_runner.py \
+    examples/racing/falsifiable/S1_falsify.scenic \
+    --sampler ce --monitor safety --count 200 --seed 42 --time 3000
+
+# 5. Inspect violations -- ranked by rho ascending.
+cat src/scenic/domains/racing/benchmarks/results/verifai_*/error_table.csv
 ```
 
-These are read from the Scenic model's runtime state (the same `[EvalGT]`,
-`[Commit]`, and `[Guard]` log signals our `sampled_runner.py` already
-parses for `summary.csv`).
+Each row in `error_table.csv` records the VerifAI-sampled parameter
+values (e.g. `{"param0": 28.4}`) plus the parsed `SampleMetrics`. To
+reproduce a single failure: copy the parameter value into the .scenic
+file (or run `sampled_runner.py` with the failing iteration's seed).
 
-**(b) VerifAI invocation.** Wrap the existing
-`sampled_runner.run_one_sample` with a VerifAI sampler:
+### Output layout
 
-```python
-from verifai.scenic_server import ScenicServer
-from verifai.samplers import HaltonSampler, CrossEntropySampler, BayesOptSampler
-
-server = ScenicServer(
-    scenic_file="examples/racing/sampled/S1_fellow_left_ahead.scenic",
-    sampler=BayesOptSampler(...),
-    monitor="no_collision",
-    max_iterations=100,
-)
-server.run()
+```
+src/scenic/domains/racing/benchmarks/results/verifai_<TIMESTAMP>/
+    S1_falsify.scenic           # snapshot of the file used
+    logs/sample_001.log         # captured stdout per iteration
+    logs/sample_002.log
+    ...
+    summary.csv                 # one row per sample (same schema as sampled_runner)
+    summary.txt                 # human-readable digest
+    error_table.csv             # violations only, ranked by robustness ascending
 ```
 
-VerifAI hands each sample to the simulator (via the sampled_runner's
-subprocess invocation), reads the monitor's robustness, and decides what
-to sample next.
+### Monitor reference
 
-**(c) Output integration.** VerifAI's `error_table` would be the
-falsification version of `summary.csv`: the list of parameter samples
-that violated each monitor, ranked by severity. Drop it into the same
-`benchmarks/results/sampled_<TIMESTAMP>/` directory under
-`error_table.csv`.
+All monitors read the parsed `SampleMetrics` from `sampled_runner.py`'s
+`parse_sample`. Convention: **lower value = closer to violation,
+negative = violated.** The runner picks one via `--monitor NAME`.
 
-### Why we're not implementing now
+| Name | Signal | Robustness gradient |
+|---|---|---|
+| `collision` | `bbox_gap_m_min` (continuous min over `[EvalGT]`/`[EvalEvent]`) | meters of clearance; 0 = touch; <0 = overlap |
+| `track` | `track_clearance_m` (signed distance to nearest edge from `[BoundsCheck]`) | +X = X meters of margin; -X = X meters past the boundary |
+| `offtrack` | `[BoundsCheck] in_track=0` (BOOLEAN) | -1 / +1 (no gradient -- prefer `track` for CE/BO) |
+| `overtake` | `commit_pass_success_count`, `commit_abort_pass_count` | +1 if any overtake completed; -(aborts) otherwise; 0 if no attempt |
+| `brake` | `guard_emergency_stable_count` | -(emergency-brake tick count) |
+| `safety` | min over the two SAFETY specs | `min(collision, track)` -- continuous on both sides; recommended for "find any safety violation" |
+| `min` | composite | `min` over collision/overtake/brake/offtrack -- "find ANY violation" (includes the boolean `offtrack`, which can saturate the floor) |
+| `all` | multi-objective tuple | `(collision, track, overtake, brake)` for `mab`-style samplers |
 
-1. **Baseline quality.** SD-13 reduced F-bank collisions from 4 to 1, but
-   F8 (corner-close-up) and F3R-style "ignoring fellow" perceptions are
-   still open. Falsification is most useful when the baseline is "passes
-   all easy cases, occasionally trips on hard ones" — once we're there,
-   VerifAI directs attention to the actual corner cases.
-2. **Scenario coverage.** We have one sampled scenario (S1). Falsification
-   over a single scenario family is much less interesting than over a
-   bank — `S2_fellow_right_ahead`, `S3_fellow_optimal_slower`,
-   `S4_corner_entry_overtake` etc. should land before VerifAI is wired
-   in, so the falsifier can budget across families.
-3. **Compute budget.** VerifAI's failure-biased sampling typically needs
-   50–500 simulation runs to converge. At ~1 minute per run with cosim
-   warm-start, that's hours per scenario. Worth doing only after the
-   scenarios are stable enough not to invalidate the budget mid-run.
+**Recommended defaults:**
+- For pure safety falsification (collision OR off-track): `--monitor safety`. Both components are continuous, CE/BO converge cleanly.
+- For collision-only campaigns: `--monitor collision`.
+- For coverage-style "find ANY weakness": `--monitor min` (broader but the boolean `offtrack` can dominate the floor).
 
-### Concrete next steps when we're ready
+The split between `track` (continuous) and `offtrack` (boolean) exists
+because the boolean version was implemented first; both read the same
+`[BoundsCheck]` stream, but `track` carries the depth-of-excursion signal
+that active samplers need to converge.
 
-1. Add 3–5 more sampled scenarios (one per F-bank family) to
-   `examples/racing/sampled/`.
-2. Write a small `monitors.py` module with the `no_collision`,
-   `overtake_completes`, and `no_emergency_stable` predicates that read
-   from the sampled_runner output format.
-3. Add `verifai_sampled_runner.py` that wraps the existing
-   `sampled_runner.run_one_sample` in a VerifAI sampler loop.
-4. Run on the cosim warm-start path overnight on the failure-biased
-   sampler with `max_iterations=200`. Read `error_table.csv` next morning.
+### Operational notes
 
-Until then, the current `sampled_runner.py` with seeded uniform sampling
-gives us reproducible coverage — enough to find new failure modes
-manually as we improve the planner.
+- **Sampler choice:** start with `halton` for any new scenario --
+  deterministic, no learning, exposes wiring/parser bugs cheaply.
+  Move to `ce` for active falsification once the smoke run is clean.
+  `bo` is more sample-efficient for very expensive simulations but
+  takes more bookkeeping to converge.
+- **Budget:** CE typically wants 100-500 samples to converge. At
+  ~1 min/sample with the warm cosim bridge, a 200-sample run is
+  ~3.5 hours of wall time -- run overnight.
+- **Bridge warmth:** the in-process driver compiles the scenario once
+  and keeps the IPC client connection alive across ALL samples. The
+  first sample pays the ~10-38 s cosim cold-start tax; subsequent
+  samples pay only the simulation time. The legacy
+  `sampled_runner.py` (subprocess per sample) pays cold-start every
+  time -- use it only when you specifically want per-sample isolation.
+- **Two runners, one parser:** both `sampled_runner.py` and
+  `verifai_runner.py` produce `summary.csv` rows via the same
+  `parse_sample` function. The schemas are identical (verifai_runner
+  adds `error_table.csv` on the side). Analysis tooling that reads
+  `summary.csv` works on both.
+- **Compounding RNG state:** non-VerifAI distributions in the .scenic
+  file (e.g. `Uniform` over the ego TTL position) advance per Scenic's
+  global RNG, which is seeded once at compile time. Iteration N's ego
+  start therefore depends on N. By design -- VerifAI controls only
+  parameters wrapped in `VerifaiRange` / `VerifaiOptions` / etc.
+
+### Collision detection: two independent signals
+
+The cosim stack contains TWO collision detectors that compute their
+verdict independently, on different geometry, in different processes:
+
+| Detector | Where it lives | What it sees | Where it surfaces |
+|---|---|---|---|
+| **Scenic / `eval_contact`** | `src/scenic/domains/racing/eval_geometry.py::classify_eval_contact` | Oriented bounding boxes at the IAC Dallara dimensions (1.93 x 4.88 m) | `[EvalEvent] type=eval_contact` log lines -> `summary.csv collision`, `bbox_gap_m_min` |
+| **ASM_Traffic / `Out1[3542]`** | The vendor Simulink model running inside VEOS | Whatever shape the ASM_Traffic model uses internally | The green/red light in ControlDesk dashboards -- not surfaced to Scenic at all |
+
+The ASM_Traffic detector runs inside the dSPACE-supplied model
+(`Platform()://ASM_Traffic/Model Root/Environment/SignalInterface/SignalInterface/ASMSignalInterface/signal_structure/SignalFilterGain/Out1[3542]`)
+and we don't have a public mapping of which Simulink block chain feeds
+it; tracing it would require opening the model in ModelDesk.
+
+For falsification we trust Scenic's `bbox_gap_m_min` as the source of
+truth. It's continuous (gives CE/BO a real gradient), it's logged
+deterministically, and it ships in `summary.csv` for every run. The
+ControlDesk light remains a useful visual cross-check during live
+sessions: if it disagrees with `summary.csv collision` for a specific
+sample, that's a signal worth investigating (geometry mismatch, dSPACE
+sensor model, etc.) -- but it doesn't currently feed back into the
+falsifier loop.
 
 ---
 
@@ -252,11 +298,16 @@ manually as we improve the planner.
 ```
 examples/racing/sampled/
     smoke_on_mainTrack.scenic             # Phase 1 verification (no sim)
-    S1_fellow_left_ahead.scenic           # Phase 2 sampled scenario
+    S1_fellow_left_ahead.scenic           # Phase 2 sampled scenario (Range)
+
+examples/racing/falsifiable/
+    S1_falsify.scenic                     # Phase 3 active-falsification target (VerifaiRange)
 
 src/scenic/domains/racing/benchmarks/
-    sampled_runner.py                     # Phase 2 batch runner
+    sampled_runner.py                     # Phase 2 subprocess runner (uniform/halton)
+    verifai_runner.py                     # Phase 3 in-process active-falsification driver
+    monitors.py                           # Phase 3 robustness functions
 
 docs/
-    falsification_pipeline.md             # This file (Phase 3 documentation)
+    falsification_pipeline.md             # This file
 ```
