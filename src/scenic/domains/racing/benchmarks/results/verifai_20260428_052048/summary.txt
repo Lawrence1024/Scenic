@@ -1,0 +1,59 @@
+Sampled bank summary: S1_falsify.scenic
+  base_seed=42, samples=50
+
+Per-sample:
+  #001 seed=42 rc=0 off_track gap=27.5m lap=? p50_ms=19.5 commits=L0/R0/S0/A0 strat=opt600/foll0/pL0/pR0
+  #002 seed=43 rc=0 COLLISION gap=48.3m lap=? p50_ms=18.6 commits=L46/R0/S0/A78 strat=opt579/foll1/pL16/pR4
+  #003 seed=44 rc=0 COLLISION gap=21.7m lap=? p50_ms=15.4 commits=L284/R0/S0/A86 strat=opt507/foll0/pL78/pR15
+  #004 seed=45 rc=0 off_track gap=38.7m lap=? p50_ms=15.7 commits=L0/R0/S0/A0 strat=opt600/foll0/pL0/pR0
+  #005 seed=46 rc=0 COLLISION gap=52.3m lap=? p50_ms=17.8 commits=L86/R0/S0/A58 strat=opt566/foll0/pL29/pR5
+  #006 seed=47 rc=0 COLLISION gap=41.5m lap=? p50_ms=14.1 commits=L52/R14/S0/A0 strat=opt557/foll0/pL20/pR23
+  #007 seed=48 rc=0 COLLISION gap=40.5m lap=? p50_ms=15.4 commits=L132/R0/S0/A78 strat=opt528/foll0/pL52/pR20
+  #008 seed=49 rc=0 off_track gap=24.1m lap=? p50_ms=13.8 commits=L0/R112/S1/A0 strat=opt573/foll0/pL2/pR25
+  #009 seed=50 rc=0 COLLISION gap=49.5m lap=? p50_ms=16.4 commits=L368/R0/S0/A88 strat=opt511/foll0/pL72/pR17
+  #010 seed=51 rc=0 off_track gap=43.5m lap=? p50_ms=20.2 commits=L0/R0/S0/A0 strat=opt598/foll0/pL2/pR0
+  #011 seed=52 rc=0 COLLISION gap=22.0m lap=? p50_ms=16.3 commits=L174/R0/S0/A84 strat=opt532/foll0/pL58/pR10
+  #012 seed=53 rc=0 off_track gap=27.3m lap=? p50_ms=17.9 commits=L0/R0/S0/A0 strat=opt600/foll0/pL0/pR0
+  #013 seed=54 rc=0 COLLISION gap=24.1m lap=? p50_ms=16.5 commits=L162/R0/S0/A84 strat=opt527/foll0/pL59/pR14
+  #014 seed=55 rc=0 off_track gap=20.6m lap=? p50_ms=14.8 commits=L0/R0/S0/A0 strat=opt599/foll0/pL1/pR0
+  #015 seed=56 rc=0 COLLISION gap=37.4m lap=? p50_ms=18.1 commits=L136/R0/S0/A78 strat=opt589/foll0/pL11/pR0
+  #016 seed=57 rc=0 COLLISION gap=24.0m lap=? p50_ms=16.4 commits=L158/R0/S0/A84 strat=opt534/foll0/pL49/pR17
+  #017 seed=58 rc=0 COLLISION gap=30.6m lap=? p50_ms=19.7 commits=L486/R0/S0/A72 strat=opt569/foll0/pL29/pR2
+  #018 seed=59 rc=0 COLLISION gap=29.4m lap=? p50_ms=15.2 commits=L40/R0/S0/A74 strat=opt570/foll0/pL17/pR13
+  #019 seed=60 rc=0 COLLISION gap=45.5m lap=? p50_ms=17.5 commits=L452/R0/S0/A74 strat=opt598/foll0/pL2/pR0
+  #020 seed=61 rc=0 off_track gap=35.4m lap=? p50_ms=19.9 commits=L0/R0/S0/A0 strat=opt598/foll0/pL1/pR1
+  #021 seed=62 rc=0 off_track gap=31.1m lap=? p50_ms=17.8 commits=L0/R0/S0/A0 strat=opt600/foll0/pL0/pR0
+  #022 seed=63 rc=0 off_track gap=24.9m lap=? p50_ms=17.4 commits=L0/R0/S0/A0 strat=opt600/foll0/pL0/pR0
+  #023 seed=64 rc=0 COLLISION gap=27.8m lap=? p50_ms=20.0 commits=L324/R0/S0/A88 strat=opt580/foll0/pL20/pR0
+  #024 seed=65 rc=0 off_track gap=27.3m lap=? p50_ms=42.7 commits=L2/R260/S2/A40 strat=opt542/foll0/pL21/pR37
+  #025 seed=66 rc=0 off_track gap=20.5m lap=? p50_ms=15.3 commits=L0/R0/S0/A0 strat=opt587/foll0/pL13/pR0
+  #026 seed=67 rc=0 off_track gap=35.2m lap=? p50_ms=17.4 commits=L0/R244/S1/A0 strat=opt533/foll0/pL57/pR10
+  #027 seed=68 rc=0 off_track gap=20.6m lap=? p50_ms=16.9 commits=L0/R200/S1/A0 strat=opt537/foll0/pL43/pR20
+  #028 seed=69 rc=0 off_track gap=34.9m lap=? p50_ms=17.6 commits=L0/R0/S0/A0 strat=opt600/foll0/pL0/pR0
+  #029 seed=70 rc=0 off_track gap=59.0m lap=? p50_ms=19.2 commits=L0/R0/S0/A0 strat=opt600/foll0/pL0/pR0
+  #030 seed=71 rc=0 off_track gap=35.0m lap=? p50_ms=15.8 commits=L0/R504/S1/A0 strat=opt571/foll0/pL18/pR11
+  #031 seed=72 rc=0 COLLISION gap=32.4m lap=? p50_ms=14.9 commits=L38/R0/S0/A116 strat=opt572/foll0/pL17/pR11
+  #032 seed=73 rc=0 off_track gap=28.2m lap=? p50_ms=20.7 commits=L0/R0/S0/A0 strat=opt596/foll0/pL4/pR0
+  #033 seed=74 rc=0 off_track gap=30.7m lap=? p50_ms=19.6 commits=L0/R0/S0/A0 strat=opt600/foll0/pL0/pR0
+  #034 seed=75 rc=0 off_track gap=26.1m lap=? p50_ms=18.6 commits=L0/R0/S0/A0 strat=opt600/foll0/pL0/pR0
+  #035 seed=76 rc=0 COLLISION gap=28.8m lap=? p50_ms=16.9 commits=L200/R0/S0/A82 strat=opt598/foll0/pL2/pR0
+  #036 seed=77 rc=0 COLLISION gap=30.8m lap=? p50_ms=19.0 commits=L32/R0/S0/A68 strat=opt577/foll0/pL20/pR3
+  #037 seed=78 rc=0 COLLISION gap=32.4m lap=? p50_ms=17.7 commits=L308/R0/S0/A82 strat=opt535/foll0/pL61/pR4
+  #038 seed=79 rc=0 COLLISION gap=26.2m lap=? p50_ms=18.0 commits=L244/R0/S0/A74 strat=opt593/foll0/pL7/pR0
+  #039 seed=80 rc=0 COLLISION gap=22.3m lap=? p50_ms=19.0 commits=L218/R0/S0/A64 strat=opt563/foll0/pL34/pR3
+  #040 seed=81 rc=0 COLLISION gap=22.5m lap=? p50_ms=17.2 commits=L332/R0/S0/A86 strat=opt494/foll0/pL83/pR23
+  #041 seed=82 rc=0 COLLISION gap=30.5m lap=? p50_ms=21.7 commits=L252/R0/S0/A68 strat=opt554/foll0/pL40/pR6
+  #042 seed=83 rc=0 COLLISION gap=35.8m lap=? p50_ms=14.4 commits=L166/R0/S0/A88 strat=opt558/foll0/pL33/pR9
+  #043 seed=84 rc=0 COLLISION gap=34.8m lap=? p50_ms=19.4 commits=L268/R0/S0/A96 strat=opt541/foll0/pL55/pR4
+  #044 seed=85 rc=0 off_track gap=38.6m lap=? p50_ms=19.8 commits=L0/R0/S0/A0 strat=opt600/foll0/pL0/pR0
+  #045 seed=86 rc=0 off_track gap=32.2m lap=? p50_ms=19.9 commits=L0/R0/S0/A0 strat=opt600/foll0/pL0/pR0
+  #046 seed=87 rc=0 COLLISION gap=40.3m lap=? p50_ms=20.8 commits=L410/R0/S0/A88 strat=opt595/foll0/pL5/pR0
+  #047 seed=88 rc=0 COLLISION gap=26.0m lap=? p50_ms=16.8 commits=L108/R0/S0/A76 strat=opt521/foll0/pL47/pR32
+  #048 seed=89 rc=0 COLLISION gap=31.9m lap=? p50_ms=16.7 commits=L90/R0/S0/A112 strat=opt590/foll0/pL9/pR1
+  #049 seed=90 rc=0 COLLISION gap=35.2m lap=? p50_ms=19.0 commits=L320/R0/S0/A82 strat=opt586/foll0/pL13/pR1
+  #050 seed=91 rc=0 COLLISION gap=28.2m lap=? p50_ms=16.8 commits=L262/R0/S0/A84 strat=opt502/foll0/pL85/pR13
+
+Aggregates:
+  ok: 0/50 (0%)
+  collision: 29/50 (58%)
+  total commit_pass_success: 6
