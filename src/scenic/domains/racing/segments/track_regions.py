@@ -318,7 +318,11 @@ def create_track_regions(
                 track, main_buffer_m=main_buffer_m, pit_buffer_m=pit_buffer_m
             )
             if main_track is not None:
+                # Loud startup log so the active path is unambiguous in any run log.
+                print(f"[TrackRegions] mainTrack/pitTrack source = XODR (Scenic Network "
+                      f"road centerlines, +/-{main_buffer_m}m main, +/-{pit_buffer_m}m pit)")
                 return (main_track or nowhere, pit_track or nowhere, track)
+            print("[TrackRegions] XODR path returned empty regions; falling back to TTL CSV path")
             # XODR path returned empty -- fall through to TTL fallback below.
 
     # TTL fallback (legacy or XODR-empty case).
@@ -331,6 +335,9 @@ def create_track_regions(
             main_buffer_m=main_buffer_m,
             pit_buffer_m=pit_buffer_m,
         )
+        why = "preferTtlTrackRegions=True (legacy)" if prefer_ttl_track_regions else "XODR path empty (fallback)"
+        print(f"[TrackRegions] mainTrack/pitTrack source = TTL CSV ({why}, "
+              f"+/-{main_buffer_m}m main, +/-{pit_buffer_m}m pit)")
         return (main_track or nowhere, pit_track or nowhere, track)
 
     # No XODR, no TTL -- empty regions.
