@@ -540,7 +540,48 @@ Laguna Seca corners. Three example ego positions for
 `smoke_on_curve.scenic`: (540.77, -14.52), (-57.46, -218.18),
 (502.77, 8.48). Per-region areas after slicing: mainCurve = 8443.9
 m² (9 pieces), mainStraight = 32359.6 m² (11 pieces), pitCurve =
-935.7 m² (2 pieces), pitStraight = 6740.4 m² (2 pieces). Stage 2
-warning verification (e.g. running `with ttlFileName 'ttl_pit_xodr.csv'`
-+ `on mainStraight`) requires a live simulator and is documented in
-the smoke scenario's docstring; not exercised in this commit.
+935.7 m² (2 pieces), pitStraight = 6740.4 m² (2 pieces).
+
+**Placement bank (16 cases).** Added
+`src/scenic/domains/racing/benchmarks/sd24_placement_bank.py` — a
+single-command verification driver that compiles a synthetic
+scenario per case via `scenarioFromString`, samples N times, and
+asserts (a) the ego lands inside the requested polygon and
+(b) the contradiction predicate fires iff the case is an explicit
+mismatch. No simulator is attached — the bank uses the same
+`ttl_category != classify(x, y)` predicate as `placement.py` so the
+two stay aligned. Run via:
+
+```bash
+python src/scenic/domains/racing/benchmarks/sd24_placement_bank.py \
+    --samples 3 --seed 42 --log sd24_bank.log
+```
+
+Coverage: 4 explicit cross-product cases + 4 unified-pipeline cases
+(`trackRegion(name, segment)` with both main and pit TTLs) + 2 bare
+axis cases (`on curve`, `on straight`) + 2 default-position cases
+(main TTL, pit TTL) + 4 explicit contradiction cases (the four
+mismatch combinations). Final result: 16/16 pass.
+
+**Refinement uncovered by the bank: on-TTL skip in the contradiction
+predicate.** The first bank run failed `default_pit_ttl`: 2/3
+samples placed on the pit TTL polyline but classified as `mainTrack`
+because the pit TTL legitimately traverses the mainTrack polygon at
+pit entry/exit (where the main-wins-on-overlap rule subtracts pit
+from main, so points along the pit TTL near pit entry land in main
+by polygon arithmetic). The contradiction predicate fired
+spuriously. Fix: both `placement.py:_maybe_warn_placement_contradiction`
+and the bank's local copy now skip when the placed (x, y) is within
+1 m of the TTL polyline. Rationale: any placement on the TTL is
+consistent with the TTL by construction — it came from
+`trackRegion(...)` or the default — regardless of which side of the
+polygon arithmetic claims (x, y). Same skip rule mirrors between
+the bank and the simulator so they validate the same predicate.
+
+Stage 2 warning verification with a live simulator (the
+`[Placement] [WARN]` line itself, not the predicate) requires
+dSPACE; a 3-sample halton smoke through `verifai_runner.py` on
+`F_curve_falsify.scenic` confirmed the unmodified scenario produces
+no warnings, three distinct corner placements, and the expected
+overtake-attempt-vs-gap correlation. Run via the user; not
+exercised in this commit.

@@ -23,6 +23,41 @@ def t_for_dspace_lateral(t_val: float) -> float:
     return float(t_val)
 
 
+# Tolerance for "is this placement on the TTL polyline?" — the TTL placement
+# pipeline samples directly on the polyline (post-SD-19b PolylineRegion), so
+# the resolved (x, y) should be within mm of the polyline. 1 m is safe
+# margin against any frame-transform / float-precision drift.
+_TTL_PROXIMITY_TOLERANCE_M = 1.0
+
+
+def _placement_is_on_ttl(ttl_folder, ttl_name, x, y, tol_m=_TTL_PROXIMITY_TOLERANCE_M) -> bool:
+    """True iff the placed (x, y) lies within ``tol_m`` of the TTL polyline.
+
+    Used by the contradiction warning to recognize "placed via the unified
+    `trackRegion(...)` pipeline (or another TTL-aware route)" — in that case
+    the placement is consistent with the TTL by construction even when it
+    straddles the main/pit polygon boundary at pit entry/exit (where the
+    pit TTL legitimately traverses the mainTrack polygon because of the
+    main-wins-on-overlap rule).
+    """
+    if not ttl_folder or not ttl_name:
+        return False
+    try:
+        from scenic.domains.racing.segments.track_regions import (
+            create_ttl_region_from_file,
+        )
+        from shapely.geometry import Point
+    except Exception:
+        return False
+    try:
+        polyline = create_ttl_region_from_file(ttl_folder, ttl_name)
+        if polyline is None:
+            return False
+        return float(polyline.lineString.distance(Point(float(x), float(y)))) < tol_m
+    except Exception:
+        return False
+
+
 def _maybe_warn_placement_contradiction(sim, obj, x, y, vehicle_label):
     """SD-24c: emit a [Placement] [WARN] line when a car's TTL category and its
     placed (x, y) classification disagree.
@@ -30,6 +65,15 @@ def _maybe_warn_placement_contradiction(sim, obj, x, y, vehicle_label):
     Silent when:
         - The car has no `ttlFileName` set (no implicit context).
         - The placed (x, y) is consistent with the TTL category.
+        - The placed (x, y) is *on* the TTL polyline (within
+          ``_TTL_PROXIMITY_TOLERANCE_M``). This is the
+          unified-pipeline / default-placement case: the position came
+          from ``new Point on trackRegion(self.ttlFileName)`` (or
+          equivalent) and is therefore consistent with the TTL by
+          construction. The pit TTL traverses the mainTrack polygon at
+          pit entry/exit due to the main-wins-on-overlap rule; without
+          this skip the warning would fire spuriously on every default
+          pit-TTL placement that lands in the entry/exit zone.
         - The placed (x, y) lies in neither mainTrack nor pitTrack (off-track
           placement; the BoundsCheck pipeline owns that diagnostic).
         - mainTrackRegion / pitTrackRegion params are unavailable (e.g.
@@ -50,6 +94,10 @@ def _maybe_warn_placement_contradiction(sim, obj, x, y, vehicle_label):
         return  # no implicit context to contradict
 
     params = getattr(getattr(sim, "scene", None), "params", None) or {}
+    ttl_folder = params.get("ttlFolder")
+    if _placement_is_on_ttl(ttl_folder, ttl_name, x, y):
+        return  # placement is on the TTL polyline; consistent by construction
+
     main_region = params.get("mainTrackRegion")
     pit_region = params.get("pitTrackRegion")
     if main_region is None or pit_region is None:
