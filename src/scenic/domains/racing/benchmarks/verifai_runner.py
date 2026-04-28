@@ -347,10 +347,15 @@ def _parse_args() -> argparse.Namespace:
     g_run = p.add_argument_group("Run control")
     g_run.add_argument("--count", "-n", type=int, default=50,
                        help="Number of samples (default 50; CE wants 100-500)")
-    g_run.add_argument("--seed", type=int, default=42,
-                       help="Base seed; sample i uses seed=base+i for log/csv "
-                            "labelling (the actual Scenic RNG is seeded once "
-                            "at scenarioFromFile by the global random module)")
+    g_run.add_argument("--seed", type=int, default=None,
+                       help="Base seed for Python random + numpy.random "
+                            "(seeded BEFORE scenarioFromFile so Scenic's "
+                            "in-place sampling and VerifAI's sampler share "
+                            "the same RNG state). Sample i is labelled "
+                            "seed=base+i. If OMITTED, a random base is "
+                            "auto-generated at startup and printed loudly "
+                            "so the campaign is still reproducible by "
+                            "re-running with --seed <printed>.")
     g_run.add_argument("--time", type=int, default=3000, dest="time_steps",
                        help="Simulation duration in time steps (default 3000)")
     g_run.add_argument("--max-consecutive-failures", type=int, default=5,
@@ -392,6 +397,28 @@ def main() -> int:
         _progress(f"[VerifaiRunner] ERROR: scenic file not found: {scenic_file}")
         return 2
 
+    # ---- seed BOTH RNGs before compile (matches `scenic --seed N` in
+    # __main__.py:184-189). Without this, the Scenic global RNG (used by
+    # `new Point on ttlRegion(...)` and other in-place samplers) and
+    # VerifAI's numpy-backed sampler init from os.urandom, so two
+    # invocations with the same --seed produced different sample-1
+    # layouts. Discovered SD-22 by diffing seven seed=42 runs.
+    #
+    # Behaviour: if --seed is provided, seed deterministically. If
+    # omitted, generate a random base at startup and print it so the
+    # user can re-run with --seed <printed> to reproduce.
+    import random as _py_random
+    import numpy as _np
+    if args.seed is None:
+        base_seed = _py_random.randrange(2**31)
+        seed_origin = "auto-generated (no --seed; reproduce with --seed {0})".format(base_seed)
+    else:
+        base_seed = int(args.seed)
+        seed_origin = "from --seed"
+    _py_random.seed(base_seed)
+    _np.random.seed(base_seed)
+    args.seed = base_seed  # propagate to label-base + summary.csv
+
     # ---- output dirs
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     out_dir = Path(args.results_root) / f"{args.label}_{timestamp}"
@@ -400,7 +427,7 @@ def main() -> int:
     _progress(f"[VerifaiRunner] output dir:    {out_dir}")
     _progress(f"[VerifaiRunner] scenic file:   {scenic_file}")
     _progress(f"[VerifaiRunner] sampler:       {args.sampler}  monitor: {args.monitor}")
-    _progress(f"[VerifaiRunner] count:         {args.count}    seed: {args.seed}")
+    _progress(f"[VerifaiRunner] count:         {args.count}    seed: {base_seed} ({seed_origin})")
     _progress(f"[VerifaiRunner] time steps:    {args.time_steps}")
 
     shutil.copy(scenic_file, out_dir / scenic_file.name)
