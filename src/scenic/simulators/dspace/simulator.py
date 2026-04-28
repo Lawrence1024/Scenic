@@ -1532,7 +1532,26 @@ class DSpaceSimulation(RacingSimulation):
                 _ct = int(getattr(self, "currentTime", 0) or 0)
                 _is_ctrl_step = (_ct % _ctrl_iv) == 0
                 if _is_ctrl_step:
-                    _bd = compute_bounds_distance(_x, _y)
+                    # SD-18a: prefer GPS-derived position over readback-translated position.
+                    # The readback path applies an empirical RD->XODR translation
+                    # (frame_calibration.py) that drifts ~10 m in the LGS_v1 deployment;
+                    # gps_to_xodr uses the XODR's <geoReference> via pyproj, which is
+                    # canonical by construction. When GPS readback is unavailable (sensor
+                    # blackout, etc.), fall back to the readback (_x, _y) so BoundsCheck
+                    # still produces a value.
+                    _gps = getattr(obj.dspaceActor, "gps_lonlat", None)
+                    _xy_from_gps = None
+                    _xodr_path = None
+                    if _gps is not None and len(_gps) == 2:
+                        _xodr_path = get_map_path(getattr(getattr(self, "scene", None), "params", None) or {})
+                        _xy_from_gps = gps_to_xodr(_gps[0], _gps[1], _xodr_path)
+                    if _xy_from_gps is not None:
+                        _bx, _by = float(_xy_from_gps[0]), float(_xy_from_gps[1])
+                        _pos_source = "gps"
+                    else:
+                        _bx, _by = _x, _y
+                        _pos_source = "readback"
+                    _bd = compute_bounds_distance(_bx, _by)
                     if _bd is not None:
                         _d_in, _d_out, _in_track = _bd
                         # Throttle: every 10 control steps (0.5s @ 0.05 control period) when in bounds;
@@ -1545,26 +1564,25 @@ class DSpaceSimulation(RacingSimulation):
                         if (not _in_track) or _due_periodic or _state_changed:
                             _t_log = float(_ct) * float(self.timestep)
                             _flag = "OK" if _in_track else "OUT"
-                            # Per-lap calibration sanity check: convert dSPACE GPS readback to
-                            # expected XODR-xy via pyproj, compare against the translation-derived
-                            # ego.position. Residual reveals if our pure-translation fit drifts
-                            # across the lap (rotation/scale we ignored).
-                            _gps_str = ""
-                            _gps = getattr(obj.dspaceActor, "gps_lonlat", None)
-                            if _gps is not None and len(_gps) == 2:
-                                _xodr_path = get_map_path(getattr(getattr(self, "scene", None), "params", None) or {})
-                                _xy_from_gps = gps_to_xodr(_gps[0], _gps[1], _xodr_path)
-                                if _xy_from_gps is not None:
-                                    _resx = _x - _xy_from_gps[0]
-                                    _resy = _y - _xy_from_gps[1]
-                                    _resmag = (_resx * _resx + _resy * _resy) ** 0.5
-                                    _gps_str = (f" lon={_gps[0]:.6f} lat={_gps[1]:.6f}"
-                                                f" xodr_from_gps=({_xy_from_gps[0]:.2f},{_xy_from_gps[1]:.2f})"
-                                                f" residual_dx={_resx:+.2f}m residual_dy={_resy:+.2f}m"
-                                                f" residual_mag={_resmag:.2f}m")
-                            print(f"[BoundsCheck] t={_t_log:.2f}s pos=({_x:.2f},{_y:.2f}) "
-                                  f"d_in={_d_in:.2f}m d_out={_d_out:.2f}m in_track={int(_in_track)} [{_flag}]"
-                                  f"{_gps_str}")
+                            # Diagnostic suffix: residual between the GPS-derived position
+                            # we used and the readback-translated position we used to use.
+                            # Helps confirm the frame fix is working (residual should be
+                            # large, e.g. ~10 m, when readback is offset; near zero if the
+                            # calibration is correct).
+                            _diag = ""
+                            if _pos_source == "gps":
+                                _resx = _x - _bx
+                                _resy = _y - _by
+                                _resmag = (_resx * _resx + _resy * _resy) ** 0.5
+                                _diag = (f" lon={_gps[0]:.6f} lat={_gps[1]:.6f}"
+                                         f" readback_xy=({_x:.2f},{_y:.2f})"
+                                         f" residual_dx={_resx:+.2f}m residual_dy={_resy:+.2f}m"
+                                         f" residual_mag={_resmag:.2f}m")
+                            else:
+                                _diag = " (no gps; using readback fallback)"
+                            print(f"[BoundsCheck] t={_t_log:.2f}s pos=({_bx:.2f},{_by:.2f}) "
+                                  f"src={_pos_source} d_in={_d_in:.2f}m d_out={_d_out:.2f}m "
+                                  f"in_track={int(_in_track)} [{_flag}]{_diag}")
                             self._bounds_check_last_log_step = _step_idx
                             self._bounds_check_last_in_track = _in_track
             except Exception:

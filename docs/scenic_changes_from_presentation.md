@@ -7,7 +7,8 @@ honest look at the current implementation.
 
 Ordered roughly by how badly they bite. Each item: the current
 behavior, why it's wrong (or worth questioning), and the rough fix
-shape.
+shape. Resolved items move to the `## Done` section at the bottom so
+the numbered list stays useful as a forward-looking ledger.
 
 ---
 
@@ -166,104 +167,15 @@ fails. Users must use the derived regions (`mainTrack`,
 
 ---
 
-## 6. BoundsCheck off-track measurement is unreliable (TWO compounding issues)
+## 6. BoundsCheck off-track measurement is unreliable
 
-**Symptom:** the 50-sample CE campaign at
-`results/verifai_20260428_052048/` flags 50/50 samples as off-track,
-but the dSPACE viewer shows ego visually within the track surface
-across the whole campaign. The off-track signal is broken.
-
-**Issue A -- frame mismatch.** Every `[BoundsCheck]` line carries a
-`residual_mag` between two estimates of ego position:
-- `pos=(...)` -- what the simulator passed to `compute_bounds_distance`,
-  derived from the dSPACE actor's reported position (in whatever
-  frame the simulator stores)
-- `xodr_from_gps=(...)` -- what GPS readback would give, projected
-  into the LGS_v1 XODR frame via `geoReference`
-
-In the 50-sample run, this residual is **constant ~10 m across the
-entire lap**, with `pos` consistently +9 m east and +5 m north of
-`xodr_from_gps`. Constant magnitude + constant direction is the
-signature of a frame-transform offset, not noise. So the ego
-position passed to BoundsCheck is offset from the true position by
-~10 m, which is enough to push samples spuriously across the inner
-geofence.
-
-**Issue B -- `d_in = 0` triggers OUT, but cutting inside an inner
-geofence on a racetrack is normal.** `bounds_check.py:173` defines:
-```
-in_track = (point inside outer polygon) AND (point outside inner polygon)
-```
-That sets `in_track=False` whenever ego touches the INNER boundary --
-i.e., when ego cuts an apex or rides the inside curb. Even a clean
-late-apex line on a corner gets flagged. In the 50-sample run, ego
-trips this gate with `d_out ≈ 10 m` (lots of margin to the OUTER
-edge, where "off the track" actually means).
-
-**Net effect:** 50/50 off-track is a measurement artifact. The
-collision metric (29/50) and left/right asymmetry (28 left-only /
-0 right-only) are unaffected -- those use OBB intersection in the
-same coordinate frame as ego/fellow positions, so any frame offset
-cancels. The slides have been updated to drop the off-track claim
-while keeping the collision findings.
-
-**Fix shape (two pieces):**
-1. **Frame calibration.** Confirm which frame the simulator's actor
-   `position` is reported in (RD-frame? Final.xodr-frame?
-   LGS_v1-frame?). Apply the right transform before calling
-   `compute_bounds_distance`. The user's memory note already
-   documents `LGS_v1 ↔ RD = (-6.101, -50.761)` -- the residual we
-   see (~+9, +5) doesn't match that exactly, suggesting yet another
-   frame in the chain. This is a calibration audit task.
-2. **Semantic fix on off-track.** Either:
-   - Only flag OUT when `d_out` collapses (ego left via the OUTER
-     edge); leave `d_in=0` as a separate diagnostic, OR
-   - Regenerate `track_inside.csv` to follow the actual physical
-     inside boundary of the track surface (typically the inside
-     curb / pit wall), not the racing-line "do not cut here" line
-     race_common may currently encode.
-
-Until either piece lands, the `track_clearance_m` field in
-`SampleMetrics` and the `off_track` boolean both produce
-unreliable readings, and `monitors.track_clearance` /
-`monitors.safety_min` should not be trusted for falsification on
-this map. The `monitors.collision_robustness` (driven by
-`bbox_gap_m_min`) remains valid.
-
-**How we caught it:** comparing visualization (ego visibly on
-track) against the parsed log (50/50 off-track) during slide
-review. Without the visual sanity check, we'd have published the
-100% off-track number as a real finding.
+*Resolved in SD-18a. See `## Done` section below.*
 
 ---
 
 ## 7. verifai_runner should print sample-progress to the terminal even with `--quiet *>file`
 
-**Symptom:** running the falsifier with the recommended PowerShell
-invocation
-```
-python verifai_runner.py ... --quiet *>run.log
-```
-buries every `[VerifaiRunner] === sample N/M ===` line inside the
-log file. There is no terminal output at all during the ~80 min
-run, so the user can't tell which sample is currently running
-without tail-ing the file.
-
-**Fix shape:** route the `[VerifaiRunner] sample-progress` print
-calls through `sys.__stdout__` (the original, pre-redirect stdout)
-instead of plain `print()`. PowerShell's `*>` only redirects
-`sys.stdout` / `sys.stderr` -- writes to `sys.__stdout__` bypass it
-and reach the terminal directly.
-
-Concretely, in `src/scenic/domains/racing/benchmarks/verifai_runner.py:main()`
-at the per-iteration progress lines, do:
-```python
-sys.__stdout__.write(f"[VerifaiRunner] === sample {i+1}/{count} ===\n")
-sys.__stdout__.flush()
-```
-instead of `print(...)`.
-
-Pure housekeeping; no functional change. ~5-line edit.
+*Resolved in SD-18b. See `## Done` section below.*
 
 ---
 
@@ -302,3 +214,63 @@ don't regress this conventionally-good architecture.
 - **Falsification campaign size.** The 10-sample CE result is
   preliminary; rerun with 100+ samples to confirm the 22-23 m
   cluster is robust across seeds.
+
+---
+
+## Done
+
+### #6 — BoundsCheck off-track measurement is unreliable (SD-18a)
+
+**What was wrong.** The 50-sample CE campaign at
+`results/verifai_20260428_052048/` flagged 50/50 samples as
+off-track despite the dSPACE viewer showing ego visually inside
+the track surface throughout. Two compounding issues:
+
+- **Issue A — frame mismatch.** Every `[BoundsCheck]` line carried a
+  ~10 m residual between the simulator's `pos=(...)` (derived from
+  dSPACE actor position via `readback.rd_to_xodr` with the empirical
+  `(-6.101, -50.761)` translation in `frame_calibration.py`) and the
+  GPS-derived `xodr_from_gps=(...)` (from `pyproj` projection through
+  the XODR's `<geoReference>`). Constant magnitude + constant
+  direction = frame-transform offset, not noise. The residual pushed
+  the ego position spuriously across the inner geofence.
+
+- **Issue B (NOT touched in this fix) — `d_in=0` semantics.**
+  Investigation showed the inside/outside CSVs ARE physical track
+  edges (11-28 m apart), so `d_in=0` correctly means "ego touched
+  the inner boundary." With Issue A fixed, `d_in=0` events are real;
+  no semantic change needed.
+
+**What landed.** `simulator.py` now prefers
+`gps_to_xodr(lon, lat, xodr_path)` as the input to
+`compute_bounds_distance`. The pyproj path through
+`<geoReference>` is canonical by construction (no empirical fit).
+The readback-derived `(_x, _y)` stays as a fallback when GPS is
+unavailable. The `[BoundsCheck]` log line gained a `src=gps|readback`
+field and now reports `readback_xy=(...)` + residual diagnostics.
+
+**Verification notes.** Re-run the 50-sample campaign and confirm
+`summary.csv` shows non-100% off-track. Spot-check at least 3
+samples by replaying logs against the dSPACE viewer.
+
+### #7 — verifai_runner sample-progress visibility under `--quiet *>file` (SD-18b)
+
+**What was wrong.** `python verifai_runner.py ... --quiet *>run.log`
+captured all `[VerifaiRunner] sample N/M` boundaries inside the log
+file; the terminal showed nothing during the ~80-minute run.
+
+**What landed.** Added a `_progress(text)` helper that writes through
+`sys.__stdout__` with `flush()`. PowerShell `*>` redirects only
+`sys.stdout` / `sys.stderr`; the original FD at `sys.__stdout__` is
+untouched, so writes through it remain visible on the terminal even
+under redirection. All 22 `[VerifaiRunner]` status prints (setup
+banner, sample boundaries, sampled values, per-sample outcome,
+violations, circuit-breaker, campaign-end summary) routed through
+`_progress`. Per-sample simulator stdout (the heavy log content) is
+unchanged — still flows through `_tee_stdout` to the per-sample log
+file.
+
+**Verification notes.** Run a 3-sample CE smoke with
+`--quiet *>run.log`. Terminal should show
+`[VerifaiRunner] === sample 1/3 ===` etc. live; `run.log` should be
+~50 lines (no per-sample sim noise).

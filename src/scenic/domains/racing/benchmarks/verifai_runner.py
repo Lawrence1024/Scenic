@@ -87,6 +87,34 @@ from scenic.domains.racing.benchmarks.sampled_runner import (
 
 
 # ---------------------------------------------------------------------------
+# Progress -> original terminal stdout, bypassing any sys.stdout redirection
+# ---------------------------------------------------------------------------
+
+def _progress(text: str) -> None:
+    """Write `text` to the original terminal stdout with a trailing newline.
+
+    Used for [VerifaiRunner] status lines (sample boundaries, sampled values,
+    per-sample outcome, violations, campaign-end summary) so they remain
+    visible on the terminal during long campaigns even when the runner's
+    own output is redirected to a file:
+
+        python verifai_runner.py ... --quiet *>run.log
+
+    PowerShell `*>` redirects `sys.stdout` / `sys.stderr` only; the original
+    file descriptors at `sys.__stdout__` / `sys.__stderr__` are untouched.
+    Writing through `sys.__stdout__` therefore bypasses the redirect and the
+    user sees live progress while `run.log` stays compact.
+
+    Falls back to plain `print()` if `sys.__stdout__` is unavailable.
+    """
+    try:
+        sys.__stdout__.write(text + "\n")
+        sys.__stdout__.flush()
+    except Exception:
+        print(text)
+
+
+# ---------------------------------------------------------------------------
 # Tee: fan stdout writes to BOTH the original terminal and an in-memory buf
 # ---------------------------------------------------------------------------
 
@@ -217,7 +245,7 @@ def _run_one_simulation(simulator, scene, time_steps: int, sample_idx: int) -> b
         )
     except Exception as exc:
         traceback.print_exc()
-        print(f"[VerifaiRunner] simulate() raised: {exc}")
+        _progress(f"[VerifaiRunner] simulate() raised: {exc}")
         return False
     return simulation is not None
 
@@ -353,8 +381,7 @@ def main() -> int:
     args = _parse_args()
     scenic_file = Path(args.scenic_file)
     if not scenic_file.is_file():
-        print(f"[VerifaiRunner] ERROR: scenic file not found: {scenic_file}",
-              file=sys.stderr)
+        _progress(f"[VerifaiRunner] ERROR: scenic file not found: {scenic_file}")
         return 2
 
     # ---- output dirs
@@ -362,11 +389,11 @@ def main() -> int:
     out_dir = Path(args.results_root) / f"{args.label}_{timestamp}"
     log_dir = out_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[VerifaiRunner] output dir:    {out_dir}")
-    print(f"[VerifaiRunner] scenic file:   {scenic_file}")
-    print(f"[VerifaiRunner] sampler:       {args.sampler}  monitor: {args.monitor}")
-    print(f"[VerifaiRunner] count:         {args.count}    seed: {args.seed}")
-    print(f"[VerifaiRunner] time steps:    {args.time_steps}")
+    _progress(f"[VerifaiRunner] output dir:    {out_dir}")
+    _progress(f"[VerifaiRunner] scenic file:   {scenic_file}")
+    _progress(f"[VerifaiRunner] sampler:       {args.sampler}  monitor: {args.monitor}")
+    _progress(f"[VerifaiRunner] count:         {args.count}    seed: {args.seed}")
+    _progress(f"[VerifaiRunner] time steps:    {args.time_steps}")
 
     shutil.copy(scenic_file, out_dir / scenic_file.name)
 
@@ -385,7 +412,7 @@ def main() -> int:
         from dotmap import DotMap
         params["verifaiSamplerParams"] = DotMap(sampler_params_raw)
 
-    print(f"[VerifaiRunner] compiling scenario...")
+    _progress(f"[VerifaiRunner] compiling scenario...")
     t0 = time.perf_counter()
     scenario = scenic.scenarioFromFile(
         str(scenic_file),
@@ -393,13 +420,15 @@ def main() -> int:
         params=params,
         mode2D=True,
     )
-    print(f"[VerifaiRunner] compiled in {time.perf_counter()-t0:.1f}s")
+    _progress(f"[VerifaiRunner] compiled in {time.perf_counter()-t0:.1f}s")
 
     # Sanity-check that the scenario actually has VerifAI-controlled parameters.
     if scenario.externalSampler is None:
-        print(f"[VerifaiRunner] WARN: scenario has no external (Verifai*) parameters. "
-              f"Sampler will not influence anything; consider wrapping at least one "
-              f"value in VerifaiRange(...) in {scenic_file.name}.")
+        _progress(
+            f"[VerifaiRunner] WARN: scenario has no external (Verifai*) parameters. "
+            f"Sampler will not influence anything; consider wrapping at least one "
+            f"value in VerifaiRange(...) in {scenic_file.name}."
+        )
 
     # ---- spawn simulator (cosim bridge cold-start happens on first .simulate())
     simulator = scenario.getSimulator()
@@ -416,14 +445,16 @@ def main() -> int:
         sample_idx = i + 1
         seed = args.seed + i
         log_path = log_dir / f"sample_{sample_idx:03d}.log"
-        print(f"\n[VerifaiRunner] === sample {sample_idx:03d}/{args.count} "
-              f"(seed_label={seed}, feedback={feedback}) ===")
+        _progress(
+            f"\n[VerifaiRunner] === sample {sample_idx:03d}/{args.count} "
+            f"(seed_label={seed}, feedback={feedback}) ==="
+        )
 
         # ---- generate scene (active sampler reads feedback)
         try:
             scene, _gen_iters = scenario.generate(feedback=feedback)
         except RejectionException as exc:
-            print(f"[VerifaiRunner] sample {sample_idx:03d} rejected by Scenic: {exc}")
+            _progress(f"[VerifaiRunner] sample {sample_idx:03d} rejected by Scenic: {exc}")
             log_path.write_text(
                 f"[VerifaiRunner] rejection: {exc}\n", encoding="utf-8"
             )
@@ -437,7 +468,7 @@ def main() -> int:
 
         sampled_values = _extract_verifai_values(scenario)
         if sampled_values:
-            print(f"[VerifaiRunner]   sampled: {sampled_values}")
+            _progress(f"[VerifaiRunner]   sampled: {sampled_values}")
 
         # ---- run simulation, capturing stdout to a per-sample buffer + terminal
         buf = io.StringIO()
@@ -459,9 +490,11 @@ def main() -> int:
         # scalar. Reduce to min so feedback stays comparable across monitors.
         rho_scalar = float(min(rho)) if isinstance(rho, tuple) else float(rho)
 
-        print(f"[VerifaiRunner]   sim ok={ok} elapsed={elapsed:.1f}s "
-              f"collision={metrics.collision} bbox_gap_min={metrics.bbox_gap_m_min} "
-              f"-> rho={rho_scalar:.3f}")
+        _progress(
+            f"[VerifaiRunner]   sim ok={ok} elapsed={elapsed:.1f}s "
+            f"collision={metrics.collision} bbox_gap_min={metrics.bbox_gap_m_min} "
+            f"-> rho={rho_scalar:.3f}"
+        )
 
         if rho_scalar <= args.violation_threshold:
             error_rows.append(ErrorRow(
@@ -471,8 +504,10 @@ def main() -> int:
                 sampled_values=sampled_values,
                 metrics=metrics,
             ))
-            print(f"[VerifaiRunner]   *** VIOLATION (rho={rho_scalar:.3f} "
-                  f"<= {args.violation_threshold}); added to error_table ***")
+            _progress(
+                f"[VerifaiRunner]   *** VIOLATION (rho={rho_scalar:.3f} "
+                f"<= {args.violation_threshold}); added to error_table ***"
+            )
 
         feedback = rho_scalar
 
@@ -480,9 +515,11 @@ def main() -> int:
         if not ok:
             consecutive_failures += 1
             if consecutive_failures >= args.max_consecutive_failures:
-                print(f"[VerifaiRunner] {consecutive_failures} consecutive "
-                      f"simulation failures -- aborting campaign. The cosim "
-                      f"bridge is likely dead; restart VEOS and retry.")
+                _progress(
+                    f"[VerifaiRunner] {consecutive_failures} consecutive "
+                    f"simulation failures -- aborting campaign. The cosim "
+                    f"bridge is likely dead; restart VEOS and retry."
+                )
                 break
         else:
             consecutive_failures = 0
@@ -497,19 +534,20 @@ def main() -> int:
     # ---- final summary
     write_summary_text(out_dir / "summary.txt", samples, scenic_file, args.seed)
 
-    print(f"\n[VerifaiRunner] DONE.")
-    print(f"  samples:        {len(samples)}/{args.count}")
-    print(f"  violations:     {len(error_rows)}")
-    print(f"  summary.csv:    {out_dir / 'summary.csv'}")
-    print(f"  summary.txt:    {out_dir / 'summary.txt'}")
-    print(f"  error_table:    {out_dir / 'error_table.csv'}")
+    _progress(f"\n[VerifaiRunner] DONE.")
+    _progress(f"  samples:        {len(samples)}/{args.count}")
+    _progress(f"  violations:     {len(error_rows)}")
+    _progress(f"  summary.csv:    {out_dir / 'summary.csv'}")
+    _progress(f"  summary.txt:    {out_dir / 'summary.txt'}")
+    _progress(f"  error_table:    {out_dir / 'error_table.csv'}")
     if error_rows:
-        worst = error_rows[0] if error_rows else None
         # Re-sort to be sure even if the loop bailed mid-write.
         error_rows.sort(key=lambda r: r.rho)
         worst = error_rows[0]
-        print(f"  worst rho:      {worst.rho:.3f} at sample #{worst.sample_index} "
-              f"(values: {worst.sampled_values})")
+        _progress(
+            f"  worst rho:      {worst.rho:.3f} at sample #{worst.sample_index} "
+            f"(values: {worst.sampled_values})"
+        )
     return 0
 
 
