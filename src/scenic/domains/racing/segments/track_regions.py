@@ -143,21 +143,56 @@ def build_track_regions_from_opendrive(
     track: Any,
     main_buffer_m: float = MAIN_TRACK_BUFFER_M,
     pit_buffer_m: float = PIT_TRACK_BUFFER_M,
+    use_road_polygons: bool = True,
 ) -> Tuple[Optional[Any], Optional[Any]]:
     """Build mainTrack and pitTrack from an existing RacingTrack (OpenDRIVE).
 
+    SD-19a: by default uses road polygons directly (Road inherits from
+    NetworkElement -> PolygonalRegion in driving/roads.py). The polygon
+    already encodes the road's full drivable width from XODR
+    (lane widths, junctions, etc.), so we just take the union per
+    side and apply the main-wins-on-overlap rule. Buffer arguments
+    are accepted for back-compat but ignored on the polygon path.
+
+    When `use_road_polygons=False` (or when polygon-side fails), falls
+    back to the legacy centerline-buffer approach which uses
+    `main_buffer_m` / `pit_buffer_m`.
+
     Args:
-        track: RacingTrack with _mainRacingRoads and _pitRoads (each road has lanes with centerlines).
-        main_buffer_m: Buffer in meters on each side of main segment centerlines (default 6).
-        pit_buffer_m: Buffer in meters on each side of pit segment centerlines (default 1.5).
+        track: RacingTrack with _mainRacingRoads and _pitRoads.
+        main_buffer_m: Buffer (legacy fallback only). Default 6.
+        pit_buffer_m: Buffer (legacy fallback only). Default 1.5.
+        use_road_polygons: If True (default), use Road.polygon via
+            PolygonalRegion.unionAll. If False, force the legacy
+            centerline-buffer path.
 
     Returns:
-        (mainTrack, pitTrack) as Scenic Regions (PolygonalRegion), or (None, None) if no geometry.
+        (mainTrack, pitTrack) as Scenic Regions, or (None, None) if no geometry.
     """
-    from scenic.domains.racing.segments.segment_map import _get_road_centerline
-
     main_roads = list(getattr(track, "_mainRacingRoads", None) or [])
     pit_roads = list(getattr(track, "_pitRoads", None) or [])
+
+    if use_road_polygons and (main_roads or pit_roads):
+        try:
+            main_track = PolygonalRegion.unionAll(main_roads) if main_roads else None
+            pit_track = PolygonalRegion.unionAll(pit_roads) if pit_roads else None
+            # PolygonalRegion.unionAll returns `nowhere` for empty input.
+            if main_track is nowhere:
+                main_track = None
+            if pit_track is nowhere:
+                pit_track = None
+            # Main wins on overlap.
+            if pit_track is not None and main_track is not None:
+                pit_track = pit_track.difference(main_track)
+            return (main_track, pit_track)
+        except Exception as exc:
+            print(
+                f"[TrackRegions] road-polygon union failed ({exc}); "
+                f"falling back to centerline-buffer (legacy path)"
+            )
+
+    # Legacy fallback: buffer each road's centerline by main/pit buffer.
+    from scenic.domains.racing.segments.segment_map import _get_road_centerline
 
     main_centerlines = []
     for road in main_roads:
@@ -173,7 +208,6 @@ def build_track_regions_from_opendrive(
 
     main_track = _centerlines_to_buffered_region(main_centerlines, main_buffer_m)
     pit_track = _centerlines_to_buffered_region(pit_centerlines, pit_buffer_m)
-    # Overlap rule (same as segments): main wins; pitTrack = pit minus main
     if pit_track is not None and main_track is not None:
         pit_track = pit_track.difference(main_track)
 
@@ -243,20 +277,24 @@ def build_track_regions_from_ttl(
 def create_ttl_region_from_file(
     ttl_folder: Optional[Any],
     ttl_file_name: str,
-    buffer_m: float = MAIN_TRACK_BUFFER_M,
-) -> Optional[Any]:
-    """Build a single Region from one TTL centerline CSV (random point on that TTL).
+) -> Optional[PolylineRegion]:
+    """Build a PolylineRegion from one TTL centerline CSV.
 
-    Use for placement like: new RacingCar on ttl  (uses scene ttlFileName)
-    or with a specific file: new RacingCar on ttlRegion('ttl_optimal_xodr.csv')
+    SD-19b: returns the PolylineRegion directly (no buffer). Per-vehicle
+    TTL placement (`new RacingCar with ttlFileName 'X'` and the
+    RacingCar default `position: new Point on ttlRegion(self.ttlFileName)`)
+    now lands EXACTLY on the racing-line waypoint chain. Lateral offset
+    becomes a separate concern (Frenet, see Ask 1 in the deck).
+
+    Use for placement like:
+        new RacingCar on ttlRegion('ttl_optimal_xodr.csv')
 
     Args:
         ttl_folder: Folder containing the TTL CSV (Path or str). If None, returns None.
         ttl_file_name: CSV filename (e.g. 'ttl_main_road.csv', 'ttl_optimal_xodr.csv').
-        buffer_m: Meters on each side of centerline (default 6.0).
 
     Returns:
-        PolygonalRegion (buffered centerline) or None if folder/file invalid.
+        PolylineRegion (the TTL centerline polyline) or None if folder/file invalid.
     """
     if ttl_folder is None or not str(ttl_folder).strip():
         return None
@@ -266,10 +304,7 @@ def create_ttl_region_from_file(
     pts = _load_ttl_csv(folder, ttl_file_name)
     if not pts or len(pts) < 2:
         return None
-    poly = _polyline_from_waypoints(pts)
-    if poly is None:
-        return None
-    return _buffer_polyline_region(poly, buffer_m)
+    return _polyline_from_waypoints(pts)
 
 
 def create_track_regions(
@@ -319,8 +354,8 @@ def create_track_regions(
             )
             if main_track is not None:
                 # Loud startup log so the active path is unambiguous in any run log.
-                print(f"[TrackRegions] mainTrack/pitTrack source = XODR (Scenic Network "
-                      f"road centerlines, +/-{main_buffer_m}m main, +/-{pit_buffer_m}m pit)")
+                print(f"[TrackRegions] mainTrack/pitTrack source = XODR road polygons "
+                      f"(width-aware drivable area; centerline-buffer fallback unused)")
                 return (main_track or nowhere, pit_track or nowhere, track)
             print("[TrackRegions] XODR path returned empty regions; falling back to TTL CSV path")
             # XODR path returned empty -- fall through to TTL fallback below.

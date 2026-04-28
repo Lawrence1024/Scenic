@@ -91,11 +91,20 @@ _mainTrack, _pitTrack, _ = create_track_regions(
 mainTrack: Region = _mainTrack
 pitTrack: Region = _pitTrack
 
-# ttl: region from param ttlFileName (random point on that TTL). Fallback to mainTrack if no ttlFolder/ttl.
+# SD-19c: union of main + pit so users can write `new RacingCar on raceTrack`
+# (any drivable surface) without spelling out the union. We chose the alias
+# approach over subclassing RacingTrack from PolygonalRegion because it
+# satisfies the same user intent with one line and zero risk to RacingTrack's
+# existing __init__ semantics. RacingTrack remains a Python wrapper; raceTrack
+# is the Region for `on` specifiers. Uses UnionRegion (already imported above).
+raceTrack: Region = UnionRegion(_mainTrack, _pitTrack) if (_mainTrack and _pitTrack) else (_mainTrack or _pitTrack or mainTrack)
+
+# ttl: PolylineRegion from param ttlFileName (random point exactly on that TTL).
+# Fallback to mainTrack if no ttlFolder/ttl.
+# SD-19b: PolylineRegion (no buffer) -- samples land on the line, not in a corridor.
 _ttl = create_ttl_region_from_file(
     globalParameters.ttlFolder,
     globalParameters.ttlFileName if globalParameters.ttlFileName else 'ttl_main_road.csv',
-    globalParameters.mainTrackBuffer
 ) if globalParameters.ttlFolder else None
 ttl: Region = _ttl if _ttl else mainTrack
 
@@ -103,11 +112,13 @@ ttl: Region = _ttl if _ttl else mainTrack
 # Also called by RacingCar's `position` default with self.ttlFileName -- when
 # that is None or ttlFolder is unset, fall back to mainTrack so unset cars
 # still get a valid sampling region.
+# SD-19b: returns a PolylineRegion now (was a buffered PolygonalRegion). Each
+# `new Point on ttlRegion(...)` sample lands EXACTLY on the racing line.
 def ttlRegion(ttlFileName):
     if not globalParameters.ttlFolder or not ttlFileName:
         return mainTrack
     return create_ttl_region_from_file(
-        globalParameters.ttlFolder, ttlFileName, globalParameters.mainTrackBuffer
+        globalParameters.ttlFolder, ttlFileName
     ) or mainTrack
 
 # Backward compatibility: mainRacingRoad and pitLaneRoad alias to mainTrack and pitTrack

@@ -14,62 +14,13 @@ the numbered list stays useful as a forward-looking ledger.
 
 ## 1. mainTrack / pitTrack don't use XODR road width
 
-**Current:** `create_track_regions()` in
-`src/scenic/domains/racing/segments/track_regions.py:275-352` builds
-the regions by taking the **centerline** of each `_mainRacingRoads`
-road and **buffering it by ±6 m** (default `mainTrackBuffer`). Same
-shape for `pitTrack` with ±1.5 m.
-
-**Why it's wrong:** XODR encodes per-station lane widths; each `Road`
-in Scenic's parsed Network has a `polygon` attribute representing the
-actual drivable area. We discard that and use a constant-radius
-symmetric buffer instead. So our current `mainTrack` treats the LGS
-track as if it were 12 m wide everywhere — which is roughly right on
-straights but wrong at corner apexes where the racing surface
-narrows. It's also symmetric whereas real tracks are not.
-
-**Fix shape:** replace
-```
-buffer(road.centerline, mainTrackBuffer)
-```
-with
-```
-union of (road.polygon for road in _mainRacingRoads)
-```
-or use the road's `drivable_polygon` if exposed by the driving
-domain. Verify visually against race_common's `outside.csv` /
-`inside.csv` geofences (the comparison is already partially in
-place, see `track_regions.py:290-292`).
-
-**Why we hadn't done it:** historical accident. The first version
-worked off TTL CSV centerlines (no width), and we just buffered. When
-we migrated to XODR-native (Phase B.5), we kept the buffer logic.
+*Resolved in SD-19a. See `## Done` section below.*
 
 ---
 
 ## 2. ttlRegion buffer is too large for "place on TTL" semantics
 
-**Current:** `ttlRegion(file)` in
-`src/scenic/domains/racing/model.scenic:106-111` and
-`create_ttl_region_from_file()` at
-`segments/track_regions.py:243-272` buffer the TTL CSV centerline by
-**±6 m** (same `mainTrackBuffer` default).
-
-**Why it's wrong:** the per-vehicle TTL placement default
-(`position: new Point on ttlRegion(self.ttlFileName)` on
-`RacingCar`) was meant to make `new RacingCar` land **on** the racing
-line, not in a 12 m-wide envelope around it. With ±6 m, sampling is
-effectively over the whole track surface — same as `mainTrack`.
-
-**Fix shape:** distinguish two intents:
-- "On the TTL polygon" (driving anywhere within the racing-line
-  buffer) — keep something like ±1.5 m so the car is recognizably
-  *near* the line.
-- "On the TTL polyline" — sample directly on the centerline (zero
-  buffer). This composes with `frenetOffset` (Ask 1 in the deck)
-  if/when Scenic core absorbs Frenet.
-
-Pick one as the default; ship a parameter for the other.
+*Resolved in SD-19b. See `## Done` section below.*
 
 ---
 
@@ -146,24 +97,7 @@ missing is exposing the classifier outputs as Scenic regions.
 
 ## 5. RacingTrack isn't directly usable as a Scenic Region
 
-**Current:** `RacingTrack` (`segments/tracks.py:183-852`) is a
-Python class wrapping Scenic's `Network`. It's exposed as `_track`
-in `model.scenic`, but `_track` is a Python object, not a Scenic
-`Region`, so:
-```scenic
-new RacingCar on _track          # doesn't work today
-```
-fails. Users must use the derived regions (`mainTrack`,
-`pitTrack`, `ttlRegion(file)`) instead.
-
-**Fix shape:** either
-- Make `RacingTrack` Region-compatible (subclass `Region` or
-  expose `track.region` returning the union of all main + pit
-  road polygons), OR
-- Add a top-level `raceTrack` alias that resolves to
-  `mainTrack ∪ pitTrack`.
-
-~5 LOC either way.
+*Resolved in SD-19c. See `## Done` section below.*
 
 ---
 
@@ -274,3 +208,85 @@ file.
 `--quiet *>run.log`. Terminal should show
 `[VerifaiRunner] === sample 1/3 ===` etc. live; `run.log` should be
 ~50 lines (no per-sample sim noise).
+
+### #1 — mainTrack/pitTrack now use XODR road polygons (SD-19a)
+
+**What was wrong.** `create_track_regions()` built `mainTrack` /
+`pitTrack` by buffering each road's **centerline** by ±6 m / ±1.5 m.
+This discarded XODR's per-station lane widths entirely and
+treated the LGS track as if it were 12 m wide everywhere
+(roughly right on straights, wrong at corner apexes).
+
+**What landed.** `build_track_regions_from_opendrive` in
+`track_regions.py` now defaults to using `Road.polygon` directly
+(each `Road` inherits from `NetworkElement -> PolygonalRegion`,
+so the polygon already encodes the full drivable width from XODR).
+We just call `PolygonalRegion.unionAll(main_loop_roads)` and
+`PolygonalRegion.unionAll(pit_roads)`, then apply the
+main-wins-on-overlap rule via `pit.difference(main)`. The
+buffer arguments are kept for back-compat but ignored on the
+polygon path. The legacy centerline-buffer path remains as
+fallback inside the same function (gated by `use_road_polygons=False`
+or by polygon-side exception).
+
+The startup log now reads:
+`[TrackRegions] mainTrack/pitTrack source = XODR road polygons (width-aware drivable area; centerline-buffer fallback unused)`
+
+**Verification notes.** Re-run F-bank or any sampled scenario; the
+startup log should show the new line. Visually, mainTrack at
+corner apexes should now narrow correctly instead of staying 12 m
+wide. `examples/racing/sampled/smoke_on_mainTrack.scenic` is the
+quickest sanity check (no simulator needed).
+
+### #2 — ttlRegion returns PolylineRegion (SD-19b)
+
+**What was wrong.** `ttlRegion(file)` returned a buffered
+PolygonalRegion (±6 m around the racing-line centerline). The
+per-vehicle TTL placement default
+(`position: new Point on ttlRegion(self.ttlFileName)` on
+`RacingCar`) thus sampled in a 12 m-wide envelope, not on the line.
+
+**What landed.** `create_ttl_region_from_file` in `track_regions.py`
+returns the underlying `PolylineRegion` directly (no buffer). The
+`ttlRegion` helper in `model.scenic` and the `_ttl` global both
+updated to drop the buffer arg. Each `new Point on ttlRegion(...)`
+sample now lands EXACTLY on the racing-line waypoint chain.
+
+**Lateral wiggle.** Without a buffer, the ego always starts
+mathematically on the line. If we want a small lateral
+randomization for falsification diversity, that's a future
+Frenet-offset feature (Ask 1 in the deck — Scenic-core proposal).
+
+**Verification notes.** Compile any scenario using a TTL placement
+and inspect the sampled (x, y) — they should sit within
+~0.001 m of the closest TTL waypoint, not scattered ±6 m.
+
+### #5 — raceTrack alias for `new RacingCar on raceTrack` (SD-19c)
+
+**What was wrong.** `RacingTrack` (in `segments/tracks.py`) was a
+Python wrapper class around Scenic's `Network`. `_track` in
+`model.scenic` referenced an instance, but `_track` was not a
+`Region`, so `new RacingCar on _track` failed.
+
+**What landed.** Added a top-level `raceTrack` alias in
+`model.scenic` defined as `UnionRegion(_mainTrack, _pitTrack)`
+(falling back to whichever exists if one is empty). `UnionRegion`
+was already imported. Users can now write:
+```scenic
+new RacingCar on raceTrack   # any drivable surface, main or pit
+new RacingCar on mainTrack   # just main loop
+new RacingCar on pitTrack    # just pit lane
+```
+
+**Why alias and not subclass.** The plan considered making
+`RacingTrack` inherit from `PolygonalRegion`. The alias approach
+gives the same user benefit (clean `on raceTrack` syntax) at one
+line of change, with zero risk to RacingTrack's existing
+`__init__` semantics. Subclassing would have required restructuring
+the init order so the parent's polygon is computed before
+`_identifyRacingFeatures()` runs. Not worth the fragility for an
+aesthetic improvement.
+
+**Verification notes.** Compile any scenario with
+`new RacingCar on raceTrack` and inspect — should land on either
+the main loop or the pit lane.
