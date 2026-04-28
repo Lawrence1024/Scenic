@@ -1,0 +1,11 @@
+sample_index,seed,return_code,log_path,collision,off_track,lap_time_s,ego_start_xy,opp_start_xy,sampled_gap_m,commit_pass_success_count,commit_pass_left_count,commit_pass_right_count,commit_abort_pass_count,guard_emergency_stable_count,selected_stay_optimal,selected_follow_fellow,selected_pass_left,selected_pass_right,tick_count,tick_ms_p50
+1,42,0,src\scenic\domains\racing\benchmarks\results\sampled_20260427_204414\logs\sample_001.log,False,False,,,,,0,0,0,0,0,0,0,0,0,0,
+2,43,0,src\scenic\domains\racing\benchmarks\results\sampled_20260427_204414\logs\sample_002.log,False,False,,,,,0,0,0,0,0,0,0,0,0,0,
+3,44,0,src\scenic\domains\racing\benchmarks\results\sampled_20260427_204414\logs\sample_003.log,False,False,,,,,0,0,0,0,0,0,0,0,0,0,
+4,45,0,src\scenic\domains\racing\benchmarks\results\sampled_20260427_204414\logs\sample_004.log,False,False,,,,,0,0,0,0,0,0,0,0,0,0,
+5,46,0,src\scenic\domains\racing\benchmarks\results\sampled_20260427_204414\logs\sample_005.log,False,False,,,,,0,0,0,0,0,0,0,0,0,0,
+6,47,0,src\scenic\domains\racing\benchmarks\results\sampled_20260427_204414\logs\sample_006.log,False,False,,,,,0,0,0,0,0,0,0,0,0,0,
+7,48,0,src\scenic\domains\racing\benchmarks\results\sampled_20260427_204414\logs\sample_007.log,False,False,,,,,0,0,0,0,0,0,0,0,0,0,
+8,49,0,src\scenic\domains\racing\benchmarks\results\sampled_20260427_204414\logs\sample_008.log,False,False,,,,,0,0,0,0,0,0,0,0,0,0,
+9,50,0,src\scenic\domains\racing\benchmarks\results\sampled_20260427_204414\logs\sample_009.log,False,False,,,,,0,0,0,0,0,0,0,0,0,0,
+10,51,0,src\scenic\domains\racing\benchmarks\results\sampled_20260427_204414\logs\sample_010.log,False,False,,,,,0,0,0,0,0,0,0,0,0,0,

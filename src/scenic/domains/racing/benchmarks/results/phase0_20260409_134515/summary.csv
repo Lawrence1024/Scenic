@@ -1,2 +1,0 @@
-scenario,return_code,lap_completion_status,lap_time_s,ttl_switch_count,min_opponent_distance_m,collision,off_track,near_miss_count,waypoint_hits,phase0_samples
-examples\racing\phase0_benchmark\05_opponent_just_ahead_corner.scenic,0,completed,27.95,0,12.3,False,True,0,34,12

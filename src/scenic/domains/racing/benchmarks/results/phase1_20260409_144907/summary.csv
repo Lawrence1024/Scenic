@@ -1,2 +1,0 @@
-scenario,return_code,lap_completion_status,lap_time_s,phase1_switch_observed,phase1_switch_count,ttl_switch_count,min_opponent_distance_m,collision,off_track,near_miss_count,waypoint_hits,phase0_samples
-examples\racing\phase1_planner\01_optimal_to_left.scenic,0,completed,11.7,True,1,1,,False,False,0,139,5

@@ -44,10 +44,18 @@ pit lane.
 
 ### Sampled scenario
 `examples/racing/sampled/S1_fellow_left_ahead.scenic`:
-- ego placed `on mainTrack` (uniform over the main racing region)
+- ego placed on its own TTL (`ttl_optimal_xodr.csv`) via the per-vehicle
+  `position: new Point on ttlRegion(self.ttlFileName)` default on
+  `RacingCar` (see `racing/model.scenic:164`). No `on R` specifier needed.
 - fellow placed via `_racing_st_offset (Range(20, 60), 5)` — variable gap
   in [20, 60] m ahead, fixed +5 m left of ego (so fellow rides the left TTL)
 - both vehicles run the full SD-13 strategy-driven planner
+
+The integrated "on ttl" placement means each car's initial sampling region
+follows ITS OWN `ttlFileName` attribute -- fellow with `ttl_left_xodr.csv`
+samples on the left racing line, ego with `ttl_optimal_xodr.csv` samples
+on the optimal racing line. Explicit `at (x,y)` or `on mainTrack` still
+override the default the same as before.
 
 ### Batch runner
 `src/scenic/domains/racing/benchmarks/sampled_runner.py`:
@@ -76,6 +84,61 @@ be re-run alone with the same seed.
 ### Determinism
 Holding `--seed` fixed makes the entire sampled bank reproducible run-to-run.
 Vary the seed (or the per-sample offset rule) to widen coverage.
+
+### What the summary columns actually mean
+
+`summary.csv`/`summary.txt` are parsed straight from the per-sample logs.
+The signal-to-column mapping is non-obvious enough to be worth pinning
+down -- earlier versions of the runner had two parser bugs (now fixed) that
+made the summaries silently wrong:
+
+| Column | Source line in log | Notes |
+|---|---|---|
+| `collision` | `[EvalEvent] type=eval_contact` | TRUE OBB-overlap event from the eval pipeline. Trustworthy. (Falls back to `bbox_gap_m<0` only if no eval_contact lines are present.) |
+| `ego_start_xy` | first `[Ego debug] xy=(x, y) -> ...` | Resolved ego (x, y) at simulation start. |
+| `opp_start_xy` | `[Placement] Fellow_0: ... -> s=<s>, t=<t>` | Race-frame coords; the ego-relative `_racing_st_offset` is reproducible across runs even if the absolute (x, y) varies. |
+| `sampled_gap_m` | first paren in same `[Placement] Fellow_0: ... + (gap, lat) -> ...` | The float Scenic sampled out of `Range(20, 60)` for this run. |
+| `commit_pass_left_count` / `_right_count` | `decision_reason=commit_pass_*_hold` and `=strategy_pass_*` | TICK count, not maneuver count -- a single 2 s overtake yields ~40 ticks. Use this as "did the planner attempt this side?" not "how many overtakes." |
+| `commit_pass_success_count` | `pass_success=1` field on `[Commit]` lines | DISCRETE count -- the lifecycle clears the flag after one tick, so this is the number of completed overtakes. |
+| `commit_abort_pass_count` | `decision_reason=abort_*` (pass / hold / commit_invalidated / recover_follow) | TICK count again. |
+| `selected_*` | `[Strategy] t=... selected=<name>` | TICK count of the strategy selector's choice (the policy-side, before lifecycle execution). |
+
+**Interpretation rule of thumb:** if `commit_pass_left_count` is high but
+`commit_pass_success_count` is 0, the planner kept TRYING to overtake on
+the left and never succeeded -- usually because `commit_abort_pass_count`
+is also high (the SD-4 emergency-brake gate or the lifecycle's
+`commit_invalidated_hazard` keeps killing the maneuver). That's a
+falsification signal: the layout is reachable by the planner's intent but
+not survivable by its execution.
+
+### Two parser bugs that previously hid real failures
+
+Both fixed in 2026-04-27; if you see results from before that date, treat
+them as suspect:
+
+1. **Encoding mismatch.** The runner captures the child subprocess's stdout
+   straight off the pipe (UTF-8 / ASCII). The parser was decoding those
+   bytes as UTF-16-LE -- which Python's `errors="replace"` accepts silently,
+   yielding garbage with `?` placeholders that no regex matches. Result:
+   every numeric metric came back zero and the summary printed `gap=?
+   lap=? p50_ms=?` for every sample. Fix: BOM-sniff first, then default
+   to UTF-8 (`_decode_log` in `sampled_runner.py`).
+
+2. **Signal regexes wrong for the SD-13 planner.** The original parser was
+   written against pre-SD-13 log conventions:
+   - It looked for `decision_reason=pass_success_free_run`, but the SD-13
+     planner emits `pass_success=1` as a field on `[Commit]` lines instead.
+   - It looked for `[Placement] ... resolved ... (x, y)` but the actual
+     line is `[Placement] Fellow_0: racing (s,t) from ego + (gap, lat) -> s=..., t=...`.
+   - It looked for `[Ego] set position xy=(...)` but the actual line is
+     `[Ego debug] xy=(...) -> ...`.
+   Result: collision and overtake counts were both zero in the summary
+   even when they had clearly happened in the log. Fix: regexes updated
+   to match the SD-13 log format.
+
+If you re-derive metrics from logs by hand (or write a new analysis
+script), key off the source lines in the table above, not the legacy
+patterns.
 
 ---
 

@@ -100,9 +100,15 @@ _ttl = create_ttl_region_from_file(
 ttl: Region = _ttl if _ttl else mainTrack
 
 # Helper for per-car TTL file: new RacingCar on ttlRegion('ttl_optimal_xodr.csv')
-def ttlRegion(ttlFileName): (create_ttl_region_from_file(
-    globalParameters.ttlFolder, ttlFileName, globalParameters.mainTrackBuffer
-) if globalParameters.ttlFolder else None) or mainTrack
+# Also called by RacingCar's `position` default with self.ttlFileName -- when
+# that is None or ttlFolder is unset, fall back to mainTrack so unset cars
+# still get a valid sampling region.
+def ttlRegion(ttlFileName):
+    if not globalParameters.ttlFolder or not ttlFileName:
+        return mainTrack
+    return create_ttl_region_from_file(
+        globalParameters.ttlFolder, ttlFileName, globalParameters.mainTrackBuffer
+    ) or mainTrack
 
 # Backward compatibility: mainRacingRoad and pitLaneRoad alias to mainTrack and pitTrack
 mainRacingRoad: Region = mainTrack
@@ -142,9 +148,20 @@ class RacingCar(Car):
         controllerAggressiveness: Controller aggressiveness (0.0-1.0, default: 0.5)
     """
     
+    # Per-vehicle TTL configuration. Declared up-front so the `position`
+    # default can self-reference `self.ttlFileName` (the Scenic compiler
+    # records the dependency and samples ttlFileName before position).
+    ttlFolder: None
+    ttlFileName: None
+
     # Default racing properties
     speed: 25  # Higher default speed for racing (90 km/h)
-    position: new Point on mainRacingRoad
+    # Integrated "on ttl" placement: when this car has a ttlFileName, sample
+    # uniformly over the buffered TTL polygon for THAT file (each car uses
+    # its own ttl). When unset, fall back to the entire mainRacingRoad.
+    # Explicit specifiers (e.g. `new RacingCar at (x, y)` or
+    # `new RacingCar on mainTrack`) still override this default normally.
+    position: new Point on ttlRegion(self.ttlFileName)
     requireVisible: False
     
     # Racing identification

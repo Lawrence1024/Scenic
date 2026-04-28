@@ -1,4 +1,0 @@
-scenario,return_code,lap_completion_status,lap_time_s,phase1_switch_observed,phase1_switch_count,ttl_switch_count,min_opponent_distance_m,collision,off_track,near_miss_count,waypoint_hits,phase0_samples,fellow_placement_from_ego_offset_observed,fellow_st_log_present,fellow_s0,fellow_t0,fellow_t_out_of_band,fellow_harness_line_count,fellow_speed_min_mps,fellow_speed_max_mps,fellow_max_speed_step_jump_mps,fellow_speed_stuck_near_zero,fellow_position_range_m
-examples\racing\phase1_planner\01_optimal_to_left.scenic,0,completed,19.15,True,1,1,,False,False,0,349,8,False,False,,,False,0,,,,False,
-examples\racing\phase1_planner\02_left_to_right.scenic,0,completed,19.0,True,1,1,,False,False,0,341,8,False,False,,,False,0,,,,False,
-examples\racing\phase1_planner\03_right_to_optimal.scenic,0,completed,18.65,True,1,1,,False,False,0,328,8,False,False,,,False,0,,,,False,

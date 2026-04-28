@@ -43,12 +43,11 @@ model scenic.simulators.dspace.racing_model
 # the resolved float at simulation time and computes (delta_s, delta_t).
 gap_m = Range(20, 60)
 
-# Ego placed uniformly on its OWN TTL (ttl_optimal_xodr.csv). The RacingCar
-# default `position: new Point on ttlRegion(self.ttlFileName)` resolves the
-# region per-vehicle from the car's own ttlFileName attribute, so we don't
-# need an explicit `on mainTrack` here. See racing/model.scenic:147 (default)
-# and ttlRegion helper at racing/model.scenic:103.
-ego = new RacingCar with raceNumber 1, \
+# Ego placed uniformly anywhere on mainTrack. Scenic excludes pit lane
+# automatically because mainTrack = (Road 1 ∪ Road 2) excluding the pit
+# lane (Road 0). See racing/model.scenic:91.
+ego = new RacingCar on mainTrack, \
+    with raceNumber 1, \
     with ttlFileName 'ttl_optimal_xodr.csv', \
     with ttlFolder localPath('../../../assets/ttls/LS_ENU_TTL_CSV')
 
@@ -64,9 +63,9 @@ ego.behavior = FollowRacingLineMPCBehavior(
 # Fellow at (delta_s, +5) relative to ego in race s-t coords. The dSPACE
 # placement layer (modeldesk/placement.py:413) resolves this against the
 # ego anchor at simulation start, so fellow ends up gap_m ahead and 5 m
-# left of wherever Scenic placed ego. Scenic's initial sample uses the
-# fellow's OWN ttlFileName (left TTL) via the per-vehicle default.
-opponent = new RacingCar with _racing_st_offset (gap_m, 5), \
+# left of wherever Scenic placed ego.
+opponent = new RacingCar on mainTrack, \
+    with _racing_st_offset (gap_m, 5), \
     with raceNumber 2, \
     with ttlFileName 'ttl_left_xodr.csv', \
     with ttlFolder localPath('../../../assets/ttls/LS_ENU_TTL_CSV')

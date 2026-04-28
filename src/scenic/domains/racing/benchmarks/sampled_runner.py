@@ -95,37 +95,70 @@ class SampleMetrics:
 
 _RE_TICKTIME = re.compile(r"\[TickTime\] t=([\d.]+)s wall_t=[\d.]+s tick_ms=([\d.]+)")
 _RE_STRATEGY_SELECTED = re.compile(r"\[Strategy\] t=[\d.]+s selected=([a-z_]+)")
-_RE_COMMIT_REASON = re.compile(r"decision_reason=(commit_pass_left|commit_pass_right|pass_success_free_run)")
-_RE_BBOX_GAP = re.compile(r"bbox_gap_m=(-?[\d.]+)")
+_RE_BBOX_GAP = re.compile(r"\[EvalGT\][^\n]*bbox_gap_m=(-?[\d.]+)")
 _RE_LAP_TIME = re.compile(r"lap_time_s=([\d.]+)")
-_RE_EGO_POS = re.compile(r"\[Ego\] (?:set position|debug) xy=\(([-\d.]+),\s*([-\d.]+)\)")
-_RE_FELLOW_POS = re.compile(r"\[Placement\] [Ff]ellow.*resolved.*\(([-\d.]+),\s*([-\d.]+)\)")
-_RE_GAP = re.compile(r"_racing_st_offset=\(([\d.]+)")
+# Ego start: first `[Ego debug] xy=(<x>, <y>) -> ...` (note `[Ego debug]`, not `[Ego] debug`)
+_RE_EGO_POS = re.compile(r"\[Ego debug\] xy=\(([-\d.]+),\s*([-\d.]+)\)")
+# Fellow placement format: `[Placement] Fellow_<n>: racing (s,t) from ego + (<gap>, <lat>) -> s=<s>, t=<t>`.
+# Capture s,t (the resolved race-frame coords) as the start position string and the gap (first paren value)
+# separately for the sampled_gap_m column.
+_RE_FELLOW_RESOLVED = re.compile(
+    r"\[Placement\] Fellow_\d+:[^\n]*from ego \+ \(([-\d.]+),\s*([-\d.]+)\)[^\n]*->\s*s=([-\d.]+),\s*t=([-\d.]+)"
+)
 _RE_OFF_TRACK = re.compile(r"in_track=0|out_of_track")
+# `pass_success=1` is the SD-13 commit-success flag emitted on the lifecycle's
+# success-tick (`[Commit] ... pass_success=1`). Tick count of this is the
+# overtake-completion count for the run.
+_RE_PASS_SUCCESS = re.compile(r"pass_success=1\b")
+# Collision detection: prefer `[EvalEvent] type=eval_contact` (canonical
+# overlap event) over per-tick bbox_gap_m<=0 -- the latter can fire on
+# numerical noise; eval_contact is only emitted when the OBBs actually overlap.
+_RE_EVAL_CONTACT = re.compile(r"\[EvalEvent\][^\n]*type=eval_contact")
 
 
-def _parse_log_utf16(path: Path) -> str:
-    """Decode a Scenic log file. Scenic on Windows writes UTF-16-LE; fallback to UTF-8."""
+def _decode_log(path: Path) -> str:
+    """Decode a captured subprocess log.
+
+    `run_one_sample` captures the child's stdout bytes directly (no shell), so
+    encoding is whatever Python's stdout uses inside the child -- on every
+    platform we've seen that's UTF-8 / ASCII. Earlier this function assumed
+    UTF-16-LE (the encoding PowerShell's `*>` redirection produces when YOU
+    redirect a Scenic run yourself), but that path is NOT used here -- the
+    bytes come straight off the subprocess pipe. Decoding UTF-8 bytes as
+    UTF-16-LE silently produces garbage (every two ASCII bytes get paired
+    into bogus codepoints), which is why every metric came back zero and
+    the per-sample summary was riddled with `?` placeholders.
+
+    BOM-sniff first so a future PowerShell-redirected file would still parse,
+    then default to UTF-8.
+    """
     raw = path.read_bytes()
-    try:
-        return raw.decode("utf-16-le", "replace")
-    except Exception:
-        return raw.decode("utf-8", "replace")
+    if raw[:2] == b"\xff\xfe":
+        return raw[2:].decode("utf-16-le", "replace")
+    if raw[:2] == b"\xfe\xff":
+        return raw[2:].decode("utf-16-be", "replace")
+    if raw[:3] == b"\xef\xbb\xbf":
+        return raw[3:].decode("utf-8", "replace")
+    return raw.decode("utf-8", "replace")
 
 
 def parse_sample(idx: int, seed: int, log_path: Path, return_code: int) -> SampleMetrics:
     """Extract per-sample metrics from one Scenic+sim log."""
-    text = _parse_log_utf16(log_path) if log_path.exists() else ""
+    text = _decode_log(log_path) if log_path.exists() else ""
 
-    # Collision: any tick with bbox_gap_m <= 0 (boxes touching/overlapping).
-    collision = False
-    for m in _RE_BBOX_GAP.finditer(text):
-        try:
-            if float(m.group(1)) <= 0.0:
-                collision = True
-                break
-        except ValueError:
-            continue
+    # Collision: trust `[EvalEvent] type=eval_contact` (true OBB overlap).
+    # Fall back to the per-tick bbox_gap_m<=0 check only if eval_contact
+    # was not emitted (older logs); the legacy check can flag transient
+    # numerical zeros, so it is the secondary signal.
+    collision = bool(_RE_EVAL_CONTACT.search(text))
+    if not collision:
+        for m in _RE_BBOX_GAP.finditer(text):
+            try:
+                if float(m.group(1)) < 0.0:
+                    collision = True
+                    break
+            except ValueError:
+                continue
 
     off_track = bool(_RE_OFF_TRACK.search(text))
 
@@ -137,31 +170,36 @@ def parse_sample(idx: int, seed: int, log_path: Path, return_code: int) -> Sampl
         except ValueError:
             pass
 
-    # First ego position observed.
+    # First ego position observed (`[Ego debug] xy=(<x>, <y>) -> ...`).
     ego_xy = None
     em = _RE_EGO_POS.search(text)
     if em:
         ego_xy = f"({em.group(1)}, {em.group(2)})"
-    fellow_xy = None
-    fm = _RE_FELLOW_POS.search(text)
-    if fm:
-        fellow_xy = f"({fm.group(1)}, {fm.group(2)})"
 
-    # Sampled gap (the Scenic Range(20, 60) resolved value, surfaced via
-    # placement debug log).
+    # Fellow placement and sampled gap: parse the canonical placement line
+    # `[Placement] Fellow_0: racing (s,t) from ego + (<gap>, <lat>) -> s=<s>, t=<t>`.
+    # gap = the longitudinal offset Scenic resolved from `Range(20, 60)`;
+    # opp_start_xy = the resulting race-frame (s, t) coords (no x,y until
+    # placement.py executes, but s/t is reproducible across runs).
+    fellow_xy = None
     gap_m = None
-    gm = _RE_GAP.search(text)
-    if gm:
+    fm = _RE_FELLOW_RESOLVED.search(text)
+    if fm:
         try:
-            gap_m = float(gm.group(1))
+            gap_m = float(fm.group(1))
         except ValueError:
             pass
+        fellow_xy = f"s={fm.group(3)}, t={fm.group(4)}"
 
-    # Commit / strategy counts.
-    commit_pass_success = text.count("decision_reason=pass_success_free_run")
-    commit_pass_left = text.count("decision_reason=commit_pass_left_hold") + text.count("decision_reason=commit_pass_left")
-    commit_pass_right = text.count("decision_reason=commit_pass_right_hold") + text.count("decision_reason=commit_pass_right")
-    commit_abort = text.count("decision_reason=abort_pass") + text.count("decision_reason=abort_hold")
+    # Lifecycle counts. Each `decision_reason=...` line is one planner tick,
+    # so these counts are tick-counts in that state, NOT discrete maneuver
+    # counts. `pass_success_count` IS a discrete count (one tick per
+    # successful overtake completion; the lifecycle clears the flag
+    # immediately after).
+    commit_pass_success = len(_RE_PASS_SUCCESS.findall(text))
+    commit_pass_left = text.count("decision_reason=commit_pass_left_hold") + text.count("decision_reason=strategy_pass_left")
+    commit_pass_right = text.count("decision_reason=commit_pass_right_hold") + text.count("decision_reason=strategy_pass_right")
+    commit_abort = text.count("decision_reason=abort_pass") + text.count("decision_reason=abort_hold") + text.count("decision_reason=abort_commit_invalidated") + text.count("decision_reason=abort_recover_follow")
     guard_emergency = text.count("emergency_stable_mode=1")
 
     # Strategy distribution.

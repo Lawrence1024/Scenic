@@ -1,8 +1,0 @@
-scenario,return_code,lap_completion_status,lap_time_s,ttl_switch_count,min_opponent_distance_m,collision,off_track,near_miss_count,waypoint_hits,phase0_samples
-examples\racing\phase0_benchmark\00_no_opponent.scenic,0,completed,29.049999999999997,0,,False,False,0,548,12
-examples\racing\phase0_benchmark\01_slower_opponent_optimal.scenic,0,completed,29.099999999999998,0,24.23,False,False,0,547,12
-examples\racing\phase0_benchmark\02_slower_opponent_left.scenic,0,completed,29.2,0,18.9,False,False,0,548,12
-examples\racing\phase0_benchmark\03_slower_opponent_right.scenic,0,completed,29.049999999999997,0,21.65,False,False,0,544,12
-examples\racing\phase0_benchmark\04_opponent_weaving_lightly.scenic,0,completed,28.999999999999996,0,23.7,False,False,0,547,12
-examples\racing\phase0_benchmark\05_opponent_just_ahead_corner.scenic,0,completed,29.049999999999997,0,8.0,False,False,0,547,12
-examples\racing\phase0_benchmark\06_side_by_side_start.scenic,0,completed,29.15,0,11.91,False,False,0,549,12
