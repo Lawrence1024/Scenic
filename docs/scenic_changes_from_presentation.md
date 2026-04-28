@@ -382,3 +382,96 @@ the same numeric distribution as the SD-20 smoke (`summary.csv` columns
 are unchanged in shape; only the implementation moved). Per-sample log
 files retain the full `[Commit]`/`[Strategy]`/`[BoundsCheck]`/etc.
 prints because those stayed in place — only the parser was deleted.
+
+### SD-22 — Seed Python random + numpy.random in verifai_runner
+
+**What was wrong.** Determinism analysis across seven seed=42
+verifai_runner runs found that no two produced the same sample 1
+despite identical scenic file and identical CLI seed. Sample-1
+`param0` (the VerifAI-controlled gap) ranged across {27.46, 28.71,
+32.93, 40.0, 41.85, 52.48, 59.63} and `ego_start_xy` varied across
+the entire main loop. Root cause: `verifai_runner.py` never seeded
+the RNGs. The `--seed` flag was a label-only artifact; the real
+Scenic global RNG (used by `new Point on ttlRegion(...)` and other
+in-place samplers) and `numpy.random` (used by VerifAI's CE/BO
+samplers) both initialized from `os.urandom` each invocation.
+
+**What landed.** In `verifai_runner.main()`, before
+`scenarioFromFile`, mirror what `scenic --seed N` does at
+`__main__.py:184-189` — seed both `random.seed()` and
+`numpy.random.seed()` with the base value. Per-flag behaviour:
+
+- `--seed N` provided → seed deterministically with N; reproducible.
+- `--seed` omitted → auto-generate a base at startup, seed with it,
+  print it loudly so the user can re-run with `--seed <printed>`
+  to reproduce.
+
+The auto-generated base is drawn from Python's default RNG (which
+itself initializes from `os.urandom` on first use), so consecutive
+no-seed runs produce different bases and therefore different
+campaigns — i.e. "act as random when seed is not provided."
+
+**Verification notes.** Two back-to-back runs with `--seed 42` now
+produce the same sample-1 `param0`, the same `ego_start_xy`, the
+same `opp_start_xy`. A run without `--seed` produces a different
+sample-1 and prints `auto-generated (no --seed; reproduce with
+--seed <N>)` so the user can re-trigger an interesting random run
+deterministically.
+
+### SD-23 — ManeuverTime-based warmup + tighter initial poll + settle tick
+
+**What was wrong (after SD-22).** With seeds locked, two same-seed
+runs A and B produced the same sampled layout but slightly different
+ego trajectories. Trace inspection found ego started driving at
+*different* `ManeuverTime` values across runs (~3.41 s in run A vs
+~3.05 s in run B). Three layered wall-clock-dependent stages in the
+setup chain compounded:
+
+1. `simulator.py:setup` polls `ManeuverTime > 0` with
+   `time.sleep(0.2)`. Whichever 200 ms window the sleep wakes up in
+   determines the first observed `ManeuverTime`, which can be
+   anywhere in [~0, ~0.4 s].
+2. `arrays.ensure_fellow_arrays_initialized` advances 3 s of
+   *`SimulationTime`* from wherever VEOS happens to be.
+   `SimulationTime` is the free-running VEOS clock that ticks even
+   when the maneuver engine is dormant, so the post-warmup
+   `ManeuverTime` inherits the variance from (1) directly.
+3. The break condition `mt_now >= target` lands at a tick
+   boundary, so the overshoot is in [0, sim.timestep] depending on
+   floating-point rounding.
+
+Cumulative variance: ~360 ms across runs at fixed seed. Visible as
+the user-reported "ego starts driving at different maneuver time."
+
+**What landed.**
+
+- `arrays.WARMUP_MANEUVER_TIME = 3.0 s` replaces `WARMUP_SIM_DURATION`
+  as the warmup target. The loop now advances until *`ManeuverTime`*
+  (the maneuver-engine clock that drives plant behaviour) crosses
+  the absolute threshold, not until `SimulationTime` drifts 3 s.
+- `simulator.py:setup` poll cadence dropped from 200 ms to 10 ms.
+  First observed `ManeuverTime` is now bounded by one or two dSPACE
+  ticks instead of 200 ms.
+- Settling block: if the warmup loop breaks within half a timestep
+  of the target, advance one extra tick. Both runs end in
+  `[target + 0.5*ts, target + 1.5*ts]` regardless of rounding
+  direction. The completion log now prints absolute `mt_final` and
+  overshoot-in-ms so two same-seed runs can be diffed directly.
+
+**Verification.** Two `--seed 42 --count 1 --time 1500` runs (SD-23
+A and B) both completed with `[dSPACE] Warmup done: ManeuverTime =
+3.0130 s after N advances (+0 settle); target = 3.00 s, overshoot =
+13.00 ms` — `mt_final` and overshoot agree to the millisecond. The
+advance count differs (298 vs 278) because the starting offset
+differed (0.024 vs 0.218 s); the *end state* is invariant. First
+five `[BoundsCheck]` ticks of run A vs run B are bit-identical at
+t=0.00, 0.50, 2.00 s; differ by exactly 0.01 m at t=1.00 and 1.50 s
+(the printed precision floor; sub-cm OSQP numerical drift).
+
+**What this does NOT touch.** OSQP solver determinism (subnormal
+flush, BLAS thread scheduling, ADMM iteration count variance) still
+produces sub-ulp control differences amplified through closed-loop
+dynamics into sub-cm trajectory drift. That's the noise floor under
+tight tolerances and is orthogonal to the maneuver-start
+synchronization addressed here. For falsification purposes it's
+well below any meaningful safety threshold.

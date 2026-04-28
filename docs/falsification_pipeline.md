@@ -1,10 +1,17 @@
 # Falsification pipeline for the racing domain
 
-**Status (SD-16/SD-20/SD-21):** the full pipeline runs end-to-end against
-the cosim bridge without external orchestration. SD-20 routed every eval
-signal through Scenic's ``simulation.records`` channel; SD-21 deleted the
-log-parsing path entirely so monitors are no longer coupled to stdout
-format. The single in-process driver is ``verifai_runner.py``.
+**Status (SD-16/SD-20/SD-21/SD-22/SD-23):** the full pipeline runs
+end-to-end against the cosim bridge without external orchestration.
+SD-20 routed every eval signal through Scenic's
+``simulation.records`` channel; SD-21 deleted the log-parsing path
+entirely so monitors are no longer coupled to stdout format; SD-22
+seeded Python ``random`` and ``numpy.random`` with ``--seed`` so the
+campaign actually responds to the flag (it was a label-only artifact
+before); SD-23 anchored the dSPACE-side warmup to ``ManeuverTime``
+instead of ``SimulationTime`` so MPC tick 1 starts at the same plant
+state across same-seed runs. Two same-seed invocations now reproduce
+each other to the cm scale; residual drift is OSQP numerical noise.
+The single in-process driver is ``verifai_runner.py``.
 
 ## What "falsifiable" means here
 
@@ -245,11 +252,30 @@ that active samplers need to converge.
   `_record_event(tag, payload)` call alongside the existing print and
   a corresponding extractor in
   `src/scenic/domains/racing/benchmarks/metrics.py::_records_extract`.
-- **Compounding RNG state:** non-VerifAI distributions in the .scenic
-  file (e.g. `Uniform` over the ego TTL position) advance per Scenic's
-  global RNG, which is seeded once at compile time. Iteration N's ego
-  start therefore depends on N. By design -- VerifAI controls only
-  parameters wrapped in `VerifaiRange` / `VerifaiOptions` / etc.
+- **Determinism contract (SD-22 / SD-23):** with `--seed N`,
+  `verifai_runner.py` seeds Python `random` and `numpy.random` with
+  `N` before `scenarioFromFile` (matching what `scenic --seed N` does
+  in `__main__.py`). This makes both the Scenic global RNG (used by
+  in-place samplers like `new Point on ttlRegion(...)`) and VerifAI's
+  CE / BO sampler deterministic. With `--seed` omitted, a base is
+  auto-generated at startup and printed loudly so the campaign is
+  still reproducible by re-running with `--seed <printed>`.
+- **Compounding RNG state across samples:** within a single seeded
+  run, non-VerifAI distributions advance per the global RNG, so
+  iteration N's ego start depends on N. By design — VerifAI controls
+  only parameters wrapped in `VerifaiRange` / `VerifaiOptions`. Sample
+  i and sample i+1 within the same campaign are therefore *different*
+  layouts, but the entire i-sequence is reproducible across runs at
+  the same seed.
+- **Maneuver-start synchronization (SD-23):** the warmup target is
+  *`ManeuverTime`* (the dSPACE maneuver-engine clock), not
+  `SimulationTime` (the free-running VEOS clock). Two same-seed
+  invocations now reach MPC tick 1 with identical post-warmup
+  `ManeuverTime` (verified: 3.0130 s in both A and B of an SD-23
+  back-to-back test). Residual sub-cm trajectory drift comes from
+  OSQP solver numerical noise (subnormal flush, BLAS thread
+  scheduling, ADMM iteration-count variance) and is well below any
+  meaningful safety threshold for falsification.
 
 ### Collision detection: two independent signals
 
