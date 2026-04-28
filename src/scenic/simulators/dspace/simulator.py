@@ -732,6 +732,15 @@ class DSpaceSimulation(RacingSimulation):
             )
             _mt_started = False
             if self._var_access is not None:
+                # SD-23: poll at ~10 ms cadence (was 200 ms). The first poll
+                # interval that catches ManeuverTime > 0 dictates the initial
+                # observed value: with 200 ms sleeps the first observed value
+                # could be anywhere in [~0, ~0.4 s], propagating to a
+                # post-warmup variance of the same magnitude. With ~10 ms
+                # cadence the first observed value is bounded by one or two
+                # dSPACE ticks, and the downstream warmup (which now targets
+                # ManeuverTime, not SimulationTime) absorbs the rest.
+                _mt_started = False
                 _mt_poll_deadline = time.perf_counter() + 5.0
                 while time.perf_counter() < _mt_poll_deadline:
                     try:
@@ -742,7 +751,7 @@ class DSpaceSimulation(RacingSimulation):
                         print(f"[Setup] ManeuverTime = {_mt:.4f}s — maneuver is running.")
                         _mt_started = True
                         break
-                    time.sleep(0.2)
+                    time.sleep(0.01)
 
             # CoSim: switch bridge from AUTO to MANUAL (controlled stepping) now that
             # ManeuverTime has latched. From this point every VEOS tick requires step().
