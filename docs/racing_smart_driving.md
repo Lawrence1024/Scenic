@@ -349,3 +349,136 @@ Total racing suite: **177 pass** (was 136 pre-SD-11).
   conservative behavior).
 - **Default flip** — `use_strategy_authority` stays `False` until full
   F-bank validation completes.
+
+### SD-13 (snapshot path removal — strategy as sole entry authority, 2026-04-28)
+
+**Motivation:** the F-bank run after SD-12 surfaced the cost of having both
+the strategy authority and the legacy snapshot path coexist:
+
+- **F6 ping-pong (50 ms granularity, t=0.4–2.2s):**
+  ```
+  SETUP_PASS_RIGHT (strategy_pass_right) → FREE_RUN (opponent_not_blocking)
+       → SETUP_PASS_RIGHT → FREE_RUN → ... (every 50 ms)
+  ```
+  Strategy authority set `state.mode = SETUP_PASS_RIGHT`. Next tick the gate
+  `state.mode in (FREE_RUN, FOLLOW)` excluded SETUP, so strategy didn't re-fire.
+  The snapshot path's `opponent_not_blocking` gate at `tactical_planner.py:1493`
+  wiped the SETUP because fellow on left → optimal/right are open in snapshot
+  terms. Strategy fired again, ping-pong every 50 ms.
+- **F3L/F3R regression:** with SD-12c's clean opp_trajectory threading,
+  predicted_collision correctly says "no collision" when fellow is on a
+  parallel TTL. Strategy picked stay_optimal 583/600 ticks. The 17 pass_*
+  selections never built up enough hysteresis to fire authority. Ego just
+  barreled past on optimal at full speed — visually felt like "ignoring fellow."
+
+**User directive:** "If we have decided a better way of racing and planning,
+we could consider the old snapshot to be removed since it is giving confusing
+information." Plus: "without the A/B confusion." Plus: "consider reverting
+SD-12 if you think is necessary."
+
+**Verdict on SD-12:** all three commits layered cleanly on the new
+architecture and were KEPT. The architectural problem was the persistence of
+the snapshot entry chain alongside strategy authority — not SD-12 itself.
+
+**Design — strategy is the sole entry authority:**
+
+The snapshot-driven FOLLOW/FREE_RUN/SETUP entry chain (Phases 7–9 in the
+SD-11g planner, ~700 LOC) is DELETED entirely. Strategy authority becomes
+the only path from FREE_RUN/FOLLOW into the lifecycle. Strategy `pass_*`
+routes DIRECTLY to `COMMIT_PASS_*` (skipping SETUP) since the strategy
+pipeline already validated geometry over the 10 s horizon.
+
+Resulting planner shape:
+
+```
+Phase 1 — Guards: no_opponent → strategy_authority → pit_mode_guard
+                  → relevance_dist
+Phase 2 — Snapshot derivations (relation_ahead, hazards) for in-flight use
+Phase 3 — COMMIT_PASS_* execution (predicted_collision-gated abort,
+          pass_success → HOLD_PASS_*)
+Phase 4 — HOLD_PASS_* execution (long_ok + merge_geom_ok + ramp release)
+Phase 5 — ABORT_PASS execution (recovery to FOLLOW/FREE_RUN)
+Phase 6 — Safety: contact_recovery_hold (post-collision FOLLOW)
+Defensive fallback — strategy_inactive_follow_fallback (no fellow_trajectory)
+```
+
+That's it. No SETUP, no opening_confidence_count, no protected_follow latch,
+no snapshot-driven FOLLOW vs FREE_RUN selection.
+
+**Strategy mapping (in `_strategy_to_planner_output`):**
+
+| Strategy | Mode | TTL | Speed cap | Lifecycle handoff |
+|---|---|---|---|---|
+| `stay_optimal` | FREE_RUN | optimal | None | clears commit/lateral_lock |
+| `follow_fellow` | FOLLOW | optimal | opp + 0.3 | n/a |
+| `pass_left` / `pass_right` | **COMMIT_PASS_***  (NEW: skip SETUP) | side | opp + commit_speed_margin_mps | seeds `commit.side`, `commit.start_s`, `commit.until_s`, `commit.candidate_count`, `lateral_path_lock_*` |
+
+**Stages (5 total — direct replacement, no flag-gated rollout):**
+
+- **SD-13a** Modified `_strategy_to_planner_output` so `pass_*` returns
+  `COMMIT_PASS_*` directly. Lifecycle's COMMIT branch carries the maneuver
+  through pass_success → HOLD → FREE_RUN naturally.
+- **SD-13b** Deleted `tactical_planner_step_v1` lines ~1437–1937 (the
+  entire snapshot Phase 7–9 entry chain): `opponent_not_blocking`,
+  `gap_not_ok`, `ahead_blocking_follow`, `follow_pressure`,
+  `setup_reentry_cooldown`, `setup_too_far_follow`, `setup_candidate_collect`,
+  `pass_intent`/`opening_confidence` arming, `commit_active` snapshot
+  promotion, `pass_window_unsafe_both_sides`, final SETUP entry.
+  Added defensive fallback `_follow_result("strategy_inactive_follow_fallback")`.
+- **SD-13c** Deleted dead helpers (`_is_proximity_hazard`, protected_follow
+  latch), state fields (`setup_candidate_*`, `follow_pressure_count`,
+  `protected_follow_*`, `setup_commit_*`, `pass_intent_*`,
+  `opening_confidence_count`), and config fields
+  (`protected_follow_release_cycles`, `setup_commit_*`, `pass_intent_*`,
+  `setup_entry_persistence_cycles`, `follow_pressure_threshold_cycles`,
+  `setup_commit_min_closing_mps`).
+- **SD-13d** Test reconciliation: deleted 25 snapshot-only tests
+  (~1270 LOC) from `test_tactical_planner.py`; updated
+  `test_pass_authority_returns_commit_pass_and_seeds_lifecycle` and
+  `test_flag_off_completely_bypasses_authority` to assert the new return
+  shapes.
+- **SD-13e** F-bank validation + docs (this section).
+
+**LOC reduction:**
+
+| File | Pre-SD-13 | Post-SD-13 | Δ |
+|---|---|---|---|
+| `tactical_planner.py` | ~1957 | 1352 | **−31%** |
+| `test_tactical_planner.py` | ~2080 | 835 | **−60%** |
+
+**Tests:** 152 pass (was 180; lost 25 deleted snapshot tests, kept all
+strategy / lifecycle / pass_geometry / situation_assessment / SD-12 tests).
+
+**Two-key safety preserved:** strategy authority commits to a plan; SD-4's
+1.5 s `path_collision_predicted` independently vetoes mid-flight via
+`hard_abort_hazard`. The `_apply_predicted_collision_gate` module-level
+helper is unchanged.
+
+**Surviving snapshot facts** (still required by lifecycle, NOT for entry):
+- `sit.delta_s_m` — HOLD release longitudinal-clearance check
+- `sit.lateral_m` — ABORT side-by-side check + COMMIT pass-success HOLD entry
+- `sit.ahead` (relation_ahead) — COMMIT/HOLD/ABORT all key off ahead vs behind
+
+**Acceptance per scenario** (to be measured by F-bank run after this commit):
+
+- F1: `stay_optimal` throughout, FREE_RUN, no commits.
+- F2: `pass_left/right` → `COMMIT_PASS_*` directly → success, ≥1 commit_pass_success.
+- F3L/F3R: deliberate overtake via COMMIT_PASS_* (no more "ego barrels past
+  on optimal" since SETUP is skipped — when strategy picks pass_*, ego
+  visibly commits to the side TTL).
+- F4 sudden-stop: SD-4 emergency brake fires (out of SD-13 scope per user).
+- F5/F7/F8: strategy picks appropriate plan; lifecycle executes.
+- F6: `pass_right` → `COMMIT_PASS_RIGHT` → success. **No more ping-pong.**
+- F9: `stay_optimal` throughout (validated single-run earlier).
+
+**Deferred to follow-up cycles:**
+
+- **Deliberation tuning** ("ignoring fellow" perception when strategy picks
+  stay_optimal on parallel-TTL geometry) — needs a config knob to prefer
+  pass_* in a "comfort zone" between hard_clearance (2.5 m) and a softer
+  cushion (~4 m).
+- **F4 sudden-stop emergency brake** — still uses SD-4's existing path,
+  acceptable as-is.
+- **Comment/symbol cleanup**: residual references to deleted concepts
+  (e.g., `_clear_setup_commit` is now a no-op; legacy `SETUP_LEFT`/
+  `SETUP_RIGHT` aliases) can be tidied in a separate cleanup pass.
