@@ -217,66 +217,89 @@ Requirements:
   Scenic's `place_ego()` + `ts.Download()` is the authoritative spawn source.
   See `cosim/FINDINGS.md` §10 for the full write-verification trace.
 
-### Required switch settings for Dennis's 2026-04 VEOS
+### Required switch settings for Dennis's 2026-04-29 corrected CoSim VEOS
 
-Three switches written at setup (captured/restored at teardown). The
-`Sw_Manual_VESI_Overwrite` target depends on *who drives ego*:
+The canonical target is now `dspace_art_cosim_stack.yml` with
+`Cosim-VEOS/ASM_Traffic.osa` (Dennis's 2026-04-29 OSA wiring fix in place).
+The old non-CoSim `dspace_art_stack.yml` is retained as fallback only.
 
-| Switch | Target | Rationale |
-|---|---|---|
-| `Sw_Activate_CLIF[0\|1]/Value` | `2.0` | Unblocks ExternalControl under CoSim (FINDINGS §6) |
-| `Sw_MultiEgo_Fellows[0const\|1race\|2extern]/Sw_MultiEgo_Fellows` | `0.0` (const) | Routes fellow to legacy `Const_*_Fellows_External` MAPort arrays — what Scenic's controller writes every tick |
-| `Sw_Manual_VESI_Overwrite[0bridge\|1extern\|2scenic]/Value` *(new VEOS)* or `Sw_Manual_VESI_Overwrite[0\|1]/Value` *(old VEOS)* | **`1.0` (extern) when Scenic drives ego** (`scenic_control = True`) | Routes ego VESI to MAPort `Const_throttle_cmd` / `Const_gear_cmd` / `Const_steering_cmd` — exactly what Scenic's controller writes |
-|  | **`0.0` (bridge) when ART drives ego** (`scenic_control = False`, `ARTStackControlBehavior`) | Routes ego VESI to the SocketCAN bridge so raptor's CAN commands reach VEOS. `simulator.py::setup()` step 9b probes the new path first then falls back to legacy `[0\|1]`; the value is selected from `scene.params["scenic_control"]` (default `True` → `1.0`). |
+Both modes (Scenic-ego and ART-ego) verified end-to-end on the corrected OSA
+on 2026-04-29. The switch values below differ from the canonical answers
+Dennis gives because **our deployment is external Python + MAPort, not an
+in-VEOS Scenic VPU** — see `cosim/FINDINGS.md` §12 for the full deployment-
+topology rationale.
+
+| Switch | Scenic-ego | ART-ego | Rationale |
+|---|---|---|---|
+| `Sw_Activate_CLIF[0\|1]/Value` | `0.0` (or `2.0` under CoSim) | `1.0` (or `2.0` under CoSim) | CoSim path needs `2.0` for `ManeuverTime` to advance (FINDINGS §6) |
+| `Sw_Manual_VESI_Overwrite[0bridge\|1extern\|2scenic]/Value` | **`1.0`** (extern / software-joystick path) | **`0.0`** (bridge) | Scenic-ego uses `=1` because per-tick `Const_*_cmd` MAPort writes land at the OSA input port wired to enum `=1`. Dennis's canonical `=2` (scenic) routes through `ScenicControlInterface`, which assumes an in-VEOS Scenic VPU we don't run. ART-ego = bridge as canonical. |
+| `Sw_RaceControl[0Intern\|1Extern\|2Orchestrator]/Value` | **`0.0`** (intern) | **`0.0`** (intern) | Dennis canon for Scenic is `=1` (extern) but expects an extern flag source from `ScenicControlInterface`. Intern + `Const_track_flag=1` holds the plant in green. ART canonically uses `=0` (intern) and lets the docker setflag handshake drive race state. |
+| `Sw_MultiEgo_Fellows[0const\|1race\|2extern]/Sw_MultiEgo_Fellows` | **`0.0`** (const) | **`0.0`** (const) | `=0` routes fellow inputs to `Const_*_Fellows_External` MAPort arrays — what Scenic's fellow controller writes every tick. Dennis canon `=2` (extern) points at a different external bus on this OSA (verified 2026-04-29: with `=2` ego drove but fellows stayed stationary). |
+| `Const_sys_state` (RaceControl) | `9` (running) | **not written** | ART-ego skips this write; the docker `setflag` handshake (`ASM_Maneuver.py vehicleflag_<N+1> trackflag_4`, fired automatically from `author_scenario` via `ExternalControlManager`) converges race-control state instead. |
+| `Const_track_flag` (RaceControl) | `1` (green) | **not written** | Same — gated on Scenic-only via `if scenic_drives_ego:` in `initialize_vesi_interface`. |
+| `Const_veh_flag` (RaceControl) | `0` (no flag) | **not written** | Same. |
+| `Const_enable_*_cmd` (×4: throttle/brake/steer/gear) | `1` | `0` | Manual-MUX selector. `1` = honor `Const_*_cmd` writes (Scenic). `0` = bridge MUX wins (ART) — must be `0` or raptor's CAN inputs are dropped. |
 
 Plus `controldesk/connection.py::initialize_vesi_interface()` must complete
 all of its init steps — a stale switch path earlier in the method used to abort
 the rest silently. Watch for `[ControlDesk] VesiInterface init summary: N ok,
-0 failed` at setup; any non-zero `failed` count leaves VESI in a half-enabled
-state and ego won't respond to MAPort writes.
+0 failed` at setup; expect **15 ok / 0 failed** for Scenic-ego and **12 ok /
+0 failed** for ART-ego (3 fewer because race-control Const_* writes are
+gate-skipped). Any non-zero `failed` count leaves VESI in a half-enabled
+state and ego won't respond.
 
 ### Running ART-driven ego with Scenic-controlled fellow
 
-Historically (pre-CoSim work), Scenic could orchestrate a scenario where
-**raptor drives ego** and **Scenic only moves fellows** — useful for
-shaking out raptor behavior against scripted traffic. The canonical example is
-[`examples/racing/art_fellow_combined.scenic`](../../../../examples/racing/art_fellow_combined.scenic),
-which sets `param scenic_control = False` and assigns `ego.behavior =
-ARTStackControlBehavior()` (a no-op behavior that lets raptor's CAN writes
-through untouched; see `behaviors.scenic::ARTStackControlBehavior`).
-
-Run it with the full `dspace_art_stack.yml` (raptor must be up) and ctun
-tunnel active:
+Both modes run on the same `dspace_art_cosim_stack.yml` — flip
+`scene.params["scenic_control"]` (default `True`) to switch.
 
 ```bash
-scenic examples/racing/art_fellow_combined.scenic --2d --model scenic.simulators.dspace.racing_model --simulate -b --count 1
+# Bring up the stack (WSL):
+docker compose -f src/scenic/simulators/dspace/dspace_art_cosim_stack.yml up -d
+
+# Then on Windows, start ctun.exe yourself.
+
+# Run the scenario (model declared in the .scenic file):
+scenic examples/racing/f_shared/F1_fellow_behind_optimal_cruise.scenic \
+    --simulate --time 2000 --count 1 --2d -b
 ```
 
-**Status (2026-04-24):** verified end-to-end on the `dspace_art_stack`
-workflow against the **old VEOS** (non-CoSim). raptor's `acc_pedal_cmd`
-flows through `asm_socketcan_bridge` → VESI → VEOS plant → ego
-throttle/brake/steering. Scenic-ego (`ego_mpc_behavior.scenic`) on the same
-stack also verified — Scenic MPC writes via MAPort `Const_*_cmd` reach the
-plant; raptor's bridge writes are correctly bypassed (live evidence: raptor
-commanding ~38% throttle while plant ran at 100% under Scenic MPC).
+For ART-ego, edit the scenario file's `param scenic_control = True` to `False`
+(or pick / clone a scenario that sets it to `False`). Scenic CLI's `--param`
+flag for booleans is fiddly; an in-file flip is deterministic.
 
-The configuration:
+**Status (2026-04-29):** Both modes verified end-to-end on the corrected
+CoSim OSA.
 
-- `Sw_Manual_VESI_Overwrite` — `simulator.py` step 9b probes the new-VEOS
-  path `[0bridge|1extern|2scenic]` first; falls back to legacy `[0|1]` on
-  the old VEOS. Whichever resolves is written to `1.0` (Scenic) or `0.0`
-  (ART) and recorded for teardown restore.
+- **Scenic-ego**: MPC drove ego at ~60 mph; fellow drove alongside at the
+  scenario's `speed_mph=58` target via `Const_*_Fellows_External` MAPort
+  writes.
+- **ART-ego**: raptor drove ego from idle to ~80 mph in 5 s, held the
+  straight, bled speed approaching corners; fellow drove the same MAPort
+  path as in Scenic mode.
+- **Live divergence check on Scenic-ego** (which is the test that proves
+  raptor's bridge writes are correctly bypassed): on the old VEOS we saw
+  raptor commanding ~38% throttle while the plant ran at 100% under
+  Scenic MPC. Same divergence is expected on CoSim and is the canonical
+  signal that the manual-MUX gating is working.
+
+The configuration (current code, see `cosim/FINDINGS.md` §12 for the
+canonical record):
+
+- `Sw_Manual_VESI_Overwrite` — `simulator.py` step 9b sets `1.0` for
+  Scenic-ego and `0.0` for ART-ego via MAPort. Legacy `[0|1]` fallback path
+  retained for pre-Dennis VEOS but unused on the canonical 2026-04-29 OSA.
 - `Const_enable_*_cmd` — set by
-  `initialize_vesi_interface(scenic_drives_ego=...)`: `1` enables the manual
-  MUX (Scenic), `0` disables it so the bridge MUX wins (ART).
-- `Sw_RaceControl=0`, `Const_sys_state=9`, `Const_track_flag=1` (intern +
-  green) — written by `initialize_vesi_interface()` regardless of mode.
-  Non-obvious: the OSA's "extern" race-control mode does not auto-feed a
-  green flag in the dspace_art_stack, so the plant gates throttle until the
-  internal flag overrides force green. raptor still gets its own race-flag
-  readback via the bridge for its decision-making — that's a separate
-  signal path. See `cosim/FINDINGS.md` §10 ("2026-04-24 — final root cause
-  found and fixed") for the full diagnosis trace.
+  `initialize_vesi_interface(scenic_drives_ego=...)`: `1` for Scenic, `0`
+  for ART.
+- `Sw_RaceControl=0` (intern) for both modes. `Const_sys_state=9`,
+  `Const_track_flag=1`, `Const_veh_flag=0` are written for Scenic-ego only;
+  ART-ego skips them and lets the docker setflag handshake (`ASM_Maneuver.py`
+  via `ExternalControlManager.enableExternalControlViaScript`) handle state
+  convergence. The 2026-04-24 framing of "intern + green is a workaround
+  for broken extern wiring" was rationale-incorrect: it's the canonical
+  config for our external-Python+MAPort deployment topology, not a
+  workaround. Full diagnosis in `cosim/FINDINGS.md` §12.
 
 ---
 

@@ -618,14 +618,27 @@ class DSpaceSimulation(RacingSimulation):
         # CoSim flag. On pre-Dennis VEOS the paths don't exist, the get_var read
         # raises, and we skip with a one-line warning.
         #
-        # Switch semantics:
-        #   Sw_MultiEgo_Fellows[0const|1race|2extern] — fellow VESI source. 0=const
-        #     reads MAPort Const_*_Fellows_External arrays (what Scenic's controller
-        #     writes every tick); used in all current modes since the reverted
-        #     sync_step_bridge lacks stage_outports.
+        # Switch semantics — what Dennis's table says vs what our deployment uses.
+        # Dennis's 2026-04-29 table is for canonical in-VEOS deployments where Scenic
+        # runs as a VPU and a fellow source feeds external bus inputs. OUR deployment
+        # is external Python pushing values via MAPort into Const_*_cmd and
+        # Const_*_Fellows_External variables — i.e. we are software-emulating the
+        # manual override / const-array input ports. So the enum value we pick is
+        # whichever one maps to the OSA input port wired to those variables, NOT
+        # Dennis's canonical answer. Verified empirically 2026-04-29.
+        #
+        #   Sw_MultiEgo_Fellows[0const|1race|2extern] — fellow VESI source.
+        #     0=const  -> reads MAPort Const_*_Fellows_External arrays (US).
+        #     1=race   -> opponent positions from the orchestrator (live racing).
+        #     2=extern -> Dennis's "MAPort takes effect" answer; on this OSA points
+        #                 to a different external bus we don't feed (verified: with
+        #                 =2 our Const_* writes don't land and fellows are stationary).
         #   Sw_Manual_VESI_Overwrite[0bridge|1extern|2scenic] — ego VESI source.
-        #     1=extern reads MAPort Const_throttle_cmd/etc. (Scenic-driven ego).
-        #     0=bridge reads asm_socketcan_bridge inputs (ART-driven ego).
+        #     0=bridge -> asm_socketcan_bridge inputs (ART-driven ego).
+        #     1=extern -> Const_*_cmd via VESIResultData_Manual (US — software joystick).
+        #     2=scenic -> Dennis's canonical Scenic answer; routes through
+        #                 ScenicControlInterface VPU (verified: with =2 our Const_*_cmd
+        #                 writes don't reach the plant and the car gravity-drifts).
         #     Selected from scene.params["scenic_control"] (default True).
         #   Sw_Activate_CLIF[0|1] — only relevant under CoSim (must be 2.0 for
         #     ManeuverTime to advance, FINDINGS.md §6). Written below.
@@ -651,7 +664,11 @@ class DSpaceSimulation(RacingSimulation):
         if self._cd and self._var_access is not None:
             # --- Dennis-VEOS switches (always written via MAPort when available) ---
 
-            # Sw_MultiEgo_Fellows -> 0 (const / MAPort Const_*_Fellows_External arrays).
+            # Sw_MultiEgo_Fellows -> 0 (const). For our deployment this is the
+            # value that lets MAPort Const_*_Fellows_External writes drive fellows.
+            # Dennis's 2026-04-29 table said =2 (extern), but on this OSA =2 points
+            # to a different bus (verified 2026-04-29: ego drove with software-joystick
+            # path while fellows stayed stationary at =2; reverting to =0 was the fix).
             try:
                 self._multiego_fellows_original = float(self._var_access.get_var(_MULTIEGO_FELLOWS_PATH))
                 try:
@@ -666,14 +683,22 @@ class DSpaceSimulation(RacingSimulation):
                 print("[Setup] Sw_MultiEgo_Fellows[0const|1race|2extern] not present "
                       "on this VEOS — skipping (pre-Dennis build).")
 
-            # Sw_Manual_VESI_Overwrite -> 1 (extern/manual, Scenic-ego) or 0 (bridge, ART-ego)
-            # based on scene.params["scenic_control"]. Try new-VEOS path first; fall back to
-            # legacy [0|1] path for old VEOS. Whichever path resolves on this OSA is the
-            # one we use; we also remember which one for teardown.
+            # Sw_Manual_VESI_Overwrite -> 1 (extern / Manual-Joystick path, used by
+            # Scenic-ego) or 0 (bridge, ART-ego). Background:
+            #   Dennis's 2026-04-29 table assigns 2=scenic for the case where Scenic
+            #   runs as a VEOS-internal VPU and feeds control via VEOS-internal output
+            #   ports. Our deployment is different: external Python pushes per-tick
+            #   throttle/brake/steer/gear to VESIResultData_Manual/Const_*_cmd via
+            #   MAPort. That IS the manual-override (joystick) path, so for our
+            #   topology the right value is 1 — we are functionally a software
+            #   joystick. Setting 2 routes through ScenicControlInterface, whose
+            #   inputs we don't feed, and the plant ignores our Const_*_cmd writes
+            #   (verified 2026-04-29: placement worked, plant drifted by gravity,
+            #   no throttle/brake/steer/gear ever applied).
             _scenic_params = getattr(getattr(self, "scene", None), "params", None) or {}
             _scenic_drives_ego = bool(_scenic_params.get("scenic_control", True))
             _vesi_overwrite_target = 1.0 if _scenic_drives_ego else 0.0
-            _vesi_overwrite_label = "extern / Scenic-driven ego" if _scenic_drives_ego else "bridge / ART-driven ego"
+            _vesi_overwrite_label = "extern / Scenic-driven ego (software joystick)" if _scenic_drives_ego else "bridge / ART-driven ego"
             self._vesi_overwrite_path_used = None
             for _path, _suffix in ((_VESI_OVERWRITE_PATH_NEW, "[0bridge|1extern|2scenic]"),
                                     (_VESI_OVERWRITE_PATH_LEGACY, "[0|1]")):

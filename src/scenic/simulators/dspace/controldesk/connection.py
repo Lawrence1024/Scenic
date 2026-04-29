@@ -254,58 +254,72 @@ class ControlDeskApp:
     def initialize_vesi_interface(self, scenic_drives_ego=True):
         """Initialize VesiInterface for either Scenic-ego or ART-ego mode.
 
+        Verified end-to-end on Dennis's 2026-04-29 corrected CoSim OSA. See
+        cosim/FINDINGS.md §12 for the canonical record (Dennis's wiring fix +
+        the deployment-topology rationale for why our switch values differ from
+        his canonical table).
+
         Args:
-            scenic_drives_ego: True (default) -> Scenic / MAPort drives ego throttle,
-                brake, steering, gear via VESIResultData_Manual/Const_*_cmd. The four
-                Const_enable_*_cmd flags are set to 1 so the model's input multiplexer
-                selects the manual override path. Race control runs internally
-                (sys_state=9, track_flag=1=green) so the plant accepts commands without
-                needing raptor to publish CAN race-flag frames.
-                False -> the asm_socketcan_bridge / raptor drives ego via VESIResultData
-                /vehicle_inputs (the non-Manual side of the same MUX). The four
-                Const_enable_*_cmd flags must be 0 here, otherwise the manual override
-                wins and bridge writes are dropped on the floor — this is the
-                root-cause documented 2026-04-24 for the "Lichtblick shows throttle
-                but ControlDesk doesn't" symptom on the dspace_art_stack workflow.
-                Race control switches to extern (sys_state=0, track_flag=0,
-                Sw_RaceControl=1) so raptor's CAN race-flag frames are honoured.
+            scenic_drives_ego:
+                True (default, Scenic-ego) -> Scenic / MAPort drives ego throttle,
+                brake, steering, gear via VESIResultData_Manual/Const_*_cmd. The
+                four Const_enable_*_cmd flags are set to 1 so the model's input
+                multiplexer selects the manual-override (software-joystick) path.
+                Race control runs internally (Sw_RaceControl=0, sys_state=9,
+                track_flag=1=green): we do this because Dennis's canonical
+                "Sw_RaceControl=1 / extern" expects an extern flag source from
+                ScenicControlInterface (a Scenic VPU we don't run), so internal
+                race-control with Const_* values is what actually feeds the plant
+                in our external-Python+MAPort deployment.
+
+                False (ART-ego) -> the asm_socketcan_bridge / raptor drives ego via
+                VESIResultData/vehicle_inputs (the non-Manual side of the MUX). The
+                four Const_enable_*_cmd flags must be 0 here, otherwise the manual
+                override wins and bridge writes are dropped on the floor.
+                Sw_RaceControl=0 (intern) and Const_sys_state/Const_track_flag/
+                Const_veh_flag are NOT written — the docker setflag handshake
+                (ExternalControlManager.enableExternalControlViaScript -> ASM_Maneuver.py
+                vehicleflag_<N+1> trackflag_4, fired automatically from
+                modeldesk/authoring.py::author_scenario) converges race-control
+                state instead. Writing Const_* here would conflict with the
+                handshake's convergence.
+
                 Clutch goes to 100% (released) for ART, 0 for Scenic.
 
-        Per-step try/except is preserved: each write is isolated so one failure doesn't
-        abort the rest. Each failure prints its full exception + path.
-
-        Targeted at Dennis's 2026-04 VEOS only (the deployed build). Legacy old-VEOS
-        switch suffixes such as Sw_Manual_VESI_Overwrite[0|1] have been removed; if
-        you need to drive an old pre-Dennis VEOS, restore those writes from git
-        history.
+        Per-step try/except is preserved: each write is isolated so one failure
+        doesn't abort the rest. Each failure prints its full exception + path.
 
         IMPORTANT: paths whose suffix uses enum names (e.g.
-        Sw_Manual_VESI_Overwrite[0bridge|1extern|2scenic]) cannot be written through
-        ControlDesk's COM API — COM parses the brackets as an array indexer and
-        chokes on the non-integer enum names. Such switches MUST be written via
-        MAPort instead, and that's what simulator.py step 9b does for
-        Sw_Manual_VESI_Overwrite and Sw_MultiEgo_Fellows. Hence those writes are NOT
-        in this function. The function writes only switches whose paths are
-        COM-compatible (e.g. Sw_Activate_CLIF[0|1] is fine).
+        Sw_Manual_VESI_Overwrite[0bridge|1extern|2scenic]) cannot be written
+        through ControlDesk's COM API — COM parses the brackets as an array
+        indexer and chokes on the non-integer enum names. Such switches MUST be
+        written via MAPort instead, and that's what simulator.py step 9b does
+        for Sw_Manual_VESI_Overwrite and Sw_MultiEgo_Fellows. Hence those writes
+        are NOT in this function. The function writes only switches whose paths
+        are COM-compatible (e.g. Sw_Activate_CLIF[0|1] is fine).
         """
         # Mode-DEPENDENT values (these change with who drives ego):
         _enable = 1 if scenic_drives_ego else 0       # manual override mux selector
         _clif = 0.0 if scenic_drives_ego else 1.0     # bridge mode default for ART
         _clutch = 0.0 if scenic_drives_ego else 100.0 # ART runs with clutch released
 
-        # Mode-INDEPENDENT race-control values: regardless of whether Scenic or
-        # raptor drives ego, the plant gates throttle on RaceControl state.
-        # Empirically (see cosim/FINDINGS.md §10 final-root-cause block, 2026-04-24)
-        # the "extern" source (Sw_RaceControl=1) does NOT auto-feed a green flag in
-        # the dspace_art_stack OSA — the plant sits in pre-race state and rejects
-        # all throttle (bridge OR manual MAPort) until we force internal + green.
-        # Forcing internal+green lets both Scenic-ego and ART-ego flow inputs
-        # through. raptor's own race-flag readback (which it gets via the bridge
-        # from VEOS for its own decision-making) is a separate concern.
-        _race_ctrl = 0.0   # 0 = intern (the "force green" path the plant uses)
-        _sys_state = 9     # running
-        _track_flag = 1    # green
-        _veh_flag = 0      # no special vehicle flag
+        # Race-control source switch:
+        #   Scenic-ego -> Sw_RaceControl=0 (intern). Dennis 2026-04-29's table says
+        #     Scenic should use 1 (extern) — but that assumes Scenic feeds the race
+        #     flag through ScenicControlInterface. Our deployment is external-Python
+        #     + MAPort (the software-joystick path, Sw_Manual_VESI_Overwrite=1), so
+        #     no extern flag source exists; we keep intern + Const_track_flag=1 to
+        #     hold the plant in green.
+        #   ART-ego    -> Sw_RaceControl=0 (intern). The docker setflag handshake
+        #     in art_driving_stack converges sys_state/track_flag/veh_flag once it
+        #     completes, so we must NOT also write Const_sys_state/Const_track_flag/
+        #     Const_veh_flag from this side (would conflict).
+        # Const_sys_state/Const_track_flag/Const_veh_flag are therefore only
+        # written for Scenic-ego below; the steps list is gated on scenic_drives_ego.
+        _race_ctrl = 0.0   # intern in both modes (different reasons; see above)
+        _sys_state = 9     # running   (Scenic-only)
+        _track_flag = 1    # green     (Scenic-only)
+        _veh_flag = 0      # no flag   (Scenic-only)
 
         # NOTE: Sw_Manual_VESI_Overwrite is NOT written here — COM can't write the
         # [0bridge|1extern|2scenic] suffix. simulator.py step 9b writes it via MAPort
@@ -317,21 +331,30 @@ class ControlDeskApp:
              "Platform()://ASM_Traffic/Model Root/VesiInterface/Sw_Activate_CLIF[0|1]/Value",
              _clif),
 
-            # --- Race Control configuration ---
+            # --- Race Control source switch (always written, value depends on mode) ---
             ("Sw_RaceControl",
              "Platform()://ASM_Traffic/Model Root/RaceControl/"
              "Sw_RaceControl[0Intern|1Extern|2Orchestrator]/Value",
              _race_ctrl),
-            ("Const_sys_state",
-             "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_sys_state/Value",
-             _sys_state),
-            ("Const_track_flag",
-             "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_track_flag/Value",
-             _track_flag),
-            ("Const_veh_flag",
-             "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_veh_flag/Value",
-             _veh_flag),
+        ]
 
+        # --- Race Control state constants: Scenic-ego ONLY (Dennis 2026-04-29) ---
+        # ART-ego relies on the docker setflag handshake to drive these; writing
+        # them here would conflict with the handshake's convergence.
+        if scenic_drives_ego:
+            steps.extend([
+                ("Const_sys_state",
+                 "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_sys_state/Value",
+                 _sys_state),
+                ("Const_track_flag",
+                 "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_track_flag/Value",
+                 _track_flag),
+                ("Const_veh_flag",
+                 "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_veh_flag/Value",
+                 _veh_flag),
+            ])
+
+        steps.extend([
             # --- Enable manual-override path (Const_enable_*_cmd) ---
             # 1 = Scenic / MAPort drives via Const_*_cmd (manual side of the MUX).
             # 0 = bridge drives via VESIResultData/vehicle_inputs (non-manual side).
@@ -370,7 +393,7 @@ class ControlDeskApp:
             ("Pos_ClutchPedal",
              "Platform()://ASM_Traffic/Model Root/Environment/Maneuver/PlantModel/"
              "ExternalUserData/Pos_ClutchPedal[%]/Value", _clutch),
-        ]
+        ])
 
         ok_count = 0
         fail_count = 0

@@ -587,7 +587,17 @@ read the MAPort `FellowTrailer` x/y over time.
 
 ---
 
-## 11. ART-ego on Dennis's CoSim VEOS — BLOCKED on `VESIResultData.h` (2026-04-25)
+## 11. ART-ego on Dennis's CoSim VEOS — investigated 2026-04-25, RESOLVED 2026-04-29 (see §12)
+
+> **Status update (2026-04-29):** the symptom described below was NOT a
+> `VESIResultData.h` ABI mismatch. The actual blocker was an **OSA wiring
+> defect** — `ExternalControl` outputs were dangling (not connected to
+> `Data_Outport_In`), so bridge frames were correctly received and parsed
+> but had no path to the plant. Dennis shipped a corrected OSA and ART-ego
+> drives end-to-end. The header request that came out of this section was
+> never answered and turned out to be unnecessary. Section §12 is the
+> canonical 2026-04-29 record; this section is preserved for the
+> investigation trace.
 
 After Phase A confirmed Scenic-ego works end-to-end on the new CoSim VEOS
 (`dspace_art_cosim_stack.yml`, locally-rebuilt bridges, `Cosim-VEOS/ASM_Traffic.osa`),
@@ -676,3 +686,185 @@ read of plant-side `throttle_position` / `steering_angle` etc.). Tedious
 but mechanical. Risk: padding/alignment mismatches are invisible to this
 method until they bite — `boolean_T` size in particular (1 vs 4 bytes) is
 toolchain-dependent and silently shifts every field that follows.
+
+---
+
+## 12. ART-ego unblocked: Dennis's OSA wiring fix + deployment-topology switch table (2026-04-29)
+
+**Status:** Both Scenic-ego and ART-ego verified end-to-end on the new CoSim VEOS
+(`dspace_art_cosim_stack.yml`, `Cosim-VEOS/ASM_Traffic.osa`). Scenic-ego runs
+the MPC at ~60 mph, ART-ego runs raptor at ~80 mph, fellow runs alongside at
+its target speed (~58 mph) in both modes.
+
+| Mode | Stack | Plant moves | Driven by |
+|---|---|---|---|
+| Scenic-ego | `dspace_art_cosim_stack.yml` | ✅ ~60 mph | `Const_*_cmd` → manual MUX (software joystick) |
+| ART-ego    | `dspace_art_cosim_stack.yml` | ✅ ~80 mph | bridge → V-ESI → bridge MUX |
+| Fellow (both modes) | both | ✅ ~58 mph | `Const_*_Fellows_External` (=0 const path) |
+
+### What unblocked it: Dennis's OSA wiring fix
+
+The 2026-04-25 hypothesis (`VESIResultData.h` ABI mismatch) was wrong. Dennis's
+2026-04-29 reply diagnosed an **OSA-level wiring defect** instead:
+
+> *"The `CoSimServerScenic` is connected to result data, to which the
+> `ExternalControl` model should be connected. Disconnect this connection
+> and newly connect the outputs of the `CoSimServerScenic` to the
+> `ScenicControlInterface` and the output of the `ExternalControl` model
+> to the `Data_Outport_In`."*
+
+In the pre-fix OSA: `CoSimServerScenic` was wired straight into `Data_Outport_In`
+(the plant's input bus), and `ExternalControl` was present in the model but
+its outputs were not connected to anything that fed the plant. This explained
+both observations:
+
+- **Scenic-ego "worked"** because `CoSimServerScenic` had a shortcut to the
+  plant — but that's also a misleading success: it bypassed the entire
+  `ScenicControlInterface` route Dennis intended.
+- **ART-ego silently failed** because the bridge correctly received raptor's
+  CAN frames, parsed them via DBC, populated `VESIResultData_*`, sent the UDP
+  packet on port 22222 — and `ExternalControl` correctly received them on the
+  VEOS side. They just dead-ended there. `throttle_position` stayed exactly
+  zero (a header ABI mismatch would more typically produce garbled
+  non-zero values, which is part of why this hypothesis didn't fit perfectly
+  but wasn't ruled out earlier).
+
+Dennis shipped a corrected OSA: `CoSimServerScenic → ScenicControlInterface`,
+and `ExternalControl → Data_Outport_In`. Dropped into `Cosim-VEOS/ASM_Traffic.osa`
+the same day; ART-ego started driving on the first run with our deployment-topology
+switch values. **The header request from §11 was never fulfilled and was
+unnecessary.**
+
+### Dennis's switch-table guidance — and why we don't apply it verbatim
+
+Along with the OSA fix Dennis sent the canonical switch-value table:
+
+| Switch | Suffix | Scenic-ego (Dennis) | ART-ego (Dennis) | Joystick (Dennis) |
+|---|---|---|---|---|
+| `Sw_Manual_VESI_Overwrite` | `[0bridge\|1extern\|2scenic]` | **2** (scenic) | 0 (bridge) | 1 (extern) |
+| `Sw_RaceControl` | `[0Intern\|1Extern\|2Orchestrator]` | **1** (extern) | 0 (intern) | 1 (extern) |
+| `Sw_MultiEgo_Fellows` | `[0const\|1race\|2extern]` | **2** (extern) | **2** (extern) | 2 (extern) |
+| `Const_sys_state / track_flag / veh_flag` | (RaceControl) | 9 / 1 / 0 | **don't write** (docker setflag handshake) | 9 / 1 / 0 |
+
+This table is correct **for the deployment topology Dennis assumed** — a Scenic
+engine running as a VPU **inside dSPACE**, with control output ports wired to
+`ScenicControlInterface`, plus a separate external bus feeding fellow positions.
+That isn't our deployment.
+
+### Our deployment topology
+
+We run **Scenic externally on Windows**, not as a VEOS VPU. Per-tick control
+flows from Python → MAPort/COM → `VESIResultData_Manual/vehicle_inputs/Const_*_cmd`.
+Per-tick fellow state flows from Python → MAPort → `Const_*_Fellows_External`
+arrays. From the OSA's perspective we are indistinguishable from a software
+joystick + a const-array source.
+
+This means: for each multi-source switch, the value to set is whichever enum
+maps to **the OSA input port wired to the variables our MAPort writes touch**
+— which is *not* the value Dennis named for the canonical "Scenic" deployment.
+The enum *names* aren't a consistent rule across switches (the right value is
+called "extern" for ego, "const" for fellow); what's consistent is the
+underlying principle.
+
+### Final switch table for our deployment (verified 2026-04-29)
+
+| Switch | Scenic-ego | ART-ego | Notes |
+|---|---|---|---|
+| `Sw_Manual_VESI_Overwrite[0bridge\|1extern\|2scenic]` | **1** (extern / software joystick) | **0** (bridge) | =1 routes to `VESIResultData_Manual/Const_*_cmd` MAPort writes — what we actually feed. =2 routes to `ScenicControlInterface` VPU which we don't have. |
+| `Sw_RaceControl[0Intern\|1Extern\|2Orchestrator]` | **0** (intern) | **0** (intern) | =1 expects an extern flag source from `ScenicControlInterface`; we don't feed one. =0 + `Const_track_flag=1` holds the plant in green. |
+| `Sw_MultiEgo_Fellows[0const\|1race\|2extern]` | **0** (const) | **0** (const) | =0 routes to `Const_*_Fellows_External` MAPort arrays — what our fellow controller feeds every tick. =2 (Dennis canon) points at a different external bus on this OSA. |
+| `Const_sys_state / Const_track_flag / Const_veh_flag` | 9 / 1 / 0 | **not written** | ART side IS Dennis-canonical: the docker `setflag` handshake (`ASM_Maneuver.py vehicleflag_X trackflag_4`, see `controldesk/per_tick_control.py::ExternalControlManager`) handles state convergence. Fired automatically from `author_scenario`. |
+| `Sw_Activate_CLIF[0\|1]` | 0 (or 2 under CoSim) | 1 (or 2 under CoSim) | Unchanged. CoSim path needs =2 for `ManeuverTime` to advance (see §6). |
+| `Const_enable_*_cmd` (×4) | 1 | 0 | Unchanged. Manual-MUX selector; for ART must be 0 or bridge writes are dropped. |
+
+Of Dennis's table, the **ART column** (Sw_Manual_VESI_Overwrite=0, intern,
+don't-write-Const, setflag handshake) maps directly onto our deployment because
+the ART path IS the same canonical bridge → V-ESI route Dennis assumes for
+external control. The **Scenic column** doesn't, because we're running Scenic
+out-of-process via MAPort instead of in-VEOS as a VPU.
+
+### The pattern for future vendor switch-table requests
+
+When Dennis (or any dSPACE-side maintainer) gives switch values, treat them as
+"what each enum value selects in the OSA's input routing", not as "what your
+specific external Python deployment should write". Translate before applying:
+
+- For each multi-source switch, identify the OSA input port wired to whichever
+  variables your code actually writes. The right enum value is the one that
+  selects that port.
+- A clean question to ask gets a directly-usable answer:
+  > *"We push throttle/brake/steer to `VESIResultData_Manual/vehicle_inputs/Const_*_cmd`
+  > via MAPort. Which `Sw_Manual_VESI_Overwrite` value selects that as the plant's
+  > ego input?"*
+  > vs.
+  > *"What should `Sw_Manual_VESI_Overwrite` be for Scenic?"*
+
+Both are valid; the first one removes the deployment-topology guess on his side.
+
+### What §10's "intern + green workaround" actually was
+
+§10 framed the `Sw_RaceControl=0 + Const_sys_state=9 + Const_track_flag=1`
+pattern as a workaround for the dspace_art_stack OSA's broken extern race-flag
+wiring. With the deployment-topology insight from this section, that framing
+is wrong: **it was canonical config for our deployment all along**, on both
+the old and new OSAs. Our MAPort writes need an internal-flag source because
+the extern source presumes a Scenic VPU we don't run. §10's pattern stands;
+its rationale was incomplete.
+
+### Mode-switch flow (recap, for setup debugging)
+
+`scene.params["scenic_control"]` (default `True`) determines mode:
+
+- **True (Scenic-ego)**: `simulator.py` step 9b sets `Sw_Manual_VESI_Overwrite=1.0`
+  via MAPort; `connection.py::initialize_vesi_interface(scenic_drives_ego=True)`
+  sets `Const_enable_*_cmd=1`, `_clif=0.0`, `_clutch=0.0`, `_race_ctrl=0.0`,
+  and writes `Const_sys_state/track_flag/veh_flag = 9/1/0`. Per-tick, the
+  vehicle controller writes `Const_*_cmd` via MAPort; the manual MUX delivers
+  them to the plant.
+- **False (ART-ego)**: `simulator.py` step 9b sets `Sw_Manual_VESI_Overwrite=0.0`
+  via MAPort; `connection.py::initialize_vesi_interface(scenic_drives_ego=False)`
+  sets `Const_enable_*_cmd=0`, `_clif=1.0`, `_clutch=100.0`, `_race_ctrl=0.0`,
+  and **skips** `Const_sys_state/track_flag/veh_flag` (gated on
+  `if scenic_drives_ego:`). `ExternalControlManager.enableExternalControlViaScript`
+  fires `docker exec veos python3 /home/dspace/scripts/ASM_Maneuver.py vehicleflag_<N+1> trackflag_4`
+  for each fellow during `author_scenario`, which is the docker setflag
+  handshake that converges race-control state for ART. raptor's CAN frames
+  flow bridge → V-ESI → bridge MUX → plant.
+
+Under CoSim (`launch_veos_ipc_client=True`) both modes additionally override
+`Sw_Activate_CLIF=2.0` so `ManeuverTime` advances (§6).
+
+### Greppable success markers
+
+Common to both modes:
+- `[CoSimSync] VEOS IPC client connected to SyncStepBridge.`
+- `[Setup] [CoSim] Set Sw_Activate_CLIF=2.0 via MAPort (readback=2.0)`
+- `[Setup] Maneuver started via MANEUVER_START pulse.` followed by `ManeuverTime` advancing
+- `[Setup] Set Sw_MultiEgo_Fellows=0.0 (const) via MAPort (...)`
+
+Mode-specific:
+- Scenic-ego: `[ControlDesk] VesiInterface initialized: Scenic-driven ego (manual override on).`,
+  `[Setup] Set Sw_Manual_VESI_Overwrite=1.0 (extern / Scenic-driven ego (software joystick)) via MAPort [0bridge|1extern|2scenic] (...)`,
+  `VesiInterface init summary: 15 ok, 0 failed`.
+- ART-ego: `[ControlDesk] VesiInterface initialized: ART-driven ego (bridge path on, manual override off).`,
+  `[Setup] Set Sw_Manual_VESI_Overwrite=0.0 (bridge / ART-driven ego) via MAPort [0bridge|1extern|2scenic] (...)`,
+  `VesiInterface init summary: 12 ok, 0 failed` (3 fewer steps because Const_sys_state/track_flag/veh_flag are gated out),
+  `[ASM_Maneuver] [OK] Enabled external control for F<N>` for each fellow,
+  `[Setup] ART set_selected_ttl(race) OK.`
+
+### Verification record (2026-04-29)
+
+- Scenario: `examples/racing/f_shared/F1_fellow_behind_optimal_cruise.scenic`
+  (one ego, one fellow at `_racing_st_offset ('behind', 60)`, both on
+  `ttl_optimal_xodr.csv`).
+- Code baseline before edits: HEAD `c40949e5` on branch `cosim`.
+- Run 1 (`scenic_control = True`, Scenic-ego): MPC drove the ego up the track
+  hitting waypoints from index 90 onward, `[Phase0]` log showed `ego_speed`
+  rising into the 50–60 mph range; fellow `[FellowHarness]` showed speed
+  climbing toward the 58 mph target.
+- Run 2 (`scenic_control = False`, ART-ego): raptor drove the ego from idle
+  to ~80 mph (35.83 m/s) within 5 s, held it for 5 s of straight, bled to
+  ~64 mph approaching corners. Fellow `[FellowHarness]` reached ~58 mph as
+  expected. Phase0 `ego_s` advanced to 463 m by t=12.5 s. VESI init summary
+  `12 ok, 0 failed`. `[ASM_Maneuver]` setflag handshake fired for both
+  scenario objects.
