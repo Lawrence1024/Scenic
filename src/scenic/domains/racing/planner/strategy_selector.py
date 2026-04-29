@@ -54,7 +54,6 @@ def select_strategy(
     min_clearance_m: float = 2.5,
     soft_clearance_m: float = 1.5,
     progress_tiebreak_m: float = 0.5,
-    closing_on_current_line: bool = False,
 ) -> SelectedStrategy:
     """Pick the fastest safe strategy.
 
@@ -63,20 +62,6 @@ def select_strategy(
       min_clearance_m: hard safety threshold; outcomes below this are filtered.
       soft_clearance_m: softer threshold used for the chicken-out fallback.
       progress_tiebreak_m: outcomes within this much progress are considered tied.
-      closing_on_current_line: SD-25b. When True (set by the planner from
-        `assessment_closing_flag`), ``stay_optimal`` is excluded from the
-        primary survivor set regardless of its lateral clearance. The
-        ``min_clearance_m`` metric is lateral OBB separation only and
-        does not detect longitudinal rear-end risk: at certain track
-        sections the optimal and left racing lines run parallel >2.5 m
-        apart, so a faster ego on optimal will rear-end a slower fellow
-        on left while stay_optimal's lateral clearance never falls
-        below the hard threshold. Excluding stay_optimal in this case
-        forces the selector to escalate to a pass strategy or to
-        follow_fellow (whose speed profile by definition prevents the
-        rear-end). Last-resort stay_optimal at the bottom of the
-        fallback ladder is unchanged — it remains the no-good-option
-        path that the SD-4 emergency brake catches.
 
     Returns SelectedStrategy with:
       name           — the chosen strategy
@@ -90,13 +75,8 @@ def select_strategy(
 
     by_name = {o.strategy: o for o in outcomes}
 
-    # Step 1: hard-clearance filter (with SD-25b stay_optimal exclusion when
-    # closing on the current line).
-    survivors = [
-        o for o in outcomes
-        if o.min_clearance_m >= float(min_clearance_m)
-        and not (closing_on_current_line and o.strategy == "stay_optimal")
-    ]
+    # Step 1: hard-clearance filter.
+    survivors = [o for o in outcomes if o.min_clearance_m >= float(min_clearance_m)]
 
     if survivors:
         # Step 2: rank by reachable progress (highest wins).

@@ -74,9 +74,6 @@ class BankCase:
     expected_name: Optional[str] = None
     expected_name_in: Optional[tuple] = None
     expected_reason: Optional[str] = None
-    # SD-25b: when True, the bank passes closing_on_current_line=True
-    # to select_strategy. Used by the closing_flag-degrades-stay tests.
-    closing_on_current_line: bool = False
 
 
 _BANK: List[BankCase] = [
@@ -214,62 +211,6 @@ _BANK: List[BankCase] = [
         expected_name="stay_optimal",
         expected_reason="last_resort_stay",
     ),
-
-    # -------- Stage B: closing_on_current_line excludes stay_optimal --------
-    BankCase(
-        name="closing_flag_excludes_stay_optimal_picks_pass_right",
-        description=(
-            "Reproduces samples #1/#13: ego is closing on fellow on its "
-            "current line. stay_optimal has high lateral clearance (5.0m) "
-            "but the lateral metric misses the rear-end risk. With "
-            "closing_on_current_line=True, stay_optimal is excluded; "
-            "pass_right wins (highest clearance among remaining survivors)."
-        ),
-        outcomes=[
-            _outcome("stay_optimal", 3000.0, 5.0),       # high lateral, but excluded
-            _outcome("follow_fellow", 3000.0, 0.5),      # filtered
-            _outcome("pass_left", 3000.0, 4.0),
-            _outcome("pass_right", 3000.0, 13.0),
-        ],
-        expected_name="pass_right",
-        expected_reason="primary",
-        closing_on_current_line=True,
-    ),
-    BankCase(
-        name="closing_flag_no_pass_options_falls_to_follow_fellow",
-        description=(
-            "Closing on current line, stay_optimal excluded. No pass "
-            "strategy passes the 2.5m hard filter. Soft fallback to "
-            "follow_fellow (above 1.5m soft) -> follow_fellow."
-        ),
-        outcomes=[
-            _outcome("stay_optimal", 3000.0, 5.0),       # excluded by closing flag
-            _outcome("follow_fellow", 3000.0, 1.8),      # soft fallback eligible
-            _outcome("pass_left", 3000.0, 1.0),          # filtered
-            _outcome("pass_right", 3000.0, 1.0),         # filtered
-        ],
-        expected_name="follow_fellow",
-        expected_reason="soft_fallback_follow",
-        closing_on_current_line=True,
-    ),
-    BankCase(
-        name="closing_flag_off_preserves_stay_optimal_preference",
-        description=(
-            "Sanity: when closing_on_current_line=False (the default), "
-            "stay_optimal at progress=3000 with clearance 5.0 still wins "
-            "the tiebreak via its rank-0 priority. Confirms Stage B's "
-            "exclusion is gated and doesn't fire spuriously."
-        ),
-        outcomes=[
-            _outcome("stay_optimal", 3000.0, 5.0),
-            _outcome("follow_fellow", 3000.0, 0.5),      # filtered
-            _outcome("pass_left", 3000.0, 4.0),
-            _outcome("pass_right", 3000.0, 13.0),
-        ],
-        expected_name="stay_optimal",
-        expected_reason="primary",
-        closing_on_current_line=False,
-    ),
 ]
 
 
@@ -293,10 +234,7 @@ def _run_one_case(case: BankCase) -> CaseResult:
         else f"one of {case.expected_name_in}"
     )
     try:
-        sel = select_strategy(
-            case.outcomes,
-            closing_on_current_line=case.closing_on_current_line,
-        )
+        sel = select_strategy(case.outcomes)
     except Exception as exc:
         return CaseResult(
             name=case.name,
