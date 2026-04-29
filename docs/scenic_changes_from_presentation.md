@@ -1037,3 +1037,209 @@ Both expose new design questions (selector stability, marginal-
 stay-optimal handling) that the prediction-correctness work surfaced
 because the dominant pre-SD-27 failure mode — false-safe `pass_left`
 into a fellow on the left line — is gone.
+
+### SD-28 — S2 falsification scenario (gap + side + speed)
+
+Strictly a scenario expansion, not a stack change. Adds three
+VerifAI knobs (continuous gap, binary side / TTL pair, continuous
+fellow speed) so the campaign explores a 3-dim space instead of S1's
+1-dim. Sampler-agnostic (works with halton / ce / bo / random).
+Captured in `examples/racing/falsifiable/S2_falsify.scenic`. Two
+Scenic-mechanics tricks worth knowing:
+
+- **Side knob synchronisation.** Lateral offset and TTL filename
+  must agree per sample, but two independent VerifaiOptions would
+  let CE pick inconsistent combos (`lat=+5, right TTL`). Solution:
+  one `VerifaiDiscreteRange(0, 1)` routed through two
+  `@distributionFunction`-decorated helpers (`_fellow_lat_for_side`,
+  `_fellow_ttl_for_side`) so both properties resolve from the same
+  underlying sample.
+- **Behavior kwargs aren't auto-resolved.** Scenic resolves
+  Distribution properties on object instances at scene-sample time,
+  but Distribution kwargs to behavior constructors are captured raw
+  and never sampled. Workaround: register `fellow_speed_mph` as a
+  scene `param`, then have a thin wrapper behavior
+  (`_FellowFollowFromParams`) read the resolved scalar from
+  `simulation().scene.params` at first activation and delegate to
+  `FellowFollowTTLGeometricBehavior` with a literal float.
+- **Default position formula breaks on Distribution `ttlFileName`.**
+  `racing_model`'s default `position: new Point on
+  trackRegion(self.ttlFileName)` calls `_ttl_category()` which does
+  `if not ttl_file_name` and raises `RandomControlFlowError` on a
+  Distribution. Pinning `at (0, 0) with regionContainedIn everywhere`
+  bypasses the formula; `_racing_st_offset` overrides the placeholder
+  at simulation time via `modeldesk/placement.py`.
+
+`verifai_runner.py` also got a `--scenic-control / --no-scenic-control`
+convenience flag (BooleanOptionalAction) that overrides the scene's
+`scenic_control` param without requiring `--extra-param scenic_control=...`.
+Default `None` leaves the .scenic file's setting alone.
+
+S2 attempt-1 baseline (run dir `verifai_20260429_122917/`, frozen as
+the runtime-cuts reference at commit `1d7e4f7c`):
+
+- Collisions:           6 / 30
+- Off-track:            3 / 30
+- Successful passes:    16
+- Pass attempts L/R/A:  1180 / 1954 / 97
+- Worst bbox_gap:       0.00 m
+- Mean tick_ms_p50:     26.7 ms
+
+S2 reuses the existing `safety` monitor, the existing per-sample log
+schema, and the SD-27 stack. No changes to planner, simulator, or
+selector.
+
+### SD-29 — Runtime cuts + wall-clock budget analysis
+
+Two-part cycle. Part 1 lands no-behavior-change cuts inside the
+Scenic stack to recover the per-tick wall budget SD-27's OBB SAT
+work consumed. Part 2 measures *where* the per-tick wall budget
+actually goes so future cycles know whether to keep optimising
+Scenic or move to the cosim/IPC layer.
+
+#### Part 1: no-behavior-change cuts
+
+Profiling target was the `planner` bucket in `[TickBreakdown]` logs
+which went from 5.5 ms (pre-SD-27) to 10.8 ms (post-SD-27) — the
++5.3 ms is almost entirely OBB SAT distance computation (4 strategies
+× 21 horizon samples = 84 SAT calls per planner tick, each ~10× the
+cost of a euclidean centroid distance). CTR yaw rate estimation was
+~0.05 ms (essentially free).
+
+**Cut 1 — OBB SAT early-exit when centroid is large.**
+`prediction/strategy_simulator.py`. Threshold
+`half_circ_ego + half_circ_fellow + 3.0 m` (≈ 8.25 m for IAC
+Dallaras). When centroid distance exceeds this, the conservative
+lower bound `centroid_dist - half_circ_ego - half_circ_fellow` is
+guaranteed ≥ 3 m — comfortably above the 0.5 m hard filter AND
+above the boundary-case OBB clearance values (~3 m gaps in lateral
+pass tests) where SAT precision actually matters. The bound is
+always ≤ true OBB edge gap, so reporting it is conservative
+(over-rejects on the boundary, never under-rejects). Selector
+ranking is unaffected because clearance is consumed only by the
+filter, not the tiebreak (verified: `min_clearance_m` consumers are
+`strategy_selector.py:87` filter and `:114` soft fallback, plus
+telemetry).
+
+**Cut 2 — per-strategy break on overlap.**
+`prediction/strategy_simulator.py`. Once OBB clearance hits 0 (full
+overlap detected), the strategy is guaranteed to fail the hard
+filter regardless of subsequent ticks. Break the integration loop
+instead of spending the remaining ~20 OBB SAT calls.
+`reachable_progress_at_horizon_m` is irrelevant for filtered-out
+strategies, so the truncated value is fine.
+
+**Cut 3 — throttle the `[Strategy]` telemetry print.**
+`tactical_planner.py`. Pre-SD-29 the print fired every control
+tick (~600 lines per 30 s sample); string formatting of per-strategy
+dicts plus I/O was a measurable contributor to the `other` timing
+bucket. Post-SD-29: print only when (a) the selector decision
+changes (catches every transition), or (b) every 10th consecutive
+tick of the same decision (statistical sampling). Per-tick numerics
+still recorded on `state.strategy_min_clearances` etc; only the
+human-readable line is throttled.
+
+**Cut 4 — drop the dead `pc_diag["samples"]` allocation.**
+`assessment/pass_geometry.py`. Verified via `grep -rn 'pc_diag'`
+that no caller in the codebase reads `pc_diag["samples"]` — only
+`min_clear_m`, `closest_t_s`, and `breach_count` are consumed.
+15 tuples × 600 ticks × 30 samples = 270k pointless allocations
+per campaign. Removed the init line and the dict entry.
+
+**Diagnostics.** `StrategyOutcome` gained `obb_calls`, `obb_skips`,
+and `early_exit_tick` fields, surfaced on the throttled `[Strategy]`
+log line as `obb_calls=N obb_skips=M early_exits=K`. Lets us see at
+a glance how often each cut fires in production. SD-29 smoke on S2
+showed mean obb_calls=3.8, obb_skips=58.5, early_exits=1.5 per
+planner-tick — i.e., ~94% of OBB ticks short-circuit via cut 1, and
+~1.5 of 4 strategies hit overlap and break early per tick on
+average.
+
+**Files.**
+
+- `src/scenic/domains/racing/prediction/strategy_simulator.py`
+  (cuts 1, 2, instrumentation)
+- `src/scenic/domains/racing/tactical_planner.py` (cut 3)
+- `src/scenic/domains/racing/assessment/pass_geometry.py` (cut 4)
+
+Smoke results (single sample on S2): planner section dropped from
+15.0 ms → 4.4 ms p50 (−71%). Sum-of-section means dropped from
+36.95 ms → 28.37 ms (−23%). All 151 racing unit tests + 11 unit-bank
+cases pass with no test changes needed.
+
+Pending live verification: 30-sample S2 CE campaign. Acceptance
+criteria (from `docs/falsify_results.md`):
+`tick_ms_p50` strictly under 26.7 ms with all four behavioral
+metrics non-regressing (collisions ≤ 6, off-track ≤ 3, successful
+passes ≥ 16, worst `bbox_gap_m_min` not worse than 0.00 m). If any
+metric regresses, revert SD-29 commits back to `1d7e4f7c` (S2
+attempt-1 baseline).
+
+#### Part 2: wall-clock budget analysis
+
+Question the SD-29 cuts surfaced: even after the 4–5 ms Scenic-side
+cut, the simulator still ran ~2× wall-time per sim-time. Where does
+the rest of the wall budget go?
+
+Methodology: created a one-off no-control idle scenario
+(`examples/racing/calibration/no_control_idle.scenic`) and a parser
+script (`src/scenic/domains/racing/benchmarks/analyze_tick_timing.py`).
+The idle scenario stripped Scenic's behavior body to just `wait` plus
+a `[TickTime]` print, leaving the cosim+VEOS+IPC plumbing in place.
+Both files were diagnostic-only and have been removed; the findings
+are recorded here.
+
+**Per sim-step wall budget (10 ms sim time target):**
+
+| Layer | Wall ms / sim step | Notes |
+|---|---:|---|
+| Idle (no Scenic logic) | 12.3 ms | 1.23× real-time = ~23% baseline overhead |
+| Full SD-29 smoke | 22.0 ms | 2.20× real-time |
+| Difference (Scenic adds) | +9.7 ms / sim step | what the Scenic stack costs |
+
+**Per control-tick breakdown (50 ms sim time target = 5 sim steps):**
+
+| Component | Per control tick |
+|---|---:|
+| VEOS sim (5 sim steps × ~12 ms) | ~61 ms |
+| Scenic compute (`tick_ms`) | ~28 ms |
+| IPC + glue | ~22 ms |
+| **Total wall** | **~110 ms** |
+
+**The earlier "bottleneck is upstream of Scenic" diagnosis was
+wrong.** That conclusion came from quoting `wall_step − tick_ms = 87 ms`
+as "outside Scenic", but ~61 ms of those 87 ms is legitimate VEOS
+sim cost (5 sim steps must run for the simulator to advance 50 ms).
+True non-Scenic, non-VEOS overhead is ~22 ms / control tick.
+
+**Headroom for future cycles.** To hit real-time wall pacing
+(50 ms / control tick) we'd need to cut ~60 ms total:
+
+1. **Scenic side: 28 ms today.** SD-29 already cut planner.
+   Lateral OSQP MPC is now the largest single bucket (~7-10 ms).
+   Tactical planner fast-paths and behavior-body dispatch overhead
+   are also non-trivial.
+2. **IPC + glue: ~22 ms.** Worth instrumenting
+   `SyncStepBridge.advance()` separately — TCP localhost roundtrips
+   shouldn't take this long. Possible contributors: MAPort batching
+   semantics, ControlDesk readbacks per step, JSON
+   (de)serialization. Could be a meaningful single-digit-ms win.
+3. **VEOS overhead: ~11 ms above the real-time floor.** The idle
+   showed VEOS is 23% slow on its own. To recover this we'd need
+   either a faster machine or a "VEOS as fast as possible" pacing
+   knob rather than the soft-real-time cosim mode currently in use.
+
+**Bimodal idle distribution.** The idle scenario showed
+`wall_step p50=5 ms, p90=46 ms` — bimodal, not a single Gaussian.
+~80% of sim ticks are light VEOS work (~5 ms wall), ~20% are
+heavier (~46 ms wall) — likely ASM bookkeeping, MAPort syncs, or
+readback-heavy ticks. This bimodality is hidden in the full stack
+because the larger Scenic compute swamps the per-tick variance, but
+it persists underneath.
+
+**Why the doc lives here, not in code.** The diagnostic scripts
+(`no_control_idle.scenic`, `analyze_tick_timing.py`) were one-off
+investigation tools — not infrastructure worth maintaining. The
+findings above are what's load-bearing for future cycles. If a
+future cycle needs to redo the analysis, the methodology is small
+enough to recreate from this entry.
