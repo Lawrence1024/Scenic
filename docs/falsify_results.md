@@ -1,14 +1,22 @@
 # Falsification campaign results — smart-ego development log
 
-A running record of `S1_falsify.scenic` 30-sample CE campaigns and the
-stack changes between them. Each attempt entry follows the same
-structure so the deltas are easy to read and the table can be lifted
-into a development-history report.
+A running record of 30-sample CE falsification campaigns and the
+stack changes between them. Two scenarios are tracked:
+
+- **S1** (`S1_falsify.scenic`) — fellow gap is the only knob;
+  fellow always on left TTL at 20 mph. Used through SD-26/SD-27.
+- **S2** (`S2_falsify.scenic`) — adds two more knobs: fellow side
+  (left/right TTL) and fellow cruise speed (mph). Used from
+  attempt 1 onward as the more comprehensive falsification target.
+
+Each attempt entry follows the same structure so the deltas are
+easy to read and the table can be lifted into a development-history
+report.
 
 The smart-ego racing planner is the unit under test — Scenic samples
-the initial fellow-gap parameter, the dSPACE+VEOS cosim plays the
-scenario, the safety monitor records collision / off-track outcomes,
-and the verifai runner aggregates per-sample telemetry.
+the per-scenario knobs, the dSPACE+VEOS cosim plays the scenario,
+the safety monitor records collision / off-track outcomes, and the
+verifai runner aggregates per-sample telemetry.
 
 ---
 
@@ -57,13 +65,27 @@ same direction.
 
 ## Headline trend
 
-| Attempt | Date | Stack | Collisions | Off-track | Successful passes | Worst OBB gap |
-|---|---|---|---:|---:|---:|---:|
-| 1 | 2026-04-28 | pre-SD-25 baseline | **13 / 30** | 1 | 4 | 0.00 m |
-| 2 | 2026-04-29 | SD-26 + SD-27a + SD-27b | **2 / 30** | 0 | 21 | 1.79 m |
+### S1 (gap-only)
 
-Net change attempt 1 → attempt 2: collisions ↓ 85%, successful passes ↑ 5×,
+| Attempt | Date | Stack | Collisions | Off-track | Successful passes | Worst OBB gap | tick p50 |
+|---|---|---|---:|---:|---:|---:|---:|
+| 1 | 2026-04-28 | pre-SD-25 baseline | **13 / 30** | 1 | 4 | 0.00 m | 13.7 ms |
+| 2 | 2026-04-29 | SD-26 + SD-27a + SD-27b | **2 / 30** | 0 | 21 | 1.79 m | 18.7 ms |
+
+Net change S1 attempt 1 → attempt 2: collisions ↓ 85%, successful passes ↑ 5×,
 worst-case clearance moved from full overlap (0 m) to 1.79 m.
+
+### S2 (gap + side + speed)
+
+| Attempt | Date | Stack | Collisions | Off-track | Successful passes | Worst OBB gap | tick p50 |
+|---|---|---|---:|---:|---:|---:|---:|
+| 1 | 2026-04-29 | SD-26 + SD-27a + SD-27b (post S1-attempt2) | **6 / 30** | 3 | 16 | 0.00 m | 26.7 ms |
+
+S2 attempt 1 is the **reference baseline before the planned per-tick
+runtime cuts**. Any cut that drops `tick p50` below 26.7 ms without
+regressing the four behavioral metrics (collisions ≤ 6, off-track ≤ 3,
+successful passes ≥ 16, worst gap ≥ 0) is a net win. Worse on any of
+those is a regression.
 
 ---
 
@@ -160,6 +182,61 @@ Both are different design problems from what SD-26 / SD-27 attack:
 - **Sample 19 (seed 60):** zero commits — ego stayed on `stay_optimal` the whole time and rear-ended fellow. The simulator alternates between predicting `stay_optimal` ≈ 9 m on even ticks and ≈ 1 m on odd ticks (per-tick fellow-pose oscillation upstream of the predictor). Selector picks `stay_optimal` whenever it clears the 0.5 m threshold; never proactively switches to `follow_fellow` when stay_optimal is consistently marginal. **Root cause:** input oscillation + selector having no "marginal-but-not-failing" escape hatch.
 
 Neither failure invalidates SD-26 / SD-27 — they expose new design questions (selector stability, marginal-stay-optimal handling) that the prediction-correctness work surfaced because the dominant pre-SD-27 failure mode is gone.
+
+---
+
+## S2 — Attempt 1 — comprehensive scenario baseline (3 knobs)
+
+**Date:** 2026-04-29 12:29
+**Run dir:** `src/scenic/domains/racing/benchmarks/results/verifai_20260429_122917/`
+**Stack at this run:** identical to S1 attempt 2 (SD-26 + SD-27a + SD-27b). No code changes between this run and S1 attempt 2 — only the scenario changed.
+
+### Scenario change (vs S1)
+
+| Knob | S1 | S2 |
+|---|---|---|
+| `gap_m` | `VerifaiRange(20, 60)` | same |
+| Fellow side (L/R TTL) | hardcoded **left** | **`VerifaiDiscreteRange(0, 1)`** routed through paired distributionFunction helpers (lat offset and TTL filename stay synchronized) |
+| Fellow speed | hardcoded **20 mph** | **`param fellow_speed_mph = VerifaiRange(15, 35)`** read at first activation by a thin wrapper behavior |
+
+The wrapper-behavior detour is needed because Scenic doesn't auto-resolve Distribution kwargs to behavior constructors at scene-sample time. Object properties (like `_racing_st_offset`) DO get resolved, hence the per-property + Function-Distribution pattern for the side knob.
+
+### Headline numbers
+
+| Metric | Value | vs S1 attempt 2 |
+|---|---:|---|
+| Collisions | **6 / 30** | 2 → 6 (CE finds new failure modes that S1 doesn't expose) |
+| Off-track | 3 | 0 → 3 |
+| Successful passes | 16 | 21 → 16 |
+| Pass attempts (L / R / aborted) | 1180 / 1954 / 97 | 37 / 3173 / 33 → much more balanced (fellow now varies sides) |
+| Strategy picks (stay / follow / pL / pR) | 16573 / 184 / 684 / 559 | similar shape |
+| Worst per-sample `bbox_gap_m_min` | **0.00 m** | full overlap reappears in the new failure modes |
+| Mean tick_ms_p50 | **26.7 ms** | 18.7 → 26.7 ms (more knobs → more strategy work per tick) |
+
+### Why S2 is harder
+
+Three things compound:
+
+1. **Both side TTLs get loaded and exercised.** The strategy simulator runs identical work, but the broader range of fellow positions surfaces failure modes that didn't exist in S1's left-only setup.
+2. **Variable fellow speed** lets CE find combinations where the closing rate is borderline — slow enough that ego closes within horizon, fast enough that the pass dynamics get tight.
+3. **The 26.7 ms p50** vs S1's 18.7 ms is partly extra polyline-loading and partly the planner running fuller paths because fellow is now at varying lateral positions instead of always left.
+
+### Reference baseline before runtime cuts
+
+S2 attempt 1 is the **frozen reference point** for the upcoming per-tick runtime-cut work (OBB early-exit, per-strategy early-exit on overlap, throttled telemetry, `path_collision_predicted` retirement, etc.). Acceptance criteria for any cut:
+
+- `tick_ms_p50` strictly lower than 26.7 ms
+- Collisions ≤ 6 / 30
+- Off-track ≤ 3 / 30
+- Successful passes ≥ 16
+- Worst `bbox_gap_m_min` not worse than 0.00 m (i.e., no new full-overlap modes)
+
+If a cut violates any of those, roll it back and revisit. The commit at this point in history is the rollback target.
+
+### Out-of-scope for this baseline
+
+- The fellow-speed range was bumped from 15-35 mph to 15-65 mph after this run completed; the next S2 attempt will exercise the wider range.
+- The two new failure modes (S2 attempt 1's 6 collisions + 3 off-tracks) are tracked but not yet root-caused — we want the runtime work to land first so we have headroom to iterate without re-running heavy campaigns at every step.
 
 ---
 

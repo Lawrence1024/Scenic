@@ -370,6 +370,13 @@ def _parse_args() -> argparse.Namespace:
                        help="Prefix for the output dir name (default 'verifai').")
 
     g_extra = p.add_argument_group("Extra")
+    g_extra.add_argument(
+        "--scenic-control", action=argparse.BooleanOptionalAction, default=None,
+        help="Override the scene's `scenic_control` param. Use `--scenic-control` "
+             "to force Scenic-driven ego (Sw_Manual_VESI_Overwrite=1.0); use "
+             "`--no-scenic-control` to force ART-driven ego "
+             "(Sw_Manual_VESI_Overwrite=0.0). Omit to leave the .scenic file's "
+             "setting alone (typically True for the falsifiable scenarios).")
     g_extra.add_argument("--extra-param", action="append", default=[],
                          help="KEY=VALUE pair passed through to scenarioFromFile "
                               "params (repeatable). Useful for overriding things "
@@ -435,6 +442,15 @@ def main() -> int:
     # ---- compile scenario once, with VerifAI sampler config injected via params
     sampler_params_raw = json.loads(args.sampler_params) if args.sampler_params else {}
     extra_params = _parse_extra_params(args.extra_param)
+
+    # `--scenic-control` / `--no-scenic-control` is a convenience override for
+    # the scene's `scenic_control` param. Equivalent to passing
+    # `--extra-param scenic_control=true|false` but with explicit intent at
+    # the call site. Default None == leave the .scenic file's setting alone.
+    if args.scenic_control is not None:
+        extra_params["scenic_control"] = bool(args.scenic_control)
+        _progress(f"[VerifaiRunner] scenic_control override: {bool(args.scenic_control)} "
+                  f"({'Scenic-driven ego' if args.scenic_control else 'ART-driven ego'})")
 
     # `verifaiSamplerParams` is consumed by Scenic's VerifaiSampler as a DotMap,
     # but JSON gives us a plain dict. The sampler does the DotMap conversion
