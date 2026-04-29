@@ -674,6 +674,15 @@ def tactical_planner_step_v1(
             _outcomes,
             min_clearance_m=float(config.strategy_min_clearance_m),
             soft_clearance_m=float(config.strategy_soft_clearance_m),
+            # SD-25b: pass the closing flag so the selector can exclude
+            # stay_optimal when ego is closing on a fellow on its current
+            # line. Without this, samples like #1 and #13 in the 30-sample
+            # campaign repeatedly stayed on stay_optimal while accelerating
+            # at 8-20 m/s closing rate into the fellow ahead, because the
+            # lateral clearance metric stayed above the 2.5m filter (the
+            # optimal and left lines are parallel and >2.5m apart at the
+            # rear-end track sections).
+            closing_on_current_line=bool(assessment_closing_flag),
         )
         state.strategy_selected_name = str(_selected.name)
         state.strategy_selected_reason = str(_selected.reason)
