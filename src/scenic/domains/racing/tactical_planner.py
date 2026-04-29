@@ -272,6 +272,19 @@ class TacticalPlannerConfig:
     strategy_accel_mps2: float = 4.0
     strategy_post_pass_buffer_m: float = 5.0
     strategy_lane_change_s: float = 1.5
+    # SD-26: actual MPC lateral time constant for the strategy_simulator's
+    # lane-change blending. Pre-SD-26, the simulator placed ego at full
+    # lateral offset on the side polyline from t=0+, producing optimistic
+    # clearance predictions that didn't match reality (sample #8 of the
+    # pre-SD-25 30-sample run: predicted 7.73 m clearance for pass_left,
+    # actual 0.94 m collision). The blended ego_xy =
+    # alpha(t) * side + (1-alpha(t)) * optimal models the MPC's actual
+    # lateral convergence, where alpha = 1 - exp(-t/tau).
+    # Empirical fit: 2.5–5 s. Default 2.5 (conservative; more drift away
+    # from optimal early on -> tighter predicted clearance during the
+    # transition -> more pass attempts caught by the 2.5 m hard filter).
+    # Tunable via the SD-26c F-bank regression.
+    strategy_lane_change_tau_s: float = 2.5
     # SD-11e hysteresis: a strategy must be picked for this many consecutive
     # ticks before being honored. Prevents frame-to-frame flips from noisy
     # fellow velocity estimates. Default 2 = ~100ms at 20Hz control.
@@ -664,6 +677,7 @@ def tactical_planner_step_v1(
             commit_speed_margin_mps=float(config.commit_speed_margin_mps),
             post_pass_buffer_m=float(config.strategy_post_pass_buffer_m),
             lane_change_s=float(config.strategy_lane_change_s),
+            lane_change_tau_s=float(config.strategy_lane_change_tau_s),
         )
         _outcomes = []
         for _strat in _ALL_STRATEGIES:

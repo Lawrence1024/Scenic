@@ -24,10 +24,31 @@ Design notes:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import List, Literal, Optional, Sequence, Tuple
 
 from scenic.domains.racing.assessment.pass_geometry import _xy_at_arclength
+
+
+def _blend_alpha(t_off: float, tau_s: float) -> float:
+    """SD-26: first-order saturating ramp from 0 to 1 with time constant tau_s.
+
+    Models the MPC's actual lateral lane-change dynamics — ego does NOT
+    teleport onto the side polyline at t=0+; it converges over multiple
+    seconds. Empirical fit from sample #8 of the verifai_20260428_165255
+    campaign: CTE decay 4.37 m → 4.13 m → 2.75 m over t=0.2 → 1.0 → 2.5 s
+    suggests tau ≈ 3–5 s.
+
+    At t = tau_s, alpha ≈ 0.63. At t = 3*tau_s, alpha ≈ 0.95.
+
+    tau_s ≤ 0 collapses to alpha=1 (legacy instantaneous behaviour) so
+    callers can disable blending by passing 0 (used by the unit bank to
+    verify backward-compat).
+    """
+    if tau_s <= 1e-6:
+        return 1.0
+    return float(min(1.0, 1.0 - math.exp(-float(t_off) / float(tau_s))))
 
 
 Strategy = Literal["stay_optimal", "follow_fellow", "pass_left", "pass_right"]
@@ -95,6 +116,7 @@ def simulate_strategy(
     commit_speed_margin_mps: float,
     post_pass_buffer_m: float,
     lane_change_s: float,
+    lane_change_tau_s: float = 2.5,
 ) -> StrategyOutcome:
     """Walk ego forward over [0, horizon_s] under the chosen strategy.
 
@@ -117,6 +139,14 @@ def simulate_strategy(
       commit_speed_margin_mps: pass_* phase B target = opp + this
       post_pass_buffer_m  : pass_* "completed" condition: ego_s >= opp_s + this
       lane_change_s       : pass_* phase A duration
+      lane_change_tau_s   : SD-26. Time constant for the lateral-shift blend
+                            between the optimal polyline and the side polyline
+                            during pass_* simulation. Models the MPC's actual
+                            lateral dynamics — ego doesn't teleport to the side
+                            polyline at t=0+; it converges over ~tau seconds.
+                            Default 2.5 s. Set to 0.0 to reproduce the legacy
+                            instantaneous-switch behaviour (used by the unit
+                            bank for backward-compat checks).
 
     Returns StrategyOutcome with reachable progress, min clearance, samples.
     Failure modes (return outcome with reason!="ok"):
@@ -212,23 +242,59 @@ def simulate_strategy(
         opp_s_at_t = float(opp_s_m) + float(opp_speed_mps) * t_off
         phase = phase_for_t(t_off, ego_s, opp_s_at_t)
 
-        ego_track = (
-            _polyline_for_pass_phase(side, phase, polylines)
-            if strategy in ("pass_left", "pass_right")
-            else optimal_wp
-        )
-        if ego_track is None:
-            return StrategyOutcome(
-                strategy=strategy,
-                reachable_progress_at_horizon_m=ego_s,
-                reachable_speed_at_horizon_mps=ego_v,
-                min_clearance_m=float("inf"),
-                closest_t_s=0.0,
-                completed=False,
-                reason="no_polyline_for_phase",
-            )
-
-        ego_xy = _xy_at_arclength(ego_track, ego_s, float(lap_length_m))
+        # SD-26: blend ego_xy between optimal and side polylines for pass_*
+        # strategies during the lateral-shift phase. Pre-SD-26 placed ego at
+        # FULL lateral offset on the side polyline from t=0+, which produced
+        # optimistic clearance predictions (sample #8 of the pre-SD-25
+        # 30-sample run: predicted 7.73 m, actual 0.94 m collision). The
+        # blended position uses _blend_alpha(t_off, lane_change_tau_s) to
+        # model the MPC's actual lateral dynamics — ego converges to the
+        # side polyline over ~tau_s seconds.
+        if strategy in ("pass_left", "pass_right"):
+            if phase == "merge_back":
+                # Stay on the optimal polyline post-pass (legacy behaviour).
+                # Reverse-blend back to optimal is deferred to a later cycle;
+                # forward-blend during lane_change/alongside is sufficient
+                # to fix the residual-collision pathology.
+                ego_xy = _xy_at_arclength(
+                    optimal_wp, ego_s, float(lap_length_m)
+                )
+                if ego_xy is None:
+                    return StrategyOutcome(
+                        strategy=strategy,
+                        reachable_progress_at_horizon_m=ego_s,
+                        reachable_speed_at_horizon_mps=ego_v,
+                        min_clearance_m=float("inf"),
+                        closest_t_s=0.0,
+                        completed=False,
+                        reason="shapely_unavailable",
+                    )
+            else:
+                # lane_change or alongside: blend optimal -> side over time.
+                alpha = _blend_alpha(t_off, float(lane_change_tau_s))
+                ego_xy_opt = _xy_at_arclength(
+                    optimal_wp, ego_s, float(lap_length_m)
+                )
+                ego_xy_side = _xy_at_arclength(
+                    side_wp, ego_s, float(lap_length_m)
+                )
+                if ego_xy_opt is None or ego_xy_side is None:
+                    return StrategyOutcome(
+                        strategy=strategy,
+                        reachable_progress_at_horizon_m=ego_s,
+                        reachable_speed_at_horizon_mps=ego_v,
+                        min_clearance_m=float("inf"),
+                        closest_t_s=0.0,
+                        completed=False,
+                        reason="shapely_unavailable",
+                    )
+                ego_xy = (
+                    alpha * ego_xy_side[0] + (1.0 - alpha) * ego_xy_opt[0],
+                    alpha * ego_xy_side[1] + (1.0 - alpha) * ego_xy_opt[1],
+                )
+        else:
+            # stay_optimal / follow_fellow: always on optimal.
+            ego_xy = _xy_at_arclength(optimal_wp, ego_s, float(lap_length_m))
         if ego_xy is None:
             return StrategyOutcome(
                 strategy=strategy,
