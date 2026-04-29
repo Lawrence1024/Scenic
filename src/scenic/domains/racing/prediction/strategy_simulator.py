@@ -84,6 +84,12 @@ class StrategyOutcome:
         default_factory=list
     )
     reason: str = ""  # diagnostic ("ok", "no_polyline", "shapely_unavailable", ...)
+    # SD-29: timing diagnostics. obb_calls = ticks where the SAT distance was
+    # actually computed; obb_skips = ticks short-circuited via the centroid
+    # lower-bound. Together they show how often cut 1 fired.
+    obb_calls: int = 0
+    obb_skips: int = 0
+    early_exit_tick: int = -1  # -1 means ran to horizon; >=0 means cut 2 fired
 
 
 def _ramp_speed(current_v: float, target_v: float, accel: float, dt: float) -> float:
@@ -255,6 +261,20 @@ def simulate_strategy(
     # which made OBB clearance collapse during the post-pass merge tick).
     merge_back_start_t: Optional[float] = None
     last_alpha_pre_merge: float = 0.0
+    # SD-29 cut 1 (OBB early-exit): if centroid distance is large enough that
+    # the conservative lower-bound OBB clearance (centroid - half_circ_ego -
+    # half_circ_fellow) is comfortably above the hard filter threshold, skip
+    # the SAT computation. SAT is ~10x more expensive than the centroid math
+    # and is overkill in the "fellow far away" regime that dominates most
+    # ticks. Buffer (3.0 m) is chosen so the conservative bound stays >= 3 m,
+    # well clear of the 0.5 m filter AND of any boundary-case OBB clearance
+    # we want SAT precision on (~3 m gaps in lateral-pass tests).
+    _obb_skip_centroid_thresh = float(half_circ_ego + half_circ_fellow + 3.0)
+    # SD-29 timing diagnostics: count OBB calls and centroid-skip events so
+    # the runtime log can show how often the early-exit fired.
+    _obb_calls = 0
+    _obb_skips = 0
+    _early_exit_tick = -1  # set by cut 2 when min_clear hits 0
 
     def _fellow_xy_at(t_off: float) -> Optional[Tuple[float, float]]:
         if fellow_n == 0:
@@ -346,11 +366,17 @@ def simulate_strategy(
             dx = ego_xy[0] - fellow_xy[0]
             dy = ego_xy[1] - fellow_xy[1]
             centroid_dist = math.hypot(dx, dy)
-            # SD-27b: report true OBB edge-to-edge gap. Headings come from a
-            # finite difference vs the previous tick's xy; on the first tick
-            # we don't have one yet, so subtract the circumradius of each
-            # vehicle as a conservative (heading-agnostic) fallback.
-            if prev_ego_xy is not None and prev_fellow_xy is not None:
+            # SD-29 cut 1: skip SAT when centroid distance guarantees a
+            # conservative lower bound well above the hard filter. The bound
+            # `centroid_dist - half_circ_ego - half_circ_fellow` is always
+            # <= true OBB edge gap, so reporting it is conservative
+            # (over-rejects on the boundary, never under-rejects).
+            if centroid_dist > _obb_skip_centroid_thresh:
+                clearance = centroid_dist - half_circ_ego - half_circ_fellow
+                _obb_skips += 1
+            elif prev_ego_xy is not None and prev_fellow_xy is not None:
+                # SD-27b: report true OBB edge-to-edge gap. Headings come from
+                # a finite difference vs the previous tick's xy.
                 ehx = ego_xy[0] - prev_ego_xy[0]
                 ehy = ego_xy[1] - prev_ego_xy[1]
                 fhx = fellow_xy[0] - prev_fellow_xy[0]
@@ -367,8 +393,12 @@ def simulate_strategy(
                     float(fellow_xy[0]), float(fellow_xy[1]), fellow_heading,
                     float(fellow_length_m), float(fellow_width_m),
                 )
+                _obb_calls += 1
             else:
+                # i=0 fallback: no previous xy for headings, use circumradius
+                # bound (heading-agnostic, conservative).
                 clearance = max(0.0, centroid_dist - half_circ_ego - half_circ_fellow)
+                _obb_skips += 1
             if clearance < min_clear:
                 min_clear = clearance
                 closest_t = t_off
@@ -386,6 +416,16 @@ def simulate_strategy(
         prev_ego_xy = (float(ego_xy[0]), float(ego_xy[1]))
         if fellow_xy is not None:
             prev_fellow_xy = (float(fellow_xy[0]), float(fellow_xy[1]))
+
+        # SD-29 cut 2: once OBB has hit hard overlap (0 m), the strategy is
+        # guaranteed to fail any reasonable hard filter. Subsequent ticks
+        # can only confirm or improve, never re-rank this strategy above
+        # filter. Break out so we don't waste OBB SAT calls on a doomed
+        # candidate. `reachable_progress_at_horizon_m` is irrelevant for
+        # filter-rejected strategies, so the truncated value is fine.
+        if min_clear < 1e-6:
+            _early_exit_tick = i
+            break
 
         # Advance ego state to next sample.
         if i == n_steps:
@@ -422,6 +462,9 @@ def simulate_strategy(
         completed=bool(completed),
         samples=samples,
         reason="ok",
+        obb_calls=int(_obb_calls),
+        obb_skips=int(_obb_skips),
+        early_exit_tick=int(_early_exit_tick),
     )
 
 
