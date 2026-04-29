@@ -602,23 +602,12 @@ pattern:
 | **B — Locked-on-stay_optimal rear-end** | 2/13 | Selector picked `stay_optimal` for ALL 600 ticks while ego accelerated to 28 m/s and rear-ended a slower fellow on the left racing line. The lateral OBB-separation metric (`min_clearance_m`) stayed >2.5 m the whole run because the optimal and left lines are parallel and >2.5 m apart at the rear-end track sections. The metric missed the longitudinal closing rate (8–20 m/s). |
 | **C — Abort recovery on side TTL with no speed cap** | 1/13 | Lifecycle correctly committed `pass_left`, then correctly aborted on `commit_invalidated_hazard`. But `_abort_result` returned `cap=None` so ego kept accelerating at target_speed during the recovery and rear-ended fellow 1.15 s after the abort. |
 
-**Stages landed (current end state).**
+**Final outcome: ALL THREE STAGES REVERTED.** SD-25 lands as
+documentation of three failed fix attempts plus an architectural
+finding about the strategy_simulator. Code state is identical to
+SD-24's end state; nothing in the planner / selector changed.
 
-- **SD-25a — strategy_selector.py:95 tiebreak.** Replaced the
-  single-key `min(tied, key=TIEBREAK_RANK)` with a tuple-keyed
-  comparison: `(TIEBREAK_RANK, -min_clearance_m)`. For pass_left vs
-  pass_right at rank 1, the higher-clearance side wins via the
-  negated-clearance secondary. For all other comparisons (different
-  ranks), the rank dominates the tuple — behaviour unchanged.
-  Symmetric: works for fellow-on-left and fellow-on-right scenarios.
-- **SD-25d — offline regression bank.** Added
-  `src/scenic/domains/racing/benchmarks/sd25_selector_unit_bank.py`
-  with 8 hand-crafted `StrategyOutcome` cases asserting the tiebreak
-  picks higher clearance AND that all pre-SD-25 behaviours are
-  preserved. No simulator, no Scenic compile; single-command
-  runner. Verified: 8/8 pass.
-
-**Stages REVERTED.**
+**Stages REVERTED (in order).**
 
 - **SD-25c — abort_speed_margin_mps speed cap.** Originally landed
   in commit `0fc64781`. Reverted in `ae7b7f87` after a 30-sample
@@ -642,79 +631,174 @@ pattern:
   cross-track error from -0.54 m → -8 m, and exits the corner
   ~20 m off the track. The instant-cap implementation is too
   aggressive for mid-corner aborts, even though the intent (don't
-  accelerate into the fellow during recovery) is right. Future
-  cycle: apply the cap only when ego is on the OPTIMAL TTL during
-  recovery, OR use a rate-limited deceleration profile. Both
-  require more design work than a one-line patch.
+  accelerate into the fellow during recovery) is right. A future
+  cycle could try: apply the cap only when ego is on the OPTIMAL
+  TTL during recovery, OR use a rate-limited deceleration profile.
+  Both require more design work than a one-line patch.
 
 - **SD-25b — closing-flag gate for stay_optimal.** Originally
-  landed in commit `d17f2516`. Reverted in `8e559023` to roll
-  back to a one-step-at-a-time baseline after the SD-25c regression.
+  landed in commit `d17f2516`. Reverted in `8e559023`.
   Implementation added a `closing_on_current_line: bool = False`
-  kwarg to `select_strategy` and wired
-  `assessment_closing_flag` from tactical_planner; when set,
-  excluded `stay_optimal` from the primary survivor set. Targets
-  the 2/13 stay_optimal-locked rear-end collisions in the
-  baseline (samples #1 and #13).
+  kwarg to `select_strategy` and wired `assessment_closing_flag`
+  from tactical_planner; when set, excluded `stay_optimal` from the
+  primary survivor set. Intended to fix the 2/13 stay_optimal-locked
+  rear-end collisions in the baseline (samples #1 and #13). The
+  user's read of the post-SD-25c run was that the integrated
+  behaviour was "still horrible" beyond the SD-25c off-track
+  events; rolled back as part of a one-step-at-a-time response to
+  isolate SD-25a's effect. SD-25b's design is sound at the
+  unit-bank level (it correctly excludes stay_optimal when
+  closing); whether the upstream `assessment_closing_flag` fires
+  appropriately in real-world dynamics is an open question for
+  a future cycle.
 
-  **Why it was rolled back even though it didn't directly cause
-  the off-track regression.** The SD-25c off-track events were the
-  visible symptom, but the user's read of the post-SD-25c run
-  was that the integrated behaviour was "still horrible" — meaning
-  beyond the off-track events, the smart ego's overall pattern of
-  decisions had degraded relative to what they expected. The
-  conservative response is to land changes one at a time: SD-25a
-  alone is the cleanest first step (fixes 10/13 by a one-line
-  change in a unit-tested function), and SD-25b can be revisited
-  separately once SD-25a's effect is isolated and confirmed.
-  SD-25b's design is sound at the unit-bank level (it correctly
-  excludes stay_optimal when closing); the question is whether
-  the `assessment_closing_flag` upstream signal fires too
-  aggressively in real-world dynamics. That investigation is
-  deferred to a future cycle.
+- **SD-25a — strategy_selector.py:95 clearance tiebreak.**
+  Originally landed in commit `2d48a3de`. Reverted in `26f0671c`.
+  Implementation replaced the single-key
+  `min(tied, key=TIEBREAK_RANK)` with the tuple key
+  `(TIEBREAK_RANK, -min_clearance_m)` so that when pass_left and
+  pass_right tied on `reachable_progress_at_horizon_m`, the
+  higher-clearance side won the tiebreak. The 30-sample
+  SD-25a-only campaign showed it working in 7/13 baseline
+  collisions and producing the cleanest results we'd ever seen
+  (collisions 13 → 6, completed overtakes 4 → 11, off-track 1 →
+  0, worst track_clearance −15.86 m → +0.52 m). Reverted because
+  the user signalled an upcoming redesign of the strategy
+  abstraction and a half-fix in the codebase complicates
+  before/after analysis when verifying that redesign.
 
-**The falsifier did its job.** SD-25 is the first cycle where the
-falsification framework surfaced a regression that a unit bank
-couldn't have caught. The 8/8-pass selector unit bank doesn't
-exercise abort recovery dynamics; only a real simulation through
-the cosim bridge can. Reading the per-sample log for the
-worst-rho violation pinpointed the regression in ~30 minutes —
-the framework's value is exactly that. Equally important: the
-user's "step at a time" instinct after seeing the integrated
-behaviour was right. Landing three behaviour changes in one
-cycle, even with each individually justified, can compound in
-ways neither the unit bank nor static analysis catches. SD-25b
-gets re-evaluated on its own merits in a future cycle, after
-SD-25a's effect has been observed cleanly.
+**The architectural finding (the real takeaway from SD-25).**
 
-**End-state files (post both reverts).**
+SD-25a was a band-aid on a deeper bug. Investigation while debating
+whether to keep or revert SD-25a surfaced this:
+
+The `prediction.strategy_simulator.simulate_strategy` function
+integrates ego's longitudinal arc-length `s` using **a side-blind
+speed/phase schedule**. Lines 168–182 define `speed_target` and
+`phase_for_t` for both pass_left and pass_right with the SAME body
+— neither function takes a `side` argument. The arc-length update
+at lines 268–271 then advances `s` purely from speed; nothing
+about it is side-aware:
+
+```python
+ds = 0.5 * (ego_v + v_next) * sample_dt_s   # 1-D longitudinal step
+ego_s += ds                                  # ego_s evolves identically for both sides
+```
+
+`side` enters the simulator only at line 215 — for projecting the
+already-advanced `ego_s` onto a polyline to compute clearance
+against the fellow. **Consequence:**
+`reachable_progress_at_horizon_m` is bit-identical for pass_left
+and pass_right almost always. The `_polyline_for_pass_phase`
+helper at line 65 makes it worse for `min_clearance_m`: during the
+`merge_back` phase, both pass_* strategies use the OPTIMAL
+polyline. Over a 10 s horizon with ~13 of 21 samples in
+merge_back, the closest-approach to fellow often falls in the
+side-blind tail, so the min-clearance metric ALSO comes back
+identical for both sides.
+
+We confirmed this empirically by reading the baseline (pre-SD-25)
+logs for the 5 collision samples that SD-25a couldn't fix
+(#8, #10, #21, #27, #28). At every tick where pass_left was
+selected over pass_right, the reported clearances were
+**bit-identical**:
+
+| Sample | t at first pass_left selection | pL clearance | pR clearance |
+|---|---|---|---|
+| #8  | 0.15 s | 7.73 m | 7.73 m |
+| #10 | 3.65 s | 10.65 m | 10.65 m |
+| #21 | 1.55 s | 3.04 m | 3.04 m |
+| #27 | 1.25 s | 5.86 m | 5.86 m |
+| #28 | 0.35 s | 7.18 m | 7.18 m |
+
+When clearances are tuple-equal, SD-25a's `(rank, -clearance)` key
+becomes tuple-equal too, and Python's `min()` falls back on the
+same iteration-order bias as before — pass_left wins by being
+defined first in `_ALL_STRATEGIES`. SD-25a was structurally
+incapable of helping these samples; the simulator never gave the
+selector any signal to disambiguate.
+
+**The real bug, restated.** The strategy selector primary-ranks
+on `reachable_progress_at_horizon_m` and tiebreaks on rank /
+clearance. But the simulator's longitudinal integration is
+side-blind, AND the merge_back phase washes out side-specific
+clearance over a 10 s horizon. So on the cases that matter most
+(side-by-side overtakes), neither metric distinguishes the two
+sides — and the selector falls back on iteration order. There is
+no one-line fix.
+
+**Design directions for SD-26 (a real fix, not a band-aid).** The
+fix has to give the selector a side-distinguishing signal that
+isn't washed out by merge_back. Three viable options, ordered by
+invasiveness:
+
+1. **Restrict `min_clearance_m` to side-specific samples only.**
+   Compute the metric only over `lane_change` + `alongside`
+   phases; ignore `merge_back` (where both sides are on optimal).
+   1-line change in `simulate_strategy`. Fixes the equal-clearance
+   degeneracy at the source.
+2. **Add a side-sensitive primary metric.** E.g., signed lateral
+   distance from fellow at the moment of closest approach
+   (positive = on the safer side). This would be inherently
+   side-aware and make a tiebreak unnecessary in most cases.
+   Requires a new metric on `StrategyOutcome` and a selector
+   update.
+3. **Add lane-change kinematics to the simulator.** A bicycle
+   model that actually slows ego through tighter turns would
+   make `reachable_progress_at_horizon_m` differ between sides
+   when the geometry favours one direction. Most invasive but
+   architecturally correct — addresses the root cause that the
+   strategy_simulator's "instantaneous lane change" abstraction
+   leaks information.
+
+Option 1 is the minimum viable fix and likely the right next
+step. Option 2 is the architecturally cleanest. Option 3 is
+overkill for the residual collision cluster but might be worth
+it as part of a broader strategy-layer redesign.
+
+**The falsifier did its job (twice).** SD-25's value as a cycle
+isn't the code that landed (none did). It's the two findings the
+falsifier surfaced that no unit bank could have caught:
+
+1. **Mid-corner abort with a hard speed cap is dynamically
+   infeasible.** A unit bank can verify `select_strategy` picks the
+   right answer; only a closed-loop simulation through the cosim
+   bridge shows the MPC's reaction to the planner's command.
+2. **The strategy_simulator's progress and clearance metrics are
+   both side-blind in the residual-collision cases.** A unit
+   bank fed pre-built `StrategyOutcome` lists never exercises
+   the simulator that produces them; only running the actual
+   simulator on real geometries shows the equal-clearance
+   degeneracy.
+
+Both findings are deferred to SD-26. Code state at the end of
+SD-25 is byte-identical to the end of SD-24.
+
+**End-state files (post all three reverts).**
 
 - `src/scenic/domains/racing/planner/strategy_selector.py` —
-  SD-25a tiebreak ONLY (line 102-105 tuple-key min). No
-  `closing_on_current_line` parameter. No `abort_speed_margin_mps`.
-- `src/scenic/domains/racing/tactical_planner.py` — pre-SD-25b
-  baseline. The `_select_strategy` call site does not pass a
-  closing flag. `_abort_result` returns `cap=None`.
+  unchanged from SD-24. Single-key `min(tied, key=TIEBREAK_RANK)`
+  at line 95; `select_strategy` has no `closing_on_current_line`
+  parameter.
+- `src/scenic/domains/racing/tactical_planner.py` — unchanged
+  from SD-24. `_select_strategy` call site does not pass a
+  closing flag; `_abort_result` returns `cap=None`; no
+  `abort_speed_margin_mps` field.
 - `src/scenic/domains/racing/benchmarks/sd25_selector_unit_bank.py`
-  — 8 cases, all SD-25a-locked. 8/8 pass.
+  — file does not exist. Removed by the SD-25a/d revert.
 
-**Verification (user-side).** Re-run the same 30-sample CE
-campaign at `--seed 42`:
+**Verification.** Re-run the same 30-sample CE campaign at
+`--seed 42` to confirm code state matches the original 13/30
+baseline:
 
 ```powershell
 python src/scenic/domains/racing/benchmarks/verifai_runner.py `
     examples/racing/falsifiable/S1_falsify.scenic `
     --sampler ce --monitor safety --count 30 --seed 42 --time 3000 `
-    --quiet *>sd25a_only.log
+    --quiet *>sd25_postrevert_baseline.log
 ```
 
-Expected: collision count drops from 13/30 baseline → ~3/30 from
-SD-25a alone. SD-25a fixes the 10 dominant pass_left bias cases
-by sending ego to pass_right when right has higher clearance. The
-2 stay_optimal-locked rear-ends (samples #1 and #13) and the 1
-abort coast (sample #4) re-emerge as known issues since SD-25b
-and SD-25c are no longer active. Pass-right at certain corners
-remains a residual concern (SD-25c's rollback restores the
-faster-through-corners behaviour, but if pass-right itself is
-geometrically near track edge at some corners, off-track may
-appear there too at lower magnitude).
+Expected: 13/30 collisions matching `verifai_20260428_165255/`.
+Sample-by-sample equivalence isn't strictly required (the cosim
+bridge has cm-scale OSQP-driven non-determinism between runs) but
+the aggregate count + dominant pathology should match.
