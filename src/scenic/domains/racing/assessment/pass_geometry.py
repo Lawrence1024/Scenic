@@ -246,12 +246,7 @@ def path_collision_predicted(
     closest_t = 0.0
     breach_run = 0
     max_breach_run = 0
-    # SD-29 cut 4: the per-sample (t, d) list was built every tick but no
-    # caller in the codebase ever read pc_diag["samples"] (verified via
-    # `grep -rn 'pc_diag'` -- only min_clear_m / closest_t_s / breach_count
-    # are consumed). Drop the allocation; tactical_planner runs every
-    # 50 ms so this 15-entry list × 600 ticks/sample × 30 samples =
-    # 270k pointless tuples per campaign.
+    samples: list = []
     # A sample at less than half min_clear means the cars actually OVERLAP
     # (not merely close). This is automatic collision regardless of debounce —
     # protects against the high-closing-speed case where ego shoots past opp
@@ -290,6 +285,7 @@ def path_collision_predicted(
         dx = ego_xy[0] - opp_xy[0]
         dy = ego_xy[1] - opp_xy[1]
         d = (dx * dx + dy * dy) ** 0.5
+        samples.append((t, d))
         if d < min_clear:
             min_clear = d
             closest_t = t
@@ -310,6 +306,7 @@ def path_collision_predicted(
         "closest_t_s": float(closest_t),
         "breach_count": int(max_breach_run),
         "hard_overlap": hard_overlap,
+        "samples": samples,
     }
 
 

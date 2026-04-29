@@ -702,40 +702,19 @@ def tactical_planner_step_v1(
         state.strategy_reachable_progress = {
             o.strategy: float(o.reachable_progress_at_horizon_m) for o in _outcomes
         }
-        # SD-29 cut 3: throttle the [Strategy] telemetry print. Pre-SD-29 it
-        # fired every control tick (~600 lines / 30 s sample); profiling
-        # showed dict-comprehensions + format() + I/O were the dominant cost
-        # in the "other" timing bucket. Now print only when the selector
-        # changes its decision (catches every transition) OR every 10th
-        # consecutive tick of the same decision (statistical sampling).
-        # Per-tick numerics are still recorded on `state` for any consumer
-        # that needs them; only the human-readable log line is throttled.
-        _last_logged = getattr(state, "_strategy_log_last_name", None)
-        _decision_changed = (state.strategy_selected_name != _last_logged)
-        state._strategy_log_tick_counter = (
-            getattr(state, "_strategy_log_tick_counter", 0) + 1
+        # Telemetry print (one line per tick when strategy was computed).
+        _clear_str = " ".join(
+            f"{k}={v:.2f}" for k, v in state.strategy_min_clearances.items()
         )
-        if _decision_changed or state._strategy_log_tick_counter >= 10:
-            _clear_str = " ".join(
-                f"{k}={v:.2f}" for k, v in state.strategy_min_clearances.items()
-            )
-            _prog_str = " ".join(
-                f"{k}={v:.1f}" for k, v in state.strategy_reachable_progress.items()
-            )
-            # Aggregate OBB call/skip counts across the four strategies for
-            # a one-line runtime visibility.
-            _obb_total = sum(getattr(o, "obb_calls", 0) for o in _outcomes)
-            _skip_total = sum(getattr(o, "obb_skips", 0) for o in _outcomes)
-            _early = sum(1 for o in _outcomes if getattr(o, "early_exit_tick", -1) >= 0)
-            print(
-                f"[Strategy] t={float(sim_time_s):.2f}s selected={state.strategy_selected_name}"
-                f" reason={state.strategy_selected_reason}"
-                f" clearances={{{_clear_str}}}"
-                f" progress={{{_prog_str}}}"
-                f" obb_calls={_obb_total} obb_skips={_skip_total} early_exits={_early}"
-            )
-            state._strategy_log_last_name = state.strategy_selected_name
-            state._strategy_log_tick_counter = 0
+        _prog_str = " ".join(
+            f"{k}={v:.1f}" for k, v in state.strategy_reachable_progress.items()
+        )
+        print(
+            f"[Strategy] t={float(sim_time_s):.2f}s selected={state.strategy_selected_name}"
+            f" reason={state.strategy_selected_reason}"
+            f" clearances={{{_clear_str}}}"
+            f" progress={{{_prog_str}}}"
+        )
     else:
         # Strategy not computed (insufficient inputs) — leave state fields at
         # their carried-over values. Downstream SD-11e branch will fall back
