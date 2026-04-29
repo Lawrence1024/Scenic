@@ -1089,15 +1089,24 @@ S2 reuses the existing `safety` monitor, the existing per-sample log
 schema, and the SD-27 stack. No changes to planner, simulator, or
 selector.
 
-### SD-29 — Runtime cuts + wall-clock budget analysis
+### SD-29 — Runtime cuts (REVERTED) + wall-clock budget analysis
 
-Two-part cycle. Part 1 lands no-behavior-change cuts inside the
+Two-part cycle. Part 1 attempted no-behavior-change cuts inside the
 Scenic stack to recover the per-tick wall budget SD-27's OBB SAT
-work consumed. Part 2 measures *where* the per-tick wall budget
-actually goes so future cycles know whether to keep optimising
-Scenic or move to the cosim/IPC layer.
+work consumed; the cuts shipped (`4d7b485c`) but were **reverted
+(`2c2eb8ab`)** when partial verification showed sample-1 collision
++ off-track and a sample-6 spin from "crazy control commands". The
+"no-behavior-change" reasoning was correct in isolation (the
+conservative bound is genuinely a lower bound on SAT clearance) but
+loose enough (~0.4 m gap to true SAT) that some marginal close-call
+cases got pushed over the wrong side of the 0.5 m hard filter, which
+re-armed the false-safe pass-left bias SD-27 had eliminated.
 
-#### Part 1: no-behavior-change cuts
+Part 2 measures *where* the per-tick wall budget actually goes so
+future cycles know whether to keep optimising Scenic or move to the
+cosim/IPC layer.
+
+#### Part 1: no-behavior-change cuts (REVERTED)
 
 Profiling target was the `planner` bucket in `[TickBreakdown]` logs
 which went from 5.5 ms (pre-SD-27) to 10.8 ms (post-SD-27) — the
@@ -1167,13 +1176,42 @@ Smoke results (single sample on S2): planner section dropped from
 36.95 ms → 28.37 ms (−23%). All 151 racing unit tests + 11 unit-bank
 cases pass with no test changes needed.
 
-Pending live verification: 30-sample S2 CE campaign. Acceptance
-criteria (from `docs/falsify_results.md`):
-`tick_ms_p50` strictly under 26.7 ms with all four behavioral
-metrics non-regressing (collisions ≤ 6, off-track ≤ 3, successful
-passes ≥ 16, worst `bbox_gap_m_min` not worse than 0.00 m). If any
-metric regresses, revert SD-29 commits back to `1d7e4f7c` (S2
-attempt-1 baseline).
+**Live verification — REGRESSED, reverted (`2c2eb8ab`).** A partial
+30-sample S2 CE campaign at `--seed 42` (run dir
+`verifai_20260429_144214/`, stopped at sample 5) showed:
+
+- **Sample 1 (seed 42)**: collision **AND** off-track,
+  `bbox_gap_min=0.00 m`, **147 commit_pass_left** / 0 right / 0
+  success / 37 abort. The same scenario in attempt-1 baseline went
+  0/299/1/0 (cleanly picked pass_right). The selector flipped the
+  side decision because the conservative bound at marginal ticks
+  reported `pass_left ≈ 0.86 m` (above the 0.5 m filter) while
+  `pass_right` SAT-evaluated to 0.00 m — exactly the inverse of
+  reality.
+- **Sample 6 (user observation, not in summary.csv)**: ego "spin
+  due to crazy control commands". Same root cause class — the
+  selector commits to a pass that the actual physics can't resolve.
+- Samples 2–5 looked fine on the behavioral metrics, so the
+  regression isn't uniform. It's the *marginal* close-call cases
+  where the bound's ~0.4 m looseness vs true SAT decides which side
+  of the filter the strategy lands on.
+
+The wall-clock cut alone (planner 15 → 4 ms p50) wasn't worth that
+behavioral cost. Reverted in one step. Acceptance criteria from
+`docs/falsify_results.md` (collisions ≤ 6 / 30, etc.) were violated
+already in the first sample.
+
+**Lesson for future cycles.** The "always-≤ true SAT" property is
+necessary but not sufficient for behavior preservation. A bound
+that's monotonic with true SAT can still flip *relative ranking*
+between two strategies whose true SATs are close — the selector
+filter is on absolute value but selection among survivors is on
+relative ranking via progress, and the bound tightness can
+re-rank when both strategies sit near the threshold. Any future
+"compute fewer SATs" idea has to either (a) only fire when SAT is
+guaranteed safe by a *much* larger margin than the filter
+threshold, or (b) preserve the ranking *between* strategies, not
+just the safe / unsafe classification of each in isolation.
 
 #### Part 2: wall-clock budget analysis
 

@@ -80,12 +80,21 @@ worst-case clearance moved from full overlap (0 m) to 1.79 m.
 | Attempt | Date | Stack | Collisions | Off-track | Successful passes | Worst OBB gap | tick p50 |
 |---|---|---|---:|---:|---:|---:|---:|
 | 1 | 2026-04-29 | SD-26 + SD-27a + SD-27b (post S1-attempt2) | **6 / 30** | 3 | 16 | 0.00 m | 26.7 ms |
+| 2 (REVERTED) | 2026-04-29 | + SD-29 cuts | partial: 1/5 with collision + off-track at sample 1 | — | — | 0.00 m | 13–19 ms | 
 
-S2 attempt 1 is the **reference baseline before the planned per-tick
-runtime cuts**. Any cut that drops `tick p50` below 26.7 ms without
-regressing the four behavioral metrics (collisions ≤ 6, off-track ≤ 3,
-successful passes ≥ 16, worst gap ≥ 0) is a net win. Worse on any of
-those is a regression.
+S2 attempt 1 is the **reference baseline**.
+
+S2 attempt 2 (SD-29 runtime cuts) was abandoned at sample 5 of 30
+when sample 1 regressed: collision + off-track in the same scenario
+that attempt 1 cleared with 299 right-pass commits and 1 successful
+pass. Per-tick was meaningfully faster (13–19 ms p50 across the 5
+samples vs 26.7 ms baseline) but the OBB SAT skip changed marginal
+close-call ranking enough to flip the selector to pass-left in one
+of the seed-42 lateral geometries. Sample 6 (per user observation,
+not in `summary.csv` because the campaign was stopped) also showed
+ego spinning from "crazy control commands" — same root cause class.
+SD-29 commit `4d7b485c` reverted in `2c2eb8ab`. See the SD-29 entry
+in `docs/scenic_changes_from_presentation.md` for the lesson learnt.
 
 ---
 
