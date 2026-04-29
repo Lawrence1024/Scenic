@@ -802,3 +802,238 @@ Expected: 13/30 collisions matching `verifai_20260428_165255/`.
 Sample-by-sample equivalence isn't strictly required (the cosim
 bridge has cm-scale OSQP-driven non-determinism between runs) but
 the aggregate count + dominant pathology should match.
+
+### SD-26 — Lane-change blending in the strategy simulator
+
+Single-stage fix targeting the dominant pathology in the SD-25
+post-revert baseline (13/30 collisions): the strategy simulator was
+placing ego at full lateral offset on the side polyline at `t=0+`,
+producing optimistic `pass_*` clearance predictions that didn't match
+the MPC's actual lateral dynamics.
+
+**What was wrong.** From the SD-25 architectural note: at the moment
+of `pass_left` commit, the simulator queried `xy_at_arclength(left_polyline, ego_s)`
+— ego on the left polyline from t=0+. The actual MPC's CTE decay in
+sample #8 of the baseline campaign was 4.37 m → 4.13 m → 2.75 m over
+t=0.2 → 1.0 → 2.5 s — a first-order exponential with τ ≈ 3–5 s.
+Predicted clearance: 7.73 m. Actual closest approach: 0.94 m.
+
+**The fix.** Replace the instantaneous side-polyline projection with
+a blended position:
+
+```python
+ego_xy(t) = α(t) * side_polyline_xy(s) + (1 − α(t)) * optimal_polyline_xy(s)
+```
+
+where `α(t) = 1 − exp(−t / τ)` with τ = 2.5 s (default, tunable via
+`TacticalPlannerConfig.strategy_lane_change_tau_s`). `α(0) = 0` (ego on
+optimal at the moment of commit), `α(τ) ≈ 0.63`, `α(3τ) ≈ 0.95`.
+
+**Files (final state).**
+
+- `src/scenic/domains/racing/prediction/strategy_simulator.py` —
+  added `_blend_alpha(t_off, tau_s)` helper and replaced the
+  `_polyline_for_pass_phase` ego-track lookup with a per-tick
+  blended xy. `lane_change_tau_s` kwarg added to
+  `simulate_strategy` (default 2.5 s, tau ≤ 0 collapses to legacy
+  instantaneous behaviour for backward-compat tests).
+- `src/scenic/domains/racing/tactical_planner.py` —
+  `TacticalPlannerConfig.strategy_lane_change_tau_s = 2.5`, threaded
+  into the `simulate_strategy` call.
+- `src/scenic/domains/racing/benchmarks/sd26_simulator_unit_bank.py`
+  — new offline regression bank; six original SD-26 cases
+  (alpha math, tau=0 backward-compat, pass_left blend, pass_right
+  symmetry, stay_optimal invariance, merge_back routing). Single-
+  command runner with `--log` flag.
+
+**What stayed the same.** Longitudinal `s` integration unchanged
+(side-blind by design). Phase detection (`lane_change` /
+`alongside` / `merge_back`) unchanged. Speed-target schedule per
+phase unchanged. Strategy selector untouched (still consumes
+`min_clearance_m`; the value just becomes realistic).
+
+**Verification at SD-26 boundary.** SD-26 fixed the blend math in
+isolation. The 30-sample CE campaign with SD-26 alone wasn't run
+to completion — once SD-27 was in motion (a 2-sample probe surfaced
+the OBB-clearance bug that SD-26's centroid metric still couldn't
+catch), the campaign was re-run with SD-26 + SD-27 together. See
+SD-27 entry below for the unified result.
+
+### SD-27 — Better opponent prediction (CTR) and OBB-aware clearance
+
+SD-27 is the unified fix for two failure modes that SD-26 alone
+couldn't address. A 2-sample probe with SD-26 in place still produced
+a full-overlap collision in sample 2: `pass_left` was selected with
+3.95 m predicted clearance, actual outcome was full OBB overlap from
+t=4.25 s to t=4.65 s.
+
+**What was wrong (root causes uncovered after SD-26).**
+
+1. **Cartesian-CV fellow extrapolation smeared fellow off the racing
+   line.** `FellowPredictor.trajectory()` walked fellow forward at
+   constant cartesian velocity from the latest observation. On
+   curving sections, the predicted xy drifted off whatever line the
+   fellow was actually following, opening fictional gaps. This
+   directly drove the simulator to predict safe `pass_left`
+   clearances when fellow was on the left racing line.
+
+2. **The clearance metric was centroid-to-centroid, treating cars
+   as points.** With IAC Dallaras at 4.88 m × 1.93 m, a 3.95 m
+   centroid distance during end-to-end approach is already
+   overlapping. The 2.5 m hard filter was calibrated to that point
+   model and never had a chance to reject these geometries. The
+   user's exact diagnosis: "we drove straight through fellow like
+   it doesn't exist; doesn't that just mean our estimation is
+   horrible? […] the stack should see a huge car at the left of
+   the track, predict that it is still going to be on the left,
+   and thus not overlap our trajectory with that."
+
+**Architectural directive (from the user, for this fix).** Adopt
+Frenet-frame / arc-following lessons from race_common, but
+*without* baking in a "fellow follows the racing line" assumption
+— in real racing a malfunctioning fellow can drive any line and
+the smart-ego still has to avoid it. The fix has to be observation-
+based.
+
+**SD-27a — Constant-turn-rate fellow prediction.**
+
+`src/scenic/domains/racing/prediction/fellow_predictor.py`:
+
+- New `_yaw_rate_from_history()` method. Per-segment heading from
+  successive history points, unwrap, recency-weighted linear
+  regression of unwrapped θ vs time. Returns `None` if too few
+  segments or motion too small.
+- `trajectory()` now propagates fellow on a circular arc when yaw
+  rate is estimable (`|ω| ≥ 1e-3 rad/s`):
+
+  ```
+  x(t) = x0 + (v / ω) * (sin(θ0 + ω·t) − sin(θ0))
+  y(t) = y0 − (v / ω) * (cos(θ0 + ω·t) − cos(θ0))
+  ```
+
+  Otherwise falls back to the existing CV path. New kwargs
+  `use_ctr=True` (default) and `ctr_min_yaw_rate_rad_s=1e-3`.
+
+**Crucially: this makes ZERO assumption about fellow being on a
+racing line.** The propagated turn rate is whatever fellow's
+actual heading history shows — a fellow drifting off-line gets
+predicted with the off-line yaw rate they actually exhibit.
+
+Unit-bank verification: with circular-arc input (yaw rate 0.2 rad/s,
+speed 10 m/s), CTR tracks the true arc with 0.45 m error at t=2 s;
+CV diverges to 4.43 m error.
+
+**SD-27b — OBB-aware clearance metric.**
+
+`src/scenic/domains/racing/prediction/strategy_simulator.py`:
+
+- New kwargs `ego_length_m`, `ego_width_m`, `fellow_length_m`,
+  `fellow_width_m` (default IAC Dallara 4.88 m × 1.93 m, imported
+  from `eval_geometry`).
+- Per-tick clearance is now `obb_separation_distance_m` (true
+  edge-to-edge minimum gap between the two oriented bounding boxes
+  via point-in-OBB and segment-to-segment SAT-style checks). Reuses
+  the existing `eval_geometry.obb_separation_distance_m` helper.
+- **Headings are from finite-difference of the previous tick's xy.**
+  Both ego heading and fellow heading are computed as
+  `atan2(Δy, Δx)` between adjacent samples, so OBBs are properly
+  rotated to each agent's actual direction of motion at every tick.
+  At the first tick (`i=0`) there's no previous xy, so the metric
+  falls back to `centroid_dist − circumradius_ego − circumradius_fellow`
+  (heading-agnostic, conservative — under-reports clearance, never
+  over-reports). For a 21-sample horizon (10 s at 0.5 s dt), 20 of
+  21 samples use the heading-aware OBB metric.
+
+**SD-27b — Reverse-blend during merge_back.** Symmetric to SD-26's
+forward blend. Pre-SD-27 the simulator snapped ego onto the optimal
+polyline at the first `merge_back` tick; with OBB clearance that
+collapsed the predicted gap to ~0.1 m when ego was one car-length
+ahead on the same line as fellow, breaking otherwise-safe passes.
+Now α decays back to 0 over τ during merge_back (`alpha = last_alpha_pre_merge * exp(-(t - merge_back_start_t) / τ)`).
+
+**SD-27b — Threshold recalibration.** The clearance metric's
+*meaning* changed from centroid-to-centroid to edge-to-edge gap, so
+the filter thresholds had to follow. Defaults dropped:
+
+- `strategy_min_clearance_m`: 2.5 → **0.5 m**
+- `strategy_soft_clearance_m`: 1.5 → **0.2 m**
+
+Calibration intuition: a 2.5 m centroid distance with IAC-width
+1.93 m cars meant ~0.6 m of physical bumper-to-bumper gap. The new
+0.5 m hard threshold preserves roughly that physical safety buffer
+under the new metric. Updated in
+`src/scenic/domains/racing/planner/strategy_selector.py` defaults
+and `TacticalPlannerConfig.strategy_min_clearance_m / strategy_soft_clearance_m`.
+
+**Files (final state).**
+
+- `src/scenic/domains/racing/prediction/fellow_predictor.py` —
+  `_yaw_rate_from_history` helper + CTR branch in `trajectory()`.
+- `src/scenic/domains/racing/prediction/strategy_simulator.py` —
+  `eval_geometry` imports for IAC dimensions and the OBB helper;
+  per-tick OBB clearance with finite-diff headings; reverse-blend
+  in merge_back; vehicle-dimension kwargs.
+- `src/scenic/domains/racing/planner/strategy_selector.py` —
+  threshold defaults dropped to 0.5 / 0.2; docstring updated.
+- `src/scenic/domains/racing/tactical_planner.py` — config
+  defaults dropped to match.
+- `src/scenic/domains/racing/benchmarks/sd26_simulator_unit_bank.py`
+  — added 4 SD-27 cases (CTR-on-straight, CTR-on-arc, OBB lateral
+  pass, OBB full overlap) and reworked the merge-back case to
+  verify the reverse-blend.
+- `src/scenic/domains/racing/mpc/testing/test_strategy_simulator.py`,
+  `test_tactical_planner_sd11d.py` — assertion thresholds updated
+  for OBB metric (5.0 m centroid → ≈3.07 m OBB; comments call out
+  the metric change).
+
+**Verification.** Full racing test suite: 151 passed. SD-26/27
+unit bank: 11/11 passed (alpha math, tau-zero backward-compat,
+pass_left blend, pass_right symmetry, stay_optimal invariance,
+reverse-blend in merge_back, far-fellow sanity, CTR-straight,
+CTR-arc, OBB lateral pass, OBB full overlap).
+
+30-sample CE campaign at `--seed 42` with SD-26 + SD-27 active
+(`verifai_20260429_104834/`):
+
+| Metric | Pre-SD-25 baseline | SD-26 + SD-27 | Change |
+|---|---:|---:|---|
+| Collisions | 13 / 30 | 2 / 30 | ↓ 85% |
+| Off-track | 1 | 0 | ↓ |
+| Successful passes | 4 | 21 | × 5.25 |
+| Pass attempts (L / R / aborted) | 898 / 438 / 473 | 37 / 3173 / 33 | left attempts ↓ 96%, aborts ↓ 93% |
+| Strategy picks (stay / follow / pL / pR) | 17321 / 17 / 381 / 281 | 16536 / 157 / 486 / 821 | follow ↑ 9×, pR selections ↑ 3× |
+| Worst per-sample `bbox_gap_m_min` | 0.00 m (full overlap) | 1.79 m | full overlap → safe gap |
+
+The most striking signal in the telemetry is the L→R pass-attempt
+flip (898 / 438 → 37 / 3173). In `S1_falsify.scenic` the sampled
+fellow gap puts fellow on the **left** racing line. Pre-SD-27 the
+simulator (cartesian-CV smearing fellow off-line + centroid metric)
+reported `pass_left` ≈ 3.95 m clearance — looked safe, was selected,
+collided. Post-SD-27 fellow's predicted trajectory stays on the left
+line (CTR), the OBB metric correctly reports `pass_left` ≈ 0 m, the
+filter rejects, the selector picks `pass_right` instead.
+
+See `docs/falsify_results.md` for the running campaign log
+(attempt 1 baseline, attempt 2 = post-SD-27, template for future
+attempts).
+
+**Remaining failures (both different design problems from what
+SD-26 / SD-27 attack — out of scope here).**
+
+- Sample 4 (seed 45): strategy selector flip-flops between
+  `pass_left` / `pass_right` every tick at this track location.
+  Hysteresis (`strategy_commit_cycles=2`) is too short for noisy
+  alternating selection; snapshot fallback path doesn't apply the
+  same hysteresis. 37 left commits all aborted, eventual contact.
+- Sample 19 (seed 60): zero commits — ego stayed on `stay_optimal`
+  the whole time and rear-ended fellow. Predictor alternates
+  between `stay_optimal` ≈ 9 m on even ticks and ≈ 1 m on odd
+  ticks (per-tick fellow-pose oscillation upstream of the
+  predictor). Selector picks `stay_optimal` whenever it clears
+  0.5 m; never proactively switches to `follow_fellow` when
+  stay_optimal is consistently marginal.
+
+Both expose new design questions (selector stability, marginal-
+stay-optimal handling) that the prediction-correctness work surfaced
+because the dominant pre-SD-27 failure mode — false-safe `pass_left`
+into a fellow on the left line — is gone.

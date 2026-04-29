@@ -98,7 +98,9 @@ def test_strategy_telemetry_populated_when_inputs_supplied():
     assert "[Strategy]" in out
     # F9 case: stay_optimal should win (large clearance, full target speed).
     assert st.strategy_selected_name == "stay_optimal"
-    assert st.strategy_min_clearances["stay_optimal"] >= 4.5
+    # SD-27b: clearance is OBB edge-to-edge gap. Lateral 5m minus IAC width
+    # 1.93m ≈ 3.07m at the closest tick.
+    assert st.strategy_min_clearances["stay_optimal"] >= 2.8
     assert "stay_optimal" in st.strategy_reachable_progress
 
 

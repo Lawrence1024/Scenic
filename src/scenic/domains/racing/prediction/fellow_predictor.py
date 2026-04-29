@@ -83,6 +83,72 @@ class FellowPredictor:
             return None
         return (cov_tx / var_t, cov_ty / var_t)
 
+    def _yaw_rate_from_history(self) -> Optional[float]:
+        """SD-27a: estimate fellow's yaw rate from heading history.
+
+        Uses per-segment heading = atan2(dy, dx) over the last ~max_age_s of
+        history, unwraps, then runs a recency-weighted linear regression of
+        unwrapped heading vs time. Returns None if too few segments or motion
+        is too small to extract a reliable heading (caller falls back to CV).
+
+        Pure observation-based: makes no assumption that fellow is on any
+        particular polyline. Captures whatever turn rate fellow's actual
+        cartesian trajectory exhibits.
+        """
+        if len(self._hist) < 3:
+            return None
+
+        # Compute per-segment headings from successive history points.
+        seg_headings: list[Tuple[float, float]] = []  # (t_mid, theta)
+        hist_list = list(self._hist)
+        for k in range(1, len(hist_list)):
+            t0, x0, y0, _ = hist_list[k - 1]
+            t1, x1, y1, _ = hist_list[k]
+            dt_seg = float(t1) - float(t0)
+            if dt_seg <= 1e-9:
+                continue
+            dx = float(x1) - float(x0)
+            dy = float(y1) - float(y0)
+            if math.hypot(dx, dy) < 1e-3:
+                # Motion too small — heading is noise.
+                continue
+            seg_headings.append((0.5 * (float(t0) + float(t1)), math.atan2(dy, dx)))
+
+        if len(seg_headings) < 2:
+            return None
+
+        # Unwrap headings so the regression sees a continuous angle.
+        theta_unw = [seg_headings[0][1]]
+        for i in range(1, len(seg_headings)):
+            d = seg_headings[i][1] - seg_headings[i - 1][1]
+            while d > math.pi:
+                d -= 2.0 * math.pi
+            while d < -math.pi:
+                d += 2.0 * math.pi
+            theta_unw.append(theta_unw[-1] + d)
+
+        # Recency-weighted linear regression of unwrapped theta vs time.
+        t_ref = seg_headings[-1][0]
+        rows: list[Tuple[float, float, float]] = []
+        for (ti, _), th in zip(seg_headings, theta_unw):
+            age = max(0.0, t_ref - ti)
+            if age > self._history_max_age_s:
+                continue
+            wi = math.exp(-age / self._history_decay_s)
+            rows.append((wi, ti, th))
+        if len(rows) < 2:
+            return None
+        tw_sum = sum(w for w, _, _ in rows)
+        if tw_sum <= 1e-12:
+            return None
+        t_mean = sum(w * t for w, t, _ in rows) / tw_sum
+        th_mean = sum(w * th for w, _, th in rows) / tw_sum
+        var_t = sum(w * (t - t_mean) ** 2 for w, t, _ in rows)
+        cov_tth = sum(w * (t - t_mean) * (th - th_mean) for w, t, th in rows)
+        if var_t <= 1e-12:
+            return None
+        return cov_tth / var_t
+
     def _recency_weighted_velocity_s(self) -> Optional[float]:
         rows: list[Tuple[float, float]] = []
         for ti, _xi, _yi, si in self._hist:
@@ -127,18 +193,35 @@ class FellowPredictor:
         self,
         horizon_s: float,
         sample_dt_s: float,
+        *,
+        use_ctr: bool = True,
+        ctr_min_yaw_rate_rad_s: float = 1e-3,
     ) -> list[Tuple[float, float, float, Optional[float]]]:
-        """SD-11a: multi-step CV extrapolation over [0, horizon_s].
+        """SD-11a / SD-27a: multi-step extrapolation over [0, horizon_s].
 
-        Reuses the same blended (last-segment + recency-weighted-history)
-        velocity that ``step()`` computes for its single-sample prediction —
-        no new estimator. Walks forward at constant velocity from the most
-        recent observation.
+        Walks forward from the most recent observation. Default model is
+        constant-turn-rate (CTR) using the fellow's observed yaw rate from
+        recent heading history; if yaw rate can't be estimated or is below
+        ``ctr_min_yaw_rate_rad_s``, falls back to constant velocity (CV).
+
+        CTR makes ZERO assumption about fellow being on a racing line —
+        the propagated turn rate is whatever fellow's actual heading
+        history shows. Pre-SD-27 (CV-only) smeared fellow off curving
+        racing lines, opening fictional gaps that drove the strategy
+        simulator to predict safe pass clearances that didn't exist.
+
+        Args:
+          horizon_s: total prediction horizon (seconds).
+          sample_dt_s: sampling interval (seconds).
+          use_ctr: when True (default), uses CTR if yaw rate is
+            estimable; when False, always uses CV (legacy behaviour).
+          ctr_min_yaw_rate_rad_s: yaw rates below this magnitude collapse
+            to CV (avoids dividing by ~0). Default 1e-3 rad/s ≈ 0.06°/s.
 
         Returns a list of ``(t_offset_s, x, y, s_or_None)`` tuples with
         ``t_offset_s`` in {0, dt, 2*dt, ..., k*dt} where ``k = floor(horizon_s/dt)``.
         Length is ``k + 1``. ``samples[0]`` is the current observation (no motion);
-        ``samples[i]`` for ``i >= 1`` is the CV-extrapolated pose at ``i*dt``.
+        ``samples[i]`` for ``i >= 1`` is the extrapolated pose at ``i*dt``.
 
         Degenerate cases:
           - No history: returns ``[]``.
@@ -146,8 +229,7 @@ class FellowPredictor:
             current observation repeated at every sample (zero motion).
 
         Used by SD-11b's strategy simulator to predict where the fellow
-        will be over the planning horizon, under the assumption that
-        the fellow continues its current behavior.
+        will be over the planning horizon.
         """
         if not self._hist:
             return []
@@ -185,11 +267,36 @@ class FellowPredictor:
                     else:
                         vs = vs_seg
 
+        # SD-27a: estimate yaw rate from heading history; fall back to CV
+        # if the estimate is too noisy / motion too small.
+        yaw_rate: Optional[float] = None
+        if use_ctr:
+            yaw_rate = self._yaw_rate_from_history()
+        v_speed = math.hypot(vx, vy)
+        if (
+            yaw_rate is not None
+            and abs(yaw_rate) >= float(ctr_min_yaw_rate_rad_s)
+            and v_speed > 1e-3
+        ):
+            theta0 = math.atan2(vy, vx)
+            radius = v_speed / yaw_rate  # signed; negative for CW turns
+        else:
+            yaw_rate = None
+            theta0 = 0.0
+            radius = 0.0
+
         samples: list[Tuple[float, float, float, Optional[float]]] = []
         for i in range(n_steps + 1):
             t_off = i * dt
-            x_i = float(x_now) + vx * t_off
-            y_i = float(y_now) + vy * t_off
+            if yaw_rate is not None:
+                # CTR: circular arc from (x_now, y_now) at heading theta0,
+                # speed v_speed, turn rate yaw_rate.
+                angle = theta0 + yaw_rate * t_off
+                x_i = float(x_now) + radius * (math.sin(angle) - math.sin(theta0))
+                y_i = float(y_now) - radius * (math.cos(angle) - math.cos(theta0))
+            else:
+                x_i = float(x_now) + vx * t_off
+                y_i = float(y_now) + vy * t_off
             s_i: Optional[float] = None
             if s_now is not None:
                 if vs is not None:

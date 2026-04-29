@@ -82,7 +82,9 @@ def test_stay_optimal_clearance_high_when_fellow_off_line():
         **_COMMON_KW,
     )
     assert out.reason == "ok"
-    assert out.min_clearance_m >= 4.5  # ego on optimal y=0, fellow at y=-5 → 5m at minimum
+    # SD-27b: OBB edge-to-edge gap, not centroid. Lateral gap 5m minus
+    # 0.5*ego_width minus 0.5*fellow_width = 5 - 1.93 ≈ 3.07m at the closest tick.
+    assert out.min_clearance_m >= 2.8
     assert out.reachable_speed_at_horizon_mps >= 30.0  # accelerated from 0.5 over 10s
     assert out.completed is True
 
@@ -124,8 +126,11 @@ def test_pass_left_completes_when_left_polyline_clear():
     )
     assert out.reason == "ok"
     assert out.completed is True, f"pass should complete on parallel clear left TTL: {out}"
-    # Min clearance during alongside phase: ego on left (y=+5), fellow on optimal (y=0) → ~5m
-    assert out.min_clearance_m >= 4.0
+    # SD-27b: OBB edge-to-edge gap. Min occurs during the alongside-to-merge_back
+    # transition where ego is mid-blend (y≈3.8m) and longitudinally close to
+    # fellow; closest-corner-pair ≈ 2m. Threshold here verifies the simulator
+    # finds a viable pass (above the 0.5m hard filter), not a specific value.
+    assert out.min_clearance_m >= 1.0
 
 
 def test_pass_left_blocked_by_converging_left_polyline():
@@ -172,7 +177,9 @@ def test_fellow_far_ahead_all_strategies_safe():
         )
         assert out.reason == "ok", f"{s}: {out}"
         # Fellow goes 600+500=1100 by t=10; ego does ~370. Gap stays >300 m.
-        assert out.min_clearance_m > 300.0, f"{s}: clearance={out.min_clearance_m}"
+        # SD-27b: subtract IAC circumradius (~2.6m each side) from centroid
+        # for OBB clearance, still well above 290m.
+        assert out.min_clearance_m > 290.0, f"{s}: clearance={out.min_clearance_m}"
 
 
 # ---------------------------------------------------------------------------

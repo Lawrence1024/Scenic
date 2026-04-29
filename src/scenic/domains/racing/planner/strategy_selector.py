@@ -4,13 +4,21 @@ Takes the four StrategyOutcomes from strategy_simulator.simulate_strategy and
 picks the winner under a correctness-first ranking:
 
   1. Filter survivors with min_clearance_m >= min_clearance_m threshold
-     (default 2.5m, matching pass_geometry.DEFAULT_MIN_LAT_CLEARANCE_M).
+     (default 0.5m post-SD-27b; this is OBB edge-to-edge gap, NOT centroid
+     distance — see strategy_simulator.simulate_strategy).
   2. Among survivors, rank by reachable_progress_at_horizon_m (highest wins).
   3. Tiebreak (within ~0.1m progress): stay_optimal > pass_* > follow_fellow,
      i.e., prefer the strategy that requires the least mode change.
   4. Soft fallback if filter empties: try follow_fellow at a softer threshold
-     (1.5m). If that also fails, return stay_optimal as the last resort
+     (0.2m). If that also fails, return stay_optimal as the last resort
      (the SD-4 emergency-brake layer downstream will catch any actual collision).
+
+Threshold history:
+  - Pre-SD-27 used 2.5m / 1.5m on centroid distance. With OBB-aware clearance
+    (true edge-to-edge gap between IAC Dallaras), every legitimate pass has
+    min_clearance ~0.5–3 m during the alongside/merge transition, so the
+    centroid-era 2.5m threshold rejected everything. New defaults reflect
+    "physical gap between bumpers" rather than "centroid separation".
 
 No state. No side effects. Deterministic given input outcomes.
 
@@ -51,8 +59,8 @@ class SelectedStrategy:
 def select_strategy(
     outcomes: Sequence[StrategyOutcome],
     *,
-    min_clearance_m: float = 2.5,
-    soft_clearance_m: float = 1.5,
+    min_clearance_m: float = 0.5,
+    soft_clearance_m: float = 0.2,
     progress_tiebreak_m: float = 0.5,
 ) -> SelectedStrategy:
     """Pick the fastest safe strategy.

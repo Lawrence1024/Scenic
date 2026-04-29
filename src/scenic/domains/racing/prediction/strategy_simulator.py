@@ -13,13 +13,18 @@ horizon. The selected strategy then becomes the planner's primary decision
 Design notes:
   - This is FORECAST, not control. Speed profiles are simple piecewise
     constant-acceleration ramps; the actual lateral motion of a lane change
-    is handled by the MPC at runtime. Polyline switches in pass_* strategies
-    are treated as instantaneous at the strategy level.
+    is handled by the MPC at runtime. SD-26 added lane-change blending
+    so the simulator no longer teleports ego onto the side polyline at t=0+.
   - Reuses the cached _xy_at_arclength from assessment/pass_geometry so each
     polyline is constructed at most once per simulator call.
-  - Fellow trajectory is the CV-extrapolated true xy from
-    FellowPredictor.trajectory(); NOT a polyline projection. This matches
-    the user's intent "assume fellow continues current behavior" verbatim.
+  - Fellow trajectory comes from FellowPredictor.trajectory(); SD-27a made
+    that a constant-turn-rate (CTR) extrapolation rather than cartesian CV,
+    so curving fellows stop drifting off-line in the prediction.
+  - SD-27b: clearance is OBB-aware. Pre-SD-27 used centroid distance, which
+    treated 4.88m × 1.93m IAC Dallaras as points; a 2.5 m centroid filter
+    failed to catch end-to-end approaches where the cars were already
+    overlapping. This module now computes true gap between the predicted
+    OBBs at each tick using eval_geometry.obb_separation_distance_m.
 """
 
 from __future__ import annotations
@@ -29,6 +34,11 @@ from dataclasses import dataclass, field
 from typing import List, Literal, Optional, Sequence, Tuple
 
 from scenic.domains.racing.assessment.pass_geometry import _xy_at_arclength
+from scenic.domains.racing.eval_geometry import (
+    IAC_DALLARA_LENGTH_M,
+    IAC_DALLARA_WIDTH_M,
+    obb_separation_distance_m,
+)
 
 
 def _blend_alpha(t_off: float, tau_s: float) -> float:
@@ -117,6 +127,10 @@ def simulate_strategy(
     post_pass_buffer_m: float,
     lane_change_s: float,
     lane_change_tau_s: float = 2.5,
+    ego_length_m: float = IAC_DALLARA_LENGTH_M,
+    ego_width_m: float = IAC_DALLARA_WIDTH_M,
+    fellow_length_m: float = IAC_DALLARA_LENGTH_M,
+    fellow_width_m: float = IAC_DALLARA_WIDTH_M,
 ) -> StrategyOutcome:
     """Walk ego forward over [0, horizon_s] under the chosen strategy.
 
@@ -147,6 +161,15 @@ def simulate_strategy(
                             Default 2.5 s. Set to 0.0 to reproduce the legacy
                             instantaneous-switch behaviour (used by the unit
                             bank for backward-compat checks).
+      ego_length_m, ego_width_m, fellow_length_m, fellow_width_m
+                          : SD-27b. Vehicle dimensions used for OBB-aware
+                            clearance. Defaults to IAC Dallara (4.88 m ×
+                            1.93 m). The reported min_clearance_m is the
+                            minimum edge-to-edge gap between the two oriented
+                            bounding boxes over the horizon, NOT centroid
+                            distance — pre-SD-27 the simulator treated cars
+                            as points, so the 2.5 m filter missed end-to-end
+                            approaches that were already overlapping.
 
     Returns StrategyOutcome with reachable progress, min clearance, samples.
     Failure modes (return outcome with reason!="ok"):
@@ -220,6 +243,18 @@ def simulate_strategy(
     completed = False
     samples: List[Tuple[float, float, float, float, str, float, float, float]] = []
     fellow_n = len(fellow_traj)
+    # SD-27b: cache previous tick xy for each agent so we can take a
+    # finite-difference heading at i >= 1. Sample i=0 falls back to a
+    # circumradius approximation (safe over-estimate of vehicle extent).
+    prev_ego_xy: Optional[Tuple[float, float]] = None
+    prev_fellow_xy: Optional[Tuple[float, float]] = None
+    half_circ_ego = 0.5 * math.hypot(float(ego_length_m), float(ego_width_m))
+    half_circ_fellow = 0.5 * math.hypot(float(fellow_length_m), float(fellow_width_m))
+    # SD-27b: track merge_back start so we can reverse-blend ego back to the
+    # optimal polyline symmetrically (instead of the SD-26 snap-to-optimal,
+    # which made OBB clearance collapse during the post-pass merge tick).
+    merge_back_start_t: Optional[float] = None
+    last_alpha_pre_merge: float = 0.0
 
     def _fellow_xy_at(t_off: float) -> Optional[Tuple[float, float]]:
         if fellow_n == 0:
@@ -251,47 +286,46 @@ def simulate_strategy(
         # model the MPC's actual lateral dynamics — ego converges to the
         # side polyline over ~tau_s seconds.
         if strategy in ("pass_left", "pass_right"):
+            # SD-27b: symmetric reverse-blend during merge_back. Pre-SD-27 the
+            # simulator snapped ego to the optimal polyline at the first
+            # merge_back tick; with OBB clearance that produces an artificial
+            # near-zero gap when ego is one car-length ahead on the same line
+            # as fellow, breaking otherwise-safe passes. Reverse-blend keeps
+            # ego on the side polyline a moment longer and exponentially
+            # decays alpha back to 0 over the same tau_s.
             if phase == "merge_back":
-                # Stay on the optimal polyline post-pass (legacy behaviour).
-                # Reverse-blend back to optimal is deferred to a later cycle;
-                # forward-blend during lane_change/alongside is sufficient
-                # to fix the residual-collision pathology.
-                ego_xy = _xy_at_arclength(
-                    optimal_wp, ego_s, float(lap_length_m)
-                )
-                if ego_xy is None:
-                    return StrategyOutcome(
-                        strategy=strategy,
-                        reachable_progress_at_horizon_m=ego_s,
-                        reachable_speed_at_horizon_mps=ego_v,
-                        min_clearance_m=float("inf"),
-                        closest_t_s=0.0,
-                        completed=False,
-                        reason="shapely_unavailable",
-                    )
+                if merge_back_start_t is None:
+                    merge_back_start_t = t_off
+                t_since_merge = max(0.0, t_off - merge_back_start_t)
+                tau = float(lane_change_tau_s)
+                if tau <= 1e-6:
+                    alpha = 0.0
+                else:
+                    alpha = float(last_alpha_pre_merge) * math.exp(-t_since_merge / tau)
             else:
-                # lane_change or alongside: blend optimal -> side over time.
                 alpha = _blend_alpha(t_off, float(lane_change_tau_s))
-                ego_xy_opt = _xy_at_arclength(
-                    optimal_wp, ego_s, float(lap_length_m)
+                last_alpha_pre_merge = alpha
+
+            ego_xy_opt = _xy_at_arclength(
+                optimal_wp, ego_s, float(lap_length_m)
+            )
+            ego_xy_side = _xy_at_arclength(
+                side_wp, ego_s, float(lap_length_m)
+            )
+            if ego_xy_opt is None or ego_xy_side is None:
+                return StrategyOutcome(
+                    strategy=strategy,
+                    reachable_progress_at_horizon_m=ego_s,
+                    reachable_speed_at_horizon_mps=ego_v,
+                    min_clearance_m=float("inf"),
+                    closest_t_s=0.0,
+                    completed=False,
+                    reason="shapely_unavailable",
                 )
-                ego_xy_side = _xy_at_arclength(
-                    side_wp, ego_s, float(lap_length_m)
-                )
-                if ego_xy_opt is None or ego_xy_side is None:
-                    return StrategyOutcome(
-                        strategy=strategy,
-                        reachable_progress_at_horizon_m=ego_s,
-                        reachable_speed_at_horizon_mps=ego_v,
-                        min_clearance_m=float("inf"),
-                        closest_t_s=0.0,
-                        completed=False,
-                        reason="shapely_unavailable",
-                    )
-                ego_xy = (
-                    alpha * ego_xy_side[0] + (1.0 - alpha) * ego_xy_opt[0],
-                    alpha * ego_xy_side[1] + (1.0 - alpha) * ego_xy_opt[1],
-                )
+            ego_xy = (
+                alpha * ego_xy_side[0] + (1.0 - alpha) * ego_xy_opt[0],
+                alpha * ego_xy_side[1] + (1.0 - alpha) * ego_xy_opt[1],
+            )
         else:
             # stay_optimal / follow_fellow: always on optimal.
             ego_xy = _xy_at_arclength(optimal_wp, ego_s, float(lap_length_m))
@@ -311,7 +345,30 @@ def simulate_strategy(
         if fellow_xy is not None:
             dx = ego_xy[0] - fellow_xy[0]
             dy = ego_xy[1] - fellow_xy[1]
-            clearance = (dx * dx + dy * dy) ** 0.5
+            centroid_dist = math.hypot(dx, dy)
+            # SD-27b: report true OBB edge-to-edge gap. Headings come from a
+            # finite difference vs the previous tick's xy; on the first tick
+            # we don't have one yet, so subtract the circumradius of each
+            # vehicle as a conservative (heading-agnostic) fallback.
+            if prev_ego_xy is not None and prev_fellow_xy is not None:
+                ehx = ego_xy[0] - prev_ego_xy[0]
+                ehy = ego_xy[1] - prev_ego_xy[1]
+                fhx = fellow_xy[0] - prev_fellow_xy[0]
+                fhy = fellow_xy[1] - prev_fellow_xy[1]
+                ego_heading = (
+                    math.atan2(ehy, ehx) if (ehx * ehx + ehy * ehy) > 1e-9 else 0.0
+                )
+                fellow_heading = (
+                    math.atan2(fhy, fhx) if (fhx * fhx + fhy * fhy) > 1e-9 else 0.0
+                )
+                clearance = obb_separation_distance_m(
+                    float(ego_xy[0]), float(ego_xy[1]), ego_heading,
+                    float(ego_length_m), float(ego_width_m),
+                    float(fellow_xy[0]), float(fellow_xy[1]), fellow_heading,
+                    float(fellow_length_m), float(fellow_width_m),
+                )
+            else:
+                clearance = max(0.0, centroid_dist - half_circ_ego - half_circ_fellow)
             if clearance < min_clear:
                 min_clear = clearance
                 closest_t = t_off
@@ -326,6 +383,9 @@ def simulate_strategy(
             float(fellow_xy[1]) if fellow_xy is not None else float("nan"),
             float(clearance),
         ))
+        prev_ego_xy = (float(ego_xy[0]), float(ego_xy[1]))
+        if fellow_xy is not None:
+            prev_fellow_xy = (float(fellow_xy[0]), float(fellow_xy[1]))
 
         # Advance ego state to next sample.
         if i == n_steps:
