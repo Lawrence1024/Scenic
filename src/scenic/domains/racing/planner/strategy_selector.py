@@ -91,18 +91,8 @@ def select_strategy(
             o for o in survivors_sorted
             if (top_progress - o.reachable_progress_at_horizon_m) <= float(progress_tiebreak_m)
         ]
-        # Pick the one with lowest tiebreak rank (stay_optimal > pass_* > follow_fellow),
-        # then by HIGHEST min_clearance_m as a secondary key. SD-25a: pass_left and
-        # pass_right both have rank 1, so without the clearance secondary, Python's
-        # stable-sort iteration order made pass_left win every tie — including when
-        # the fellow was geometrically on the left and pass_right had visibly higher
-        # clearance. Negation flips the sort direction so larger clearance ranks
-        # lower (preferred) under min(). For non-pass comparisons (different ranks),
-        # behaviour is unchanged because the rank dominates the tuple comparison.
-        chosen = min(
-            tied,
-            key=lambda o: (_TIEBREAK_RANK.get(o.strategy, 99), -float(o.min_clearance_m)),
-        )
+        # Pick the one with lowest tiebreak rank (stay_optimal > pass_* > follow_fellow).
+        chosen = min(tied, key=lambda o: _TIEBREAK_RANK.get(o.strategy, 99))
         return SelectedStrategy(
             name=chosen.strategy,
             reason="primary",
