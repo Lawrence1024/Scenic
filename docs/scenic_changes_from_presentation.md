@@ -585,3 +585,79 @@ dSPACE; a 3-sample halton smoke through `verifai_runner.py` on
 no warnings, three distinct corner placements, and the expected
 overtake-attempt-vs-gap correlation. Run via the user; not
 exercised in this commit.
+
+### SD-25 — Smart-ego pathology fixes from the 30-sample falsifier campaign
+
+**What was wrong.** A 30-sample CE falsification run on
+`examples/racing/falsifiable/S1_falsify.scenic` at `--seed 42`
+produced 13/30 collisions. Three distinct bugs explained the pattern:
+
+| Bug | Count | Symptom |
+|---|---|---|
+| **A — Strategy-selector tiebreak** | 10/13 | When pass_left and pass_right tied on `reachable_progress_at_horizon_m`, both had `_TIEBREAK_RANK = 1`. Python's `min()` returned the first match in iteration order — pass_left always — even when pass_right's `min_clearance_m` was visibly higher. Smart ego repeatedly drove into a fellow geometrically positioned on the left because of a deterministic tiebreak bias. |
+| **B — Locked-on-stay_optimal rear-end** | 2/13 | Selector picked stay_optimal for ALL 600 ticks while ego accelerated to 28 m/s and rear-ended a slower fellow on the left racing line. Lateral OBB-separation metric stayed >2.5 m the whole run (optimal and left lines parallel at the rear-end track sections), so the hard filter never escalated. The metric missed the longitudinal closing rate (8–20 m/s). |
+| **C — Abort recovery on side TTL with no speed cap** | 1/13 | Lifecycle correctly committed `pass_left`, then correctly aborted on `commit_invalidated_hazard`. But `_abort_result` returned `cap=None` so ego kept accelerating at target_speed during the recovery and rear-ended fellow 1.15 s after the abort. |
+
+**What landed.** Four staged fixes in the order they were committed:
+
+- **SD-25a — strategy_selector.py:95 tiebreak.** Replaced the
+  single-key `min(tied, key=TIEBREAK_RANK)` with a tuple-keyed
+  comparison: `(TIEBREAK_RANK, -min_clearance_m)`. For pass_left vs
+  pass_right at rank 1, the higher-clearance side wins via the
+  negated-clearance secondary. For all other comparisons, the rank
+  dominates the tuple — behaviour unchanged. Symmetric: works for
+  fellow-on-left and fellow-on-right scenarios.
+
+- **SD-25d — offline regression bank.** Added
+  `src/scenic/domains/racing/benchmarks/sd25_selector_unit_bank.py`
+  with 11 hand-crafted `StrategyOutcome` cases asserting the
+  tiebreak picks higher clearance AND that all pre-SD-25
+  behaviours are preserved. No simulator, no Scenic compile;
+  single-command runner with `--log`. Verified: 11/11 pass.
+
+- **SD-25b — closing-flag gate for stay_optimal.** Added kwarg
+  `closing_on_current_line: bool = False` to `select_strategy`.
+  When True (set by tactical_planner from
+  `assessment_closing_flag`), stay_optimal is excluded from the
+  primary survivor set. The hard filter then forces escalation —
+  to a pass strategy if any side has ≥2.5 m clearance, else
+  soft-fallback to follow_fellow which by definition brakes to
+  match fellow speed. Last-resort stay_optimal at the bottom of
+  the fallback ladder is unchanged (the SD-4 emergency brake is
+  the no-good-option safety net). The closing flag is already
+  computed by `situation_assessment.assess_nearest_opponent` and
+  threaded into `tactical_planner_step_v1`; SD-25b adds the one-line
+  wiring at the `select_strategy` call site.
+
+- **SD-25c — abort-recovery speed cap.** Added
+  `abort_speed_margin_mps: float = 2.0` to `TacticalPlannerConfig`.
+  `_abort_result` now returns
+  `cap = opp_speed + abort_speed_margin_mps` instead of `None` (gated
+  on `relation_ahead` so the cap only applies when the fellow is
+  actually ahead). Ego decelerates to ~fellow-speed during recovery
+  instead of coasting at target_speed. Same gating preserves the
+  no-cap path when fellow is no longer the dominant constraint.
+
+**Why these matter.** Bug A was a deterministic-tiebreak bias that
+misrouted 77% of overtakes into the wrong side. Bug B was a
+coverage gap in the safety metric — lateral clearance is necessary
+but not sufficient when the longitudinal closing rate is large.
+Bug C was a missing speed cap that turned a correctly-detected
+abort into a delayed collision.
+
+**Verification.** SD-25a/b/d locked in by the offline unit bank
+(`sd25_selector_unit_bank.py` 11/11 pass). End-to-end verification
+requires the user to re-run the 30-sample CE campaign at `--seed 42`
+(deterministic since SD-22) and compare collision counts:
+
+```powershell
+python src/scenic/domains/racing/benchmarks/verifai_runner.py `
+    examples/racing/falsifiable/S1_falsify.scenic `
+    --sampler ce --monitor safety --count 30 --seed 42 --time 3000 `
+    --quiet *>sd25_postfix.log
+```
+
+Expected: collision count drops from 13/30 baseline → ~0–2/30. If
+the residual rate is higher, the leftover samples surface a new
+pathology that this campaign + bank framework can characterize and
+fix the same way SD-25 was driven by the 30-sample baseline.

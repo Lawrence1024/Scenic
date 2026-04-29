@@ -165,6 +165,15 @@ class TacticalPlannerConfig:
     # within this radius, ABORT keeps the commit-side TTL instead of reverting to
     # optimal — so an abort decelerates rather than swerving across the fellow.
     abort_keep_ttl_lat_m: float = 3.0
+    # SD-25c: speed cap during ABORT_PASS, expressed as a margin above fellow speed.
+    # Pre-SD-25c, _abort_result returned cap=None so the MPC continued at whatever
+    # target_speed was set. In sample #4 of the 30-sample falsifier campaign, this
+    # caused ego to keep accelerating after a commit_invalidated abort fired and
+    # rear-end the fellow 1.15 s later. With cap=opp+abort_speed_margin_mps, ego
+    # decelerates to ~fellow-speed — making ABORT_PASS a true brake-and-recover
+    # rather than a coast-and-pray. 2.0 m/s margin keeps ego marginally faster
+    # than fellow (so it eventually clears), without slamming to a halt.
+    abort_speed_margin_mps: float = 2.0
     ahead_relax_free_run_enabled: bool = True
     ahead_relax_min_gap_m: float = 32.0
     ahead_relax_max_risk_01: float = 0.12
@@ -747,7 +756,19 @@ def tactical_planner_step_v1(
             and abs(float(sit.lateral_m)) < float(config.abort_keep_ttl_lat_m)
         ):
             abort_ttl = commit_side_now
-        return ABORT_PASS, abort_ttl, None, reason
+        # SD-25c: hard speed cap during ABORT_PASS so ego decelerates instead of
+        # coasting at target_speed. Sample #4 of the 30-sample falsifier campaign
+        # rear-ended the fellow 1.15 s after a correctly-fired abort_commit_invalidated
+        # because cap was None and ego kept accelerating. With cap=opp+margin, ego
+        # is bounded just above fellow speed — guaranteed to recover laterally
+        # without driving INTO the fellow longitudinally.
+        abort_cap: Optional[float] = None
+        if relation_ahead and sit is not None:
+            abort_cap = max(
+                0.0,
+                float(opponent_speed_mps) + float(config.abort_speed_margin_mps),
+            )
+        return ABORT_PASS, abort_ttl, abort_cap, reason
 
     def _strategy_to_planner_output(
         name: str,
