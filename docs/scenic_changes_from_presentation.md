@@ -585,3 +585,123 @@ dSPACE; a 3-sample halton smoke through `verifai_runner.py` on
 no warnings, three distinct corner placements, and the expected
 overtake-attempt-vs-gap correlation. Run via the user; not
 exercised in this commit.
+
+### SD-25 — Smart-ego pathology fixes from the 30-sample falsifier campaign
+
+Three stages landed, one reverted after the falsifier surfaced a
+worse failure mode than the one it tried to fix.
+
+**What was wrong (baseline).** A 30-sample CE falsification run on
+`examples/racing/falsifiable/S1_falsify.scenic` at `--seed 42`
+produced 13/30 collisions. Three distinct bugs explained the
+pattern:
+
+| Bug | Count | Symptom |
+|---|---|---|
+| **A — Strategy-selector tiebreak** | 10/13 | When `pass_left` and `pass_right` tied on `reachable_progress_at_horizon_m`, both had `_TIEBREAK_RANK = 1`. Python's `min()` returned the first match in iteration order — pass_left always — even when pass_right's `min_clearance_m` was visibly higher. Smart ego repeatedly drove into a fellow geometrically positioned on the left because of a deterministic tiebreak bias. |
+| **B — Locked-on-stay_optimal rear-end** | 2/13 | Selector picked `stay_optimal` for ALL 600 ticks while ego accelerated to 28 m/s and rear-ended a slower fellow on the left racing line. The lateral OBB-separation metric (`min_clearance_m`) stayed >2.5 m the whole run because the optimal and left lines are parallel and >2.5 m apart at the rear-end track sections. The metric missed the longitudinal closing rate (8–20 m/s). |
+| **C — Abort recovery on side TTL with no speed cap** | 1/13 | Lifecycle correctly committed `pass_left`, then correctly aborted on `commit_invalidated_hazard`. But `_abort_result` returned `cap=None` so ego kept accelerating at target_speed during the recovery and rear-ended fellow 1.15 s after the abort. |
+
+**Stages landed.**
+
+- **SD-25a — strategy_selector.py:95 tiebreak.** Replaced the
+  single-key `min(tied, key=TIEBREAK_RANK)` with a tuple-keyed
+  comparison: `(TIEBREAK_RANK, -min_clearance_m)`. For pass_left vs
+  pass_right at rank 1, the higher-clearance side wins via the
+  negated-clearance secondary. For all other comparisons (different
+  ranks), the rank dominates the tuple — behaviour unchanged.
+  Symmetric: works for fellow-on-left and fellow-on-right scenarios.
+- **SD-25d — offline regression bank.** Added
+  `src/scenic/domains/racing/benchmarks/sd25_selector_unit_bank.py`
+  with hand-crafted `StrategyOutcome` cases asserting the tiebreak
+  picks higher clearance AND that all pre-SD-25 behaviours are
+  preserved. No simulator, no Scenic compile; single-command
+  runner. Verified: 11/11 pass after both A and B landed.
+- **SD-25b — closing-flag gate for stay_optimal.** Added kwarg
+  `closing_on_current_line: bool = False` to `select_strategy`.
+  When True (set by tactical_planner from
+  `assessment_closing_flag`), `stay_optimal` is excluded from the
+  primary survivor set. The hard filter then forces escalation —
+  to a pass strategy if any side has ≥2.5 m clearance, else
+  soft-fallback to `follow_fellow`. Last-resort `stay_optimal` at
+  the bottom of the fallback ladder is unchanged (the SD-4
+  emergency brake is the no-good-option safety net).
+
+**Stage REVERTED.**
+
+- **SD-25c — abort_speed_margin_mps speed cap.** Originally landed
+  in commit `0fc64781`: `_abort_result` returned
+  `cap = opp_speed_mps + abort_speed_margin_mps` (default 2.0 m/s)
+  instead of `None`. Reverted in commit `ae7b7f87` after a 30-sample
+  re-run surfaced a worse failure mode.
+
+  **What went wrong.** The 30-sample CE re-run at `--seed 42`
+  showed multiple severe off-track events that didn't exist in
+  the baseline:
+    | Sample | Off-track? | track_clearance_m | Notes |
+    |---|---|---|---|
+    | #003 | TRUE | -0.43 m | mild |
+    | #004 | TRUE | **-8.77 m** | severe |
+    | #010 | TRUE | **-20.4 m** | catastrophic, also collision |
+
+  Sample #10 traces show the regression mechanism precisely.
+  At t=9.80 s, abort fired (`commit_invalidated_hazard`) mid-corner.
+  The `[Planner]` line at that tick reads
+  `target_speed_cap=10.78 = opp_speed (8.78) + abort_speed_margin_mps (2.0)`.
+  Ego state at t=10.00 s: speed=26.09 m/s, gear=3, segment "main
+  curve", CTE=-0.54 m. The MPC was now asked to brake from 26 →
+  11 m/s **while** still tracking the LEFT TTL (per SD-2d's
+  keep-commit-side-during-side-by-side) **through a corner**. The
+  combination is dynamically infeasible — ego understeers, builds
+  cross-track error from -0.54 m → -8 m, and exits the corner
+  ~20 m off the track surface.
+
+  **Why the original intent was right but the implementation wasn't.**
+  Sample #4 of the baseline run rear-ended fellow 1.15 s after a
+  correctly-detected abort because ego coasted at target_speed
+  during recovery. The intent — don't keep accelerating into the
+  fellow during abort — is correct. The implementation — instant
+  cap from racing speed to fellow_speed+2 m/s — is too aggressive
+  for mid-corner aborts. Two design directions for a future cycle:
+    1. Apply the cap only when ego is on the OPTIMAL TTL during
+       abort recovery, not when keeping the commit-side TTL. The
+       commit-side path is already the side-by-side recovery
+       trajectory; layering a hard speed cut on top breaks the
+       MPC.
+    2. Use a gentle deceleration profile (rate-limited cap)
+       rather than an instant target. Gives the MPC time to
+       follow a curve at decreasing speed.
+
+  Both require more design work than a one-line patch. Deferred.
+  Sample #4's original rear-end re-emerges as a known issue — a
+  single occurrence in 30 samples, vs. multiple severe off-track
+  events the speed cap caused. Net safety win to revert.
+
+**The falsifier did its job.** SD-25 is the first cycle where the
+falsification framework surfaced a regression that a unit bank
+couldn't have caught. The 11/11-pass selector unit bank doesn't
+exercise abort recovery dynamics; only a real simulation through
+the cosim bridge can. Reading the per-sample log for the
+worst-rho violation pinpointed the regression in ~30 minutes —
+the framework's value is exactly that.
+
+**End-state files (post-revert).**
+
+- `src/scenic/domains/racing/planner/strategy_selector.py` — SD-25a tiebreak + SD-25b closing-flag kwarg.
+- `src/scenic/domains/racing/tactical_planner.py` — SD-25b passes `closing_on_current_line` to selector. The SD-25c `abort_speed_margin_mps` field is removed; `_abort_result` returns `cap=None` again.
+- `src/scenic/domains/racing/benchmarks/sd25_selector_unit_bank.py` — 11/11 pass.
+
+**Verification (user-side).** Re-run the same 30-sample CE
+campaign at `--seed 42`:
+
+```powershell
+python src/scenic/domains/racing/benchmarks/verifai_runner.py `
+    examples/racing/falsifiable/S1_falsify.scenic `
+    --sampler ce --monitor safety --count 30 --seed 42 --time 3000 `
+    --quiet *>sd25_postrevert.log
+```
+
+Expected: collision count drops from 13/30 baseline → ~3/30
+(SD-25a fixes the 10 dominant pass_left bias cases; SD-25b fixes
+the 2 stay_optimal rear-ends; sample #4's abort coast remains as
+a known issue pending a smarter abort cap design).
