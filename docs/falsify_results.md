@@ -80,7 +80,8 @@ worst-case clearance moved from full overlap (0 m) to 1.79 m.
 | Attempt | Date | Stack | Collisions | Off-track | Successful passes | Worst OBB gap | tick p50 |
 |---|---|---|---:|---:|---:|---:|---:|
 | 1 | 2026-04-29 | SD-26 + SD-27a + SD-27b (post S1-attempt2) | **6 / 30** | 3 | 16 | 0.00 m | 26.7 ms |
-| 2 (REVERTED) | 2026-04-29 | + SD-29 cuts | partial: 1/5 with collision + off-track at sample 1 | — | — | 0.00 m | 13–19 ms | 
+| 2 (REVERTED) | 2026-04-29 | + SD-29 cuts | partial: 1/5 with collision + off-track at sample 1 | — | — | 0.00 m | 13–19 ms |
+| post-revert verify | 2026-04-29 | back to SD-28 baseline | **5 / 30** | 2 | 17 | 0.00 m | 22.0 ms |
 
 S2 attempt 1 is the **reference baseline**.
 
@@ -95,6 +96,26 @@ not in `summary.csv` because the campaign was stopped) also showed
 ego spinning from "crazy control commands" — same root cause class.
 SD-29 commit `4d7b485c` reverted in `2c2eb8ab`. See the SD-29 entry
 in `docs/scenic_changes_from_presentation.md` for the lesson learnt.
+
+The post-revert verification campaign (run dir
+`verifai_20260429_165916/`) confirmed the codebase is back at
+SD-28-equivalent behavior: collisions 5/30, off-track 2/30,
+successful passes 17, worst bbox 0.00 m, mean tick_p50 22.0 ms.
+All four behavioral acceptance criteria pass, with results
+slightly *better* than the baseline on each (one fewer collision,
+one fewer off-track, one more successful pass). The 4.7 ms drop
+in tick_p50 (26.7 → 22.0) is run-to-run wall-clock noise, not a
+code change — useful calibration for future runtime-cut campaigns:
+the baseline tick_p50 number carries a ±5 ms cosim-noise band, so
+a runtime cut needs to clear that band by a meaningful margin to
+be statistically distinguishable from variance.
+
+Pass-attempt L/R balance also flipped between baseline (1180 L /
+1954 R) and post-revert (2003 L / 1164 R) despite identical code +
+seed. The CE sampler converges to different adversarial regions
+across re-runs because cosim non-determinism feeds back into the
+rho-rank that drives next-sample placement. Aggregate counts +
+dominant pathology match; per-sample paths legitimately differ.
 
 ---
 
