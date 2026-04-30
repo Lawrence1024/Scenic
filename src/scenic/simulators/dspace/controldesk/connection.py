@@ -276,13 +276,18 @@ class ControlDeskApp:
                 VESIResultData/vehicle_inputs (the non-Manual side of the MUX). The
                 four Const_enable_*_cmd flags must be 0 here, otherwise the manual
                 override wins and bridge writes are dropped on the floor.
-                Sw_RaceControl=0 (intern) and Const_sys_state/Const_track_flag/
-                Const_veh_flag are NOT written — the docker setflag handshake
-                (ExternalControlManager.enableExternalControlViaScript -> ASM_Maneuver.py
-                vehicleflag_<N+1> trackflag_4, fired automatically from
-                modeldesk/authoring.py::author_scenario) converges race-control
-                state instead. Writing Const_* here would conflict with the
-                handshake's convergence.
+                Sw_RaceControl=0 (intern). Const_sys_state/Const_track_flag/
+                Const_veh_flag ARE written in ART mode too (corrected 2026-04-29):
+                the docker setflag handshake (ASM_Maneuver.py manualflag
+                vehicleflag_0 trackflag_1) only writes manual_mode + the manual
+                channel arrays — it does NOT touch Const_sys_state, so on a fresh
+                VEOS the race state machine never transitions to "running" and
+                downstream gates block raptor's commands. We were getting away
+                with it before only because we always ran Scenic first, which
+                latched sys_state=9 into VEOS state for subsequent ART runs to
+                inherit. Auto-mode Const_* and the manual channel are orthogonal
+                (manual_mode=1 selects the manual channel as the live source);
+                writing both with consistent green semantics is safe.
 
                 Clutch goes to 100% (released) for ART, 0 for Scenic.
 
@@ -303,23 +308,29 @@ class ControlDeskApp:
         _clif = 0.0 if scenic_drives_ego else 1.0     # bridge mode default for ART
         _clutch = 0.0 if scenic_drives_ego else 100.0 # ART runs with clutch released
 
-        # Race-control source switch:
-        #   Scenic-ego -> Sw_RaceControl=0 (intern). Dennis 2026-04-29's table says
-        #     Scenic should use 1 (extern) — but that assumes Scenic feeds the race
-        #     flag through ScenicControlInterface. Our deployment is external-Python
-        #     + MAPort (the software-joystick path, Sw_Manual_VESI_Overwrite=1), so
-        #     no extern flag source exists; we keep intern + Const_track_flag=1 to
-        #     hold the plant in green.
-        #   ART-ego    -> Sw_RaceControl=0 (intern). The docker setflag handshake
-        #     in art_driving_stack converges sys_state/track_flag/veh_flag once it
-        #     completes, so we must NOT also write Const_sys_state/Const_track_flag/
-        #     Const_veh_flag from this side (would conflict).
-        # Const_sys_state/Const_track_flag/Const_veh_flag are therefore only
-        # written for Scenic-ego below; the steps list is gated on scenic_drives_ego.
-        _race_ctrl = 0.0   # intern in both modes (different reasons; see above)
-        _sys_state = 9     # running   (Scenic-only)
-        _track_flag = 1    # green     (Scenic-only)
-        _veh_flag = 0      # no flag   (Scenic-only)
+        # Race-control source switch + auto-mode race state:
+        #   Sw_RaceControl=0 (intern) in both modes. For Scenic-ego, Dennis's table
+        #     said use 1 (extern) — assuming Scenic feeds the race flag through
+        #     ScenicControlInterface. Our deployment is external-Python + MAPort
+        #     (Sw_Manual_VESI_Overwrite=1), so no extern flag source exists; we
+        #     keep intern + Const_* below to hold the plant in green.
+        #   Const_sys_state/Const_track_flag/Const_veh_flag are written in BOTH
+        #     modes. ASM_Maneuver.py only writes manual_mode + manual-channel
+        #     arrays; it never touches Const_sys_state. On a fresh VEOS the race
+        #     state machine boots with sys_state at default (~0) and never
+        #     transitions to "running" until something writes 9 — that "something"
+        #     used to be only the Scenic-ego path. Cold ART-ego runs were broken
+        #     for this reason; they "worked" only when a Scenic run had latched
+        #     sys_state=9 into VEOS state for the ART run to inherit.
+        #   The auto-mode Const_* channel and the manual-override channel
+        #     (track_flag_manual / veh_flag_manual / manual_mode) are independent;
+        #     manual_mode=1 selects the manual channel as the live source while
+        #     the auto-mode Const_* values serve as the underlying state-machine
+        #     state. Consistent green semantics on both is safe.
+        _race_ctrl = 0.0   # intern in both modes
+        _sys_state = 9     # running (both modes — auto-mode race state)
+        _track_flag = 1    # green   (both modes — auto-mode track flag)
+        _veh_flag = 0      # no flag (both modes — auto-mode vehicle flag)
 
         # NOTE: Sw_Manual_VESI_Overwrite is NOT written here — COM can't write the
         # [0bridge|1extern|2scenic] suffix. simulator.py step 9b writes it via MAPort
@@ -338,23 +349,22 @@ class ControlDeskApp:
              _race_ctrl),
         ]
 
-        # --- Race Control state constants: Scenic-ego ONLY (Dennis 2026-04-29) ---
-        # ART-ego relies on the docker setflag handshake to drive these; writing
-        # them here would conflict with the handshake's convergence.
-        if scenic_drives_ego:
-            steps.extend([
-                ("Const_sys_state",
-                 "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_sys_state/Value",
-                 _sys_state),
-                ("Const_track_flag",
-                 "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_track_flag/Value",
-                 _track_flag),
-                ("Const_veh_flag",
-                 "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_veh_flag/Value",
-                 _veh_flag),
-            ])
-
+        # --- Race Control state constants (auto-mode channel; both modes) ---
+        # sys_state=9 is what transitions the race state machine to "running" so
+        # downstream gates emit go signals. Required on fresh VEOS in both modes;
+        # ASM_Maneuver.py never touches these paths.
         steps.extend([
+            ("Const_sys_state",
+             "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_sys_state/Value",
+             _sys_state),
+            ("Const_track_flag",
+             "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_track_flag/Value",
+             _track_flag),
+            ("Const_veh_flag",
+             "Platform()://ASM_Traffic/Model Root/RaceControl/race_control/Const_veh_flag/Value",
+             _veh_flag),
+
+
             # --- Enable manual-override path (Const_enable_*_cmd) ---
             # 1 = Scenic / MAPort drives via Const_*_cmd (manual side of the MUX).
             # 0 = bridge drives via VESIResultData/vehicle_inputs (non-manual side).

@@ -857,8 +857,18 @@ class DSpaceSimulation(RacingSimulation):
                 print("[Setup] [WARN] Brake read failed: {}. Proceeding to race go.".format(e))
 
         # 14) Apply race "Go" signals (manual_mode, track_flag, vehicle_flag) so cars are allowed to start moving.
+        # Scenic-mode only: this writes the manual-override channel
+        # (track_flag_manual=1 / veh_flag_manual=0 / manual_mode=1). For ART-driven ego
+        # the docker setflag handshake (per_tick_control.ExternalControlManager,
+        # fired from author_scenario) writes the same three values via ASM_Maneuver.py
+        # (manualflag vehicleflag_0 trackflag_1), so re-running this block in ART mode
+        # is redundant — and on prior versions actually clobbered the ART path because
+        # the values matched but timing did not. Gate on scenic_control to keep the
+        # post-warmup MAPort write as the Scenic-mode authoritative source.
+        _scenic_params = getattr(getattr(self, "scene", None), "params", None) or {}
+        _scenic_drives_ego = bool(_scenic_params.get("scenic_control", True))
         var = getattr(self, "_var_access", None) or getattr(self, "_cd", None)
-        if var:
+        if var and _scenic_drives_ego:
             try:
                 track_path = "Platform()://RaceControl/Model Root/Parameters/track_flag_manual"
                 veh_path = "Platform()://RaceControl/Model Root/Parameters/veh_flag_manual"
@@ -872,6 +882,8 @@ class DSpaceSimulation(RacingSimulation):
                 print("[Setup] Race go signals applied (track_flag[0]=1, vehicle_flag[0]=0, manual_mode=1).")
             except Exception as e:
                 print(f"[Setup] [WARN] Failed to apply race go signals: {e}")
+        elif var:
+            print("[Setup] Skipping Scenic-mode race go signals (scenic_control=False); ART setflag handshake owns track/vehicle flags.")
 
         # 15) Optional ROS 2 bag recording (Docker container; per-sample, default off via param)
         try:

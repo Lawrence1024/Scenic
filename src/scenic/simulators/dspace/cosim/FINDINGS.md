@@ -868,3 +868,150 @@ Mode-specific:
   expected. Phase0 `ego_s` advanced to 463 m by t=12.5 s. VESI init summary
   `12 ok, 0 failed`. `[ASM_Maneuver]` setflag handshake fired for both
   scenario objects.
+
+## 13. Cold-ART-on-fresh-VEOS failure: setflag invocation + race-state init (2026-04-29 evening)
+
+**Status:** corrected. Two latent bugs that had cancelled out by accident
+(Scenic always ran first and warmed VEOS state for the ART run that followed)
+were exposed when an ART-ego run was attempted directly on a fresh
+`docker compose up` of `dspace_art_cosim_stack.yml`. ART-ego didn't drive on
+cold VEOS; running Scenic-ego first then ART-ego succeeded as before. The
+asymmetry pinned the bugs.
+
+### Bug A — `ExternalControlManager.enableExternalControlViaScript` was mis-translating ASM_Maneuver.py
+
+The Scenic loop iterated `scene.objects` and issued one
+`docker exec ... ASM_Maneuver.py vehicleflag_<raceNumber+1> trackflag_4` per
+car, treating the integer after the underscore as a vehicle index. Reading
+the actual script source inside the `veos` container shows the integer is the
+**value to write**, not an index — and the target is a single race-wide scalar:
+
+```python
+elif "trackflag" in command:
+    trackflag_value = int(command_parts[1])
+    MAPort.Write('RaceControl/Model Root/Parameters/track_flag_manual[1,1]',
+                 MyValueFactory.CreateFloatValue(trackflag_value))
+elif "vehicleflag" in command:
+    trackflag_value = int(command_parts[1])  # variable misleadingly named
+    MAPort.Write('RaceControl/Model Root/Parameters/veh_flag_manual[1,1]',
+                 MyValueFactory.CreateFloatValue(trackflag_value))
+elif command == "manualflag":
+    MAPort.Write('RaceControl/Model Root/Parameters/manual_mode',
+                 MyValueFactory.CreateFloatValue(1.0))
+```
+
+So Scenic's per-vehicle loop wrote `veh_flag_manual = 2`, then `= 3` (last
+write wins) for an F1+F2 scenario — neither value is "no error". And it never
+issued `manualflag`, so `manual_mode` stayed `0` and the manual channel was
+never selected as the live source: the writes landed in the right slots but
+were ignored downstream. The previous belief that "the docker handshake
+converges race-control state" was based on an incorrect reading of what the
+script does.
+
+**Fix** (`controldesk/per_tick_control.py`): replaced the per-vehicle loop
+with a single race-wide call
+
+```
+docker exec veos python3 /home/dspace/scripts/ASM_Maneuver.py \
+    manualflag vehicleflag_0 trackflag_1
+```
+
+Constants `_TRACK_FLAG_GREEN = 1`, `_VEHICLE_FLAG_NO_ERROR = 0` named so the
+intent is grep-able. Backward-compatible signature
+(`enableExternalControlViaScript(scene_objects=None)`) kept the call site at
+`modeldesk/authoring.py:20` working.
+
+### Bug B — `simulator.py` step 14 wrote Scenic-mode race-go signals unconditionally
+
+Step 14 (post-warmup, post-MANEUVER_START) wrote `track_flag_manual[0]=1`,
+`veh_flag_manual[0]=0`, `manual_mode=1` to the same paths the docker handshake
+writes — but ran **after** the handshake. In Scenic-ego mode this was
+correct/intentional. In ART-ego mode, the handshake had set ART-appropriate
+values and step 14 was clobbering them with Scenic-mode green; furthermore, in
+the cold-fresh-VEOS case, step 14 was ALSO the only thing writing
+`manual_mode=1`, so removing step 14 entirely broke ART-ego (Bug A's writes
+landed in slots, but no `manualflag` meant they were ignored).
+
+**Fix** (`simulator.py` step 14): gated on `scene.params["scenic_control"]`
+(default `True`). With Bug A's fix issuing `manualflag` directly, the gating
+is now safe — both modes get `manual_mode=1` either through step 14
+(Scenic-mode, post-warmup MAPort write) or the docker handshake (ART-mode,
+pre-MANEUVER_START XIL write). Logs the chosen path:
+- `[Setup] Race go signals applied (track_flag[0]=1, vehicle_flag[0]=0, manual_mode=1).` (Scenic-mode)
+- `[Setup] Skipping Scenic-mode race go signals (scenic_control=False); ART setflag handshake owns track/vehicle flags.` (ART-mode)
+
+### Bug C (the cold-VEOS one) — `Const_sys_state` was gated to Scenic-only
+
+The auto-mode race-control state lives at three separate paths from the
+manual-channel arrays the docker script touches:
+
+| Path | Channel |
+|---|---|
+| `RaceControl/race_control/Const_sys_state/Value` | auto-mode race state machine |
+| `RaceControl/race_control/Const_track_flag/Value` | auto-mode track flag |
+| `RaceControl/race_control/Const_veh_flag/Value` | auto-mode vehicle flag |
+| `RaceControl/Model Root/Parameters/manual_mode` | manual-channel enable |
+| `RaceControl/Model Root/Parameters/track_flag_manual[1,1]` | manual-channel track flag |
+| `RaceControl/Model Root/Parameters/veh_flag_manual[1,1]` | manual-channel vehicle flag |
+
+`manual_mode=1` selects the manual channel as the live source — but the
+underlying race state machine still has to be in `sys_state == 9` ("running")
+for downstream gates to emit go-signals to plant subsystems. ASM_Maneuver.py
+**never** writes `Const_sys_state`. On a fresh VEOS, `sys_state` defaults to
+something other than 9 and stays there until something writes it.
+
+The pre-fix `connection.py::initialize_vesi_interface` wrote
+`Const_sys_state=9, Const_track_flag=1, Const_veh_flag=0` only when
+`scenic_drives_ego=True`, on the (incorrect) belief that the docker handshake
+covered ART. So:
+
+- Scenic run on fresh VEOS → `Const_sys_state=9` written via XIL → state
+  machine transitions to "running" → values **latch** in VEOS state for the
+  rest of the process lifetime.
+- ART run on warm VEOS (after Scenic) → inherited `sys_state=9` → driving
+  worked.
+- ART run on **cold** VEOS (no prior Scenic) → `sys_state` stayed at default
+  → plant downstream blocked → ART silent. **This is the case 2026-04-29's
+  verification didn't exercise** because we always ran Scenic first.
+
+**Fix** (`controldesk/connection.py`): removed the `if scenic_drives_ego:`
+gate around the `Const_sys_state/Const_track_flag/Const_veh_flag` block —
+now writes in both modes. Auto-mode `Const_*` and the manual channel are
+orthogonal; consistent green semantics on both is safe and gives the manual
+channel an underlying state-machine state to layer on top of. VESI init
+summary in ART mode goes from `12 ok` → `15 ok`.
+
+### Net behavior matrix (post-fix)
+
+| Mode | Cold VEOS | Warm VEOS | Source of `manual_mode=1` | Source of `sys_state=9` |
+|---|---|---|---|---|
+| Scenic-ego | works | works | step 14 (post-warmup, MAPort) | initialize_vesi_interface (init, COM) |
+| ART-ego    | works (was broken) | works | docker `manualflag` (pre-maneuver-start, XIL) | initialize_vesi_interface (init, COM) — **was missing** |
+
+### What this changes about the "translate vendor switch tables" memo
+
+The corrected switch table memo (`memory/project_dennis_corrected_switches.md`)
+claimed ART-ego skips `Const_sys_state/track_flag/veh_flag` because "the
+docker setflag handshake handles state convergence". That sentence was wrong
+— the script never touches those paths. The corrected understanding: the
+docker handshake handles the **manual-channel** state (manual_mode + the
+`*_manual` arrays); the **auto-mode** state (`Const_sys_state` etc.) needs to
+be initialized separately, and there's no good reason to gate that on who
+drives the ego. The "translate, don't apply" rule still holds (Dennis's table
+is for in-VEOS Scenic VPU deployments and our deployment is external-Python +
+MAPort), but for `Const_sys_state` specifically the right answer is "write 9
+in both modes" — the gate was an incorrect inference, not a translation.
+
+### Greppable success markers (cold-fresh ART run)
+
+```
+[ASM_Maneuver] [OK] Race flags set (manual_mode=1, track=1 green, vehicle=0 no-error).
+[ControlDesk] VesiInterface init summary: 15 ok, 0 failed (15 total steps)
+[ControlDesk] VesiInterface initialized: ART-driven ego (bridge path on, manual override off).
+[Setup] Set Sw_Manual_VESI_Overwrite=0.0 (bridge / ART-driven ego) via MAPort [0bridge|1extern|2scenic] (...)
+[Setup] Skipping Scenic-mode race go signals (scenic_control=False); ART setflag handshake owns track/vehicle flags.
+```
+
+If `[ControlDesk] VesiInterface init summary` reports `12 ok` (not `15 ok`)
+in ART mode, you're on a pre-fix branch — the `Const_*` writes are missing
+and a cold-VEOS run will silently stall.

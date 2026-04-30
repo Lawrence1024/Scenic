@@ -2,105 +2,104 @@
 """
 External Control Manager for dSPACE VEOS
 
-This module handles external control flag management via ASM_Maneuver.py script.
-External control flags are required for fellow vehicles to be controlled via ControlDesk.
+Sets the race-wide manual flags via ASM_Maneuver.py before maneuver start so
+the plant lets cars move (green track flag, no-error vehicle flag, manual
+override channel selected).
 
-Based on manual4.md: docker exec -it veos python3 /home/dspace/scripts/ASM_Maneuver.py vehicleflag_3 trackflag_4
+ASM_Maneuver.py accepts a list of independent commands; the integer after
+each underscore is the VALUE to write, not a vehicle index. Each writes a
+single race-wide scalar:
+    manualflag      -> RaceControl/.../manual_mode             = 1.0
+    trackflag_<N>   -> RaceControl/.../track_flag_manual[1,1]  = N
+    vehicleflag_<N> -> RaceControl/.../veh_flag_manual[1,1]    = N
+
+`manualflag` is required: without it manual_mode stays 0 and the manual
+channel isn't selected as the source, so the flag values written are ignored
+even though they're in the right slots. The three together are the same
+race-go signals Scenic-mode applies via MAPort in simulator.py step 14.
+
+Correct invocation (race-wide, regardless of vehicle count):
+    docker exec veos python3 /home/dspace/scripts/ASM_Maneuver.py \\
+        manualflag vehicleflag_0 trackflag_1
 """
 
 import subprocess
 import os
 
 
+# Race-wide flag values written by ASM_Maneuver.py.
+# trackflag_1 = green; vehicleflag_0 = no-error.
+_TRACK_FLAG_GREEN = 1
+_VEHICLE_FLAG_NO_ERROR = 0
+_SCRIPT_PATH = '/home/dspace/scripts/ASM_Maneuver.py'
+_SCRIPT_ARGS = [
+    'manualflag',
+    f'vehicleflag_{_VEHICLE_FLAG_NO_ERROR}',
+    f'trackflag_{_TRACK_FLAG_GREEN}',
+]
+
+
 class ExternalControlManager:
-    """Manager for external control flags via ASM_Maneuver.py script."""
-    
+    """Manager for race-wide manual flags via ASM_Maneuver.py."""
+
     @staticmethod
-    def enableExternalControlViaScript(scene_objects):
-        """Enable external control using ASM_Maneuver.py script.
-        
-        Based on manual4.md: docker exec -it veos python3 /home/dspace/scripts/ASM_Maneuver.py vehicleflag_3 trackflag_4
-        
+    def enableExternalControlViaScript(scene_objects=None):
+        """Set race-wide track/vehicle flags so the plant allows movement.
+
         Args:
-            scene_objects: List of Scenic objects to enable external control for
+            scene_objects: Unused. Kept for backward-compatible signature; the
+                ASM script writes a single race-wide scalar, so the call does
+                not depend on vehicle count or identity.
         """
         try:
-            # Method 1: Try Docker exec (preferred for containerized VEOS)
-            if ExternalControlManager._tryDockerExec(scene_objects):
+            if ExternalControlManager._tryDockerExec():
                 return
-            
-            # Method 2: Try direct script execution (if running inside VEOS container)
-            if os.path.exists('/home/dspace/scripts/ASM_Maneuver.py'):
-                ExternalControlManager._runScriptDirectly(scene_objects)
+
+            if os.path.exists(_SCRIPT_PATH):
+                ExternalControlManager._runScriptDirectly()
             else:
                 print("[ASM_Maneuver] Script not found - external control may need manual setup")
-                print("[ASM_Maneuver] Try: docker exec -it veos python3 /home/dspace/scripts/ASM_Maneuver.py vehicleflag_3 trackflag_4")
-                
+                print(f"[ASM_Maneuver] Try: docker exec -it veos python3 {_SCRIPT_PATH} {' '.join(_SCRIPT_ARGS)}")
+
         except Exception as e:
             print(f"[ASM_Maneuver] Error running script: {e}")
-    
+
     @staticmethod
-    def _tryDockerExec(scene_objects):
-        """Try to run ASM_Maneuver.py via Docker exec."""
+    def _tryDockerExec():
+        """Run ASM_Maneuver.py via Docker exec for the whole race."""
+        cmd = ['docker', 'exec', 'veos', 'python3', _SCRIPT_PATH, *_SCRIPT_ARGS]
         try:
-            # Enable external control for each fellow vehicle
-            for scenic_obj in scene_objects:
-                if hasattr(scenic_obj, 'raceNumber') and scenic_obj is not getattr(scene_objects[0], 'egoObject', None):
-                    fellow_number = scenic_obj.raceNumber
-                    vehicle_flag = fellow_number + 1  # F1 = vehicleflag_2, F2 = vehicleflag_3, etc.
-                    
-                    # Docker exec command as per manual4.md
-                    cmd = ['docker', 'exec', '-it', 'veos', 'python3', 
-                           '/home/dspace/scripts/ASM_Maneuver.py', 
-                           f'vehicleflag_{vehicle_flag}', 'trackflag_4']
-                    
-                    try:
-                        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-                        if result.returncode == 0:
-                            print(f"[ASM_Maneuver] [OK] Enabled external control for F{fellow_number}")
-                        else:
-                            print(f"[ASM_Maneuver] [FAIL] Failed for F{fellow_number}: {result.stderr}")
-                            return False
-                    except subprocess.TimeoutExpired:
-                        print(f"[ASM_Maneuver] [TIMEOUT] Timeout for F{fellow_number}")
-                        return False
-                    except FileNotFoundError:
-                        print("[ASM_Maneuver] Docker not found - trying direct script execution")
-                        return False
-                    except Exception as e:
-                        err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-                        print(f"[ASM_Maneuver] Error for F{fellow_number}: {err_msg}")
-                        return False
-            
-            return True
-            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                print(f"[ASM_Maneuver] [OK] Race flags set "
+                      f"(manual_mode=1, track={_TRACK_FLAG_GREEN} green, "
+                      f"vehicle={_VEHICLE_FLAG_NO_ERROR} no-error).")
+                return True
+            print(f"[ASM_Maneuver] [FAIL] Race-flag set failed: {result.stderr.strip()}")
+            return False
+        except subprocess.TimeoutExpired:
+            print("[ASM_Maneuver] [TIMEOUT] Race-flag set timed out")
+            return False
+        except FileNotFoundError:
+            print("[ASM_Maneuver] Docker not found - trying direct script execution")
+            return False
         except Exception as e:
             err_msg = str(e).encode('ascii', 'replace').decode('ascii')
             print(f"[ASM_Maneuver] Docker exec error: {err_msg}")
             return False
-    
+
     @staticmethod
-    def _runScriptDirectly(scene_objects):
-        """Run ASM_Maneuver.py script directly (when inside VEOS container)."""
+    def _runScriptDirectly():
+        """Run ASM_Maneuver.py directly (when inside the VEOS container)."""
+        cmd = ['python3', _SCRIPT_PATH, *_SCRIPT_ARGS]
         try:
-            for scenic_obj in scene_objects:
-                if hasattr(scenic_obj, 'raceNumber') and scenic_obj is not getattr(scene_objects[0], 'egoObject', None):
-                    fellow_number = scenic_obj.raceNumber
-                    vehicle_flag = fellow_number + 1
-                    
-                    cmd = ['python3', '/home/dspace/scripts/ASM_Maneuver.py', 
-                           f'vehicleflag_{vehicle_flag}', 'trackflag_4']
-                    
-                    try:
-                        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-                        if result.returncode == 0:
-                            print(f"[ASM_Maneuver] [OK] Enabled external control for F{fellow_number}")
-                        else:
-                            print(f"[ASM_Maneuver] [FAIL] Failed for F{fellow_number}: {result.stderr}")
-                    except Exception as e:
-                        err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-                        print(f"[ASM_Maneuver] Error for F{fellow_number}: {err_msg}")
-                        
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                print(f"[ASM_Maneuver] [OK] Race flags set "
+                      f"(manual_mode=1, track={_TRACK_FLAG_GREEN} green, "
+                      f"vehicle={_VEHICLE_FLAG_NO_ERROR} no-error).")
+            else:
+                print(f"[ASM_Maneuver] [FAIL] Race-flag set failed: {result.stderr.strip()}")
         except Exception as e:
             err_msg = str(e).encode('ascii', 'replace').decode('ascii')
             print(f"[ASM_Maneuver] Direct script error: {err_msg}")
