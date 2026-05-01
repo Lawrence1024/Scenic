@@ -6,6 +6,11 @@ picks the winner under a correctness-first ranking:
   1. Filter survivors with min_clearance_m >= min_clearance_m threshold
      (default 1.0m; this is OBB edge-to-edge gap, NOT centroid
      distance — see strategy_simulator.simulate_strategy).
+  1a. SD-33: when closing_flag=True AND no pass_* survives the hard filter,
+      demote stay_optimal if its predicted clearance is below
+      safe_stay_clearance_m (default 5.0m). Prevents stay_optimal from
+      winning on progress while ego actively closes on a slower fellow at
+      marginal clearance.
   2. Among survivors, rank by reachable_progress_at_horizon_m (highest wins).
   3. Tiebreak (within ~0.1m progress): stay_optimal > pass_* > follow_fellow,
      i.e., prefer the strategy that requires the least mode change.
@@ -68,6 +73,8 @@ def select_strategy(
     min_clearance_m: float = 1.0,
     soft_clearance_m: float = 0.2,
     progress_tiebreak_m: float = 0.5,
+    closing_flag: bool = False,
+    safe_stay_clearance_m: float = 5.0,
 ) -> SelectedStrategy:
     """Pick the fastest safe strategy.
 
@@ -76,6 +83,17 @@ def select_strategy(
       min_clearance_m: hard safety threshold; outcomes below this are filtered.
       soft_clearance_m: softer threshold used for the chicken-out fallback.
       progress_tiebreak_m: outcomes within this much progress are considered tied.
+      closing_flag: True iff the race situation assessment marked ego as closing
+                    on the fellow this tick. When set, stay_optimal is excluded
+                    from the survivor set if its predicted clearance is below
+                    ``safe_stay_clearance_m`` (SD-33). This prevents the selector
+                    from picking stay_optimal — which always wins on progress
+                    because it cruises at full target speed — over follow_fellow
+                    when ego is actively catching up to fellow at marginal
+                    clearance (S2 sample 8: stay_optimal=1.02m at t=3.00s won
+                    over follow_fellow=5.75m, ego cruised into the danger zone).
+      safe_stay_clearance_m: stay_optimal needs at least this much predicted
+                    clearance (m) to be considered when ``closing_flag`` is set.
 
     Returns SelectedStrategy with:
       name           — the chosen strategy
@@ -91,6 +109,32 @@ def select_strategy(
 
     # Step 1: hard-clearance filter.
     survivors = [o for o in outcomes if o.min_clearance_m >= float(min_clearance_m)]
+
+    # SD-33: when fellow is closing on ego AND no pass strategy survives the
+    # hard filter, demote stay_optimal so follow_fellow wins. stay_optimal
+    # cruises at full target_speed and so always wins the progress sort,
+    # even when its clearance just-barely passes the hard filter (~1.0m). In
+    # closing scenarios with no pass alternative that single tick of cruising-
+    # into-danger is enough to commit the run to a rear-end before
+    # follow_fellow can take over.
+    #
+    # IMPORTANT: only fire when no pass_* survives. If pass_* is an option,
+    # the normal selector picks correctly between pass and stay; demoting
+    # stay then would force pass_* commits in scenarios where stay_optimal is
+    # the prudent same-line cruise (S2 sample 1 regressed off_track at t=14.8s
+    # because the un-gated demote forced extra pass_right commits, leaving
+    # ego on the right TTL through a sharp curve).
+    if closing_flag and survivors:
+        stay = by_name.get("stay_optimal")
+        pass_survivors = [
+            o for o in survivors if o.strategy in ("pass_left", "pass_right")
+        ]
+        if (
+            stay is not None
+            and stay.min_clearance_m < float(safe_stay_clearance_m)
+            and not pass_survivors
+        ):
+            survivors = [o for o in survivors if o.strategy != "stay_optimal"]
 
     if survivors:
         # Step 2: rank by reachable progress (highest wins).

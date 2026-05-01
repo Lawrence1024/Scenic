@@ -25,6 +25,25 @@ Design notes:
     failed to catch end-to-end approaches where the cars were already
     overlapping. This module now computes true gap between the predicted
     OBBs at each tick using eval_geometry.obb_separation_distance_m.
+  - SD-32B: closing-rate gap guard. For pass_* strategies, early-returns
+    min_clearance_m=0.0 when the longitudinal gap is smaller than the
+    distance ego covers in one lane-change time constant at the current
+    closing rate (max(0, v_ego - v_opp) × τ × 1.2). Prevents pass attempts
+    that physically cannot complete before ego overtakes fellow.
+  - SD-32C: track-frame lateral guard. For pass_*, early-returns
+    min_clearance_m=0.0 when fellow's signed cross-track position on the
+    optimal polyline shows fellow is substantially committed to the same
+    side as the proposed pass (threshold ±1.0 m). Uses
+    _signed_cross_track_at_s() projection rather than ego-heading-frame
+    lateral to avoid false-positives in curved sections.
+  - SD-34: side-polyline drivability guard. For pass_*, early-returns
+    min_clearance_m=0.0 when the side TTL's curvature ahead is tighter
+    than tire-grip allows at the planned pass speed
+    (v > sqrt(8.0 m/s² / κ_max)). Prevents passes through sections like
+    the Laguna Seca Corkscrew where the side TTL inside radius is tighter
+    than the optimal line. Guard is contextual: only the scan window
+    (max(60, v×4) m ahead) is checked, so ego naturally defers the pass
+    until the dangerous geometry is past.
 """
 
 from __future__ import annotations
@@ -106,6 +125,59 @@ def _polyline_for_pass_phase(
     if phase in ("lane_change", "alongside"):
         return polylines.get(side)
     return polylines.get("optimal")
+
+
+def _max_abs_kappa_on_polyline_from_s(
+    polyline,
+    s_start_m: float,
+    scan_dist_m: float,
+    lap_length_m: float,
+) -> float:
+    """Max ``|kappa|`` (1/m) along ``polyline`` starting near ``s_start_m`` for ``scan_dist_m``.
+
+    Walks waypoints sequentially from the index closest to ``s_start_m`` (assuming
+    near-uniform parameterization), computes 3-point curvature at each, and returns
+    the maximum magnitude until ``scan_dist_m`` of accumulated arc length is reached
+    (or one full lap, whichever is shorter). Returns ``0.0`` if the polyline is too
+    short or all triplets are colinear.
+
+    Used by SD-34's side-polyline drivability guard: if the side TTL has tighter
+    curvature than the tire-grip-derived ``v_max`` at the planned pass speed, the
+    pass maneuver is physically undrivable on that side and should be rejected
+    upstream of the simulator's clearance integration.
+    """
+    if not polyline or len(polyline) < 3 or float(lap_length_m) <= 0.0:
+        return 0.0
+    n = len(polyline)
+    # Approximate starting index assuming roughly uniform arc-length spacing.
+    s_norm = float(s_start_m) % float(lap_length_m)
+    start_idx = int(round(s_norm / float(lap_length_m) * n)) % n
+    accumulated = 0.0
+    max_kappa = 0.0
+    idx = start_idx
+    for _ in range(n):
+        if accumulated >= float(scan_dist_m):
+            break
+        i_prev = (idx - 1) % n
+        i_curr = idx
+        i_next = (idx + 1) % n
+        p0 = (float(polyline[i_prev][0]), float(polyline[i_prev][1]))
+        p1 = (float(polyline[i_curr][0]), float(polyline[i_curr][1]))
+        p2 = (float(polyline[i_next][0]), float(polyline[i_next][1]))
+        v1x = p1[0] - p0[0]; v1y = p1[1] - p0[1]
+        v2x = p2[0] - p1[0]; v2y = p2[1] - p1[1]
+        cross = v1x * v2y - v1y * v2x
+        len1 = math.hypot(v1x, v1y)
+        len2 = math.hypot(v2x, v2y)
+        if len1 > 1e-6 and len2 > 1e-6:
+            avg_len = (len1 + len2) / 2.0
+            if avg_len > 1e-6:
+                kappa = abs(2.0 * cross / (len1 * len2 * avg_len))
+                if kappa > max_kappa:
+                    max_kappa = kappa
+        accumulated += len2
+        idx = i_next
+    return max_kappa
 
 
 def _signed_cross_track_at_s(
@@ -311,6 +383,47 @@ def simulate_strategy(
                     closest_t_s=0.0,
                     completed=False,
                     reason="fellow_on_right_side",
+                )
+
+        # SD-34: side-polyline drivability guard. The lane-change blend places
+        # ego on the side polyline during the alongside phase. If that polyline
+        # has a section tighter than the tire-grip-derived v_max for the planned
+        # pass speed, the maneuver is undrivable on this side — ego will lose
+        # grip mid-curve. Canonical example: the Corkscrew at Laguna Seca, where
+        # the right TTL has a tighter inside-line radius than optimal (S2 sample
+        # 1 went off-track at t=14.80s after the planner committed pass_right
+        # through seg 13/curve at v=17 m/s, exceeding tire grip on the right
+        # TTL's tighter radius).
+        #
+        # The guard is per-tick and contextual: the scan window only sees a
+        # bounded distance ahead, so a tight section beyond the window doesn't
+        # block. Ego naturally defers a pass attempt until the dangerous
+        # geometry is past — no explicit "wait" state needed.
+        SIDE_KAPPA_LATERAL_ACCEL_MPS2 = 8.0  # ~0.82g, matches SD-31's commit_max_lateral_accel_mps2
+        pass_speed_cap_mps = min(
+            float(target_speed_mps),
+            float(opp_speed_mps) + float(commit_speed_margin_mps),
+        )
+        # Scan distance: cover the lane-change + early alongside window. At
+        # ego=20 m/s this is ~80 m, matching the Corkscrew's longitudinal span.
+        scan_dist_m = max(60.0, float(ego_speed_mps) * 4.0)
+        max_kappa_side = _max_abs_kappa_on_polyline_from_s(
+            side_wp,
+            float(ego_s_m),
+            float(scan_dist_m),
+            float(lap_length_m),
+        )
+        if max_kappa_side > 1e-3 and pass_speed_cap_mps > 0.0:
+            v_max_side_mps = math.sqrt(SIDE_KAPPA_LATERAL_ACCEL_MPS2 / max_kappa_side)
+            if pass_speed_cap_mps > v_max_side_mps:
+                return StrategyOutcome(
+                    strategy=strategy,
+                    reachable_progress_at_horizon_m=float(ego_s_m),
+                    reachable_speed_at_horizon_mps=float(ego_speed_mps),
+                    min_clearance_m=0.0,
+                    closest_t_s=0.0,
+                    completed=False,
+                    reason="side_polyline_curvature_too_tight",
                 )
     else:
         side = ""

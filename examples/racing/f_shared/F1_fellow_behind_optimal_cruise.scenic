@@ -5,7 +5,7 @@ param time_step = 0.01
 param control_period = 0.05
 param ttlFolder = localPath('../../../assets/ttls/LS_ENU_TTL_CSV')
 param launch_veos_ipc_client = True
-param scenic_control = True
+param scenic_control = False
 param fellowHarnessLog = True
 param prediction_enabled = False
 model scenic.simulators.dspace.racing_model
