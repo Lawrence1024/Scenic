@@ -108,6 +108,42 @@ def _polyline_for_pass_phase(
     return polylines.get("optimal")
 
 
+def _signed_cross_track_at_s(
+    xy: Tuple[float, float],
+    polyline,
+    s_m: float,
+    lap_length_m: float,
+) -> Optional[float]:
+    """Signed perpendicular distance from ``xy`` to ``polyline`` at arclength ``s_m``.
+
+    Positive = LEFT of the polyline's forward tangent (matches the placement
+    convention ``t > 0`` = left of TTL centerline). Negative = RIGHT.
+    Returns ``None`` if the polyline tangent at ``s_m`` cannot be computed
+    (degenerate segment or shapely unavailable upstream of ``_xy_at_arclength``).
+
+    Used by SD-32C's pass-side sanity guard to express fellow's lateral in the
+    TRACK frame instead of the ego-heading frame (``OpponentSituation.lateral_m``
+    is heading-frame and flips sign when ego yaws relative to the track).
+    """
+    xy_on = _xy_at_arclength(polyline, float(s_m), float(lap_length_m))
+    if xy_on is None:
+        return None
+    xy_next = _xy_at_arclength(polyline, float(s_m) + 1.0, float(lap_length_m))
+    if xy_next is None:
+        return None
+    tx = float(xy_next[0]) - float(xy_on[0])
+    ty = float(xy_next[1]) - float(xy_on[1])
+    tlen = math.hypot(tx, ty)
+    if tlen < 1e-6:
+        return None
+    tx /= tlen
+    ty /= tlen
+    dx = float(xy[0]) - float(xy_on[0])
+    dy = float(xy[1]) - float(xy_on[1])
+    # left-normal = tangent rotated 90° CCW = (-ty, tx)
+    return dx * (-ty) + dy * tx
+
+
 def simulate_strategy(
     strategy: Strategy,
     *,
@@ -131,10 +167,6 @@ def simulate_strategy(
     ego_width_m: float = IAC_DALLARA_WIDTH_M,
     fellow_length_m: float = IAC_DALLARA_LENGTH_M,
     fellow_width_m: float = IAC_DALLARA_WIDTH_M,
-    # SD-32C: fellow's signed lateral offset from optimal centerline (positive
-    # = left, negative = right per placement convention). Used only by the
-    # pass-side sanity guard; None disables the check (legacy callers).
-    fellow_lateral_m: Optional[float] = None,
 ) -> StrategyOutcome:
     """Walk ego forward over [0, horizon_s] under the chosen strategy.
 
@@ -240,16 +272,27 @@ def simulate_strategy(
                 reason="gap_too_short_for_lane_change",
             )
 
-        # SD-32C: pass-side sanity guard. Refuse to pass on the side the
-        # opponent already occupies (lateral offset > 1.0 m on that side).
-        # The simulator's lane-change blend has a known asymmetry that can
-        # report pass_left clearance > pass_right when fellow is on the left
-        # (S2 sample 9: pass_left=3.18 m, pass_right=0.91 m, fellow at +5 m
-        # → SD-30 picks pass_left → 5.85 s later side-by-side collision on
-        # the LEFT TTL). Geometric sanity check upstream of the integration.
+        # SD-32C (refined): pass-side sanity guard in TRACK frame. Refuse to
+        # pass on the side the opponent already occupies (signed lateral from
+        # optimal centerline > 1.0 m on that side). Compute the lateral
+        # internally by projecting fellow's current xy onto the optimal
+        # polyline — the original SD-32C accepted sit.lateral_m which is in
+        # the EGO HEADING frame, and that frame can flip sign under yaw
+        # relative to track tangent (S2 sample 10: fellow on RIGHT TTL but
+        # ego frame had fellow on left → guard didn't fire → COMMIT_PASS_RIGHT
+        # straight into the fellow).
         FELLOW_LATERAL_THRESHOLD_M = 1.0
-        if fellow_lateral_m is not None:
-            if strategy == "pass_left" and float(fellow_lateral_m) > FELLOW_LATERAL_THRESHOLD_M:
+        fellow_lat_track: Optional[float] = None
+        if fellow_traj and len(fellow_traj) > 0:
+            fellow_xy_now = (float(fellow_traj[0][1]), float(fellow_traj[0][2]))
+            fellow_lat_track = _signed_cross_track_at_s(
+                fellow_xy_now,
+                optimal_wp,
+                float(opp_s_m),
+                float(lap_length_m),
+            )
+        if fellow_lat_track is not None:
+            if strategy == "pass_left" and fellow_lat_track > FELLOW_LATERAL_THRESHOLD_M:
                 return StrategyOutcome(
                     strategy=strategy,
                     reachable_progress_at_horizon_m=float(ego_s_m),
@@ -259,7 +302,7 @@ def simulate_strategy(
                     completed=False,
                     reason="fellow_on_left_side",
                 )
-            if strategy == "pass_right" and float(fellow_lateral_m) < -FELLOW_LATERAL_THRESHOLD_M:
+            if strategy == "pass_right" and fellow_lat_track < -FELLOW_LATERAL_THRESHOLD_M:
                 return StrategyOutcome(
                     strategy=strategy,
                     reachable_progress_at_horizon_m=float(ego_s_m),

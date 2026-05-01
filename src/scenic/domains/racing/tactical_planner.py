@@ -697,9 +697,10 @@ def tactical_planner_step_v1(
             post_pass_buffer_m=float(config.strategy_post_pass_buffer_m),
             lane_change_s=float(config.strategy_lane_change_s),
             lane_change_tau_s=float(config.strategy_lane_change_tau_s),
-            # SD-32C: thread fellow lateral so simulate_strategy can refuse
-            # passes on the side the opponent already occupies.
-            fellow_lateral_m=(float(sit.lateral_m) if sit is not None else None),
+            # SD-32C now computes the track-frame lateral inside the simulator
+            # by projecting fellow xy onto the optimal polyline. The previous
+            # sit.lateral_m wiring was heading-frame and gave the wrong side
+            # under yaw — see SD-32C-fix in strategy_simulator.py.
         )
         _outcomes = []
         for _strat in _ALL_STRATEGIES:
