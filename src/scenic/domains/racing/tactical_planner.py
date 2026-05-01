@@ -707,14 +707,10 @@ def tactical_planner_step_v1(
             # pass_* with missing side polyline returns a failure outcome;
             # selector still ranks it last via the clearance filter.
             _outcomes.append(_simulate_strategy(_strat, **_strategy_kw))
-        # SD-33: pass closing_flag through so the selector can demote
-        # stay_optimal when ego is catching up to fellow at marginal clearance.
-        _closing = bool(assessment_closing_flag) if assessment_closing_flag is not None else False
         _selected = _select_strategy(
             _outcomes,
             min_clearance_m=float(config.strategy_min_clearance_m),
             soft_clearance_m=float(config.strategy_soft_clearance_m),
-            closing_flag=_closing,
         )
         state.strategy_selected_name = str(_selected.name)
         state.strategy_selected_reason = str(_selected.reason)
