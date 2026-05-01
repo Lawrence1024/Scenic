@@ -267,11 +267,13 @@ class TacticalPlannerConfig:
     strategy_horizon_s: float = 10.0
     strategy_sample_dt_s: float = 0.5
     # SD-27b: clearance is now OBB edge-to-edge gap (NOT centroid distance).
-    # 0.5m hard / 0.2m soft are calibrated to "physical bumper-to-bumper gap"
-    # rather than the pre-SD-27 centroid metric (where 2.5m roughly meant
-    # "0.5m physical gap" because each IAC Dallara is ~2m wide). See
-    # strategy_simulator.simulate_strategy for the OBB metric definition.
-    strategy_min_clearance_m: float = 0.5
+    # Post-SD-30: 1.0m hard / 0.2m soft. The hard filter is "physical
+    # bumper-to-bumper gap" (OBB edge-to-edge, not centroid). 1.0m is roughly
+    # half an IAC Dallara's 1.93m width — enough breathing room at racing
+    # speed without rejecting the wide passes the simulator predicts in the
+    # F-bank cases (5–11m clearance). See strategy_simulator.simulate_strategy
+    # for the OBB metric definition.
+    strategy_min_clearance_m: float = 1.0
     strategy_soft_clearance_m: float = 0.2
     strategy_target_speed_mps: float = 45.0
     strategy_accel_mps2: float = 4.0

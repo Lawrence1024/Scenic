@@ -4,7 +4,7 @@ Takes the four StrategyOutcomes from strategy_simulator.simulate_strategy and
 picks the winner under a correctness-first ranking:
 
   1. Filter survivors with min_clearance_m >= min_clearance_m threshold
-     (default 0.5m post-SD-27b; this is OBB edge-to-edge gap, NOT centroid
+     (default 1.0m; this is OBB edge-to-edge gap, NOT centroid
      distance — see strategy_simulator.simulate_strategy).
   2. Among survivors, rank by reachable_progress_at_horizon_m (highest wins).
   3. Tiebreak (within ~0.1m progress): stay_optimal > pass_* > follow_fellow,
@@ -19,6 +19,12 @@ Threshold history:
     min_clearance ~0.5–3 m during the alongside/merge transition, so the
     centroid-era 2.5m threshold rejected everything. New defaults reflect
     "physical gap between bumpers" rather than "centroid separation".
+  - Post-SD-30 raised the hard filter from 0.5m to 1.0m (~half the Dallara's
+    1.93m width) after S2 falsifier sample 1 collided despite a passing
+    prediction: the 0.5m bar admitted close-call pass_left choices when a
+    safer pass_right was available. The selector also now uses clearance as
+    a secondary tiebreak key within rank-1, so when both pass strategies
+    survive the filter, the one with greater predicted clearance wins.
 
 No state. No side effects. Deterministic given input outcomes.
 
@@ -59,7 +65,7 @@ class SelectedStrategy:
 def select_strategy(
     outcomes: Sequence[StrategyOutcome],
     *,
-    min_clearance_m: float = 0.5,
+    min_clearance_m: float = 1.0,
     soft_clearance_m: float = 0.2,
     progress_tiebreak_m: float = 0.5,
 ) -> SelectedStrategy:
@@ -99,8 +105,13 @@ def select_strategy(
             o for o in survivors_sorted
             if (top_progress - o.reachable_progress_at_horizon_m) <= float(progress_tiebreak_m)
         ]
-        # Pick the one with lowest tiebreak rank (stay_optimal > pass_* > follow_fellow).
-        chosen = min(tied, key=lambda o: _TIEBREAK_RANK.get(o.strategy, 99))
+        # Pick the one with lowest tiebreak rank (stay_optimal > pass_* > follow_fellow);
+        # within the same rank (notably pass_left vs pass_right), prefer the strategy
+        # with greater predicted clearance so a 2x-safer side beats canonical-order luck.
+        chosen = min(
+            tied,
+            key=lambda o: (_TIEBREAK_RANK.get(o.strategy, 99), -o.min_clearance_m),
+        )
         return SelectedStrategy(
             name=chosen.strategy,
             reason="primary",
