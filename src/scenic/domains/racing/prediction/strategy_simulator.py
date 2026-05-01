@@ -209,17 +209,27 @@ def simulate_strategy(
                 reason="no_side_polyline",
             )
 
-        # SD-32B: gap-feasibility guard. The lateral shift takes ~tau_s to
-        # complete; ego covers v_ego·tau_s longitudinally during that window.
-        # If the gap to fellow is shorter than that distance (with a 20%
-        # safety factor), the lane change cannot complete before catch-up —
-        # ego would clip fellow mid-shift. Clamp clearance to 0 so the hard
-        # filter rejects the pass instead of returning a misleading midpoint
-        # clearance figure (S2 sample 8: gap=20m, predicted pass_right clear
-        # 1-3m oscillating, actual contact at t=5s on optimal).
+        # SD-32B (refined): closing-rate gap-feasibility guard. The lateral
+        # shift takes ~tau_s to complete; during that window, ego CLOSES on
+        # fellow by (v_ego - v_opp)·tau_s longitudinally. If the available
+        # gap is shorter than this closing distance (with a 20% safety
+        # factor), ego catches fellow before the shift completes and would
+        # clip fellow mid-transition. Clamp clearance to 0 so the hard
+        # filter rejects the pass.
+        #
+        # The previous absolute-speed formula (v_ego·tau·1.2) was too
+        # aggressive: it blocked legitimate passes against slow fellows
+        # whenever v_ego itself was high (S2 50-sample run: samples 4, 5,
+        # 14, 18, 24, ... regressed from OK to COLLISION because the gap
+        # guard rejected pass_right against a slow fellow on the opposite
+        # side, and the selector then picked stay_optimal over follow_fellow
+        # on progress). Closing rate is the correct kinematic signal —
+        # fellows that are equal- or faster-than-ego pose no catch-up risk
+        # and should not block a pass attempt.
         longitudinal_gap = (float(opp_s_m) - float(ego_s_m)) % float(lap_length_m)
-        min_pass_gap = float(ego_speed_mps) * float(lane_change_tau_s) * 1.2
-        if longitudinal_gap > 0.0 and longitudinal_gap < min_pass_gap:
+        closing_rate_mps = max(0.0, float(ego_speed_mps) - float(opp_speed_mps))
+        min_pass_gap = closing_rate_mps * float(lane_change_tau_s) * 1.2
+        if longitudinal_gap > 0.0 and min_pass_gap > 0.0 and longitudinal_gap < min_pass_gap:
             return StrategyOutcome(
                 strategy=strategy,
                 reachable_progress_at_horizon_m=float(ego_s_m),
