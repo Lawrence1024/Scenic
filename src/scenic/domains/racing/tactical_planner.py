@@ -227,6 +227,13 @@ class TacticalPlannerConfig:
     # Required Δv to clear with 5m post-pass buffer: (12+5)/2.5 = 6.8 m/s minimum,
     # (15+5)/2.5 = 8 m/s. We use 16 m/s to give 2× headroom for slew-rate ramp-up.
     commit_speed_margin_mps: float = 16.0
+    # SD-31: tire-grip ceiling for the COMMIT speed cap. With curvature κ on
+    # the chosen TTL, peak cornering speed is sqrt(a_lat_max / |κ|). 8.0 m/s²
+    # (≈0.82g) matches the curvature scan in behaviors.scenic and leaves
+    # margin under the IAC Dallara's ~2.5g slick-tire peak. S2 falsifier
+    # sample 6 launched into the curbs when commit cap = opp + 16 = 27 m/s
+    # was demanded into a κ=0.14 hairpin (which permits at most ~7.5 m/s).
+    commit_max_lateral_accel_mps2: float = 8.0
     # SD-2f: SETUP needs enough closing speed to satisfy pass_min_relative_speed_mps=3.0
     # (otherwise SETUP holds forever, never reaching COMMIT). follow_speed_margin_mps=2.5
     # gives only 2.5 m/s closing — below the minimum. Use 4.5 m/s during SETUP so
@@ -488,6 +495,11 @@ def tactical_planner_step_v1(
     # when use_strategy_authority=False; primary decision when True per
     # SD-11e). Defaults to None for backward compat.
     fellow_trajectory: Optional[Sequence[Tuple[float, float, float, Optional[float]]]] = None,
+    # SD-31: peak |κ| over the MPC lookahead on the active TTL. When >0,
+    # COMMIT_PASS_* caps are clipped by sqrt(a_lat_max / |κ|) so the planner
+    # cannot ask the longitudinal MPC for a speed the tires can't honor in
+    # the upcoming curve.
+    curvature_ahead_max: Optional[float] = None,
 ) -> Tuple[str, str, Optional[float], str]:
     """Return ``(mode, ttl_key, speed_cap, decision_reason)``.
 
@@ -685,6 +697,9 @@ def tactical_planner_step_v1(
             post_pass_buffer_m=float(config.strategy_post_pass_buffer_m),
             lane_change_s=float(config.strategy_lane_change_s),
             lane_change_tau_s=float(config.strategy_lane_change_tau_s),
+            # SD-32C: thread fellow lateral so simulate_strategy can refuse
+            # passes on the side the opponent already occupies.
+            fellow_lateral_m=(float(sit.lateral_m) if sit is not None else None),
         )
         _outcomes = []
         for _strat in _ALL_STRATEGIES:
@@ -723,6 +738,19 @@ def tactical_planner_step_v1(
         # to the snapshot path when state.strategy_selected_name is "".
         pass
 
+    def _curvature_clip(cap: float) -> float:
+        # SD-31: tire-grip ceiling. v_max_curve = sqrt(a_lat_max / |κ|). When
+        # the upcoming curvature exceeds the cap's lateral-accel budget, drop
+        # the cap; otherwise leave it alone.
+        if curvature_ahead_max is None:
+            return cap
+        k = abs(float(curvature_ahead_max))
+        if k <= 1e-3:
+            return cap
+        a_lat = float(config.commit_max_lateral_accel_mps2)
+        v_max_curve = (a_lat / k) ** 0.5
+        return min(cap, v_max_curve)
+
     def _commit_result(side: str, reason: str) -> Tuple[str, str, Optional[float], str]:
         # SD-2e: cap speed during COMMIT so ego maintains a controlled differential
         # (~8 m/s closing) instead of charging at full target_speed. Removes the
@@ -732,6 +760,7 @@ def tactical_planner_step_v1(
         cap: Optional[float] = None
         if relation_ahead and sit is not None:
             cap = max(3.0, float(opponent_speed_mps) + float(config.commit_speed_margin_mps))
+            cap = _curvature_clip(cap)
         # SD-2f: leaving SETUP — clear the entry timestamp so a future SETUP gets a
         # fresh timeout window.
         state.setup_entry_s = -1.0e9
@@ -811,8 +840,10 @@ def tactical_planner_step_v1(
                 float(state.lateral_path_lock_until_s),
                 float(sim_time_s) + float(config.lateral_path_lock_hold_s),
             )
-            # COMMIT cap = opp + commit_speed_margin_mps (matches _commit_result).
+            # COMMIT cap = opp + commit_speed_margin_mps (matches _commit_result),
+            # then clipped by upcoming curvature (SD-31).
             cap_commit = max(3.0, float(opponent_speed_mps) + float(config.commit_speed_margin_mps))
+            cap_commit = _curvature_clip(cap_commit)
             if side == "left":
                 state.mode = COMMIT_PASS_LEFT
                 return COMMIT_PASS_LEFT, "left", cap_commit, f"strategy_pass_{side}"

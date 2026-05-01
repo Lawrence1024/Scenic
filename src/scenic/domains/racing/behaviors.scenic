@@ -1298,6 +1298,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     # ~1s while abort_keep_ttl_lat_m holds the side line).
                     ego_active_ttl=str(_scripted_active_ttl or "optimal"),
                     fellow_trajectory=_fellow_traj_for_strategy,
+                    # SD-31: curvature on the active TTL (set by the previous
+                    # tick's curvature scan; lags by one control_period). Used
+                    # by tactical_planner to clip COMMIT_PASS_* speed caps so
+                    # the longitudinal MPC isn't asked for a speed the tires
+                    # can't honor in the upcoming curve.
+                    curvature_ahead_max=float(getattr(self, "_last_curvature_ahead_for_tactical", 0.0) or 0.0),
                 )
                 _sec_planner_ms += (_wallclock_time.perf_counter() - _sec_t_planner_start) * 1000.0
                 _mode_tac = _mode3
@@ -1631,6 +1637,18 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 if not hasattr(self, '_last_effective_target_speed'):
                     self._last_effective_target_speed = float(effective_target_speed)
                 last_eff = float(self._last_effective_target_speed)
+                # SD-32A: when a SAFETY cap is binding (curvature or tactical pass-cap)
+                # and is asking for deceleration, raise the slew-down rate to ~1.5g so
+                # the cap is honored within ~0.4s instead of ~0.85s. cte slew rates stay
+                # unchanged — those target smoothness, not safety. Without this bump,
+                # SD-31's curvature-clipped commit cap (e.g. 7.4 m/s into a hairpin) is
+                # defeated by the 0.6 m/s/tick floor and ego enters the curve at ~14
+                # m/s, exceeding tire grip (S2 sample 6 fly-and-spin).
+                _bind = str(getattr(self, '_binding_speed_cap', '') or '')
+                _safety_binding = _bind in ("curvature", "tactical")
+                _decelerating = float(effective_target_speed) < last_eff
+                if _safety_binding and _decelerating:
+                    slew_down_ms = max(slew_down_ms, 15.0)
                 effective_target_speed = max(last_eff - slew_down_ms * dt_slew, min(last_eff + slew_up_ms * dt_slew, float(effective_target_speed)))
                 self._last_effective_target_speed = float(effective_target_speed)
             

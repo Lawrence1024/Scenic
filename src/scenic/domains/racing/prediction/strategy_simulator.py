@@ -131,6 +131,10 @@ def simulate_strategy(
     ego_width_m: float = IAC_DALLARA_WIDTH_M,
     fellow_length_m: float = IAC_DALLARA_LENGTH_M,
     fellow_width_m: float = IAC_DALLARA_WIDTH_M,
+    # SD-32C: fellow's signed lateral offset from optimal centerline (positive
+    # = left, negative = right per placement convention). Used only by the
+    # pass-side sanity guard; None disables the check (legacy callers).
+    fellow_lateral_m: Optional[float] = None,
 ) -> StrategyOutcome:
     """Walk ego forward over [0, horizon_s] under the chosen strategy.
 
@@ -204,6 +208,57 @@ def simulate_strategy(
                 completed=False,
                 reason="no_side_polyline",
             )
+
+        # SD-32B: gap-feasibility guard. The lateral shift takes ~tau_s to
+        # complete; ego covers v_ego·tau_s longitudinally during that window.
+        # If the gap to fellow is shorter than that distance (with a 20%
+        # safety factor), the lane change cannot complete before catch-up —
+        # ego would clip fellow mid-shift. Clamp clearance to 0 so the hard
+        # filter rejects the pass instead of returning a misleading midpoint
+        # clearance figure (S2 sample 8: gap=20m, predicted pass_right clear
+        # 1-3m oscillating, actual contact at t=5s on optimal).
+        longitudinal_gap = (float(opp_s_m) - float(ego_s_m)) % float(lap_length_m)
+        min_pass_gap = float(ego_speed_mps) * float(lane_change_tau_s) * 1.2
+        if longitudinal_gap > 0.0 and longitudinal_gap < min_pass_gap:
+            return StrategyOutcome(
+                strategy=strategy,
+                reachable_progress_at_horizon_m=float(ego_s_m),
+                reachable_speed_at_horizon_mps=float(ego_speed_mps),
+                min_clearance_m=0.0,
+                closest_t_s=0.0,
+                completed=False,
+                reason="gap_too_short_for_lane_change",
+            )
+
+        # SD-32C: pass-side sanity guard. Refuse to pass on the side the
+        # opponent already occupies (lateral offset > 1.0 m on that side).
+        # The simulator's lane-change blend has a known asymmetry that can
+        # report pass_left clearance > pass_right when fellow is on the left
+        # (S2 sample 9: pass_left=3.18 m, pass_right=0.91 m, fellow at +5 m
+        # → SD-30 picks pass_left → 5.85 s later side-by-side collision on
+        # the LEFT TTL). Geometric sanity check upstream of the integration.
+        FELLOW_LATERAL_THRESHOLD_M = 1.0
+        if fellow_lateral_m is not None:
+            if strategy == "pass_left" and float(fellow_lateral_m) > FELLOW_LATERAL_THRESHOLD_M:
+                return StrategyOutcome(
+                    strategy=strategy,
+                    reachable_progress_at_horizon_m=float(ego_s_m),
+                    reachable_speed_at_horizon_mps=float(ego_speed_mps),
+                    min_clearance_m=0.0,
+                    closest_t_s=0.0,
+                    completed=False,
+                    reason="fellow_on_left_side",
+                )
+            if strategy == "pass_right" and float(fellow_lateral_m) < -FELLOW_LATERAL_THRESHOLD_M:
+                return StrategyOutcome(
+                    strategy=strategy,
+                    reachable_progress_at_horizon_m=float(ego_s_m),
+                    reachable_speed_at_horizon_mps=float(ego_speed_mps),
+                    min_clearance_m=0.0,
+                    closest_t_s=0.0,
+                    completed=False,
+                    reason="fellow_on_right_side",
+                )
     else:
         side = ""
 
