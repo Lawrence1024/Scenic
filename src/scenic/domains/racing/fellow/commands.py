@@ -25,6 +25,7 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 _MPH_TO_KMH = 1.609344
+_MPS_TO_MPH = 2.2369362921
 
 
 def mph_to_kmh(mph: float) -> float:
@@ -698,6 +699,45 @@ def compute_follow_ttl_geometric_plant_command(
         obj, simulation, fellow_index=fellow_index
     )
     return v_kmh, d_m, sub
+
+
+def compute_always_faster_plant_command(
+    obj: Any,
+    simulation: Any,
+    ego_obj: Any,
+    *,
+    speed_offset_mph: float = 10.0,
+    min_speed_mph: float = 120.0,
+    max_speed_mph: float = 160.0,
+    fellow_index: Optional[int] = None,
+) -> tuple[float, float, str]:
+    """Track ego speed plus a constant offset for **v**; placement **d**.
+
+    Reads ego speed (m/s) from ``ego_obj.speed``, converts to mph, adds
+    ``speed_offset_mph``, and clamps to ``[min_speed_mph, max_speed_mph]``.
+    Lateral **d** is the Scenic placement value (``_route_s_t``) — no TTL
+    δ(s) lookup, no waypoint search — so the per-tick cost is O(1). The
+    fellow drifts relative to the racing-line curvature in corners, but
+    for the "stay ahead, no overtake" use case that imprecision is
+    acceptable in exchange for compute headroom.
+
+    Returns ``(v_kmh, d_m, log_suffix)``.
+    """
+    ego_speed_mps = 0.0
+    sp = getattr(ego_obj, "speed", None)
+    if sp is not None:
+        try:
+            ego_speed_mps = float(sp)
+        except (TypeError, ValueError):
+            ego_speed_mps = 0.0
+    ego_speed_mph = ego_speed_mps * _MPS_TO_MPH
+    target_mph = max(
+        float(min_speed_mph),
+        min(float(max_speed_mph), ego_speed_mph + float(speed_offset_mph)),
+    )
+    v_kmh = mph_to_kmh(target_mph)
+    d_m = get_fellow_placed_lateral_deviation(obj)
+    return v_kmh, d_m, "always_faster/placement_t"
 
 
 def _parse_sudden_stop_behavior_fields(obj: Any) -> tuple[float, float, float]:

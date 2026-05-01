@@ -17,6 +17,8 @@ F_SCENARIO_NAMES: Tuple[str, ...] = (
     "F7_fellow_right_occupied_deterministic.scenic",
     "F8_corner_entry_fellow_ahead_optimal.scenic",
     "F9_fellow_stationary_roadside_obstacle.scenic",
+    "F13_fellow_ahead_always_faster.scenic",
+    "F13c_control_no_fellow.scenic",
 )
 
 PHASE7_F_SCENARIO_NAMES: Tuple[str, ...] = (

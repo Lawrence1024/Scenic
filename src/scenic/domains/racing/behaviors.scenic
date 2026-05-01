@@ -18,6 +18,7 @@ from scenic.domains.racing.waypoints import (
     select_forward_racing_waypoint,
 )
 from scenic.domains.racing.fellow import (
+    compute_always_faster_plant_command,
     compute_constant_offset_plant_command,
     compute_fellow_swerve_out_of_control_command,
     compute_follow_ttl_geometric_plant_command,
@@ -319,6 +320,40 @@ behavior FellowSwerveOutOfControlBehavior(
             swerve_amp_m=swerve_amp_m,
             swerve_d_rate_m_s=swerve_d_rate_m_s,
             stop_hold_d=stop_hold_d,
+        )
+        take SetFellowPlantAction(v_kmh, d_m)
+        self._fellow_plant_log_mode = mode
+        wait
+
+behavior FellowAlwaysFasterThanEgoBehavior(speed_offset_mph=10, min_speed_mph=120, max_speed_mph=160):
+    """dSPACE fellow: speed = ego.speed + offset (clamped); lateral **d** from TTL geometry.
+
+    Ego-aware fellow that targets ``ego.speed + speed_offset_mph`` each control tick,
+    clamped to ``[min_speed_mph, max_speed_mph]``. Designed so the fellow is structurally
+    uncatchable on a straight: as long as ego cruises below
+    ``max_speed_mph - speed_offset_mph``, the fellow remains the same offset faster, and
+    the s-gap grows monotonically. Tests whether the planner declines COMMIT_PASS when
+    no realistic overtake exists.
+
+    Each step **takes** :class:`~scenic.domains.racing.actions.SetFellowPlantAction`
+    with **v** from ego speed + offset (mph→km/h) and **d** from TTL δ(s). Same
+    TTL/route requirements as :obj:`FellowFollowTTLGeometricBehavior`.
+
+    Args:
+        speed_offset_mph: How much faster than ego the fellow targets in **mph**.
+            Default **10**. With ego at 60 m/s ≈ 134 mph, fellow targets 144 mph.
+        min_speed_mph: Floor on commanded speed (mph) so the fellow doesn't drop
+            to a crawl if ego stops. Default **120**.
+        max_speed_mph: Ceiling on commanded speed (mph) for plant-safety / corner
+            stability. Default **160**.
+    """
+    self._fellow_vd_plant_enabled = True
+    while True:
+        v_kmh, d_m, mode = compute_always_faster_plant_command(
+            self, simulation(), ego,
+            speed_offset_mph=speed_offset_mph,
+            min_speed_mph=min_speed_mph,
+            max_speed_mph=max_speed_mph,
         )
         take SetFellowPlantAction(v_kmh, d_m)
         self._fellow_plant_log_mode = mode

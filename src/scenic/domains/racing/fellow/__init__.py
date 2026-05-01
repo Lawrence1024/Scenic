@@ -13,6 +13,7 @@ Submodules
 from __future__ import annotations
 
 from scenic.domains.racing.fellow.commands import (
+    compute_always_faster_plant_command,
     compute_constant_offset_plant_command,
     compute_fellow_swerve_out_of_control_command,
     compute_fellow_ttl_geometric_d_m,
@@ -27,6 +28,7 @@ from scenic.domains.racing.fellow.commands import (
     sudden_stop_v_kmh,
 )
 __all__ = [
+    "compute_always_faster_plant_command",
     "compute_constant_offset_plant_command",
     "compute_fellow_swerve_out_of_control_command",
     "compute_fellow_ttl_geometric_d_m",
