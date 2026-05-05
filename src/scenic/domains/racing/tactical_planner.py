@@ -814,6 +814,14 @@ def tactical_planner_step_v1(
     # cannot ask the longitudinal MPC for a speed the tires can't honor in
     # the upcoming curve.
     curvature_ahead_max: Optional[float] = None,
+    # SD-42O: per-TTL precomputed velocity profiles. When supplied, the
+    # strategy simulator's per-strategy speed_target consults the profile
+    # for that strategy's active TTL, matching what `slice_trajectory_from_profile`
+    # produces in the planner's reference. This eliminates the strategy-vs-
+    # execution divergence that caused F2 to commit to passes the simulator
+    # predicted as safe (slow merge speed → wide clearance) but reality
+    # contacted (racing speed → ego catches fellow earlier in the merge).
+    velocity_profiles_by_ttl: Optional[Dict[str, "VelocityProfile"]] = None,
 ) -> Tuple[str, str, Optional[float], str]:
     """Return ``(mode, ttl_key, speed_cap, decision_reason)``.
 
@@ -1015,6 +1023,9 @@ def tactical_planner_step_v1(
             # by projecting fellow xy onto the optimal polyline. The previous
             # sit.lateral_m wiring was heading-frame and gave the wrong side
             # under yaw — see SD-32C-fix in strategy_simulator.py.
+            # SD-42O: thread the per-TTL profiles so the simulator's
+            # speed_target consults the same vx the planner will execute.
+            velocity_profiles_by_ttl=velocity_profiles_by_ttl,
         )
         _outcomes = []
         for _strat in _ALL_STRATEGIES:

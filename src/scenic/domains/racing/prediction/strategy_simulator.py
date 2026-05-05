@@ -167,6 +167,17 @@ def simulate_strategy(
     ego_width_m: float = IAC_DALLARA_WIDTH_M,
     fellow_length_m: float = IAC_DALLARA_LENGTH_M,
     fellow_width_m: float = IAC_DALLARA_WIDTH_M,
+    # SD-42O: per-TTL precomputed velocity profiles. When supplied, the
+    # simulator's per-strategy speed_target closures consult the profile
+    # instead of synthesizing schedules from setup/commit margins. This
+    # makes the simulator's predicted ego trajectory match what the planner
+    # will actually execute (which now uses `slice_trajectory_from_profile`),
+    # eliminating the strategy-vs-execution divergence that caused F2 to
+    # commit to passes the simulator predicted as safe but reality contacted.
+    # Dict keys: "optimal", "left", "right". When None, falls back to the
+    # legacy synthesized schedules.
+    velocity_profiles_by_ttl: Optional[dict] = None,
+    follow_headway_margin_mps: float = 2.0,
 ) -> StrategyOutcome:
     """Walk ego forward over [0, horizon_s] under the chosen strategy.
 
@@ -315,32 +326,75 @@ def simulate_strategy(
     else:
         side = ""
 
-    # Compute per-strategy target speed schedule.
-    if strategy == "stay_optimal":
-        def speed_target(t_off: float, opp_s_at_t: float) -> float:
-            return float(target_speed_mps)
-        def phase_for_t(t_off: float, ego_s_at_t: float, opp_s_at_t: float) -> str:
-            return "stay"
-    elif strategy == "follow_fellow":
-        def speed_target(t_off: float, opp_s_at_t: float) -> float:
-            return float(min(target_speed_mps, opp_speed_mps + 0.3))
-        def phase_for_t(t_off: float, ego_s_at_t: float, opp_s_at_t: float) -> str:
-            return "follow"
+    # SD-42O: when velocity_profiles_by_ttl is provided, consult the profile
+    # corresponding to this strategy's active TTL. Otherwise fall back to the
+    # legacy synthesized schedules (kept for back-compat with non-SD-42 callers
+    # and for the unit-test bank in tests/test_strategy_simulator.py).
+    _profile_for_strategy = None
+    if velocity_profiles_by_ttl is not None:
+        if strategy == "stay_optimal" or strategy == "follow_fellow":
+            _profile_for_strategy = velocity_profiles_by_ttl.get("optimal")
+        elif strategy == "pass_left":
+            _profile_for_strategy = velocity_profiles_by_ttl.get("left")
+        elif strategy == "pass_right":
+            _profile_for_strategy = velocity_profiles_by_ttl.get("right")
+
+    if _profile_for_strategy is not None:
+        # Profile path: speed_target consults the friction-limited optimal vx
+        # at ego's current arc-length on the active TTL. Mode shaping mirrors
+        # the planner's `slice_trajectory_from_profile`:
+        #   stay_optimal / pass_*  → vx = profile.lookup(s)
+        #   follow_fellow          → vx = min(profile.lookup, opp + headway)
+        # ABORT_PASS doesn't appear here because the simulator only sees
+        # the four candidate strategies (stay/follow/pass_left/pass_right).
+        if strategy == "follow_fellow":
+            def speed_target(t_off: float, opp_s_at_t: float) -> float:
+                base = float(_profile_for_strategy.lookup(_ego_s_carry[0]))
+                return float(min(base, float(opp_speed_mps) + float(follow_headway_margin_mps)))
+        else:
+            def speed_target(t_off: float, opp_s_at_t: float) -> float:
+                return float(_profile_for_strategy.lookup(_ego_s_carry[0]))
+        # Phase function unchanged — used by the lateral-blend logic.
+        if strategy in ("pass_left", "pass_right"):
+            def phase_for_t(t_off: float, ego_s_at_t: float, opp_s_at_t: float) -> str:
+                if t_off < float(lane_change_s):
+                    return "lane_change"
+                if ego_s_at_t < opp_s_at_t + float(post_pass_buffer_m):
+                    return "alongside"
+                return "merge_back"
+        elif strategy == "follow_fellow":
+            def phase_for_t(t_off: float, ego_s_at_t: float, opp_s_at_t: float) -> str:
+                return "follow"
+        else:
+            def phase_for_t(t_off: float, ego_s_at_t: float, opp_s_at_t: float) -> str:
+                return "stay"
     else:
-        # pass_left / pass_right 3-phase profile.
-        def speed_target(t_off: float, opp_s_at_t: float) -> float:
-            phase = phase_for_t(t_off, _ego_s_carry[0], opp_s_at_t)
-            if phase == "lane_change":
-                return float(min(target_speed_mps, opp_speed_mps + setup_speed_margin_mps))
-            if phase == "alongside":
-                return float(min(target_speed_mps, opp_speed_mps + commit_speed_margin_mps))
-            return float(target_speed_mps)
-        def phase_for_t(t_off: float, ego_s_at_t: float, opp_s_at_t: float) -> str:
-            if t_off < float(lane_change_s):
-                return "lane_change"
-            if ego_s_at_t < opp_s_at_t + float(post_pass_buffer_m):
-                return "alongside"
-            return "merge_back"
+        # Legacy synthesized speed schedules (back-compat).
+        if strategy == "stay_optimal":
+            def speed_target(t_off: float, opp_s_at_t: float) -> float:
+                return float(target_speed_mps)
+            def phase_for_t(t_off: float, ego_s_at_t: float, opp_s_at_t: float) -> str:
+                return "stay"
+        elif strategy == "follow_fellow":
+            def speed_target(t_off: float, opp_s_at_t: float) -> float:
+                return float(min(target_speed_mps, opp_speed_mps + 0.3))
+            def phase_for_t(t_off: float, ego_s_at_t: float, opp_s_at_t: float) -> str:
+                return "follow"
+        else:
+            # pass_left / pass_right 3-phase profile.
+            def speed_target(t_off: float, opp_s_at_t: float) -> float:
+                phase = phase_for_t(t_off, _ego_s_carry[0], opp_s_at_t)
+                if phase == "lane_change":
+                    return float(min(target_speed_mps, opp_speed_mps + setup_speed_margin_mps))
+                if phase == "alongside":
+                    return float(min(target_speed_mps, opp_speed_mps + commit_speed_margin_mps))
+                return float(target_speed_mps)
+            def phase_for_t(t_off: float, ego_s_at_t: float, opp_s_at_t: float) -> str:
+                if t_off < float(lane_change_s):
+                    return "lane_change"
+                if ego_s_at_t < opp_s_at_t + float(post_pass_buffer_m):
+                    return "alongside"
+                return "merge_back"
 
     _ego_s_carry = [float(ego_s_m)]
     _ego_v_carry = [float(ego_speed_mps)]

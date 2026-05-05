@@ -1453,6 +1453,14 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     # the longitudinal MPC isn't asked for a speed the tires
                     # can't honor in the upcoming curve.
                     curvature_ahead_max=float(getattr(self, "_last_curvature_ahead_for_tactical", 0.0) or 0.0),
+                    # SD-42O: pass per-TTL profiles so the simulator's
+                    # speed_target consults the same vx the planner will
+                    # execute via slice_trajectory_from_profile.
+                    velocity_profiles_by_ttl=(
+                        _scripted_velocity_profiles
+                        if isinstance(_scripted_velocity_profiles, dict) and _scripted_velocity_profiles
+                        else None
+                    ),
                 )
                 _sec_planner_ms += (_wallclock_time.perf_counter() - _sec_t_planner_start) * 1000.0
                 _mode_tac = _mode3
