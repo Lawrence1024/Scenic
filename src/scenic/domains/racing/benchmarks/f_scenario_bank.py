@@ -17,13 +17,15 @@ F_SCENARIO_NAMES: Tuple[str, ...] = (
     "F7_fellow_right_occupied_deterministic.scenic",
     "F8_corner_entry_fellow_ahead_optimal.scenic",
     "F9_fellow_stationary_roadside_obstacle.scenic",
-    "F13_fellow_ahead_always_faster.scenic",
-    # F13c removed from the F-bank: it sets `scenic_control = False`, handing
-    # the ego over to the ART stack. The Scenic-side intelligence pipeline
-    # (tactical / prediction / assessment / guard / commit-abort) does not
-    # run, so it doesn't validate any Scenic-stack change. The .scenic file
-    # is retained for ART-baseline work but is no longer in the regression
-    # sweep.
+    # F13 and F13c removed from the F-bank: both set `scenic_control = False`,
+    # handing the ego over to the ART stack. The Scenic intelligence pipeline
+    # (tactical / prediction / assessment / guard / commit-abort) still runs
+    # and emits its decisions to the log, but those decisions never reach the
+    # plant — the dSPACE bridge accepts ART's actuator commands instead.
+    # Reported metrics (collision, lap_time, commit_pass_*_count) measure
+    # ART's behavior, not Scenic's, so neither scenario validates any
+    # Scenic-stack change. The .scenic files are retained for ART-baseline
+    # work but are no longer in the regression sweep.
     "F14_fellow_ahead_active_blocker.scenic",
 )
 
