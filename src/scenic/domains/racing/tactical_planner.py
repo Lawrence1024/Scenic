@@ -430,7 +430,7 @@ def slice_trajectory_from_profile(
     opp_speed_mps: float = 0.0,
     follow_headway_margin_mps: float = 2.0,
     abort_derate: float = 0.7,
-    abort_speed_margin_mps: float = 5.0,
+    abort_speed_margin_mps: float = 1.0,
     cte_now_m: float = 0.0,
     cte_tau_m: float = 3.0,
     cte_deadband_m: float = 1.0,
@@ -451,6 +451,16 @@ def slice_trajectory_from_profile(
                                 we receive is the side TTL's, so just slice it)
       ABORT_PASS              → vx[i] = max(v_min, min(profile · derate,
                                                        opp − margin))
+                                ABORT means "this pass isn't going to work,
+                                back off behind the fellow" — gentle deceleration
+                                to slightly slower than the fellow, NOT an
+                                emergency brake. SD-42N+: margin defaults to
+                                1.0 m/s (was 5.0); the prior 5 m/s margin
+                                slammed ego from racing speed to walking pace
+                                (e.g. F14 abort: 17→3 m/s in 1 s), dropping
+                                ego below gear-1→2 downshift and triggering
+                                a 12+ second crawl/recovery cascade. Real
+                                emergency = EMERGENCY_STABLE below.
       EMERGENCY_STABLE,       → linear ramp from ego_speed to 0 over
         SAFE_STOP                safe_stop_ramp_s seconds (existing Stage E
                                 pattern, applied here so the planner reference
