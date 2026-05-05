@@ -63,6 +63,7 @@ from scenic.domains.racing.planner.planner_reference import PlannerReference
 from scenic.domains.racing.planner.strategy_selector import (
     select_strategy as _select_strategy,
 )
+from scenic.domains.racing.planner.velocity_profile import VelocityProfile
 from scenic.domains.racing.situation_assessment import OpponentSituation
 
 FREE_RUN = "FREE_RUN"
@@ -333,6 +334,18 @@ class TacticalPlannerConfig:
     # Override via `param use_strategy_authority False` to fall back to the
     # snapshot path for A/B comparison.
     use_strategy_authority: bool = True
+    # SD-42M: when True, the planner emits PlannerReference.vx_mps by slicing
+    # the per-TTL precomputed velocity profile (Stage L) and shaping by mode
+    # (FREE_RUN / FOLLOW / COMMIT_* / HOLD_* / ABORT / SAFE_STOP) — the entire
+    # min-of-caps composition (cte / curvature / global / scripted / tactical)
+    # is bypassed. The velocity profile already encodes the friction-limited
+    # cornering ceiling (replaces curvature_speed_cap), forward-backward
+    # smoothing (replaces "brake before corner" RC-7b heuristic), and global
+    # max (clipped at MAX_SPEED_LIMIT_MS during profile generation).
+    # Default False during Stage M roll-in; flipped True in Stage N once the
+    # flag-True path passes the F-bank smoke; the flag and the legacy path
+    # are deleted in Stage P. Override via `param use_velocity_profile_reference`.
+    use_velocity_profile_reference: bool = False
     strategy_horizon_s: float = 10.0
     strategy_sample_dt_s: float = 0.5
     # SD-27b: clearance is now OBB edge-to-edge gap (NOT centroid distance).
@@ -399,6 +412,135 @@ def _dv_commit_gap_max_m(config: "TacticalPlannerConfig", dv_mps: float) -> floa
 
 def _dv_hold_release_long_m(config: "TacticalPlannerConfig", dv_mps: float) -> float:
     return float(config.hold_release_long_intercept_m) + float(config.hold_release_long_dv_slope) * max(0.0, float(dv_mps))
+
+
+def slice_trajectory_from_profile(
+    profile: VelocityProfile,
+    *,
+    ego_s_m: float,
+    ego_speed_mps: float,
+    horizon_n: int,
+    horizon_dt: float,
+    mode: str,
+    opp_speed_mps: float = 0.0,
+    follow_headway_margin_mps: float = 2.0,
+    abort_derate: float = 0.7,
+    abort_speed_margin_mps: float = 5.0,
+    cte_now_m: float = 0.0,
+    cte_tau_m: float = 3.0,
+    cte_deadband_m: float = 1.0,
+    safe_stop_ramp_s: float = 1.5,
+    v_min_mps: float = 3.0,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, str]:
+    """SD-42M: build (vx, ax, s) per-horizon arrays by slicing a precomputed
+    velocity profile and shaping by tactical mode.
+
+    Returns ``(vx_mps[N], ax_mps2[N], s_m[N], binding_source)``.
+
+    Mode shaping (per the SD-42 architecture):
+
+      FREE_RUN, SETUP_*       → vx[i] = profile.lookup(s[i])           (raceline)
+      FOLLOW                  → vx[i] = min(profile.lookup, opp + headway)
+      COMMIT_PASS_*, HOLD_*   → vx[i] = profile.lookup of *the active TTL*
+                                (caller switched ttl_key already; the profile
+                                we receive is the side TTL's, so just slice it)
+      ABORT_PASS              → vx[i] = max(v_min, min(profile · derate,
+                                                       opp − margin))
+      EMERGENCY_STABLE,       → linear ramp from ego_speed to 0 over
+        SAFE_STOP                safe_stop_ramp_s seconds (existing Stage E
+                                pattern, applied here so the planner reference
+                                IS the safe-stop trajectory)
+
+    CTE-tracking gate (the ONE legitimate residual modulation): when ego
+    is laterally off the active TTL by more than `cte_deadband_m` (default
+    1 m), apply
+        multiplier = exp(-(|cte| - deadband) / cte_tau_m)
+    This is the lateral-tracking-error backoff that Stage K's CTE-cap
+    suppression was trying to approximate. It's a plant gate (proportional
+    to actual tracking error), not a tactical decision. Steady-state
+    racing (|CTE| < 1 m) is unaffected; large CTE during TTL switches
+    modulates speed naturally as ego converges.
+
+    The slicer integrates s forward via constant-vx within each step:
+    s[i+1] = s[i] + vx[i] * dt. This is the same approximation the
+    SD-41B build_reference uses, but applied per-step rather than
+    constant-vx0-extrapolation.
+
+    Replaces the entire min-of-caps composition (cte / curvature / global /
+    scripted / tactical) with one source of truth: the offline-computed
+    profile + mode shaping + CTE gate. See `velocity_profile.py` for the
+    profile generation algorithm.
+    """
+    n = max(1, int(horizon_n))
+    dt = max(1e-3, float(horizon_dt))
+    mode_str = str(mode or "").upper()
+
+    # ----- Safe-stop / emergency: linear ramp from current speed to 0 -----
+    if mode_str in ("EMERGENCY_STABLE", "SAFE_STOP"):
+        v0 = max(0.0, float(ego_speed_mps))
+        T = max(dt, float(safe_stop_ramp_s))
+        t_grid = np.arange(n, dtype=np.float64) * dt
+        vx = np.maximum(0.0, v0 * (1.0 - t_grid / T))
+        s = np.zeros(n, dtype=np.float64)
+        s[0] = float(ego_s_m)
+        for i in range(n - 1):
+            s[i + 1] = s[i] + vx[i] * dt
+        ax = np.zeros(n, dtype=np.float64)
+        if n >= 2:
+            ax[:-1] = (vx[1:] - vx[:-1]) / dt
+            ax[-1] = ax[-2]
+        return vx, ax, s, "safe_stop"
+
+    # ----- CTE-tracking gate multiplier (active only when |CTE| > deadband)
+    cte_abs = abs(float(cte_now_m))
+    cte_excess = max(0.0, cte_abs - float(cte_deadband_m))
+    cte_mult = float(np.exp(-cte_excess / max(1e-3, float(cte_tau_m)))) if cte_excess > 0 else 1.0
+
+    # ----- Determine sample-0 binding label (telemetry only) --------------
+    v_profile_0 = float(profile.lookup(float(ego_s_m)))
+    binding = "profile"
+    if mode_str == "FOLLOW":
+        v_headway_0 = float(opp_speed_mps) + float(follow_headway_margin_mps)
+        if v_headway_0 < v_profile_0:
+            binding = "follow_headway"
+    elif mode_str == "ABORT_PASS":
+        binding = "abort_derate"
+    if cte_mult < 1.0:
+        # The CTE gate, if active, is the most informative label — it tells
+        # the user "ego is mid-merge, that's why we're slow."
+        binding = "cte_gate"
+
+    # ----- Walk forward, sampling profile at running s --------------------
+    vx = np.zeros(n, dtype=np.float64)
+    s = np.zeros(n, dtype=np.float64)
+    s[0] = float(ego_s_m)
+    floor = max(0.0, float(v_min_mps))
+
+    for i in range(n):
+        v_profile = float(profile.lookup(s[i]))
+        if mode_str == "FOLLOW":
+            v_headway = float(opp_speed_mps) + float(follow_headway_margin_mps)
+            v_mode = min(v_profile, v_headway)
+        elif mode_str == "ABORT_PASS":
+            v_derated = v_profile * float(abort_derate)
+            v_opp_minus = float(opp_speed_mps) - float(abort_speed_margin_mps)
+            v_mode = min(v_derated, v_opp_minus)
+        else:
+            # FREE_RUN, COMMIT_*, HOLD_*, SETUP_*, etc. — raceline speed.
+            v_mode = v_profile
+
+        v_final = max(floor, v_mode * cte_mult)
+        vx[i] = v_final
+        if i + 1 < n:
+            s[i + 1] = s[i] + v_final * dt
+
+    # ----- ax via numerical derivative ------------------------------------
+    ax = np.zeros(n, dtype=np.float64)
+    if n >= 2 and dt > 0.0:
+        ax[:-1] = (vx[1:] - vx[:-1]) / dt
+        ax[-1] = ax[-2]
+
+    return vx, ax, s, binding
 
 
 def _smart_commit_cap(
@@ -1613,6 +1755,19 @@ def build_reference(
     sim_time_s: float,
     traj_id: int,
     prev_vx0_mps: Optional[float] = None,
+    # SD-42M: profile-based path. When `use_velocity_profile=True` and
+    # `velocity_profile` is provided, the slicer fills vx_mps / ax_mps2
+    # from the profile + mode shaping and the min-of-caps composition is
+    # bypassed. Default off so existing callers keep their behavior.
+    velocity_profile: Optional[VelocityProfile] = None,
+    use_velocity_profile: bool = False,
+    opp_speed_mps: float = 0.0,
+    follow_headway_margin_mps: float = 2.0,
+    abort_derate: float = 0.7,
+    abort_speed_margin_mps: float = 5.0,
+    cte_now_m: float = 0.0,
+    cte_tau_m: float = 3.0,
+    cte_deadband_m: float = 1.0,
 ) -> PlannerReference:
     """SD-41B: build a dense PlannerReference from already-computed caps.
 
@@ -1634,36 +1789,59 @@ def build_reference(
     n = max(1, int(mpc_horizon_n))
     dt = max(1e-3, float(mpc_dt_s))
 
-    # ----- Cap composition --------------------------------------------------
-    cap_sources: Dict[str, float] = {
-        "cte": float(cte_cap_mps),
-        "curvature": float(curvature_cap_mps),
-        "global": float(global_max_mps),
-    }
-    if scripted_cap_mps is not None:
-        cap_sources["phase1"] = float(scripted_cap_mps)
-    if planner_cap_mps is not None:
-        cap_sources["tactical"] = float(planner_cap_mps)
-
-    if cap_sources:
-        vx0 = min(cap_sources.values())
-        binding_source = min(cap_sources, key=cap_sources.get)
+    # ----- SD-42M: profile-based path (flag-gated) -------------------------
+    # When the velocity profile is available and the flag is set, slice the
+    # profile + mode shaping for vx/ax/s. The legacy min-of-caps composition
+    # below is bypassed entirely. This is the SD-42 architectural target.
+    used_profile_path = bool(use_velocity_profile and velocity_profile is not None)
+    if used_profile_path:
+        vx, ax, s_m, binding_source = slice_trajectory_from_profile(
+            velocity_profile,
+            ego_s_m=float(ego_s_m),
+            ego_speed_mps=float(ego_speed_mps),
+            horizon_n=n,
+            horizon_dt=dt,
+            mode=str(mode or ""),
+            opp_speed_mps=float(opp_speed_mps),
+            follow_headway_margin_mps=float(follow_headway_margin_mps),
+            abort_derate=float(abort_derate),
+            abort_speed_margin_mps=float(abort_speed_margin_mps),
+            cte_now_m=float(cte_now_m),
+            cte_tau_m=float(cte_tau_m),
+            cte_deadband_m=float(cte_deadband_m),
+        )
+        vx0 = float(vx[0])
     else:
-        vx0 = float(racing_line_target_mps)
-        binding_source = "none"
-    vx0 = max(0.0, float(vx0))
+        # ----- Legacy cap composition (Stage B / pre-SD-42 path) ----------
+        cap_sources: Dict[str, float] = {
+            "cte": float(cte_cap_mps),
+            "curvature": float(curvature_cap_mps),
+            "global": float(global_max_mps),
+        }
+        if scripted_cap_mps is not None:
+            cap_sources["phase1"] = float(scripted_cap_mps)
+        if planner_cap_mps is not None:
+            cap_sources["tactical"] = float(planner_cap_mps)
 
-    # ----- Per-step vx_mps + ax_mps2 ---------------------------------------
-    vx = np.full(n, vx0, dtype=np.float64)
-    ax = np.zeros(n, dtype=np.float64)
-    if prev_vx0_mps is not None and dt > 0.0:
-        # Reflect step change from previous tick at sample 0; subsequent
-        # samples cruise at vx0 so ax stays zero. MPC will smooth via slew
-        # at the actuator level.
-        ax[0] = (vx0 - float(prev_vx0_mps)) / dt
+        if cap_sources:
+            vx0 = min(cap_sources.values())
+            binding_source = min(cap_sources, key=cap_sources.get)
+        else:
+            vx0 = float(racing_line_target_mps)
+            binding_source = "none"
+        vx0 = max(0.0, float(vx0))
 
-    # ----- s_m (naive constant-speed integration) --------------------------
-    s_m = float(ego_s_m) + vx0 * dt * np.arange(n, dtype=np.float64)
+        # ----- Per-step vx_mps + ax_mps2 ----------------------------------
+        vx = np.full(n, vx0, dtype=np.float64)
+        ax = np.zeros(n, dtype=np.float64)
+        if prev_vx0_mps is not None and dt > 0.0:
+            # Reflect step change from previous tick at sample 0; subsequent
+            # samples cruise at vx0 so ax stays zero. MPC will smooth via slew
+            # at the actuator level.
+            ax[0] = (vx0 - float(prev_vx0_mps)) / dt
+
+        # ----- s_m (naive constant-speed integration) ---------------------
+        s_m = float(ego_s_m) + vx0 * dt * np.arange(n, dtype=np.float64)
 
     # ----- Lateral columns from chosen TTL ---------------------------------
     x_m = np.full(n, float(ego_x), dtype=np.float64)

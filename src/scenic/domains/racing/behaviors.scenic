@@ -563,6 +563,23 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         pass
     if _tactical_config.use_strategy_authority:
         print(f"{_fbhv} SD-11e strategy authority ENABLED (use_strategy_authority=True)")
+    # SD-42M: parse `use_velocity_profile_reference` scene param. Default
+    # False during Stage M roll-in; flipped True in Stage N once the
+    # flag-True path passes the F-bank smoke. Override via
+    # `--param use_velocity_profile_reference True`.
+    try:
+        _v_use_vp = _params_for_strategy.get("use_velocity_profile_reference", None)
+        if _v_use_vp is not None:
+            if isinstance(_v_use_vp, bool):
+                _tactical_config.use_velocity_profile_reference = bool(_v_use_vp)
+            else:
+                _tactical_config.use_velocity_profile_reference = (
+                    str(_v_use_vp).strip().lower() in ("true", "1", "yes", "on")
+                )
+    except Exception:
+        pass
+    if _tactical_config.use_velocity_profile_reference:
+        print(f"{_fbhv} SD-42M velocity-profile reference ENABLED (use_velocity_profile_reference=True)")
     if _segment_aware_enabled:
         # Segment-aware gating via fine-grained modifiers;
         # disable the legacy straight-only blanket gate so corner passes are possible.
@@ -1882,6 +1899,21 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 self._planner_traj_id = int(getattr(self, '_planner_traj_id', 0)) + 1
                 _prev_ref = getattr(self, '_planner_reference', None)
                 _prev_vx0 = float(_prev_ref.vx_mps[0]) if _prev_ref is not None and _prev_ref.vx_mps.size > 0 else None
+                # SD-42M: thread the per-TTL velocity profile + flag into
+                # build_reference. When the flag is on AND a profile for the
+                # active TTL exists, the legacy min-of-caps composition is
+                # bypassed and vx_mps comes from `slice_trajectory_from_profile`.
+                _ref_velocity_profile = (
+                    _scripted_velocity_profiles.get(_ref_ttl_key)
+                    if isinstance(_scripted_velocity_profiles, dict) else None
+                )
+                _ref_use_profile = bool(getattr(_tactical_config, 'use_velocity_profile_reference', False))
+                # Opp speed for FOLLOW headway / ABORT margin. _nearest_vs3
+                # is set above when a fellow exists; default 0 otherwise.
+                _ref_opp_v = float(_nearest_vs3 or 0.0)
+                # CTE for the tracking-error gate. self._last_waypoint_cte_for_speed
+                # is populated by the lateral MPC; default 0 if missing.
+                _ref_cte_now = float(getattr(self, '_last_waypoint_cte_for_speed', 0.0) or 0.0)
                 self._planner_reference = _planner_build_reference(
                     mode=str(_mode_tac or "FREE_RUN"),
                     ttl_key=_ref_ttl_key,
@@ -1903,6 +1935,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     sim_time_s=float(_sim_time_s),
                     traj_id=int(self._planner_traj_id),
                     prev_vx0_mps=_prev_vx0,
+                    velocity_profile=_ref_velocity_profile,
+                    use_velocity_profile=_ref_use_profile,
+                    opp_speed_mps=_ref_opp_v,
+                    cte_now_m=_ref_cte_now,
                 )
                 _ref0 = float(self._planner_reference.vx_mps[0])
                 print(
