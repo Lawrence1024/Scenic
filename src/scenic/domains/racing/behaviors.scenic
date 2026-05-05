@@ -590,9 +590,26 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _stability_guard_enabled = False
             print(f"{_fbhv} Phase1/Phase3 TTL dynamic mode disabled due to setup error.")
 
-    # Gear thresholds (m/s)
-    gear_up_thresholds = [0.0, 12.0, 22.0, 32.0, 42.0, 52.0]
-    gear_down_thresholds = [0.0, 9.0, 18.0, 28.0, 38.0, 48.0]
+    # SD-41I — Gear thresholds (m/s) derived from the dSPACE Dallara AV24
+    # plant model. Source files (canonical authority for these numbers):
+    #   .../IAC_Project/Parameterization/MOD_Traffic/Pool/Parameter/ASM/
+    #     Drivetrain/GearboxAT/GearboxAT_dallara24.xml
+    #   .../IAC_Project/.../SoftECU/ShiftStrategy/ShiftStrategy_dallara24.xml
+    #   .../IAC_Project/.../Drivetrain/Rear Differential/Rear Differential_dallara24.xml
+    #
+    # Computation: speed = Proc_n_up_acc / (gear_ratio · final_drive · 60) · π·D
+    # with Proc_n_up_acc = 3850 RPM, final_drive (MainReductionGear) = 3.0,
+    # tire diameter D ≈ 0.686 m (Dallara IL-15 spec).
+    #
+    #   Gear ratios (Map_GearRatio):  1=3.75  2=2.235  3=1.518  4=1.13  5=0.7
+    #   Computed upshift speeds (m/s): 1→2≈12.3   2→3≈20.6   3→4≈30.4   4→5≈40.8
+    #   Plant has NO gear 6: Map_GearRatio saturates at 0.7 for indices > 5.
+    #
+    # The Scenic upshift values [12, 22, 32, 42] match within ~1 m/s. Downshift
+    # values are 3 m/s below upshift for hysteresis. The previous lists
+    # included [42, 52] / [38, 48] entries for a phantom gear 6; removed.
+    gear_up_thresholds = [0.0, 12.0, 22.0, 32.0, 42.0]
+    gear_down_thresholds = [0.0, 9.0, 18.0, 28.0, 38.0]
 
     wp_last_idx = 0
 
@@ -2787,13 +2804,13 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     self.gear = new_gear
                     gear_changed = True
                     print(f"  [Gear] Proactive downshift from {current_gear} to {new_gear} (curvature_ahead={curvature_ahead_max:.3f} 1/m, speed={current_speed:.2f} m/s)")
-                elif current_gear < 6 and current_speed > gear_up_thresholds[min(current_gear, 5)]:
+                elif current_gear < 5 and current_speed > gear_up_thresholds[min(current_gear, 4)]:
                     new_gear = current_gear + 1
                     actions_to_take.append(SetGearAction(new_gear))
                     self.gear = new_gear
                     gear_changed = True
                     print(f"  [Gear] Shifting up from {current_gear} to {new_gear} (speed={current_speed:.2f} m/s)")
-                elif current_gear > 1 and current_speed < gear_down_thresholds[min(current_gear - 1, 5)]:
+                elif current_gear > 1 and current_speed < gear_down_thresholds[min(current_gear - 1, 4)]:
                     new_gear = current_gear - 1
                     actions_to_take.append(SetGearAction(new_gear))
                     self.gear = new_gear
@@ -3379,8 +3396,10 @@ behavior FollowModeBehavior(target_car, target_gap=31.0, manage_gears=True, use_
     # Get controllers
     _lon_controller, _lat_controller = simulation().getRacingControllers(self)
     past_steer_angle = 0
-    gear_up_thresholds = [0.0, 12.0, 22.0, 32.0, 42.0, 52.0]
-    gear_down_thresholds = [0.0, 9.0, 18.0, 28.0, 38.0, 48.0]
+    # SD-41I: see the matching block in FollowRacingLineMPCBehavior for the
+    # plant-derived rationale. Keep the two lists in sync.
+    gear_up_thresholds = [0.0, 12.0, 22.0, 32.0, 42.0]
+    gear_down_thresholds = [0.0, 9.0, 18.0, 28.0, 38.0]
     
     # Waypoint state (nearest index), used only if waypoints are available
     wp_last_idx = 0
@@ -3475,7 +3494,7 @@ behavior FollowModeBehavior(target_car, target_gap=31.0, manage_gears=True, use_
                 self.gear = 1
                 current_gear = 1
             elif current_speed is not None:
-                if current_gear < 6 and current_speed > gear_up_thresholds[current_gear]:
+                if current_gear < 5 and current_speed > gear_up_thresholds[current_gear]:
                     take SetGearAction(current_gear + 1)
                     self.gear = current_gear + 1
                     current_gear = self.gear

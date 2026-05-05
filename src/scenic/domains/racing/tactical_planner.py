@@ -406,27 +406,51 @@ def _smart_commit_cap(
     racing_line_target_mps: float,
     commit_margin_mps: float,
     stationary_threshold_mps: float = 3.0,
+    sustained_pace_floor_mps: float = 13.0,
 ) -> float:
-    """SD-41B: stationary-opponent commit cap.
+    """SD-41B + SD-41I: physics-aware commit speed cap.
 
-    Why: Pre-SD-41B, COMMIT_PASS_* used `max(3.0, opp_speed + commit_margin_mps)`
-    as the speed cap. With a stationary fellow (F9 stationary-blocker), this
-    collapses to max(3.0, 0 + 2.0) = 3.0 m/s — ego brakes hard from racing
-    speed for no safety reason, since the pass against a parked car is just
-    a lateral shift that can be done at racing-line speed (curvature clip
-    will still trim if there's an apex on the way).
+    The COMMIT_PASS_* speed cap has two structural constraints:
+
+    1. **Stationary opponent (SD-41B).** Pre-SD-41B used
+       `max(3.0, opp_speed + commit_margin_mps)`. With a stationary fellow
+       (F9), this collapses to ~3 m/s — ego brakes hard from racing speed
+       for no safety reason. Pass against a parked car is just a lateral
+       shift that can be done at racing-line speed.
+
+    2. **Vehicle gear physics (SD-41I).** The dSPACE Dallara AV24 plant
+       upshifts gear 1 → 2 at ~12 m/s (computed from
+       `Proc_n_up_acc = 3850 RPM`, `Map_GearRatio[1] = 3.75`,
+       `MainReductionGear = 3.0`, tire D ≈ 0.686 m). Below that point ego
+       sits in gear 1 where torque cannot sustain the commanded speed. SD-39
+       set `commit_margin = 2`, so against a 9 m/s fellow the cap was 11 m/s
+       — *below the gear-1 ceiling*. Pre-SD-41H, the MPC's factor-of-2
+       cost-coefficient bug accidentally drove ego to 22 m/s (= gear 2
+       territory) and the inconsistency was invisible. With the QP fixed,
+       ego now actually tracks v_ref = 11 m/s and gets stranded in gear 1,
+       falling behind the fellow it was trying to pass.
+
+       The `sustained_pace_floor_mps` (default 13.0) is set just above the
+       gear 1 → 2 upshift point so that commit_cap always lands ego firmly
+       in gear 2 or higher. Faster fellows (opp ≥ 11 m/s) are unaffected
+       because `opp + commit_margin` already exceeds the floor. F14's active
+       blocker (~12 m/s) gives `max(13, 12 + 2) = 14` — same cap as before.
+       Only slow-fellow scenarios (opp ≲ 11 m/s) benefit.
 
     Behavior:
-      - opp below `stationary_threshold_mps` (~3 m/s, basically parked /
-        rolling): skip the closing-speed cap; return racing-line target.
-      - opp at or above the threshold: return the prior formula unchanged.
-        F2 / F14 commit caps are unaffected.
+      - opp < `stationary_threshold_mps` (~3 m/s): return racing-line target
+        (skip closing-speed cap entirely; just lateral-shift around).
+      - opp ≥ stationary threshold: return
+        `max(sustained_pace_floor_mps, opp + commit_margin)`.
 
     Curvature clip is applied by the caller after this function returns.
     """
     if float(opp_speed_mps) < float(stationary_threshold_mps):
         return float(racing_line_target_mps)
-    return max(3.0, float(opp_speed_mps) + float(commit_margin_mps))
+    return max(
+        float(sustained_pace_floor_mps),
+        float(opp_speed_mps) + float(commit_margin_mps),
+    )
 
 
 @dataclass
