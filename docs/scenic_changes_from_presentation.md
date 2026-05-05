@@ -1825,12 +1825,16 @@ provide load-bearing emergency authority and stay in place.
 |---|---|---|
 | Planner output | `(mode, ttl, cap, reason)` tuple | Dense `PlannerReference` (7-col, N-horizon) |
 | MPC v_ref source | `effective_target_speed` after `min()` chain + slew + SD-40 clamp | `PlannerReference.vx_mps` directly |
+| MPC longitudinal cost coefficient | `P[v,v] += w_v` (off by 2× — solved to v = 2·v_ref) | `P[v,v] += 2·w_v` (solves to v = v_ref) |
 | Cap composition site | `behaviors.scenic` (after planner emits scalar cap) | `tactical_planner.build_reference()` (planner owns) |
 | Brain-leg cap delivery latency | Up to 1+ second slew lag | Same tick (no slew, no clamp) |
 | F9 stationary-blocker brake | Capped at 3 m/s during pass | Racing-line speed during pass |
 | Safety guard channel | Post-MPC command clip only | Helpers exist for pre-MPC swap (not wired); post-MPC clip retained |
 | Lateral profile | TTL waypoints via `ReferenceBuilder` (unchanged) | TTL waypoints via `ReferenceBuilder` (Stage D deferred) |
+| Gear thresholds | 6 entries (phantom gear 6 at 52/48 m/s) | 5 entries citing `GearboxAT_dallara24.xml` |
+| Commit cap floor | `max(3.0, opp + commit_margin)` (could land below gear-2 upshift) | `max(13.0, opp + commit_margin)` (always lands ego in gear ≥ 2) |
 | Telemetry | `_speed_caps` dict | `[PlannerRef]` log + `binding_cap_source` field |
+| F-bank scenario configuration | smart-stack flags only via runner `-p` | scenarios self-contain `tactical_planner_enabled=True` etc. |
 
 **Files.**
 - New: `src/scenic/domains/racing/planner/__init__.py`,
@@ -1841,3 +1845,125 @@ provide load-bearing emergency authority and stay in place.
   auto-enable, SD-32A "tactical" branch removal),
   `src/scenic/domains/racing/safety/stability_guard.py`
   (supervisor helpers).
+
+#### Stage H — Longitudinal MPC factor-of-2 cost coefficient
+
+While validating Stage C end-to-end on F2 (the canonical "slow fellow
+ahead" scenario), the contract turned out to be working — the planner
+correctly emitted `cap = 10.94 m/s`, `[PlannerRef]` correctly delivered
+that to `v_ref_profile`, the MPC consumed it directly — but ego still
+crashed into the fellow. CtrlTrace evidence was unambiguous: ego speed
+sat at 21–25 m/s ≈ 2 × v_ref with intermittent brief brake events when
+the overshoot grew too large.
+
+The bug. `mpc_longitudinal.py:173` had `P[v,v] += w_v` and `q[v] -= 2·w_v·v_ref`.
+OSQP solves `0.5·x'·P·x + q'·x`. Expanding the intended cost
+`w_v·(v − v_ref)²`:
+
+  - v² coefficient = w_v  →  P[v,v] should be **2·w_v** (so 0.5·2·w_v·v² = w_v·v²)
+  - v coefficient = −2·w_v·v_ref  →  q[v] = −2·w_v·v_ref ✓ (was correct)
+
+With P[v,v] = w_v (half), the unconstrained-quadratic minimum solves to
+**v = 2·v_ref** instead of v_ref. Same factor-of-2 issue at the terminal
+cost (line 224, `wT_v`).
+
+Why this stayed hidden. Pre-SD-39, `commit_speed_margin` was 16 m/s,
+so commit_cap = opp+16 was high enough that 2·cap saturated at
+`MAX_SPEED_LIMIT_MS=62.58` — ego raced past slow fellows at racing
+speed, contact-free, and the bug was invisible. SD-39 dropped
+commit_margin to 2.0 (cap = opp+2 = 11 m/s for slow fellows), which
+would have exposed the bug, but the slew limiter on
+`effective_target_speed` and SD-40's hard-ceiling clamp kept changing
+what reached the MPC. Stage C wired v_ref straight from
+`PlannerReference.vx_mps` with no slew, exposing the bug cleanly.
+
+The fix is two lines (per-step at `mpc_longitudinal.py:173`, terminal
+at `:224`). The control-rate cost (`w_du` at line 185, k=0 case) has
+the same algebraic shape and is also off by 2×, but it only affects
+smoothness, not the absolute target — left for a future cleanup.
+
+#### Stage I — Plant-derived gear thresholds + physics-aware commit cap
+
+Stage H exposed yet another structural mismatch — fixing the MPC let
+ego correctly track v_ref = 11 m/s, which is **below the dSPACE
+Dallara AV24 plant's gear 1 → 2 upshift point**. Ego stranded itself
+in gear 1, oscillating 5–9 m/s, and never approached the 9 m/s fellow
+it was supposed to pass.
+
+Verifying Scenic's gear thresholds against the plant:
+
+The dSPACE Dallara AV24 ships with parameter files that pin down the
+drivetrain and shift strategy. The relevant ones (referenced from
+`behaviors.scenic:594` going forward):
+
+  - `.../Drivetrain/GearboxAT/GearboxAT_dallara24.xml`:
+    `Map_GearRatio = [reverse −3.0, neutral 0, 1: 3.75, 2: 2.235,
+    3: 1.518, 4: 1.13, 5: 0.7]`. Saturates at gear 5 — **there is no
+    gear 6**.
+  - `.../Drivetrain/Rear Differential/Rear Differential_dallara24.xml`:
+    `Const_i_MainReductionGear = 3.0` (final drive).
+  - `.../SoftECU/ShiftStrategy/ShiftStrategy_dallara24.xml`:
+    `Proc_n_up_acc = 3850` RPM (upshift under acceleration);
+    `Proc_n_up_no_acc = 3500` RPM (coast upshift); plus the per-throttle
+    `Map_omega_Upshift` table.
+
+Computing the natural upshift speeds (`speed = n_up_acc / (gear_ratio
+× final_drive × 60) × π·D` with tire diameter ≈ 0.686 m for the IL-15):
+
+  | Transition | Plant computation (m/s) | Scenic threshold (m/s) | Match |
+  |---|---|---|---|
+  | 1 → 2 | 12.3 | 12.0 | ✓ |
+  | 2 → 3 | 20.6 | 22.0 | ✓ |
+  | 3 → 4 | 30.4 | 32.0 | ✓ |
+  | 4 → 5 | 40.8 | 42.0 | ✓ |
+  | 5 → 6 | n/a — no gear 6 | 52.0 | **phantom** |
+
+The first four entries match the plant within ~1 m/s, so they
+**are** physics-derived (probably empirically calibrated against the
+plant at some point in the past, just never documented). The 5 → 6
+entry is for a gear that doesn't exist; on a real shift attempt the
+dSPACE bridge silently clamps the requested gear, masking the bug.
+
+The two changes:
+
+1. `behaviors.scenic` gear lists trimmed to 5 entries each, with a
+   citation block pointing at the XML files. Both upshift conditional
+   sites updated: `current_gear < 6` → `current_gear < 5` and the
+   threshold lookup index clamps changed to match.
+
+2. `_smart_commit_cap` in `tactical_planner.py` gains a new parameter
+   `sustained_pace_floor_mps = 13.0`, set just above the gear 1 → 2
+   upshift point (12). For non-stationary opponents the cap becomes
+   `max(13, opp + commit_margin)`, ensuring ego always lands firmly in
+   gear 2 or higher. F2 (opp = 9): cap = max(13, 11) = **13** (was 11).
+   F14 (opp = 12): cap = max(13, 14) = **14** (unchanged). Faster
+   fellows: also unchanged. Stationary case (F9): still hands the
+   racing-line target through.
+
+The full chain is now structurally consistent end-to-end:
+
+```
+strategy_simulator   →   planner cap (≥ gear 2 floor)
+                              │
+                              ▼
+                    PlannerReference.vx_mps
+                              │
+                              ▼
+                MPC (correctly tracks v_ref, not 2·v_ref)
+                              │
+                              ▼
+              dSPACE plant (in gear 2+ → torque sufficient)
+```
+
+Three structural bugs the SD-41 work uncovered along the way (none of
+them in the original SD-41 plan — discovered by the cleaner contract):
+
+  - **F14 plant-level non-determinism**: 1 cm cte divergence at t=3.10s
+    amplifies to 85 / 65 / 0 contacts across three identical-code,
+    identical-init back-to-back runs. Origin is the dSPACE plant
+    readback (likely floating-point ordering, IPC timing, or
+    tire/suspension hysteresis in VEOS). Methodology decision: F9 is
+    the per-stage determinism gate; F14 is treated as a multi-run
+    distribution check, not a binary pass/fail.
+  - **MPC longitudinal QP factor-of-2** (Stage H above).
+  - **Planner cap below vehicle gear-2 floor** (Stage I above).
