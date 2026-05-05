@@ -1710,21 +1710,16 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 if _safety_binding and _decelerating:
                     slew_down_ms = max(slew_down_ms, 15.0)
                 effective_target_speed = max(last_eff - slew_down_ms * dt_slew, min(last_eff + slew_up_ms * dt_slew, float(effective_target_speed)))
-                # SD-40: brain-leg cohesion -- enforce planner's tactical cap
-                # as a HARD CEILING regardless of slew state. Without this, the
-                # slew limiter delays the MPC's tracked target by 1+ seconds when
-                # the planner drops the cap (e.g. FOLLOW mode commands cap=opp+0.3,
-                # but slew keeps the MPC tracking the previous higher value). The
-                # leg then accelerates while the brain is screaming "follow!".
-                # The slew is preserved for smoothness on UPWARD changes and for
-                # CTE / curvature / global caps; the tactical cap (which is the
-                # brain's explicit decision about safe speed given the situation)
-                # is treated as non-negotiable. Observed F14 t=15-17s: planner=
-                # FOLLOW with cap~12.3 m/s, ego speed climbed to 14.88 m/s before
-                # brake activated, then climbed again to 14.27 m/s at risk=0.95
-                # right before contact at t=17.95.
-                if _p3cap is not None:
-                    effective_target_speed = min(effective_target_speed, float(_p3cap))
+                # SD-41C: SD-40 hard-ceiling clamp removed. The clamp was a
+                # band-aid for the brain-leg gap — when planner cap dropped,
+                # the slew limiter held effective_target_speed at the prior
+                # value and the MPC kept accelerating. SD-40 forced eff <= cap
+                # in one tick. With Stage C, v_ref_profile is sourced from
+                # PlannerReference.vx_mps directly (which already composed all
+                # caps with no slew), so the slew limiter no longer affects
+                # what the MPC tracks in tactical mode — the clamp is redundant.
+                # The slew limiter and effective_target_speed remain, but only
+                # matter for the legacy non-tactical fallback path.
                 self._last_effective_target_speed = float(effective_target_speed)
 
             # --- SD-41B: emit dense PlannerReference (compatibility shim) ---
@@ -1793,6 +1788,25 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             else:
                 # Main mode: profile from effective_target_speed, then reduce for upcoming turns
                 v_ref_profile = [float(effective_target_speed)] * horizon
+            # SD-41C: when the tactical planner is on, source v_ref_profile
+            # from PlannerReference.vx_mps directly. The planner already
+            # composed all caps (cte, curvature, global, scripted, tactical)
+            # into vx_mps with NO slew or hard-ceiling band-aid, so the MPC
+            # tracks the brain's intent at the same tick it's set. The
+            # per-step curvature reduction below still runs on top, so any
+            # apex tighter than the planner's binding cap will pull the
+            # profile down further. Non-tactical scenarios (no PlannerReference)
+            # fall through to the legacy effective_target_speed source above.
+            if not pit_mode and _tactical_planner_enabled:
+                _ref_for_mpc = getattr(self, '_planner_reference', None)
+                if _ref_for_mpc is not None and _ref_for_mpc.vx_mps is not None and _ref_for_mpc.vx_mps.size > 0:
+                    _vx = _ref_for_mpc.vx_mps
+                    if _vx.size >= horizon:
+                        v_ref_profile = [float(v) for v in _vx[:horizon]]
+                    else:
+                        # Pad with the last value to fill the horizon.
+                        _last = float(_vx[-1])
+                        v_ref_profile = [float(v) for v in _vx] + [_last] * (horizon - _vx.size)
             # If we have waypoints (main mode only; pit already has constant profile), build a speed profile that reduces speed for upcoming turns (cached + vectorized)
             if not pit_mode and use_waypoints and wp_list and len(wp_list) >= 2:
                 # Stable cache key (shape + first/last waypoint) so cache hits when racing line is unchanged
@@ -1963,8 +1977,13 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 brake_mpc = float(brake_mpc)
             except Exception as ex:
                 print(f"{_fbhv} MPC longitudinal error: {ex}, using fallback")
-                # Fallback: simple proportional control
-                speed_error = effective_target_speed - current_speed
+                # Fallback: simple proportional control. SD-41C: prefer the
+                # planner reference's vx[0] when available so the fallback
+                # honors the brain even when the MPC solver bails.
+                _fb_target = float(effective_target_speed)
+                if v_ref_profile:
+                    _fb_target = float(v_ref_profile[0])
+                speed_error = _fb_target - current_speed
                 if speed_error > 0:
                     throttle_mpc = min(1.0, speed_error * 0.1)
                     brake_mpc = 0.0
