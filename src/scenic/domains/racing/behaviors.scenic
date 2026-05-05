@@ -1721,15 +1721,18 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 if not hasattr(self, '_last_effective_target_speed'):
                     self._last_effective_target_speed = float(effective_target_speed)
                 last_eff = float(self._last_effective_target_speed)
-                # SD-32A: when a SAFETY cap is binding (curvature or tactical pass-cap)
-                # and is asking for deceleration, raise the slew-down rate to ~1.5g so
-                # the cap is honored within ~0.4s instead of ~0.85s. cte slew rates stay
-                # unchanged — those target smoothness, not safety. Without this bump,
-                # SD-31's curvature-clipped commit cap (e.g. 7.4 m/s into a hairpin) is
-                # defeated by the 0.6 m/s/tick floor and ego enters the curve at ~14
-                # m/s, exceeding tire grip (S2 sample 6 fly-and-spin).
+                # SD-32A (post-SD-41F): raise slew-down rate to ~1.5g when the
+                # CURVATURE cap is binding and asking for deceleration so the cap
+                # is honored within ~0.4s instead of ~0.85s. Originally this also
+                # fired for the "tactical" cap, but Stage C wired v_ref_profile
+                # straight from PlannerReference.vx_mps; the slew limiter no
+                # longer affects what the MPC tracks in tactical mode (it only
+                # mutates the telemetry-only effective_target_speed). The
+                # "tactical" check was deleted as dead work. The curvature path
+                # remains load-bearing for non-tactical scenarios where
+                # effective_target_speed still drives v_ref_profile.
                 _bind = str(getattr(self, '_binding_speed_cap', '') or '')
-                _safety_binding = _bind in ("curvature", "tactical")
+                _safety_binding = _bind == "curvature"
                 _decelerating = float(effective_target_speed) < last_eff
                 if _safety_binding and _decelerating:
                     slew_down_ms = max(slew_down_ms, 15.0)
