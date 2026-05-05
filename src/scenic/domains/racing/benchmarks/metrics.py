@@ -79,7 +79,10 @@ class SampleMetrics:
 # Tags emitted by the racing pipeline. Defined here for documentation /
 # discoverability; ``_records_extract`` only reads the ones it knows about.
 _RECORD_TAGS = (
-    'EvalGT', 'EvalEvent', 'EvalEventDiag', 'EvalContact',
+    # SD-37: removed 'EvalEventDiag' (folded into EvalEvent fields) and
+    # 'EvalContact' (deleted; was redundant with EvalEvent + EvalGT and
+    # never read by _records_extract).
+    'EvalGT', 'EvalEvent',
     'Commit', 'Strategy', 'TickTime', 'BoundsCheck',
     'Guard', 'EgoStart', 'FellowPlacement',
 )

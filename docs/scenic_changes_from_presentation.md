@@ -1281,3 +1281,362 @@ investigation tools — not infrastructure worth maintaining. The
 findings above are what's load-bearing for future cycles. If a
 future cycle needs to redo the analysis, the methodology is small
 enough to recreate from this entry.
+
+### SD-30 — Selector clearance tiebreak + 1.0 m hard filter
+
+S2 falsifier sample 1 collided despite a passing prediction: the
+0.5 m clearance bar admitted close-call `pass_left` choices when a
+safer `pass_right` was available. SD-30 raised
+`strategy_min_clearance_m` from 0.5 → 1.0 (~half a Dallara width)
+and added a secondary tiebreak inside the `survivors` rank-1 group
+where, when both pass strategies pass the filter, the one with
+greater predicted clearance wins. Clearance is now both a hard bar
+and a tiebreak signal.
+
+**Files.** `src/scenic/domains/racing/planner/strategy_selector.py`,
+`src/scenic/domains/racing/tactical_planner.py` (config default).
+
+**Live verification.** Sample 1 fixed; broader campaign showed three
+*new* failure modes (samples 6, 8, 9), each a distinct mechanism —
+the SD-31/32 plan addresses all three.
+
+### SD-31 — Curvature-clipped pass cap
+
+S2 sample 6 went off-track and "flew" through Laguna Seca's
+turn-19 hairpin (κ ≈ 0.143, r ≈ 7 m) because the COMMIT_PASS speed
+cap was set to opp+commit_speed_margin without respecting the
+curvature ahead. SD-31 clips the commit cap by `sqrt(a_y_max / κ)`
+so ego enters tight curves at a tire-grip-feasible speed regardless
+of the strategy layer's preferred margin. New config field
+`commit_max_lateral_accel_mps2 = 8.0` (~0.82 g, conservative for
+IAC slicks).
+
+**Files.** `src/scenic/domains/racing/tactical_planner.py`
+(`_curvature_clip` helper + new field), `behaviors.scenic`
+(thread `curvature_ahead_max` to `tactical_planner_step_v1`).
+
+### SD-32A — Honor safety caps quickly via slew-rate bump
+
+The planner cap dropped to ~7 m/s on hairpin entry (SD-31) but the
+slew-rate limiter on `effective_target_speed` (~7-12 m/s²) took
+~0.85 s to converge — by then ego was at the apex. SD-32A bumps
+`slew_down_ms` to 15 m/s² (~1.5 g, brake-limited) when the binding
+cap is `tactical` or `curvature` AND the cap is asking for
+deceleration. Other slew rates (CTE, cruise) unchanged — those
+target smoothness, not safety.
+
+**Files.** `src/scenic/domains/racing/behaviors.scenic` (slew block
+near line 1707).
+
+### SD-32B — Closing-rate gap-feasibility guard
+
+Sample 8 collided longitudinally because the strategy simulator
+reported `pass_right ≈ 1-3 m` clearance for a pass that physically
+couldn't complete in the available longitudinal gap. SD-32B adds a
+pre-integration early-return in `simulate_strategy()` for `pass_*`:
+if `closing_speed × lane_change_tau × 1.2 > longitudinal_gap`, the
+pass is clamped to `min_clearance_m=0.0` with reason
+`gap_too_short_for_lane_change`. Original cut used absolute ego
+speed (`v_ego × τ`) which over-blocked legitimate passes; the
+**refined** version uses closing rate (`max(0, v_ego - v_opp) × τ`)
+so non-closing fellows don't trip the guard.
+
+**Files.**
+`src/scenic/domains/racing/prediction/strategy_simulator.py`.
+
+### SD-32C — Track-frame lateral pass-side guard
+
+Sample 9 collided from a `pass_left` commit into a fellow ALREADY
+on the LEFT TTL — geometric nonsense the simulator's lane-change
+blend asymmetry didn't catch. SD-32C adds a sanity guard: if
+`fellow_lat_track > +1.0 m` (substantially left of optimal),
+`pass_left` is clamped to 0; mirror for `pass_right`. Original cut
+used `OpponentSituation.lateral_m` which is in the **ego heading
+frame** (sign flips when ego yaws). **Refined** version uses a new
+`_signed_cross_track_at_s()` helper that projects fellow xy onto
+the optimal polyline's tangent — true track-frame lateral, sign-
+stable across ego heading changes.
+
+**Files.**
+`src/scenic/domains/racing/prediction/strategy_simulator.py`
+(helper + guard).
+
+### SD-33/34 — REVERTED
+
+Two coordinated structural fixes attempted then reverted:
+
+- **SD-33** (selector closing-flag demote of `stay_optimal`):
+  forced selector to drop `stay_optimal` when `closing_flag=True`
+  AND no `pass_*` survived the hard filter. Intended to break F14-
+  style "selector picks stay_optimal because it has the best
+  progress, even though we're closing on a wall" failures.
+- **SD-34** (side-polyline curvature drivability guard): blocked
+  passes when the side TTL has a tighter curve ahead than the
+  pass speed could handle. Intended to prevent off-tracks at the
+  Corkscrew when ego commits to right TTL.
+
+Live verification of the combined cut showed visualization
+regressions: the un-gated SD-33 forced extra `pass_right` commits
+on sample 1 (94 vs ~29 baseline), driving ego onto the right TTL
+through the Corkscrew → off-track. Reverted at `faa54ccc`. The
+underlying problems both still need fixes, but as separate plans
+with tighter gating conditions.
+
+### SD-35 — Risk-metric overhaul (longer lookahead, blocker-aware, no-escape gate)
+
+F14's active-blocker run surfaced a structural defect in
+`emergency_risk_01`: ego ran straight into the blocker at 14 m/s
+closing rate while the recorded risk plateaued around 0.5–0.6.
+The thresholds (`abort_risk_01=0.55`, `emergency_risk_enter_01
+=0.85`) sat *above* the metric's saturation floor in the actively-
+blocked regime, so neither gate ever fired. Three causes:
+
+1. **TTC normalization horizon (4.0 s) too long for the linear
+   ramp.** `(4 - ttc) / 4` only reads 0.93 at sub-second TTC — no
+   headroom above the abort threshold. Replaced with exponential
+   `1 - exp(-2.0 / max(ttc, 0.1))`. Crosses 0.50 at ttc ~3 s
+   (abort), 0.75 at ttc ~1.5 s (emergency-stable). Smooth ramp,
+   no plateau.
+2. **`flyby_d` damping suppresses risk against active blockers.**
+   The damping factor reduced gap+TTC pressures by 0.32–0.88 when
+   `pred_lat` was small. Intent was "ignore parallel fly-bys" but
+   actively-mirroring blockers keep `pred_lat` small for the
+   *wrong* reason. Added precondition: when
+   `closing_speed_mps > 5.0`, return `flyby_d = 1.0` (no damping).
+3. **No "no-escape" gate.** When all corridors are closed AND
+   `gap_ok=0` AND `closing_flag=1`, the situation is committed-
+   into-a-wall but the channel-max sometimes scored only ~0.6.
+   Added a final hard floor: in that condition, force
+   `risk = max(risk, 0.95)`.
+
+Threshold harmonization (matched to the new exponential ramp):
+
+- `pass_safe_risk_max`: 0.48 → 0.45 (don't commit if any TTC < 3.5 s)
+- `abort_risk_01`: 0.55 → 0.50 (abort committed pass at TTC ~3 s)
+- `emergency_risk_enter_01`: 0.85 → 0.75 (brake floor at TTC ~1.5 s)
+- `emergency_risk_exit_01`: 0.55 → 0.50 (preserve 0.25 hysteresis)
+
+**Files.**
+`src/scenic/domains/racing/assessment/race_situation.py`
+(`_compute_emergency_risk`, `_longitudinal_opening_dampen`),
+`src/scenic/domains/racing/tactical_planner.py` (config),
+`src/scenic/domains/racing/safety/stability_guard.py` (config).
+
+**Live verification.** F14 risk now reaches 0.50 at the right
+moment (~1.5 s before contact) and crosses the abort threshold;
+SD-36 is needed for the abort to actually brake.
+
+### SD-36 — ABORT_PASS brake authority
+
+After SD-35 the planner FSM correctly transitioned to ABORT_PASS,
+but ego still ran into the blocker because **`final_brake = 0`
+throughout the abort window**. Root causes (both load-bearing):
+
+1. **`_abort_result` returned `None` for `target_speed_cap`.**
+   With no cap, `effective_target_speed` fell back to the racing-
+   line target, MPC saw positive speed error, throttle stayed at
+   1.0. New: cap = `max(3.0, opp_speed - abort_speed_margin_mps)`,
+   so MPC sees a clear *negative* speed error and produces brake.
+   New config field `abort_speed_margin_mps = 5.0` for tunability.
+2. **Stability guard's brake floor wasn't reaching the actuator.**
+   `stability_guard_enabled` defaults to `False` in
+   `FollowRacingLineMPCBehavior` and **no production scenario
+   enabled it** — the guard was dead code. F14 now opts in
+   explicitly. Additionally added a panic-brake bypass in
+   `behaviors.scenic` so when `emergency_stable_mode=True`, the
+   guard's brake floor (0.30/0.45/0.60) reaches the actuator
+   without being clipped by the upstream `brake_cap` (0.25).
+
+**Files.**
+`src/scenic/domains/racing/tactical_planner.py` (`_abort_result`,
+new config), `src/scenic/domains/racing/behaviors.scenic`
+(panic-brake bypass after `stability_guard_step`),
+`examples/racing/f_shared/F14_fellow_ahead_active_blocker.scenic`
+(`stability_guard_enabled=True`).
+
+**Architectural note.** The `stability_guard_enabled=False` default
+on the production behavior means the safety layer is opt-in per
+scenario. This should probably be reversed (guard auto-enables when
+`tactical_planner_enabled=True`) but that change risks regressing
+S2 / F-bank scenarios that have implicit assumptions; deferred to
+a later plan.
+
+### SD-37 — Abort cooldown (with restorative gap growth)
+
+F14 ego escaped the first commit but immediately tried the *other*
+side, getting trapped in a left → abort → right → abort →
+contact oscillation. SD-37 adds a cooldown after ABORT_PASS exits:
+for `abort_cooldown_s` seconds, the strategy authority's
+`pass_left` / `pass_right` selections are downgraded to
+`follow_fellow`. New state field `last_abort_exit_s` stamps the
+cooldown start at all 4 ABORT exit return paths.
+
+**SD-37b refinement.** First cut used `abort_cooldown_s = 1.5` and
+`cap = opp + 0.3` during cooldown FOLLOW. Live verification showed
+the gap *shrank* during cooldown (10 → 8 m) because ego crept
+forward at ~opp speed. Tightened to:
+
+- `abort_cooldown_s`: 1.5 → 3.0 (more time for blocker mirror to
+  settle)
+- `cooldown_follow_speed_offset_mps`: new field, default `-1.5`,
+  so during cooldown the cap is `opp - 1.5` (ego falls behind at
+  1.5 m/s, gap GROWS by ~4.5 m over the 3 s window)
+- `strategy_min_clearance_m`: 1.0 → 2.0 (one car-width margin
+  required for a commit; rejects the marginal `1.13 m` clearances
+  that were re-triggering commits right after cooldown expired)
+
+**Files.** `src/scenic/domains/racing/tactical_planner.py`
+(config + state + cooldown gate in `_strategy_to_planner_output`).
+
+### SD-38 — Throttle/brake mutual exclusion + idle-creep brake floor
+
+User noticed simultaneous throttle + brake outputs (e.g.
+`final_throttle=0.20, final_brake=0.12`). Root cause: the
+stability guard's `reapproach_hold` mode applied a throttle cap
+AND a brake floor independently, with no mutual exclusion. The
+existing `BRAKE_THROTTLE_EXCLUSION_THRESHOLD = 0.05` check at
+`behaviors.scenic:2387` ran *before* the guard, so the guard's
+combined output bypassed it.
+
+Three changes:
+
+1. **In-guard mutex.** When `reapproach_hold` floors brake,
+   also zero throttle. Guard's outputs are now internally
+   coherent.
+2. **Defense-in-depth post-guard mutex.** After
+   `stability_guard_step` and the SD-36 panic-brake bypass, run a
+   final exclusion: if both `final_throttle > 0.05` and
+   `final_brake > 0.05`, brake wins (throttle = 0). Catches *any*
+   future source of conflict.
+3. **Idle-creep brake floor at near-stop speeds.** When
+   `guard_active` AND `current_speed < 2.0 m/s`, force
+   `final_brake ≥ 0.20`. Counters dSPACE plant idle propulsion
+   that would otherwise cause low-speed creep into a stopped
+   fellow.
+
+**Grade caveat (documented as known limitation).** The 0.20 floor
+is a flat-road approximation. Real idle physics is *torque*, not
+constant speed — uphill the engine drag dominates and ego
+decelerates without brake; downhill gravity assists and the floor
+may be insufficient. The longitudinal MPC at
+`mpc_longitudinal.py:430` already does grade-aware
+throttle/brake conversion (gravity compensation), but the SD-38
+floor is grade-blind. Future improvement when the controller is
+exercised on Laguna Seca's Corkscrew (~6% grade): make the floor
+grade-aware via `floor = 0.20 + max(0, -grade_pct * 0.05)`.
+
+**Files.** `src/scenic/domains/racing/safety/stability_guard.py`
+(in-guard mutex), `src/scenic/domains/racing/behaviors.scenic`
+(post-guard mutex + idle-creep floor).
+
+### SD-39 — Less-aggressive commit + abort-exit TTL retention
+
+Two coordinated fixes for the "ego accelerates into blocker
+during commit, then swerves into the still-overlapping blocker
+at abort exit" pattern:
+
+1. **Lower `commit_speed_margin_mps`**: 16.0 → 5.0 (rev1) → 2.0
+   (rev2). Default 16 made commits *accelerative races* — ego
+   accelerated from `opp_speed` up to `opp_speed + 16 m/s` during
+   the commit window, gaining closing momentum that the abort
+   layer then had to fight. Each tightening helped some but the
+   structural cause (MPC overshoot, see SD-40) means even tight
+   margins can't fully fix it via this knob.
+2. **Abort-exit TTL retention.** When ABORT_PASS exits and bbox
+   is still overlapping (`overlap_hazard_raw=True`), the planner
+   used to snap TTL back to "optimal" — causing ego to steer hard
+   left/right toward optimal and *swipe into the still-touching
+   fellow*. New `_abort_exit_ttl()` helper keeps the commit-side
+   TTL while overlapping; reverts to optimal once bbox-clear.
+   Applied at all 4 ABORT exit return paths.
+
+Also tuned F14 specifically: ego `target_speed: 60 → 20 m/s`. With
+the racing-line target lower, the slew limiter on
+`effective_target_speed` has a much smaller range to traverse
+during tactical commits (20 → 14 cap = 0.4 s slew vs 60 → 14 =
+3 s slew). Reduces slew-induced overshoot from ~7 m/s to ~3 m/s.
+
+**Files.** `src/scenic/domains/racing/tactical_planner.py`
+(commit margin, `_abort_exit_ttl` helper, applied at 4 sites),
+`examples/racing/f_shared/F14_fellow_ahead_active_blocker.scenic`
+(target_speed).
+
+### SD-40 — Brain-leg cohesion: hard-ceiling clamp after slew
+
+F14 still showed contact even after all the above tunes. The user
+identified the structural framing: **the planner is the brain, the
+MPC is the leg; the brain's hard limits should be non-negotiable.**
+Current behavior: planner sets `tactical_speed_cap = 12.3` (FOLLOW
+mode), MPC ends up tracking 14.5+ because the slew limiter on
+`effective_target_speed` (`behaviors.scenic:1711`) takes 1+ seconds
+to drag the MPC's tracked target down to the planner cap. During
+that lag, the leg accelerates while the brain is screaming "follow!".
+
+SD-40 adds a hard-ceiling clamp *after* the slew:
+
+```python
+if _p3cap is not None:
+    effective_target_speed = min(effective_target_speed, float(_p3cap))
+```
+
+Slew is preserved for **smoothness** (gradual changes still smooth,
+upward changes still rate-limited), but the planner's tactical cap
+is enforced as an immediate ceiling. The MPC's tracked target can
+never exceed what the brain currently forbids.
+
+**Files.** `src/scenic/domains/racing/behaviors.scenic` (one block
+just after the existing slew at line 1711).
+
+**Open issue.** Live verification of the post-SD-40 run still shows
+contact. The brain-leg disconnect is structurally addressed at the
+target-speed level, but other failure modes remain (likely strategy
+selector picking wrong mode, or non-determinism in scene generation
+producing harder F14 instances). A structural follow-up is planned
+to investigate end-to-end.
+
+### F14 + S3 + FellowActiveBlockBehavior — adversarial blocker test
+
+New negative-passing-test scenario. Fellow has full ego visibility
+and uses it adversarially: each control tick, projects ego xy onto
+its TTL, takes the resulting track-frame lateral as its target `d`,
+clips to `±max_lat_offset_m`, and slews `d` toward target with
+bounded lateral velocity. Speed tracks ego speed plus an offset
+(default `-5 mph`), clamped. Asymmetric information by design — ego
+can't read blocker's internal target.
+
+Movement physically plausible: rate-limited via the existing
+`_swerve_oc_slew_d_toward()` primitive (3 m/s lateral cap → ≤0.03 m
+per 10 ms tick → no teleporting).
+
+**Files.**
+`src/scenic/domains/racing/fellow/commands.py`
+(`compute_active_block_plant_command`),
+`src/scenic/domains/racing/behaviors.scenic`
+(`FellowActiveBlockBehavior`),
+`src/scenic/domains/racing/fellow/__init__.py` (export),
+`examples/racing/f_shared/F14_fellow_ahead_active_blocker.scenic`
+(F-bank regression scenario), `src/scenic/domains/racing/benchmarks/f_scenario_bank.py`
+(register F14),
+`examples/racing/falsifiable/S3_blocker_falsify.scenic`
+(falsifiable variant for VerifAI campaigns).
+
+### SD-37 logging cleanup (Phase 1)
+
+While debugging F14, the log volume made traces hard to read. Three
+consolidations:
+
+1. **`[EvalEvent]` and `[EvalEventDiag]` collapsed into one.** The
+   diag line was paired 1:1 with EvalEvent and only added
+   `ego_speed_mps`, `opp_center_dist_m`, `rel_speed_mps`,
+   `rel_longitudinal_m`, `overlap_state`, `seg`, `ahead_hint` —
+   folded into EvalEvent's fields. Saves ~156 lines per F14 run.
+2. **`[EvalContact]` deleted.** Listed in `_RECORD_TAGS` for
+   documentation but never read by `_records_extract`. Strict
+   dead code.
+3. **Legacy `[Phase2]` (failure-path) and `[Tactical]` (TTL switch
+   + periodic mode dump) emissions deleted.** Both already covered
+   by `[Assessment]`, `[Phase0Event]`, and `[CtrlTrace]`.
+
+**Files.** `src/scenic/domains/racing/behaviors.scenic` (4 sites),
+`src/scenic/domains/racing/benchmarks/metrics.py` (`_RECORD_TAGS`).
+Backward-compatible — no downstream parser breakage.

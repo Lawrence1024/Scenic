@@ -18,6 +18,7 @@ from scenic.domains.racing.waypoints import (
     select_forward_racing_waypoint,
 )
 from scenic.domains.racing.fellow import (
+    compute_active_block_plant_command,
     compute_always_faster_plant_command,
     compute_constant_offset_plant_command,
     compute_fellow_swerve_out_of_control_command,
@@ -354,6 +355,57 @@ behavior FellowAlwaysFasterThanEgoBehavior(speed_offset_mph=10, min_speed_mph=12
             speed_offset_mph=speed_offset_mph,
             min_speed_mph=min_speed_mph,
             max_speed_mph=max_speed_mph,
+        )
+        take SetFellowPlantAction(v_kmh, d_m)
+        self._fellow_plant_log_mode = mode
+        wait
+
+behavior FellowActiveBlockBehavior(speed_offset_mph=-5.0, min_speed_mph=30.0, max_speed_mph=160.0, max_lat_speed_mps=3.0, max_lat_offset_m=5.0, deadband_m=0.4):
+    """dSPACE fellow: actively blocks ego from overtaking (negative passing test).
+
+    Adversarial blocker with full ego state visibility. Each control tick the
+    blocker projects ego's xy onto its TTL, takes the resulting track-frame
+    lateral as its target ``d``, clips to ``±max_lat_offset_m``, and slews the
+    commanded ``d`` toward target with bounded lateral velocity. Speed tracks
+    ego's speed plus ``speed_offset_mph`` (default ``-5``), clamped to
+    ``[min_speed_mph, max_speed_mph]`` — the blocker stays slightly slower so
+    the gap collapses toward it.
+
+    Information is asymmetric by design: the blocker reads ego state (oracle
+    access for the adversary), while ego cannot read the blocker's internal
+    target. This is the negative-passing-test setup.
+
+    Each step **takes** :class:`~scenic.domains.racing.actions.SetFellowPlantAction`
+    with **v** from the speed-matching loop (mph→km/h) and **d** from the
+    lateral-tracking + slew loop. Same TTL/route requirements as
+    :obj:`FellowFollowTTLGeometricBehavior`; falls back to placement **d** if
+    preconditions fail (logged once).
+
+    Args:
+        speed_offset_mph: Blocker speed = ego speed + this (mph). Default
+            **-5** (blocker is 5 mph slower than ego).
+        min_speed_mph: Floor on commanded speed (mph). Default **30**. Prevents
+            both-cars-stop pathology if ego matches the blocker indefinitely.
+        max_speed_mph: Ceiling on commanded speed (mph). Default **160**.
+        max_lat_speed_mps: Maximum lateral velocity (m/s) for the d slew.
+            Default **3.0**. Matches F5 swerve magnitude. At dt=10 ms this
+            caps per-tick |Δd| at 0.03 m, ruling out teleportation.
+        max_lat_offset_m: Clip target d to ``±this`` so the blocker stays on
+            the drivable surface. Default **5.0** m.
+        deadband_m: If the new target is within this distance of the prior
+            commanded d, hold the prior value. Default **0.4** m. Suppresses
+            blocker jitter when ego is roughly straight.
+    """
+    self._fellow_vd_plant_enabled = True
+    while True:
+        v_kmh, d_m, mode = compute_active_block_plant_command(
+            self, simulation(), ego,
+            speed_offset_mph=speed_offset_mph,
+            min_speed_mph=min_speed_mph,
+            max_speed_mph=max_speed_mph,
+            max_lat_speed_mps=max_lat_speed_mps,
+            max_lat_offset_m=max_lat_offset_m,
+            deadband_m=deadband_m,
         )
         take SetFellowPlantAction(v_kmh, d_m)
         self._fellow_plant_log_mode = mode
@@ -1331,7 +1383,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         _scripted_active_ttl = _ttl_tac
                         wp_last_idx = 0
                         wp_list = list(self.waypoints)
-                        print(f"{_fl_mpc} [Tactical] t={_sim_time_s:.2f}s ttl_switch {_p3}->{_scripted_active_ttl} mode={_mode3}")
+                        # SD-37: removed legacy [Tactical] ttl_switch line.
+                        # TTL switches are already canonically logged by
+                        # [Phase0Event] type=ttl_switch (~line 2936), and
+                        # the per-tick mode is in [CtrlTrace] planner=...
+                        # ttl=... fields. This duplicate added 1 line per
+                        # switch with no unique information.
                 self.active_ttl = _scripted_active_ttl
                 # Phase 9 authority path owns speed cap end-to-end.
                 self._tactical_speed_cap = float(_cap_tac) if _cap_tac is not None else None
@@ -1438,8 +1495,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         'seg_ctx': _seg_ctx,
                         'seg_modifier': _seg_modifier,
                     })
-                if getattr(self, '_full_control_ticks', 0) % 50 == 0:
-                    print(f"{_fl_mpc} [Tactical] t={_sim_time_s:.2f}s mode={_mode3} ttl={_scripted_active_ttl} cap={self._tactical_speed_cap}")
+                # SD-37: removed legacy [Tactical] periodic mode dump.
+                # Mode/ttl/cap are already logged every tick in [CtrlTrace]
+                # (planner=, ttl=) and per-tick [Planner] events; the every-
+                # 50-step coarse dump added no information.
             
             # --- Curvature-based speed gate (from suggestion.md) ---
             # Formula: v_max(s) = sqrt(a_y_max / (|κ(s)| + ε))
@@ -1650,6 +1709,21 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 if _safety_binding and _decelerating:
                     slew_down_ms = max(slew_down_ms, 15.0)
                 effective_target_speed = max(last_eff - slew_down_ms * dt_slew, min(last_eff + slew_up_ms * dt_slew, float(effective_target_speed)))
+                # SD-40: brain-leg cohesion -- enforce planner's tactical cap
+                # as a HARD CEILING regardless of slew state. Without this, the
+                # slew limiter delays the MPC's tracked target by 1+ seconds when
+                # the planner drops the cap (e.g. FOLLOW mode commands cap=opp+0.3,
+                # but slew keeps the MPC tracking the previous higher value). The
+                # leg then accelerates while the brain is screaming "follow!".
+                # The slew is preserved for smoothness on UPWARD changes and for
+                # CTE / curvature / global caps; the tactical cap (which is the
+                # brain's explicit decision about safe speed given the situation)
+                # is treated as non-negotiable. Observed F14 t=15-17s: planner=
+                # FOLLOW with cap~12.3 m/s, ego speed climbed to 14.88 m/s before
+                # brake activated, then climbed again to 14.27 m/s at risk=0.95
+                # right before contact at t=17.95.
+                if _p3cap is not None:
+                    effective_target_speed = min(effective_target_speed, float(_p3cap))
                 self._last_effective_target_speed = float(effective_target_speed)
             
             # --- Build speed reference profile for MPC ---
@@ -2390,8 +2464,52 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     predicted_collision_available=bool(getattr(self, "_predicted_collision_available", False)),
                 )
                 final_steer = float(_p10_guard.steer_cmd_rad)
-                final_throttle = float(_p10_guard.throttle_cmd)
-                final_brake = float(_p10_guard.brake_cmd)
+                # SD-36: panic-brake authority during EMERGENCY_STABLE. The guard
+                # outputs a brake floor (0.30/0.45/0.60 depending on overlap +
+                # closing flags) when predicted_collision fires. Without this
+                # explicit override, downstream brake_cap re-clips and slew
+                # limits earlier in this tick cap the brake at 0.25 (MAX_BRAKE_NORMAL).
+                # Forcing throttle to 0 and using the guard's brake floor as a
+                # *hard floor* (max with whatever else was set) ensures the
+                # safety layer's authority is real, not just advisory.
+                if bool(_p10_guard.emergency_stable_mode):
+                    final_throttle = 0.0
+                    final_brake = max(float(_p10_guard.brake_cmd), float(final_brake))
+                else:
+                    final_throttle = float(_p10_guard.throttle_cmd)
+                    final_brake = float(_p10_guard.brake_cmd)
+                # SD-38: defense-in-depth mutual exclusion AFTER the guard.
+                # The pre-guard mutual exclusion (line 2387-2390) only catches
+                # conflicts that exist before the guard runs. The guard itself
+                # can re-introduce both-active commands (e.g. reapproach_hold's
+                # cap-throttle + floor-brake combo). This final check ensures
+                # the controller NEVER emits both throttle and brake. Brake
+                # wins because if anything in the chain decided "brake",
+                # there's a safety reason for it -- shedding throttle is
+                # always safer than the alternative.
+                if final_brake > 0.05 and final_throttle > 0.05:
+                    final_throttle = 0.0
+                # SD-38: idle-creep brake floor at near-stop speeds. A real
+                # car with engaged gear creeps forward due to idle TORQUE
+                # (not constant speed); the actual effect depends on road
+                # grade -- uphill the engine drag dominates and the car
+                # decelerates without brake; flat ground gives slow creep;
+                # downhill gravity + idle torque both push forward and
+                # demand stronger brake to hold. The dSPACE plant model has
+                # similar behavior.
+                #
+                # GRADE LIMITATION: this 0.20 floor is a flat-road
+                # approximation. On the actual Laguna Seca-style track with
+                # significant elevation changes (the Corkscrew has ~6% grade),
+                # this is too aggressive uphill (wastes brake) and too gentle
+                # downhill (may not hold against gravity). When the controller
+                # is exercised on grade, this should become grade-aware:
+                #   floor = 0.20 + max(0, -grade_pct * 0.05)  (more brake downhill)
+                # Read grade from ttl waypoints' z-values vs ego s-position.
+                # For now (mostly-flat F-bank scenarios), 0.20 works.
+                if bool(_p10_guard.guard_active) and current_speed < 2.0:
+                    final_brake = max(float(final_brake), 0.20)
+                    final_throttle = 0.0
                 self._phase_effective_planner_state = str(_p10_guard.planner_state or getattr(self, "_phase_effective_planner_state", "FREE_RUN"))
                 self._phase_effective_ttl = str(_p10_guard.active_ttl or getattr(self, "_phase_effective_ttl", _scripted_active_ttl))
                 self._phase_effective_reason = str(_p10_guard.decision_reason or getattr(self, "_phase_effective_reason", "none"))
@@ -2662,10 +2780,22 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 _ahead_dbg = (
                     1 if (nearest_rel_longitudinal is not None and nearest_rel_longitudinal > 0.0) else 0
                 )
+                # SD-37: collapsed EvalEvent + EvalEventDiag into a single
+                # canonical contact-event line. The previous two-line format
+                # emitted ~312 lines per F14 run with redundant t / severity /
+                # bbox_gap_m / dspace_obj1_m fields. Folded EvalEventDiag's
+                # unique fields (ego_speed_mps, opp_center_dist_m, rel_speed_mps,
+                # rel_longitudinal_m, overlap_state, seg, ahead_hint) into
+                # EvalEvent. Downstream parsers (metrics.py:_records_extract)
+                # only consumed bbox_gap_m + type=eval_contact from EvalEvent,
+                # so adding diagnostic fields is backward-compatible.
                 print(
                     f"[EvalEvent] t={t_log:.2f}s type=eval_contact severity={_risk_step} "
                     f"bbox_gap_m={_os_step} dspace_obj1_m={_ds_step} "
-                    f"dspace_valid={1 if _cflags_step.get('dspace_valid', False) else 0}"
+                    f"dspace_valid={1 if _cflags_step.get('dspace_valid', False) else 0} "
+                    f"ego_speed_mps={float(current_speed):.3f} opp_center_dist_m={_opp_d_step} "
+                    f"rel_speed_mps={_opp_rel_v_step} rel_longitudinal_m={_opp_rel_s_step} "
+                    f"overlap_state={_ov_dbg} seg={_seg_dbg} ahead_hint={_ahead_dbg}"
                 )
                 _record_event('EvalEvent', {
                     't': float(t_log),
@@ -2674,17 +2804,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     'bbox_gap_m': (float(_obb_sep_step) if _obb_sep_step is not None else None),
                     'dspace_obj1_m': (float(_gt_d_step) if eval_dspace_dist_object_1_valid(_gt_d_step) else None),
                     'dspace_valid': bool(_cflags_step.get('dspace_valid', False)),
-                })
-                print(
-                    f"[EvalEventDiag] t={t_log:.2f}s severity={_risk_step} "
-                    f"ego_speed_mps={float(current_speed):.3f} opp_center_dist_m={_opp_d_step} "
-                    f"rel_speed_mps={_opp_rel_v_step} rel_longitudinal_m={_opp_rel_s_step} "
-                    f"overlap_state={_ov_dbg} seg={_seg_dbg} ahead_hint={_ahead_dbg} "
-                    f"bbox_gap_m={_os_step} dspace_obj1_m={_ds_step}"
-                )
-                _record_event('EvalEventDiag', {
-                    't': float(t_log),
-                    'severity': str(_risk_step),
                     'ego_speed_mps': float(current_speed),
                     'opp_center_dist_m': (float(nearest_dist) if nearest_dist is not None else None),
                     'rel_speed_mps': (float(nearest_rel_speed) if nearest_rel_speed is not None else None),
@@ -2692,8 +2811,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     'overlap_state': _ov_dbg,
                     'seg': _seg_dbg,
                     'ahead_hint': int(_ahead_dbg),
-                    'bbox_gap_m': (float(_obb_sep_step) if _obb_sep_step is not None else None),
-                    'dspace_obj1_m': (float(_gt_d_step) if eval_dspace_dist_object_1_valid(_gt_d_step) else None),
                 })
         # Log step summary every 50 steps; include t= and OpenDRIVE-based segment for segment performance analysis
         if self._behavior_step_count % 50 == 0:
@@ -2814,24 +2931,13 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     'center_minus_bbox_m': (float(_center_minus_obb) if _center_minus_obb is not None else None),
                     'bbox_minus_gt_m': (float(_obb_minus_gt) if _obb_minus_gt is not None else None),
                 })
-                print(
-                    f"[EvalContact] t={t_log:.2f}s risk={_risk} "
-                    f"bbox_gap_m={_os} dspace_valid={1 if _gt_valid else 0} "
-                    f"overlap_hull={1 if _cflags['overlap_obb'] else 0} "
-                    f"overlap_sensor={1 if _cflags['overlap_sensor'] else 0} "
-                    f"near_hull={1 if _cflags['near_obb'] else 0} "
-                    f"near_sensor={1 if _cflags['near_sensor'] else 0}"
-                )
-                _record_event('EvalContact', {
-                    't': float(t_log),
-                    'risk': str(_risk),
-                    'bbox_gap_m': (float(_obb_sep) if _obb_sep is not None else None),
-                    'dspace_valid': bool(_gt_valid),
-                    'overlap_hull': bool(_cflags.get('overlap_obb', False)),
-                    'overlap_sensor': bool(_cflags.get('overlap_sensor', False)),
-                    'near_hull': bool(_cflags.get('near_obb', False)),
-                    'near_sensor': bool(_cflags.get('near_sensor', False)),
-                })
+                # SD-37: removed [EvalContact] emission. It was a sample-cadence
+                # (~12 lines/run) duplicate of EvalEvent's overlap/near
+                # severity, with redundant fields (bbox_gap_m, dspace_valid)
+                # already in EvalEvent and EvalGT. The overlap_hull/sensor flags
+                # weren't consumed by metrics.py; they were captured by
+                # _record_event but never queried by _records_extract. Strict
+                # dead code, removed.
             # Phase 2: race-semantics opponent state (planner inputs; same cadence as Phase 0 line).
             try:
                 if nearest_obj is not None and car_heading is not None:
@@ -2864,10 +2970,14 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     )
                     self._opponent_overlap_state = _new_ov
                     print(format_opponent_log_line(t_log, _sit_p2))
-                else:
-                    print(f"[Phase2] t={t_log:.2f}s opponent=none")
-            except Exception as _e_p2:
-                print(f"[Phase2] t={t_log:.2f}s assess_error={_e_p2}")
+                # SD-37: removed legacy [Phase2] opponent=none and assess_error
+                # fallback emissions. The success path uses format_opponent_log_line
+                # (which emits [Phase2] with full opponent state), and absence
+                # of an opponent or an assessment error is already captured by
+                # missing [Assessment] lines downstream — no separate diagnostic
+                # tag needed for the failure-mode case.
+            except Exception:
+                pass
             if cte is not None and abs(float(cte)) >= 10.0:
                 print(f"[Phase0Event] t={t_log:.2f}s type=off_track cte_m={float(cte):.3f}")
             # Ref continuity / gate logging (todo1: match_dist, gate ACCEPT/REJECT, s_ref/dS_ref/s_jump_flag, segment_prev->new, stick_blocked, e_y_mpc vs cte_behavior)

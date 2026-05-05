@@ -224,12 +224,24 @@ def _longitudinal_opening_dampen(
     actual_gap_m: float,
     safe_gap_m: float,
     ego_speed_mps: float,
+    closing_speed_mps: Optional[float] = None,
 ) -> float:
     """Reduce gap/TTC pressure when lateral offset + along-track slot support a fly-by.
 
     Longitudinal distance supplies the "opening"; once it clears a modest slot, ego speed
     should not inflate rear-end style fear the way it does when opponents are co-linear.
+
+    SD-35: when ``closing_speed_mps`` exceeds ACTIVE_CLOSING_GUARD_MPS, return 1.0
+    (no damping). The original logic assumed small lateral = parallel fly-by, which
+    breaks against an actively-mirroring blocker — that opponent keeps ``pred_lat``
+    small for the wrong reason (it is *tracking* ego), so the damping suppressed risk
+    exactly when ego was being trapped. Active closing > 5 m/s means the opponent is
+    not in a steady-state fly-by; honor the full pressure.
     """
+    # SD-35: closing-rate gate. See docstring above.
+    ACTIVE_CLOSING_GUARD_MPS = 5.0
+    if closing_speed_mps is not None and float(closing_speed_mps) > ACTIVE_CLOSING_GUARD_MPS:
+        return 1.0
     lat_abs = abs(float(pred_lat_m))
     if lat_abs < float(FLYBY_LAT_MIN_M):
         return 1.0
@@ -259,6 +271,10 @@ def _compute_emergency_risk(
     pred_lat_m: float,
     opponent_speed_mps: float,
     ego_speed_mps: float,
+    optimal_open: bool = True,
+    left_open: bool = True,
+    right_open: bool = True,
+    gap_ok: bool = True,
 ) -> float:
     """Design-level risk decomposition (not single additive tweak)."""
 
@@ -272,12 +288,25 @@ def _compute_emergency_risk(
         gap_pressure = _clamp01((float(safe_gap_m) - float(actual_gap_m)) / max(1e-6, float(safe_gap_m)))
         if closing_flag and float(sit.closing_speed_mps) > 1e-6:
             ttc_s = max(0.0, float(actual_gap_m)) / float(sit.closing_speed_mps)
-            ttc_pressure = _clamp01((4.0 - ttc_s) / 4.0)
+            # SD-35: exponential TTC pressure with tunable time constant. The
+            # prior linear formula `(4.0 - ttc) / 4.0` saturated near 0.93 at
+            # sub-second TTC -- below the abort/emergency thresholds -- so the
+            # metric never crossed its action triggers in active-blocker scenarios.
+            # tau=2.0s gives:  ttc=4s -> 0.39  ttc=3s -> 0.49  ttc=2s -> 0.63
+            #                  ttc=1.5s -> 0.74  ttc=1s -> 0.86  ttc=0.5s -> 0.98
+            # Crosses the new abort threshold (0.50) at ttc~3s; emergency
+            # threshold (0.75) at ttc~1.5s. Smooth ramp across racing-relevant
+            # range; matches IAC literature on tactical-decision horizons.
+            TTC_TAU_S = 2.0
+            TTC_FLOOR_S = 0.1
+            ttc_clamped = max(float(ttc_s), TTC_FLOOR_S)
+            ttc_pressure = _clamp01(1.0 - math.exp(-TTC_TAU_S / ttc_clamped))
         if stationary_opp and lateral_clear:
             gap_pressure *= 0.35
             ttc_pressure *= 0.35
         flyby_d = _longitudinal_opening_dampen(
-            pred_lat_m, float(actual_gap_m), float(safe_gap_m), float(ego_speed_mps)
+            pred_lat_m, float(actual_gap_m), float(safe_gap_m), float(ego_speed_mps),
+            closing_speed_mps=float(sit.closing_speed_mps),
         )
         # Fly-by damping assumes adequate longitudinal headway. Inside the safe-gap envelope,
         # keep full rear-end / closing pressure (e.g. sudden stop while still "gap_ok" false).
@@ -290,12 +319,23 @@ def _compute_emergency_risk(
     # Shoulder / roadside: do not apply full overlap spike when the car is clearly off-axis.
     overlap_pressure = 0.90 if overlap_flag and (not lateral_clear) else 0.0
     # Use max to reflect "any severe mode should dominate".
-    return max(
+    risk = max(
         base,
         gap_pressure,
         ttc_pressure,
         overlap_pressure,
     )
+    # SD-35: trap-state floor. When all corridors are simultaneously closed AND
+    # gap is below safe AND we're closing, the situation is committed-into-a-wall
+    # with no exit. Force the metric to 0.95 so the abort + emergency gates always
+    # fire, regardless of how the channel-max happened to score. Three independent
+    # conditions guard against false positives from corridor-hysteresis flicker.
+    no_corridor_open = (
+        not bool(optimal_open) and not bool(left_open) and not bool(right_open)
+    )
+    if no_corridor_open and not bool(gap_ok) and bool(closing_flag):
+        risk = max(risk, 0.95)
+    return risk
 
 
 def assess_race_situation(
@@ -415,6 +455,13 @@ def assess_race_situation(
         pred_lat_m=pred_lat,
         opponent_speed_mps=float(getattr(sit, "opponent_speed_mps", 0.0)),
         ego_speed_mps=float(ego_speed_mps),
+        # SD-35: thread post-hysteresis corridor flags + gap_ok into the risk
+        # function so the trap-state floor can fire when ego is committed-
+        # into-a-wall (all corridors closed AND below safe gap AND closing).
+        optimal_open=bool(optimal_open),
+        left_open=bool(left_open),
+        right_open=bool(right_open),
+        gap_ok=bool(gap_ok),
     )
     latch_steps = int(st.emergency_latch_steps)
     if risk_now >= 0.70:

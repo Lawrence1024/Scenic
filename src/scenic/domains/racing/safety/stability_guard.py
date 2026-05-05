@@ -25,8 +25,15 @@ class StabilityGuardConfig:
     high_steer_abs_rad: float = 0.20
     max_brake_when_high_steer: float = 0.35
     ttl_switch_min_interval_s: float = 0.75
-    emergency_risk_enter_01: float = 0.85
-    emergency_risk_exit_01: float = 0.55
+    # SD-35: lowered from 0.85 to 0.75. Under the new exponential TTC ramp
+    # in race_situation._compute_emergency_risk, 0.75 corresponds to ttc ~1.5 s
+    # — last-chance window to floor brakes (1.5g decel ≈ 22 m/s reduction in
+    # 1.5 s). Was 0.85 (≈ttc 0.7 s under old metric), too late for the F14
+    # active-blocker case where contact occurred before the threshold was crossed.
+    emergency_risk_enter_01: float = 0.75
+    # SD-35: exit lowered from 0.55 to 0.50. Maintains the original 0.25
+    # hysteresis spread between enter and exit thresholds.
+    emergency_risk_exit_01: float = 0.50
     emergency_hold_s: float = 0.8
     emergency_brake_floor: float = 0.30
     emergency_overlap_brake_floor: float = 0.60
@@ -261,6 +268,16 @@ def stability_guard_step(
             throttle = min(throttle, float(config.reapproach_max_throttle))
             if (not bool(gap_ok)) or bool(closing_flag):
                 brake = max(brake, float(config.reapproach_brake_floor))
+                # SD-38: enforce throttle/brake mutual exclusion when the
+                # reapproach_hold brake floor fires. The guard previously
+                # capped throttle (above) AND floored brake independently,
+                # producing simultaneous outputs (e.g. throttle=0.20 and
+                # brake=0.12 in F14 t=21.8s onward). A coordinated controller
+                # never commands both. Brake wins -- if we believe the
+                # situation is bad enough to floor brake, it's bad enough
+                # to release throttle entirely.
+                if brake > 0.05:
+                    throttle = 0.0
 
     if ttl_switch_blocked:
         guard_active = True

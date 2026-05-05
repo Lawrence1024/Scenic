@@ -701,6 +701,135 @@ def compute_follow_ttl_geometric_plant_command(
     return v_kmh, d_m, sub
 
 
+def compute_active_block_plant_command(
+    obj: Any,
+    simulation: Any,
+    ego_obj: Any,
+    *,
+    speed_offset_mph: float = -5.0,
+    min_speed_mph: float = 30.0,
+    max_speed_mph: float = 160.0,
+    max_lat_speed_mps: float = 3.0,
+    max_lat_offset_m: float = 5.0,
+    deadband_m: float = 0.4,
+    fellow_index: Optional[int] = None,
+) -> tuple[float, float, str]:
+    """Adversarial blocker: mirror ego's lateral position with bounded slew; speed-match ego.
+
+    Per control tick:
+      1. Read ``ego_obj.position`` (NEW-XODR frame from ``dspaceActor``) and ``ego_obj.speed``.
+      2. Translate ego position into RD frame, project onto fellow's TTL via
+         ``project_world_to_st`` to get track-frame lateral ``t_track``.
+      3. Target lateral ``d`` = ``t_track`` clipped to ``±max_lat_offset_m``. If the change
+         from the prior commanded ``d`` is below ``deadband_m``, hold the prior value
+         (suppresses jitter from ego lateral noise).
+      4. Slew current ``d`` toward target via :func:`_swerve_oc_slew_d_toward` so
+         ``|Δd / Δt| ≤ max_lat_speed_mps``. Guarantees no teleport at the 10 ms tick.
+      5. Speed: ``ego_speed_mph + speed_offset_mph`` clamped to
+         ``[min_speed_mph, max_speed_mph]``. Default ``speed_offset_mph = -5`` keeps the
+         blocker slightly slower so the gap collapses toward the blocker.
+
+    Falls back to placement-d if frame-projection preconditions are not met (no Lap route,
+    missing TTL, or no road_index) — same fallback policy as
+    :func:`compute_fellow_ttl_geometric_d_m`.
+
+    Information access is intentionally asymmetric: the blocker reads ego position +
+    speed (oracle access on ego state), while ego cannot read the blocker's internal
+    target. This is the negative-passing-test design: an adversarial blocker with as
+    much information as a defending driver could have.
+
+    Returns ``(v_kmh, d_m, log_suffix)``.
+    """
+    # --- Speed: track ego speed minus offset, clamped. -----------------------
+    ego_speed_mps = 0.0
+    sp = getattr(ego_obj, "speed", None)
+    if sp is not None:
+        try:
+            ego_speed_mps = float(sp)
+        except (TypeError, ValueError):
+            ego_speed_mps = 0.0
+    ego_speed_mph = ego_speed_mps * _MPS_TO_MPH
+    target_mph = max(
+        float(min_speed_mph),
+        min(float(max_speed_mph), ego_speed_mph + float(speed_offset_mph)),
+    )
+    v_kmh = mph_to_kmh(target_mph)
+
+    # --- Lateral: project ego onto fellow's TTL, clip, slew. -----------------
+    # Read ego position in NEW XODR frame (matches dspaceActor.position contract;
+    # mirrors the pattern at line 218 for the fellow's own position).
+    ego_da = getattr(ego_obj, "dspaceActor", None)
+    ego_xy_xodr = None
+    if ego_da is not None and getattr(ego_da, "position", None) is not None:
+        try:
+            ego_xy_xodr = (float(ego_da.position.x), float(ego_da.position.y))
+        except (TypeError, ValueError):
+            ego_xy_xodr = None
+
+    # Frame + projection preconditions (parallel to compute_fellow_ttl_geometric_d_m).
+    route_pref = getattr(obj, "_route", None)
+    scene = getattr(simulation, "scene", None)
+    scene_params = getattr(scene, "params", None) or {}
+    ttl_folder = getattr(obj, "ttlFolder", None) or scene_params.get("ttlFolder")
+    optimal_csv = getattr(obj, "ttlFileName", None) or scene_params.get("ttlFileName")
+    road_index = getattr(simulation, "_road_index_ttl", None) or getattr(
+        simulation, "_road_index", None
+    )
+
+    target_d = None
+    log_lat = "placement_t"
+    if (
+        ego_xy_xodr is not None
+        and route_pref == "Lap"
+        and ttl_folder
+        and str(ttl_folder).strip()
+        and optimal_csv
+        and road_index
+    ):
+        try:
+            from scenic.simulators.dspace import utils as dutils
+            from scenic.simulators.dspace.geometry.frame_calibration import xodr_to_rd
+            from scenic.simulators.dspace.geometry.params import get_map_path
+            from scenic.simulators.dspace.vehicle.fellow_racing_line_lateral import (
+                _road_index_main_track_only,
+            )
+
+            idx_main = _road_index_main_track_only(road_index)
+            if idx_main is not None:
+                # Translate ego XODR -> RD before projecting (TTL polyline lives in RD).
+                xodr_path = get_map_path(scene_params)
+                ex_rd, ey_rd = xodr_to_rd(ego_xy_xodr[0], ego_xy_xodr[1], xodr_path)
+                _s_ego, t_ego_track = dutils.project_world_to_st(idx_main, (ex_rd, ey_rd))
+                # Clip to drivable lateral envelope (don't drive into the wall).
+                target_d = max(-float(max_lat_offset_m),
+                               min(float(max_lat_offset_m), float(t_ego_track)))
+                log_lat = "ego_t_track"
+        except Exception as ex:
+            if not getattr(obj, "_active_block_warned_proj", False):
+                obj._active_block_warned_proj = True
+                logger.warning(
+                    "[Fellow active_block] ego projection failed (%s); placement d",
+                    ex,
+                )
+
+    # Deadband: if the new target is within deadband_m of the prior commanded d,
+    # hold the prior value. Prevents jitter when ego is roughly straight.
+    if target_d is None:
+        # Fallback: placement (matches always-faster's behaviour when projection unavailable).
+        target_d = get_fellow_placed_lateral_deviation(obj)
+        log_lat = "placement_t"
+    last_d = get_fellow_plant_d_m(obj, if_missing=None) if hasattr(obj, "_fellow_plant_state") else None
+    if last_d is None:
+        last_d = get_fellow_placed_lateral_deviation(obj)
+    if abs(float(target_d) - float(last_d)) < float(deadband_m):
+        target_d = float(last_d)
+
+    # Rate-limit toward target_d using the existing swerve slew primitive.
+    d_m = _swerve_oc_slew_d_toward(obj, simulation, float(target_d), float(max_lat_speed_mps))
+
+    return v_kmh, float(d_m), f"active_block/{log_lat}"
+
+
 def compute_always_faster_plant_command(
     obj: Any,
     simulation: Any,

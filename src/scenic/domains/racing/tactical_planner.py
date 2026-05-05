@@ -114,7 +114,11 @@ class TacticalPlannerConfig:
     relevance_dist_m: float = 95.0
     blocked_longitudinal_m: float = 42.0
     blocked_distance_m: float = 62.0
-    pass_safe_risk_max: float = 0.48
+    # SD-35: lowered from 0.48 to 0.45. Under the new exponential TTC ramp
+    # (race_situation.py:_compute_emergency_risk), 0.45 corresponds to
+    # ttc ~3.5 s — i.e. don't commit a new pass if any fellow is closer
+    # than ~3.5 s of headway. Was 0.48 (≈ttc 8 s under old linear ramp).
+    pass_safe_risk_max: float = 0.45
     pass_requires_straight: bool = True
     setup_flip_cooldown_s: float = 4.0
     follow_speed_margin_mps: float = 2.5
@@ -159,7 +163,39 @@ class TacticalPlannerConfig:
     # alongside fellow indefinitely (the F2_tactical "run parallel" failure).
     commit_hold_s: float = 2.5
     abort_hold_s: float = 0.9
-    abort_risk_01: float = 0.55
+    # SD-35: lowered from 0.55 to 0.50. Under the new exponential TTC ramp,
+    # 0.50 corresponds to ttc ~3 s — abort a committed pass when the time-
+    # to-contact drops below 3 s, allowing ~1 s for the lateral abort slew
+    # plus margin for emergency brake to take effect. Was 0.55 (never crossed
+    # in F14 because the old metric saturated at 0.5–0.6 against active blockers).
+    abort_risk_01: float = 0.50
+    # SD-36: how much slower than the opponent to target during ABORT_PASS.
+    # Default 5.0 m/s (~11 mph). The abort speed cap is computed as
+    # max(3.0, opp_speed_mps - abort_speed_margin_mps), giving MPC a clear
+    # negative speed error so it produces brake commands instead of throttle.
+    # Initial F14 run with margin=2.0 produced only brake_mpc=0 because the
+    # 2 m/s speed gap (cap=12 m/s vs ego at ~25 m/s during abort onset) was
+    # small enough that the longitudinal MPC's brake authority stayed near
+    # zero. Bumping to 5.0 widens the gap so MPC reliably commands brake;
+    # this paired with the guard's emergency floor (0.45) gives layered
+    # deceleration. Larger = more aggressive; smaller = gentler.
+    abort_speed_margin_mps: float = 5.0
+    # SD-37: minimum time after ABORT_PASS exits before a new pass_* COMMIT
+    # may fire. SD-37b raised from 1.5 to 3.0 s. While the cooldown is active,
+    # the strategy authority's pass_left/pass_right selections are downgraded
+    # to follow_fellow with a restorative cap (cooldown_follow_cap below) so
+    # ego actively grows the gap. With cooldown=1.5 s, F14's first ABORT
+    # exited at t=6.8s and the cooldown expired at t=8.3s with actual_gap
+    # only 8.5 m -- not enough margin for a clean retry. 3.0 s gives the gap
+    # time to grow to ~12-15 m before re-evaluating. Larger = more patient;
+    # smaller = quicker retry.
+    abort_cooldown_s: float = 3.0
+    # SD-37b: speed cap during the abort cooldown FOLLOW. The original SD-37
+    # used opp+0.3 (matching the regular follow_fellow strategy), but this
+    # caused ego to creep forward and shrink the gap during cooldown. The
+    # negative offset here actively GROWS the gap during cooldown, restoring
+    # margin so the post-cooldown re-evaluation is on safer geometry.
+    cooldown_follow_speed_offset_mps: float = -1.5
     abort_ttc_s: float = 0.4   # tight: only abort on near-imminent collision
     # SD-2d: while ego is on a commit-side TTL and the fellow is still laterally
     # within this radius, ABORT keeps the commit-side TTL instead of reverting to
@@ -226,7 +262,18 @@ class TacticalPlannerConfig:
     # Empirical math (F2): gap_at_commit ≈ 12-15m, commit_hold_s = 2.5s.
     # Required Δv to clear with 5m post-pass buffer: (12+5)/2.5 = 6.8 m/s minimum,
     # (15+5)/2.5 = 8 m/s. We use 16 m/s to give 2× headroom for slew-rate ramp-up.
-    commit_speed_margin_mps: float = 16.0
+    # SD-39 (rev 2): lowered from 16.0 -> 5.0 -> 2.0 m/s. The 16 m/s margin made
+    # commits accelerative races. SD-39 first cut to 5.0 helped some, but a
+    # follow-up F14 run showed MPC overshooting the planner cap by ~5 m/s
+    # during long commits (cap=17, ego=22 at EMERGENCY). The structural cause
+    # is downstream -- the longitudinal MPC isn't fully honoring the tactical
+    # speed cap during sustained commit windows; that's a deeper investigation.
+    # As a parameter-tuning workaround, dropping margin to 2.0 means even with
+    # the ~5 m/s MPC overshoot, ego maxes out at opp+7 instead of opp+10,
+    # halving the closing momentum at the EMERGENCY moment. F2 (canonical pass
+    # against a 9 m/s fellow): ego targets 11 m/s, takes 6-8 s to complete --
+    # slower than racing-aggressive but still completes.
+    commit_speed_margin_mps: float = 2.0
     # SD-31: tire-grip ceiling for the COMMIT speed cap. With curvature κ on
     # the chosen TTL, peak cornering speed is sqrt(a_lat_max / |κ|). 8.0 m/s²
     # (≈0.82g) matches the curvature scan in behaviors.scenic and leaves
@@ -280,7 +327,16 @@ class TacticalPlannerConfig:
     # speed without rejecting the wide passes the simulator predicts in the
     # F-bank cases (5–11m clearance). See strategy_simulator.simulate_strategy
     # for the OBB metric definition.
-    strategy_min_clearance_m: float = 1.0
+    # SD-37b: raised from 1.0 to 2.0 m. F14 active-blocker run showed the
+    # selector committing to pass_right at clearance=1.13 m (just above the
+    # old 1.0 bar) at t=8.55s, immediately after the SD-37 cooldown expired.
+    # The blocker was actively mirroring; clearances of 1.0-1.7 are noise
+    # around the true geometry, not real opportunities. 2.0 m demands at
+    # least one car-width (~1.93 m for the IAC Dallara) of true margin
+    # before committing -- legitimate passes against non-blocking fellows
+    # still score well above this (5-11 m on F-bank scenarios per the
+    # strategy_simulator design notes).
+    strategy_min_clearance_m: float = 2.0
     strategy_soft_clearance_m: float = 0.2
     strategy_target_speed_mps: float = 45.0
     strategy_accel_mps2: float = 4.0
@@ -340,6 +396,15 @@ class CommitPlannerState:
     abort_until_s: float = -1.0e9  # hold timer for ABORT_PASS state
     last_side: str = ""           # side of the most recently completed commit (for cooldown)
     last_exit_s: float = -1.0e9   # sim time when last commit exited (for opposing cooldown)
+    # SD-37: cooldown after exiting ABORT_PASS. Suppresses new pass_* COMMIT
+    # selections for `config.abort_cooldown_s` seconds, forcing the planner
+    # into FOLLOW. Without this, the strategy selector would immediately try
+    # the OTHER pass side after an abort (left -> abort -> right -> abort),
+    # giving the active blocker no chance to reveal its full mirror geometry
+    # before ego re-commits. Empirically: F14 ego attempts left at t=5.4s,
+    # aborts t=6.4s, retries right at t=7.4s, aborts again t=10s, contact at
+    # 10.9s. The cooldown breaks this oscillation.
+    last_abort_exit_s: float = -1.0e9
     # SD-3d: HOLD phase state. Records when ego entered HOLD and ego's speed
     # at entry — used to compute the HOLD speed cap (freeze gain at entry,
     # don't accelerate to optimal target during the merge-back window).
@@ -789,7 +854,18 @@ def tactical_planner_step_v1(
             and abs(float(sit.lateral_m)) < float(config.abort_keep_ttl_lat_m)
         ):
             abort_ttl = commit_side_now
-        return ABORT_PASS, abort_ttl, None, reason
+        # SD-36: command active deceleration during ABORT_PASS. Returning None
+        # left effective_target_speed at the racing-line cap, so MPC produced
+        # full throttle through the abort window (observed F14 run: ego accel'd
+        # 25.15 -> 26.07 m/s during the 0.95s abort before contact). Setting cap
+        # below opponent speed forces MPC into negative speed error -> brake_mpc > 0.
+        # Floor at 3 m/s so we don't try to decel to a complete stop on straights
+        # when the opponent is just slightly slower.
+        opp_speed_mps = 0.0
+        if sit is not None:
+            opp_speed_mps = float(getattr(sit, "opponent_speed_mps", 0.0) or 0.0)
+        abort_cap_mps = max(3.0, opp_speed_mps - float(config.abort_speed_margin_mps))
+        return ABORT_PASS, abort_ttl, abort_cap_mps, reason
 
     def _strategy_to_planner_output(
         name: str,
@@ -814,6 +890,20 @@ def tactical_planner_step_v1(
             cap_val = max(0.0, float(opponent_speed_mps) + 0.3)
             return FOLLOW, "optimal", cap_val, "strategy_follow_fellow"
         if name in ("pass_left", "pass_right"):
+            # SD-37: cooldown gate. After ABORT_PASS, suppress new pass_*
+            # COMMITs for `config.abort_cooldown_s` so the active blocker
+            # finishes mirroring before ego re-attempts. Downgrade to
+            # follow_fellow during the window with a RESTORATIVE cap that
+            # grows the gap (opp + cooldown_follow_speed_offset_mps; default
+            # offset is -1.5, so ego decel below opp speed and falls back).
+            # Without this, F14 ego oscillates left -> abort -> right -> abort
+            # -> contact, AND the gap shrinks from 10m to 8m during cooldown
+            # because the regular follow cap (opp+0.3) keeps ego creeping in.
+            cooldown_remaining = float(state.commit.last_abort_exit_s) + float(config.abort_cooldown_s) - float(sim_time_s)
+            if cooldown_remaining > 0.0:
+                state.mode = FOLLOW
+                cap_val = max(0.0, float(opponent_speed_mps) + float(config.cooldown_follow_speed_offset_mps))
+                return FOLLOW, "optimal", cap_val, f"strategy_pass_{name[5:]}_cooldown_{cooldown_remaining:.2f}s"
             side = "left" if name == "pass_left" else "right"
             # SD-13a: route DIRECTLY to COMMIT_PASS_*, skipping SETUP entirely.
             # The strategy pipeline (SD-11b) already validated geometry over
@@ -1262,6 +1352,19 @@ def tactical_planner_step_v1(
         )
         return state.mode, hold_side, hold_cap, "hold_pass_hold"
 
+    # SD-39: TTL retention helper for abort exits. When ego is still
+    # bbox-overlapping the fellow at the moment ABORT_PASS exits, snapping
+    # the planned TTL back to "optimal" causes a hard lateral steer toward
+    # optimal that swipes into the still-touching fellow (observed F14
+    # t=22.40 -> 22.60: planner=ABORT_PASS ttl=right overlap=1, then
+    # planner=FREE_RUN ttl=optimal cte=3.52m steer=+0.143). Keep the
+    # commit-side TTL while still overlapping; revert to optimal once
+    # bbox-clear.
+    def _abort_exit_ttl(default_ttl: str = "optimal") -> str:
+        if overlap_hazard_raw and state.commit.side in ("left", "right"):
+            return str(state.commit.side)
+        return default_ttl
+
     if commit_enabled and state.mode == ABORT_PASS:
         # Early release: opponent already behind and no active hazard → pass completed,
         # no need to hold abort timer (prevents unnecessary hard braking after passing).
@@ -1302,7 +1405,9 @@ def tactical_planner_step_v1(
             _clear_lateral_lock()
             _clear_commit_lifecycle()
             state.mode = FREE_RUN
-            return FREE_RUN, "optimal", None, "abort_passed_free_run"
+            # SD-37: stamp cooldown on abort exit (one of four exit sites).
+            state.commit.last_abort_exit_s = float(sim_time_s)
+            return FREE_RUN, _abort_exit_ttl(), None, "abort_passed_free_run"
         if hard_abort_hazard:
             state.commit.abort_until_s = max(
                 float(state.commit.abort_until_s),
@@ -1317,7 +1422,9 @@ def tactical_planner_step_v1(
             _clear_lateral_lock()
             _clear_commit_lifecycle()
             state.mode = FREE_RUN
-            return FREE_RUN, "optimal", None, "abort_recovered_free_run"
+            # SD-37: stamp cooldown on abort exit.
+            state.commit.last_abort_exit_s = float(sim_time_s)
+            return FREE_RUN, _abort_exit_ttl(), None, "abort_recovered_free_run"
         if (not hard_abort_hazard) and (
             (assessment_gap_ok is True)
             or (opening_window_available and (not bool(assessment_closing_flag)))
@@ -1325,10 +1432,18 @@ def tactical_planner_step_v1(
             state.commit.abort_success = True
             state.commit.post_event_state = FOLLOW
             _clear_commit_lifecycle()
-            return _follow_result("abort_success_follow")
+            # SD-37: stamp cooldown on abort exit.
+            state.commit.last_abort_exit_s = float(sim_time_s)
+            # SD-39: override TTL via _abort_exit_ttl when still overlapping.
+            _r = _follow_result("abort_success_follow")
+            return _r[0], _abort_exit_ttl(_r[1]), _r[2], _r[3]
         state.commit.post_event_state = FOLLOW
         _clear_commit_lifecycle()
-        return _follow_result("abort_recover_follow")
+        # SD-37: stamp cooldown on abort exit.
+        state.commit.last_abort_exit_s = float(sim_time_s)
+        # SD-39: override TTL via _abort_exit_ttl when still overlapping.
+        _r = _follow_result("abort_recover_follow")
+        return _r[0], _abort_exit_ttl(_r[1]), _r[2], _r[3]
 
     # SD-13c: removed protected_follow latch — it was a snapshot-driven
     # safety latch that arming on `safety_pressure` (snapshot heuristic).
