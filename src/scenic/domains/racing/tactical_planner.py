@@ -56,6 +56,7 @@ from scenic.domains.racing.assessment.pass_geometry import (
 )
 from scenic.domains.racing.prediction.strategy_simulator import (
     ALL_STRATEGIES as _ALL_STRATEGIES,
+    _signed_cross_track_at_s as _planner_cross_track_at_s,
     simulate_strategy as _simulate_strategy,
 )
 from scenic.domains.racing.planner.planner_reference import PlannerReference
@@ -407,46 +408,61 @@ def _smart_commit_cap(
     commit_margin_mps: float,
     stationary_threshold_mps: float = 3.0,
     sustained_pace_floor_mps: float = 13.0,
+    pass_side: str = "",
+    fellow_lat_track_m: float = 0.0,
+    decisive_side_threshold_m: float = 1.5,
 ) -> float:
-    """SD-41B + SD-41I: physics-aware commit speed cap.
+    """SD-41B + SD-41I + SD-41J: clearance- and physics-aware commit cap.
 
-    The COMMIT_PASS_* speed cap has two structural constraints:
+    The COMMIT_PASS_* speed cap has three regimes, listed from most to
+    least permissive:
 
-    1. **Stationary opponent (SD-41B).** Pre-SD-41B used
-       `max(3.0, opp_speed + commit_margin_mps)`. With a stationary fellow
-       (F9), this collapses to ~3 m/s — ego brakes hard from racing speed
-       for no safety reason. Pass against a parked car is just a lateral
-       shift that can be done at racing-line speed.
+    1. **Stationary opponent (SD-41B).** opp < `stationary_threshold_mps`:
+       skip the closing-speed cap entirely; return racing-line target.
+       Pass against a parked car is a lateral shift, not a race.
 
-    2. **Vehicle gear physics (SD-41I).** The dSPACE Dallara AV24 plant
-       upshifts gear 1 → 2 at ~12 m/s (computed from
-       `Proc_n_up_acc = 3850 RPM`, `Map_GearRatio[1] = 3.75`,
-       `MainReductionGear = 3.0`, tire D ≈ 0.686 m). Below that point ego
-       sits in gear 1 where torque cannot sustain the commanded speed. SD-39
-       set `commit_margin = 2`, so against a 9 m/s fellow the cap was 11 m/s
-       — *below the gear-1 ceiling*. Pre-SD-41H, the MPC's factor-of-2
-       cost-coefficient bug accidentally drove ego to 22 m/s (= gear 2
-       territory) and the inconsistency was invisible. With the QP fixed,
-       ego now actually tracks v_ref = 11 m/s and gets stranded in gear 1,
-       falling behind the fellow it was trying to pass.
+    2. **Decisive opposite-side fellow (SD-41J).** Fellow's signed
+       cross-track on the optimal centerline (`fellow_lat_track_m`,
+       +left / -right) is decisively opposite the chosen pass side
+       (|lat| ≥ `decisive_side_threshold_m`). Examples:
+         pass_left  with fellow_lat_track ≤ -1.5 (fellow on right TTL)
+         pass_right with fellow_lat_track ≥ +1.5 (fellow on left TTL)
+       In these cases the side TTL ego is shifting to has full track-width
+       lateral separation from fellow's TTL — closing rate dominates the
+       outcome, and crawling at `opp+2` makes the commit window outlast
+       the simulation. Return racing-line target so ego races past.
 
-       The `sustained_pace_floor_mps` (default 13.0) is set just above the
-       gear 1 → 2 upshift point so that commit_cap always lands ego firmly
-       in gear 2 or higher. Faster fellows (opp ≥ 11 m/s) are unaffected
-       because `opp + commit_margin` already exceeds the floor. F14's active
-       blocker (~12 m/s) gives `max(13, 12 + 2) = 14` — same cap as before.
-       Only slow-fellow scenarios (opp ≲ 11 m/s) benefit.
+       This is what the user observed as "scared driving on F3R/F3L":
+       brain correctly picked pass_left against a fellow on the right
+       TTL, but cap = 13 m/s (gear-2 floor) gave only 4 m/s closing
+       against the 9 m/s fellow → pass took 25+ s and ran out the clock.
 
-    Behavior:
-      - opp < `stationary_threshold_mps` (~3 m/s): return racing-line target
-        (skip closing-speed cap entirely; just lateral-shift around).
-      - opp ≥ stationary threshold: return
-        `max(sustained_pace_floor_mps, opp + commit_margin)`.
+       The threshold is conservative: `1.5 m` corresponds to fellow being
+       at least one car-width off the optimal centerline, which the IAC
+       Dallara TTL geometry only achieves on a side TTL. Fellow on
+       optimal (|lat| < 1.5) gets the conservative regime.
+
+    3. **Tight or adjacent-TTL fellow (SD-41I).** Default — fellow on
+       optimal or near it. Use the gear-2-floor cap:
+       `max(sustained_pace_floor_mps, opp_speed + commit_margin_mps)`.
+
+       The floor (default 13 m/s) sits just above the gear 1 → 2 upshift
+       point (12 m/s, derived from the dSPACE Dallara AV24 plant model)
+       so the planner cap always lands ego firmly in gear 2 or higher.
 
     Curvature clip is applied by the caller after this function returns.
     """
     if float(opp_speed_mps) < float(stationary_threshold_mps):
         return float(racing_line_target_mps)
+    # SD-41J: decisive opposite-side fellow → race past at racing speed.
+    side = str(pass_side or "").lower()
+    lat = float(fellow_lat_track_m)
+    threshold = float(decisive_side_threshold_m)
+    if side == "left" and lat <= -threshold:
+        return float(racing_line_target_mps)
+    if side == "right" and lat >= threshold:
+        return float(racing_line_target_mps)
+    # Default: gear-2-floor cap.
     return max(
         float(sustained_pace_floor_mps),
         float(opp_speed_mps) + float(commit_margin_mps),
@@ -532,6 +548,15 @@ class TacticalPlannerState:
     # persisted strategy_commit_cycles ticks.
     strategy_committed_name: str = ""
     strategy_commit_run_count: int = 0
+    # SD-41J: fellow's signed cross-track from the optimal centerline (m,
+    # +left / -right in track frame). Populated each tick that the strategy
+    # pipeline runs (alongside strategy_min_clearances). Used by
+    # `_smart_commit_cap` to detect "decisive opposite-side fellow" passes
+    # where ego can race past at racing-line speed instead of crawling at
+    # the conservative gear-2 floor. Defaults to 0.0 (treated as "fellow
+    # on optimal — conservative cap") when the strategy pipeline didn't
+    # run this tick.
+    fellow_lat_track_m: float = 0.0
 
 
 def apply_ttl_key_to_agent(agent, ttl_key: str, ttl_cache: dict, file_by_sel: Dict[str, str]) -> bool:
@@ -852,6 +877,22 @@ def tactical_planner_step_v1(
         state.strategy_reachable_progress = {
             o.strategy: float(o.reachable_progress_at_horizon_m) for o in _outcomes
         }
+        # SD-41J: stash fellow's signed cross-track on the optimal centerline
+        # so the commit-cap helper can detect "decisive opposite-side fellow"
+        # passes (clear race-past lane) vs "fellow on optimal" passes (tight
+        # lateral merge required, conservative cap).
+        try:
+            _f0 = fellow_trajectory[0]
+            _fxy_now = (float(_f0[1]), float(_f0[2]))
+            _fellow_lat = _planner_cross_track_at_s(
+                _fxy_now,
+                optimal_waypoints,
+                float(opp_s_m),
+                float(lap_length_m),
+            )
+            state.fellow_lat_track_m = float(_fellow_lat) if _fellow_lat is not None else 0.0
+        except Exception:
+            state.fellow_lat_track_m = 0.0
         # Telemetry print (one line per tick when strategy was computed).
         _clear_str = " ".join(
             f"{k}={v:.2f}" for k, v in state.strategy_min_clearances.items()
@@ -892,11 +933,13 @@ def tactical_planner_step_v1(
         # to behind, the COMMIT branch transitions to FREE_RUN (cap=None) at line 522.
         cap: Optional[float] = None
         if relation_ahead and sit is not None:
-            # SD-41B: stationary-opponent fix. See _smart_commit_cap docstring.
+            # SD-41B/I/J: stationary fix + gear-2 floor + opposite-side aggressive.
             cap = _smart_commit_cap(
                 float(opponent_speed_mps),
                 racing_line_target_mps=float(config.strategy_target_speed_mps),
                 commit_margin_mps=float(config.commit_speed_margin_mps),
+                pass_side=str(side or ""),
+                fellow_lat_track_m=float(getattr(state, "fellow_lat_track_m", 0.0) or 0.0),
             )
             cap = _curvature_clip(cap)
         # SD-2f: leaving SETUP — clear the entry timestamp so a future SETUP gets a
@@ -1003,15 +1046,17 @@ def tactical_planner_step_v1(
                 float(state.lateral_path_lock_until_s),
                 float(sim_time_s) + float(config.lateral_path_lock_hold_s),
             )
-            # COMMIT cap = opp + commit_speed_margin_mps (matches _commit_result),
-            # then clipped by upcoming curvature (SD-31).
-            # SD-41B: smart commit cap — stationary fellow (F9) skips the
-            # closing-speed clamp so pass executes at racing-line speed
-            # rather than collapsing to 3 m/s.
+            # SD-41B/I/J: smart commit cap composes three regimes:
+            #   stationary fellow → racing-line speed (lateral shift only)
+            #   decisive opposite-side fellow → racing-line speed (clear pass)
+            #   default (fellow on optimal / adjacent) → gear-2-floor cap
+            # Curvature clip applied next.
             cap_commit = _smart_commit_cap(
                 float(opponent_speed_mps),
                 racing_line_target_mps=float(config.strategy_target_speed_mps),
                 commit_margin_mps=float(config.commit_speed_margin_mps),
+                pass_side=str(side or ""),
+                fellow_lat_track_m=float(getattr(state, "fellow_lat_track_m", 0.0) or 0.0),
             )
             cap_commit = _curvature_clip(cap_commit)
             if side == "left":
