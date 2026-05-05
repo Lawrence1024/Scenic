@@ -1833,6 +1833,7 @@ provide load-bearing emergency authority and stay in place.
 | Lateral profile | TTL waypoints via `ReferenceBuilder` (unchanged) | TTL waypoints via `ReferenceBuilder` (Stage D deferred) |
 | Gear thresholds | 6 entries (phantom gear 6 at 52/48 m/s) | 5 entries citing `GearboxAT_dallara24.xml` |
 | Commit cap floor | `max(3.0, opp + commit_margin)` (could land below gear-2 upshift) | `max(13.0, opp + commit_margin)` (always lands ego in gear ≥ 2) |
+| Commit cap discriminator | One-size-fits-all (just opp+margin) | Three regimes: stationary, decisive opposite-side (race past), tight (gear-2 floor) |
 | Telemetry | `_speed_caps` dict | `[PlannerRef]` log + `binding_cap_source` field |
 | F-bank scenario configuration | smart-stack flags only via runner `-p` | scenarios self-contain `tactical_planner_enabled=True` etc. |
 
@@ -1967,3 +1968,71 @@ them in the original SD-41 plan — discovered by the cleaner contract):
     distribution check, not a binary pass/fail.
   - **MPC longitudinal QP factor-of-2** (Stage H above).
   - **Planner cap below vehicle gear-2 floor** (Stage I above).
+  - **One-size-fits-all commit cap regardless of pass-side geometry**
+    (Stage J below).
+
+#### Stage J — Race past on decisive opposite-side passes
+
+After Stage I, F3R/F3L (canonical "fellow on a side TTL, ego passes
+on the opposite side") exhibited "scared driving": the brain correctly
+picked pass_left against a fellow on the right TTL, but cap = max(13,
+opp+2) = 13 m/s gave only 4 m/s closing rate against a 9 m/s fellow.
+The pass took 25+ seconds and the 15-second simulation ran out before
+ego completed the pass.
+
+The structural problem. `_smart_commit_cap` formula was *one
+philosophy* — "go just faster than the fellow plus a small margin" —
+applied uniformly. That philosophy is correct for **tight** passes
+where overshoot causes contact (F2 fellow on optimal, side TTL ~3 m
+offset from fellow's TTL). It's the wrong philosophy for **clear**
+passes where the side TTL has full track-width separation from the
+fellow's TTL (F3R fellow on right TTL, ego targeting left TTL =
+~6 m of lateral headroom on a typical IAC straight).
+
+The discriminator. Predicted clearance alone doesn't separate these
+cases — F2's simulator predicts 12-23 m clearance and F3R's predicts
+18-30 m, overlapping. The structurally correct signal is fellow's
+*signed cross-track on the optimal centerline*:
+
+  - `fellow_lat_track_m ≤ -1.5` → fellow on the right TTL
+  - `fellow_lat_track_m ≥ +1.5` → fellow on the left TTL
+  - `|fellow_lat_track_m| < 1.5` → fellow on/near optimal (tight)
+
+When the chosen pass side is *opposite* the fellow's TTL, lateral
+geometry has full track-width separation and ego can race past at
+the racing-line target. This becomes a third regime in
+`_smart_commit_cap`, alongside the SD-41B stationary-fellow regime
+and the SD-41I gear-2-floor regime.
+
+Wiring:
+  - New state field `TacticalPlannerState.fellow_lat_track_m`
+    populated each tick the strategy pipeline runs in
+    `tactical_planner_step_v1`, using the same `_signed_cross_track_at_s`
+    helper SD-32C uses internally.
+  - New `_smart_commit_cap` parameters `pass_side` and
+    `fellow_lat_track_m`. Both callers (`_commit_result` and
+    `_strategy_to_planner_output`) updated.
+
+Three-regime cap behavior, by scenario:
+
+  | Scenario | Fellow lat | Pass side | Cap | Regime |
+  |---|---|---|---|---|
+  | F9 stationary | -4.5 | left | 45 | stationary |
+  | F3R clear-left pass | -3 | left | 45 | decisive opposite |
+  | F3L clear-right pass | +3 | right | 45 | decisive opposite |
+  | F2 fellow on optimal | 0 | right | 13 | gear-2 floor |
+  | F14 active blocker | ~0 | left | 14 | opp+margin |
+  | Wrong-side request | +3 | left | 13 | not opposite (protected) |
+  | Marginal lat | -1.0 | left | 13 | not decisive (conservative) |
+
+Threshold value (1.5 m) is one IAC Dallara half-width off the optimal
+centerline, which is the geometric minimum for "fellow is decisively
+on a side TTL." Below that, the conservative regime applies.
+
+User context. The user also raised that lane width varies along the
+track (visible in the OpenDRIVE file). For this fix the geometry is
+implicit in the TTL polylines themselves — the simulator measures
+actual xy OBB clearance, not "fits in lane" — so per-segment lane
+width is already accounted for. The race_common 20-column TTL format
+has `left_dist_m`/`right_dist_m` per waypoint, available for any
+future "explicit lane fit" reasoning.
