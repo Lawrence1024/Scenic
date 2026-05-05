@@ -56,6 +56,9 @@ from scenic.domains.racing.tactical_planner import (
     SETUP_LEFT,
     SETUP_RIGHT,
 )
+from scenic.domains.racing.planner.velocity_profile import (
+    compute_velocity_profile as _compute_velocity_profile,
+)
 from scenic.domains.racing.prediction import FellowPredictor, format_prediction_log_line
 from scenic.domains.racing.assessment import (
     RaceSituationState,
@@ -477,6 +480,11 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         _scripted_schedule_enabled = False
     _scripted_schedule = []
     _scripted_ttl_cache = {}
+    # SD-42L: per-TTL precomputed velocity profile (forward-backward pass on
+    # the polyline geometry alone — no rich TTL columns required). Populated
+    # from `_PHASE1_TTL_FILE_BY_SELECTION` keys at scene init below; the
+    # planner consults these per tick via Stage M's slice_trajectory_from_profile.
+    _scripted_velocity_profiles = {}
     _scripted_active_ttl = str(getattr(self, 'ttl_selection', '') or '').lower()
     if _scripted_active_ttl not in _PHASE1_TTL_FILE_BY_SELECTION:
         _scripted_active_ttl = _scripted_selection_from_ttl_filename(getattr(self, 'ttlFileName', None)) or "optimal"
@@ -569,12 +577,40 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _ttl_folder = getattr(self, 'ttlFolder', None) or _params.get("ttlFolder")
             if _ttl_folder:
                 _preloaded_keys = []
+                # SD-42L: read the lateral-friction param once for the velocity
+                # profile generator. Default 12.0 m/s² is conservative for the
+                # IAC Dallara; TUM publishes 14.0 for actual race conditions.
+                # If understeer surfaces, halve and retest.
+                try:
+                    _a_lat_max_param = float((_params or {}).get("racing_a_lat_max_mps2", 12.0))
+                except Exception:
+                    _a_lat_max_param = 12.0
                 for _ttl_key, _ttl_file in _PHASE1_TTL_FILE_BY_SELECTION.items():
                     try:
                         _region, _pts = load_ttl_region(str(_ttl_folder), _ttl_file)
                         if _region is not None and _pts and len(_pts) >= 2:
                             _scripted_ttl_cache[_ttl_key] = (_region, list(_pts))
                             _preloaded_keys.append(_ttl_key)
+                            # SD-42L: precompute the velocity profile for this
+                            # TTL once at load time. Stored in the parallel
+                            # `_scripted_velocity_profiles` dict keyed by
+                            # ttl_key. Stage M will consume.
+                            try:
+                                _vp = _compute_velocity_profile(
+                                    _pts,
+                                    a_lat_max_mps2=_a_lat_max_param,
+                                )
+                                _scripted_velocity_profiles[_ttl_key] = _vp
+                                _vp_min = float(_vp.vx_optimal_mps.min())
+                                _vp_max = float(_vp.vx_optimal_mps.max())
+                                _vp_mean = float(_vp.vx_optimal_mps.mean())
+                                print(
+                                    f"{_fbhv} [VelProfile] ttl={_ttl_key} n={int(_vp.s_m.shape[0])} "
+                                    f"corner_min={_vp_min:.2f} straight_max={_vp_max:.2f} "
+                                    f"mean={_vp_mean:.2f} a_lat_max={_a_lat_max_param:.1f}"
+                                )
+                            except Exception as _e_vp:
+                                print(f"{_fbhv} [VelProfile] failed for ttl={_ttl_key}: {_e_vp}")
                     except Exception:
                         print(f"{_fbhv} TTL preload failed for {_ttl_file}.")
                 print(f"{_fbhv} TTL preload (Phase 1 / Phase 3): folder={_ttl_folder} keys={_preloaded_keys}")
