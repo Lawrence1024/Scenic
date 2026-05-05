@@ -51,6 +51,8 @@ from scenic.domains.racing.tactical_planner import (
     ABORT_PASS,
     COMMIT_PASS_LEFT,
     COMMIT_PASS_RIGHT,
+    HOLD_PASS_LEFT,
+    HOLD_PASS_RIGHT,
     SETUP_LEFT,
     SETUP_RIGHT,
 )
@@ -1654,27 +1656,61 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             # --- CTE-based speed reduction (for MPC speed reference) ---
             # Generic: no TTL or segment IDs; only |CTE| so we slow when off-line on any track.
             # When CTE is large, cap target speed so the car can recover instead of running off.
+            #
+            # SD-41K: suppress the small-CTE bands (≤ 5 m) during planner-driven
+            # lateral merges. The CTE cap was designed for "ego is accidentally
+            # off-line, slow down to recover" — but during COMMIT_PASS_*,
+            # HOLD_PASS_*, or ABORT_PASS (and the ~2-second window after
+            # exiting them while ego physically converges back to the new
+            # active TTL), the off-line state is *expected and managed* by
+            # the planner. Throttling ego mid-merge for those CTE values
+            # made F3R look "scared at start" (CTE 0.98m → cap 8 m/s during
+            # the lateral shift to the left TTL) and produced the unstable
+            # merge-back the user observed (FREE_RUN after pass with ego
+            # still 3+m off optimal → CTE cap 7-8 + lateral MPC fighting to
+            # converge → throttle/brake oscillation).
+            #
+            # Above 5 m CTE the cap still fires — that range is genuine
+            # off-track / run-off territory that the planner doesn't intend
+            # to put ego in even during a merge.
+            _phase_state = str(getattr(self, '_phase_effective_planner_state', '') or '')
+            _in_lateral_merge_now = _phase_state in (
+                COMMIT_PASS_LEFT, COMMIT_PASS_RIGHT,
+                HOLD_PASS_LEFT, HOLD_PASS_RIGHT,
+                ABORT_PASS,
+            )
+            if _in_lateral_merge_now:
+                self._last_lateral_merge_sim_t = float(_sim_time_s)
+            _time_since_merge = float(_sim_time_s) - float(
+                getattr(self, '_last_lateral_merge_sim_t', -1.0e9)
+            )
+            _recent_merge_window_s = 2.0
+            _suppress_small_cte_cap = (
+                _in_lateral_merge_now or _time_since_merge < _recent_merge_window_s
+            )
             if cte_mag_for_speed >= 10.0:
                 # 10m+ CTE: strong decel and hard cap so we don't maintain high speed off-track
                 cte_target_speed = min(3.0, max(0.0, current_speed - 4.0))
             elif cte_mag_for_speed >= 5.0:
                 # 5-10m CTE: cap speed (was current_speed -> run-off). Cap at 5 m/s so MPC brakes.
+                # SD-41K: keep this band even during lateral merges — 5+m CTE is genuinely
+                # off-track territory that the planner doesn't intend.
                 cte_target_speed = min(5.0, current_speed)
             elif cte_mag_for_speed >= 3.0:
                 # 3-5m CTE: limit to 5 m/s (earlier recovery, any track)
-                cte_target_speed = 5.0
+                cte_target_speed = target_speed if _suppress_small_cte_cap else 5.0
             elif cte_mag_for_speed >= 2.0:
                 # 2-3m CTE: limit to 6 m/s
-                cte_target_speed = 6.0
+                cte_target_speed = target_speed if _suppress_small_cte_cap else 6.0
             elif cte_mag_for_speed >= 1.5:
                 # 1.5-2m CTE: limit to 6 m/s (early intervention)
-                cte_target_speed = 6.0
+                cte_target_speed = target_speed if _suppress_small_cte_cap else 6.0
             elif cte_mag_for_speed >= 1.0:
                 # 1.0-1.5m CTE: limit to 7 m/s
-                cte_target_speed = 7.0
+                cte_target_speed = target_speed if _suppress_small_cte_cap else 7.0
             elif cte_mag_for_speed >= 0.5:
                 # 0.5-1.0m CTE: limit to 8 m/s
-                cte_target_speed = 8.0
+                cte_target_speed = target_speed if _suppress_small_cte_cap else 8.0
             elif cte_mag_for_speed >= cte_stop_threshold:
                 # At 50m+ CTE: aim for very low speed (encourages heavy braking)
                 cte_target_speed = target_speed * 0.1
