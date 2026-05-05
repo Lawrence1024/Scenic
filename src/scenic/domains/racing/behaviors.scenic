@@ -45,6 +45,7 @@ from scenic.domains.racing.tactical_planner import (
     TacticalPlannerConfig,
     TacticalPlannerState,
     apply_ttl_key_to_agent,
+    build_reference as _planner_build_reference,
     tactical_planner_step,
     tactical_planner_step_v1,
     ABORT_PASS,
@@ -1725,7 +1726,64 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 if _p3cap is not None:
                     effective_target_speed = min(effective_target_speed, float(_p3cap))
                 self._last_effective_target_speed = float(effective_target_speed)
-            
+
+            # --- SD-41B: emit dense PlannerReference (compatibility shim) ---
+            # Built every tick when the tactical planner is on. Stage B is a
+            # non-consuming shim: the reference is stored on self for Stage C
+            # (longitudinal MPC) and Stage D (lateral MPC) to consume. Until
+            # those stages land, the per-tick effective_target_speed chain
+            # above remains authoritative. The [PlannerRef] log line lets us
+            # diff vx_mps[0] (planner-composed cap, no slew) against the
+            # actual effective_target_speed (post-slew, post-clamp) to verify
+            # the contract before flipping consumers.
+            if _tactical_planner_enabled and not pit_mode:
+                _ref_ttl_key = str(_scripted_active_ttl or "optimal")
+                _ref_chosen_wp = None
+                _ref_lap_len = 0.0
+                _ref_ego_s = 0.0
+                if _scripted_ttl_cache is not None and _ref_ttl_key in _scripted_ttl_cache:
+                    _ref_chosen_wp = _scripted_ttl_cache[_ref_ttl_key][1]
+                    _ref_lap_len = polyline_lap_length_m(_ref_chosen_wp) if _ref_chosen_wp else 0.0
+                    if _ref_lap_len and _ref_lap_len > 0.0:
+                        _ego_s_proj = _arc_length_project_xy(float(px), float(py), _ref_chosen_wp)
+                        _ref_ego_s = float(_ego_s_proj) if _ego_s_proj is not None else 0.0
+                _ref_horizon = _lon_controller.config.mpc_prediction_horizon if hasattr(_lon_controller, 'config') else 35
+                _ref_dt = _lon_controller.config.mpc_prediction_dt if hasattr(_lon_controller, 'config') else 0.05
+                self._planner_traj_id = int(getattr(self, '_planner_traj_id', 0)) + 1
+                _prev_ref = getattr(self, '_planner_reference', None)
+                _prev_vx0 = float(_prev_ref.vx_mps[0]) if _prev_ref is not None and _prev_ref.vx_mps.size > 0 else None
+                self._planner_reference = _planner_build_reference(
+                    mode=str(_mode_tac or "FREE_RUN"),
+                    ttl_key=_ref_ttl_key,
+                    decision_reason=str(_eff_reason or ""),
+                    planner_cap_mps=self._tactical_speed_cap,
+                    ego_x=float(px),
+                    ego_y=float(py),
+                    ego_speed_mps=float(current_speed),
+                    ego_s_m=float(_ref_ego_s),
+                    chosen_waypoints=_ref_chosen_wp,
+                    lap_length_m=float(_ref_lap_len),
+                    cte_cap_mps=float(cte_target_speed),
+                    curvature_cap_mps=float(curvature_speed_cap),
+                    global_max_mps=float(MAX_SPEED_LIMIT_MS),
+                    scripted_cap_mps=float(_scripted_speed_cap) if _scripted_speed_cap is not None else None,
+                    racing_line_target_mps=float(target_speed),
+                    mpc_horizon_n=int(_ref_horizon),
+                    mpc_dt_s=float(_ref_dt),
+                    sim_time_s=float(_sim_time_s),
+                    traj_id=int(self._planner_traj_id),
+                    prev_vx0_mps=_prev_vx0,
+                )
+                _ref0 = float(self._planner_reference.vx_mps[0])
+                print(
+                    f"{_fl_mpc} [PlannerRef] t={_sim_time_s:.2f}s "
+                    f"traj_id={self._planner_traj_id} mode={self._planner_reference.mode} "
+                    f"ttl={self._planner_reference.ttl_key} "
+                    f"vx0={_ref0:.2f} eff={effective_target_speed:.2f} "
+                    f"binding={self._planner_reference.binding_cap_source} "
+                    f"horizon={int(self._planner_reference.horizon_length())}"
+                )
+
             # --- Build speed reference profile for MPC ---
             horizon = _lon_controller.config.mpc_prediction_horizon
             # Pit mode: constant profile at coast target (no curvature lookahead)

@@ -36,7 +36,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Sequence, Tuple
 
+import numpy as np
+
 from scenic.domains.racing.assessment.pass_geometry import (
+    _xy_at_arclength,
     pass_window_check,
     path_collision_predicted,
     select_tracks_for_state,
@@ -45,6 +48,7 @@ from scenic.domains.racing.prediction.strategy_simulator import (
     ALL_STRATEGIES as _ALL_STRATEGIES,
     simulate_strategy as _simulate_strategy,
 )
+from scenic.domains.racing.planner.planner_reference import PlannerReference
 from scenic.domains.racing.planner.strategy_selector import (
     select_strategy as _select_strategy,
 )
@@ -384,6 +388,35 @@ def _dv_commit_gap_max_m(config: "TacticalPlannerConfig", dv_mps: float) -> floa
 
 def _dv_hold_release_long_m(config: "TacticalPlannerConfig", dv_mps: float) -> float:
     return float(config.hold_release_long_intercept_m) + float(config.hold_release_long_dv_slope) * max(0.0, float(dv_mps))
+
+
+def _smart_commit_cap(
+    opp_speed_mps: float,
+    *,
+    racing_line_target_mps: float,
+    commit_margin_mps: float,
+    stationary_threshold_mps: float = 3.0,
+) -> float:
+    """SD-41B: stationary-opponent commit cap.
+
+    Why: Pre-SD-41B, COMMIT_PASS_* used `max(3.0, opp_speed + commit_margin_mps)`
+    as the speed cap. With a stationary fellow (F9 stationary-blocker), this
+    collapses to max(3.0, 0 + 2.0) = 3.0 m/s — ego brakes hard from racing
+    speed for no safety reason, since the pass against a parked car is just
+    a lateral shift that can be done at racing-line speed (curvature clip
+    will still trim if there's an apex on the way).
+
+    Behavior:
+      - opp below `stationary_threshold_mps` (~3 m/s, basically parked /
+        rolling): skip the closing-speed cap; return racing-line target.
+      - opp at or above the threshold: return the prior formula unchanged.
+        F2 / F14 commit caps are unaffected.
+
+    Curvature clip is applied by the caller after this function returns.
+    """
+    if float(opp_speed_mps) < float(stationary_threshold_mps):
+        return float(racing_line_target_mps)
+    return max(3.0, float(opp_speed_mps) + float(commit_margin_mps))
 
 
 @dataclass
@@ -825,7 +858,12 @@ def tactical_planner_step_v1(
         # to behind, the COMMIT branch transitions to FREE_RUN (cap=None) at line 522.
         cap: Optional[float] = None
         if relation_ahead and sit is not None:
-            cap = max(3.0, float(opponent_speed_mps) + float(config.commit_speed_margin_mps))
+            # SD-41B: stationary-opponent fix. See _smart_commit_cap docstring.
+            cap = _smart_commit_cap(
+                float(opponent_speed_mps),
+                racing_line_target_mps=float(config.strategy_target_speed_mps),
+                commit_margin_mps=float(config.commit_speed_margin_mps),
+            )
             cap = _curvature_clip(cap)
         # SD-2f: leaving SETUP — clear the entry timestamp so a future SETUP gets a
         # fresh timeout window.
@@ -933,7 +971,14 @@ def tactical_planner_step_v1(
             )
             # COMMIT cap = opp + commit_speed_margin_mps (matches _commit_result),
             # then clipped by upcoming curvature (SD-31).
-            cap_commit = max(3.0, float(opponent_speed_mps) + float(config.commit_speed_margin_mps))
+            # SD-41B: smart commit cap — stationary fellow (F9) skips the
+            # closing-speed clamp so pass executes at racing-line speed
+            # rather than collapsing to 3 m/s.
+            cap_commit = _smart_commit_cap(
+                float(opponent_speed_mps),
+                racing_line_target_mps=float(config.strategy_target_speed_mps),
+                commit_margin_mps=float(config.commit_speed_margin_mps),
+            )
             cap_commit = _curvature_clip(cap_commit)
             if side == "left":
                 state.mode = COMMIT_PASS_LEFT
@@ -1467,6 +1512,133 @@ def tactical_planner_step_v1(
     return _follow_result("strategy_inactive_follow_fallback")
 
 
+def build_reference(
+    *,
+    mode: str,
+    ttl_key: str,
+    decision_reason: str,
+    planner_cap_mps: Optional[float],
+    ego_x: float,
+    ego_y: float,
+    ego_speed_mps: float,
+    ego_s_m: float,
+    chosen_waypoints: Optional[Sequence[Sequence[float]]],
+    lap_length_m: float,
+    cte_cap_mps: float,
+    curvature_cap_mps: float,
+    global_max_mps: float,
+    scripted_cap_mps: Optional[float],
+    racing_line_target_mps: float,
+    mpc_horizon_n: int,
+    mpc_dt_s: float,
+    sim_time_s: float,
+    traj_id: int,
+    prev_vx0_mps: Optional[float] = None,
+) -> PlannerReference:
+    """SD-41B: build a dense PlannerReference from already-computed caps.
+
+    Cap composition (formerly in behaviors.scenic:1657-1666):
+      vx[0] = min(planner_cap, cte, curvature, global, scripted)
+    Each None component is skipped. The smallest cap source is recorded
+    in `binding_cap_source` (one of: 'tactical', 'cte', 'curvature',
+    'global', 'phase1', 'none'). When all caps are None the binding source
+    is 'none' and vx defaults to `racing_line_target_mps`.
+
+    Stage B contract: only the longitudinal columns (vx_mps, ax_mps2, s_m)
+    are load-bearing. The lateral columns (x_m, y_m, psi_rad, kappa_radpm)
+    are populated from `_xy_at_arclength` along the chosen TTL but Stage D
+    is the consumer that depends on them; until then they're informational.
+
+    s_m is integrated naively as s[i] = ego_s + vx[0] * i * dt (constant-
+    speed extrapolation). Stage F can add a curvature-aware speed profile.
+    """
+    n = max(1, int(mpc_horizon_n))
+    dt = max(1e-3, float(mpc_dt_s))
+
+    # ----- Cap composition --------------------------------------------------
+    cap_sources: Dict[str, float] = {
+        "cte": float(cte_cap_mps),
+        "curvature": float(curvature_cap_mps),
+        "global": float(global_max_mps),
+    }
+    if scripted_cap_mps is not None:
+        cap_sources["phase1"] = float(scripted_cap_mps)
+    if planner_cap_mps is not None:
+        cap_sources["tactical"] = float(planner_cap_mps)
+
+    if cap_sources:
+        vx0 = min(cap_sources.values())
+        binding_source = min(cap_sources, key=cap_sources.get)
+    else:
+        vx0 = float(racing_line_target_mps)
+        binding_source = "none"
+    vx0 = max(0.0, float(vx0))
+
+    # ----- Per-step vx_mps + ax_mps2 ---------------------------------------
+    vx = np.full(n, vx0, dtype=np.float64)
+    ax = np.zeros(n, dtype=np.float64)
+    if prev_vx0_mps is not None and dt > 0.0:
+        # Reflect step change from previous tick at sample 0; subsequent
+        # samples cruise at vx0 so ax stays zero. MPC will smooth via slew
+        # at the actuator level.
+        ax[0] = (vx0 - float(prev_vx0_mps)) / dt
+
+    # ----- s_m (naive constant-speed integration) --------------------------
+    s_m = float(ego_s_m) + vx0 * dt * np.arange(n, dtype=np.float64)
+
+    # ----- Lateral columns from chosen TTL ---------------------------------
+    x_m = np.full(n, float(ego_x), dtype=np.float64)
+    y_m = np.full(n, float(ego_y), dtype=np.float64)
+    psi_rad = np.zeros(n, dtype=np.float64)
+    kappa_radpm = np.zeros(n, dtype=np.float64)
+
+    if chosen_waypoints and lap_length_m > 0.0 and len(chosen_waypoints) >= 2:
+        for i in range(n):
+            xy = _xy_at_arclength(chosen_waypoints, float(s_m[i]), float(lap_length_m))
+            if xy is not None:
+                x_m[i] = float(xy[0])
+                y_m[i] = float(xy[1])
+        # Tangent (psi) via forward difference; last sample copies previous.
+        for i in range(n - 1):
+            dx = x_m[i + 1] - x_m[i]
+            dy = y_m[i + 1] - y_m[i]
+            if abs(dx) + abs(dy) > 1e-9:
+                psi_rad[i] = float(np.arctan2(dy, dx))
+            elif i > 0:
+                psi_rad[i] = psi_rad[i - 1]
+        if n >= 2:
+            psi_rad[-1] = psi_rad[-2]
+        # Curvature via 3-point cross-product (signed: left turn > 0).
+        for i in range(1, n - 1):
+            v1x = x_m[i] - x_m[i - 1]
+            v1y = y_m[i] - y_m[i - 1]
+            v2x = x_m[i + 1] - x_m[i]
+            v2y = y_m[i + 1] - y_m[i]
+            l1 = (v1x * v1x + v1y * v1y) ** 0.5
+            l2 = (v2x * v2x + v2y * v2y) ** 0.5
+            if l1 > 1e-6 and l2 > 1e-6:
+                cross = v1x * v2y - v1y * v2x
+                avg_len = 0.5 * (l1 + l2)
+                if avg_len > 1e-6:
+                    kappa_radpm[i] = float(2.0 * cross / (l1 * l2 * avg_len))
+
+    return PlannerReference(
+        s_m=s_m,
+        x_m=x_m,
+        y_m=y_m,
+        psi_rad=psi_rad,
+        kappa_radpm=kappa_radpm,
+        vx_mps=vx,
+        ax_mps2=ax,
+        traj_id=int(traj_id),
+        t_planner_stamp_s=float(sim_time_s),
+        mode=str(mode or ""),
+        decision_reason=str(decision_reason or ""),
+        binding_cap_source=binding_source,
+        ttl_key=str(ttl_key or "optimal"),
+    )
+
+
 __all__ = [
     "FREE_RUN",
     "FOLLOW",
@@ -1482,6 +1654,7 @@ __all__ = [
     "TacticalPlannerState",
     "_canonical_mode",
     "apply_ttl_key_to_agent",
+    "build_reference",
     "tactical_planner_step",
     "tactical_planner_step_v1",
 ]
