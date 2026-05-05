@@ -13,6 +13,16 @@ State machine (SD-3d expanded with HOLD):
 Maps opponent situation + race assessment to (TTL choice, optional speed cap,
 decision_reason). Called each control cycle from the racing behavior.
 
+SD-41 contract (post-refactor): the planner is the SOLE authority for the
+strategic speed and TTL choice. `tactical_planner_step_v1` returns the
+classic `(mode, ttl_key, speed_cap, decision_reason)` tuple for back-compat,
+but the load-bearing output is `build_reference(...)` which composes ALL
+caps (cte, curvature, global, scripted, tactical) into a dense
+`PlannerReference` that the MPC tracks directly. The MPC has no override
+authority; it is a pure tracker. The stability guard is a third channel
+that may swap the reference (Stage E helpers exist; not currently wired)
+but never modifies MPC outputs.
+
 Brake-trigger gating (post-SD-4):
   All snapshot heuristics (overlap_flag, gap_ok, closing_flag, risk thresholds)
   go through ``_apply_predicted_collision_gate`` which combines them with the

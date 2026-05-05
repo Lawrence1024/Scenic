@@ -1640,3 +1640,204 @@ consolidations:
 **Files.** `src/scenic/domains/racing/behaviors.scenic` (4 sites),
 `src/scenic/domains/racing/benchmarks/metrics.py` (`_RECORD_TAGS`).
 Backward-compatible — no downstream parser breakage.
+
+### SD-41 — Brain-leg architectural refactor (IAC-standard reference trajectory)
+
+After SD-30..40 stacked nine band-aids (curvature clip, gap guard,
+side guard, risk overhaul, abort cap, abort cooldown, mutex layers,
+commit margin tune, hard-ceiling clamp) trying to enforce planner
+intent at the actuator, the user crystallized the structural framing:
+*"the brain says one thing, the leg does another."* Each fix
+addressed a specific symptom; the underlying disease was that the
+planner emitted a sparse goal (`mode, ttl, cap, reason`) and the MPC
+had to reconstruct intent through a chain of caps, slew limiters,
+throttle ramps, and brake clips. Every accumulated layer was a
+potential disconnect.
+
+**Architectural target** (per IAC-standard literature — TUM, KAIST,
+F1Tenth):
+
+```
+PLANNER ──► PlannerReference (7-col, N-horizon) ──► SAFETY SUPERVISOR ──► MPC
+                                                          │                 │
+                                                          ▼                 ▼
+                                                   reference swap        pure tracker
+                                                   (e.g. safe-stop)      (no override)
+```
+
+Planner emits a **dense reference trajectory** per tick: the
+`PlannerReference` dataclass with `s_m / x_m / y_m / psi_rad /
+kappa_radpm / vx_mps / ax_mps2 / traj_id / t_planner_stamp_s / mode /
+decision_reason / is_safe_stop / binding_cap_source / ttl_key`. MPC
+consumes the trajectory directly with no override authority over
+strategic intent. The stability guard sits in a third channel that
+*can* swap the reference (e.g., to a safe-stop trajectory) but never
+modifies MPC outputs.
+
+Sources: TUM Autonomous Motorsport (J. Field Robotics 2023, arXiv
+2205.15979); KAIST IAC team (arXiv 2303.09463);
+TUMFTM/global_racetrajectory_optimization (7-column trajectory
+schema); Hierarchical Motion Planning for Autonomous Racing
+(arXiv 2003.04882).
+
+The refactor was staged so each step was independently committable
+and gated on F-bank verification. Stages D and E shipped in modified
+form because of two discovered constraints:
+
+#### Stage A — `PlannerReference` dataclass + planner package
+
+New module `src/scenic/domains/racing/planner/`. Defines the
+7-column dataclass plus `is_stale()` and `horizon_length()` helpers.
+Pure type definition — no behavioral effect.
+
+#### Stage B — Planner emits dense reference; smart commit cap
+
+Two pieces:
+
+1. **`_smart_commit_cap()`** in `tactical_planner.py`: when fellow
+   speed is below a stationary threshold (~3 m/s), the
+   `COMMIT_PASS_*` cap returns the racing-line target instead of
+   `max(3.0, opp+commit_margin) = 3.0`. F9's brake-for-no-reason
+   during a stationary-blocker pass is fixed at the planner level.
+   Above the threshold, behavior is identical (F2/F14 commit caps
+   unchanged).
+
+2. **`build_reference()`** in `tactical_planner.py`: composes all
+   caps (cte / curvature / global / scripted / tactical) into
+   `vx_mps[0]`, integrates `s_m` over the MPC horizon, looks up
+   `(x,y) / psi / kappa` along the chosen TTL polyline, derives
+   `ax_mps2`. Returns a fully-populated `PlannerReference`.
+   Behaviors.scenic stores the result on `self._planner_reference`
+   each tick. A new `[PlannerRef]` log line emits per tick with
+   `vx0` (planner-composed cap, no slew) alongside `eff` (post-slew
+   effective) for diff'ing the brain-leg gap.
+
+   F9 verified: COMMIT cap rises from 3.0 to 44.0; ego completes
+   pass with no contact.
+
+#### Stage C — Longitudinal MPC consumes the reference; SD-40 clamp deleted
+
+`v_ref_profile` is sourced from `PlannerReference.vx_mps` directly
+when the tactical planner is on. The planner already composed all
+caps with no slew or hard-ceiling band-aid, so the MPC tracks the
+brain's intent at the same tick it's set. The per-step curvature
+reduction still runs on top, so apex constraints still apply.
+
+The SD-40 hard-ceiling clamp on `effective_target_speed` is deleted.
+It was forcing `eff <= planner_cap` in one tick to defeat the slew
+limiter; with `v_ref_profile` now sourced from the reference, the
+slew limiter no longer affects what the MPC tracks in tactical mode.
+
+The MPC fallback PID also reads `v_ref_profile[0]` instead of the
+legacy `effective_target_speed` so brain intent is honored even on
+solver failure.
+
+The slew limiter, `_speed_caps` dict, and `effective_target_speed`
+remain (they still feed the legacy non-tactical fallback path used
+by F2-style scenarios). In tactical mode they are telemetry-only —
+the `[PlannerRef]` log's `eff` field now exposes the brain-leg gap
+so we can verify it is no longer reaching the actuators.
+
+F14 trace confirms the gap (e.g. `ABORT_PASS` at t=3.45s with
+`vx0=3.0` vs `eff=8.02` — 5 m/s of slew-induced drift); MPC tracks
+`vx0` directly via `v_ref_profile`.
+
+#### Stage D — DEFERRED (lateral MPC consumes reference)
+
+Plan called for `mpc_lateral.py` to take `psi_ref / kappa_ref / v_ref`
+from `PlannerReference` instead of computing them internally via
+`ReferenceBuilder`. Skipped after Stage C analysis:
+
+- `v_ref` is already flowing through `PlannerReference` to lateral
+  MPC (via the `v_ref_profile` kwarg from Stage C — same array).
+- The remaining piece (`psi_ref / kappa_ref / x_m / y_m`) is currently
+  produced by `ReferenceBuilder` using ~900 lines of spline fitting +
+  curvature smoothing; replacing with `build_reference`'s naive
+  forward-difference values would be a quality regression for lateral
+  tracking.
+- The architectural value of Stage D is *smooth lateral merges
+  during* `COMMIT_PASS_*` (per-step blend of optimal→side TTL using
+  `strategy_lane_change_tau_s`), which is a feature, not plumbing.
+  Plain plumbing without the merge feature trades quality for purity.
+
+Disposition: revisit Stage D only if/when planner-shaped lateral
+merges become a desired feature; otherwise delete from the plan.
+
+#### Stage E — Safety supervisor (skeleton)
+
+Planned: pre-MPC reference-swap channel where the guard, on
+predicted collision, replaces `PlannerReference.vx_mps` with a
+linear ramp-to-zero, MPC tracks the ramp naturally → structured
+deceleration with no post-MPC clipping required.
+
+Two implementation attempts both regressed F14: the safe-stop ramp's
+tail-of-horizon zeros caused the MPC to brake more aggressively than
+the planner's `ABORT_PASS` already wanted, perturbing ego's
+trajectory enough to trip a pre-existing pit_mode false positive in
+the segment classifier (SD-12a).
+
+Bisection of three F14-only back-to-back runs revealed that **F14
+has plant-level non-determinism**: 1 cm cte divergence at t=3.1s
+amplifies through closed-loop chaos to 85 / 65 / 0 contacts across
+three identical-code, identical-init runs. Python is bitwise
+deterministic on identical inputs; the noise originates in the
+dSPACE plant readback (likely floating-point ordering, IPC timing,
+or tire/suspension hysteresis in VEOS).
+
+Stage E ships as a **skeleton**:
+
+- **Helpers shipped** in `safety/stability_guard.py`:
+  `should_swap_for_emergency()` (trigger logic mirroring the
+  existing `emergency_trigger`) and `swap_reference_for_emergency()`
+  (returns a `min(planner_vx, ramp_to_zero)` profile preserving
+  lateral state).
+- **Auto-enable rule** in `behaviors.scenic`: when
+  `_tactical_planner_enabled = True` and the guard isn't explicitly
+  set, auto-enable it. Override via `--param
+  stability_guard_auto_enable False`. F9 was unset → it now gains
+  the guard (verified firing in the new run).
+- **Pre-MPC swap call NOT wired**. The post-MPC SD-36 panic-brake
+  bypass continues to provide emergency authority and is preserved.
+
+Disposition: when we want a smoother safe-stop profile that doesn't
+perturb ego's trajectory (e.g. constant `min(planner_vx, current_v *
+0.7)` instead of a ramp-to-zero), the helpers are ready to wire.
+
+#### Stage F — Cleanup (minimal)
+
+Only one truly dead block was removed: the `"tactical"` branch of
+SD-32A's safety-binding slew bump in `behaviors.scenic`. After
+Stage C wired `v_ref_profile` straight from the reference, the slew
+limiter no longer affects what the MPC tracks in tactical mode — it
+only mutates the telemetry-only `effective_target_speed` scalar. The
+SD-32A bump's "tactical" check was doing pointless work each tick.
+The "curvature" check stays load-bearing for non-tactical scenarios.
+
+Other plan-listed deletions (SD-36 panic-brake bypass, SD-38
+post-guard mutex, CTE-driven throttle override) are NOT applied
+because they all assumed Stage E's pre-MPC reference-swap was wired.
+With Stage E shipped as a skeleton, those band-aids continue to
+provide load-bearing emergency authority and stay in place.
+
+#### Net architectural state after SD-41
+
+| Concern | Pre-SD-41 | Post-SD-41 |
+|---|---|---|
+| Planner output | `(mode, ttl, cap, reason)` tuple | Dense `PlannerReference` (7-col, N-horizon) |
+| MPC v_ref source | `effective_target_speed` after `min()` chain + slew + SD-40 clamp | `PlannerReference.vx_mps` directly |
+| Cap composition site | `behaviors.scenic` (after planner emits scalar cap) | `tactical_planner.build_reference()` (planner owns) |
+| Brain-leg cap delivery latency | Up to 1+ second slew lag | Same tick (no slew, no clamp) |
+| F9 stationary-blocker brake | Capped at 3 m/s during pass | Racing-line speed during pass |
+| Safety guard channel | Post-MPC command clip only | Helpers exist for pre-MPC swap (not wired); post-MPC clip retained |
+| Lateral profile | TTL waypoints via `ReferenceBuilder` (unchanged) | TTL waypoints via `ReferenceBuilder` (Stage D deferred) |
+| Telemetry | `_speed_caps` dict | `[PlannerRef]` log + `binding_cap_source` field |
+
+**Files.**
+- New: `src/scenic/domains/racing/planner/__init__.py`,
+  `src/scenic/domains/racing/planner/planner_reference.py`.
+- Modified: `src/scenic/domains/racing/tactical_planner.py`
+  (`build_reference()`, `_smart_commit_cap()`),
+  `src/scenic/domains/racing/behaviors.scenic` (consumer wiring,
+  auto-enable, SD-32A "tactical" branch removal),
+  `src/scenic/domains/racing/safety/stability_guard.py`
+  (supervisor helpers).
