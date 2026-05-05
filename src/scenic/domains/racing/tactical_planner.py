@@ -342,10 +342,15 @@ class TacticalPlannerConfig:
     # cornering ceiling (replaces curvature_speed_cap), forward-backward
     # smoothing (replaces "brake before corner" RC-7b heuristic), and global
     # max (clipped at MAX_SPEED_LIMIT_MS during profile generation).
-    # Default False during Stage M roll-in; flipped True in Stage N once the
-    # flag-True path passes the F-bank smoke; the flag and the legacy path
-    # are deleted in Stage P. Override via `param use_velocity_profile_reference`.
-    use_velocity_profile_reference: bool = False
+    # SD-42N: flipped from False (Stage M roll-in) to True after F3R/F9 with
+    # the flag enabled produced clean traces — profile vx0 climbed naturally
+    # (39 → 62 m/s) as ego converged on the active TTL via the CTE-tracking
+    # gate, no scared throttling, no oscillating merge-back. Legacy
+    # cap-chain code still runs in behaviors.scenic but its output goes
+    # nowhere (the MPC consumes ref.vx_mps directly); Stage P deletes that
+    # dead code. Override via `--param use_velocity_profile_reference False`
+    # for a side-by-side regression compare against the SD-41 cap-chain path.
+    use_velocity_profile_reference: bool = True
     strategy_horizon_s: float = 10.0
     strategy_sample_dt_s: float = 0.5
     # SD-27b: clearance is now OBB edge-to-edge gap (NOT centroid distance).
