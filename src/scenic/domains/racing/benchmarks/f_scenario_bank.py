@@ -18,7 +18,12 @@ F_SCENARIO_NAMES: Tuple[str, ...] = (
     "F8_corner_entry_fellow_ahead_optimal.scenic",
     "F9_fellow_stationary_roadside_obstacle.scenic",
     "F13_fellow_ahead_always_faster.scenic",
-    "F13c_control_no_fellow.scenic",
+    # F13c removed from the F-bank: it sets `scenic_control = False`, handing
+    # the ego over to the ART stack. The Scenic-side intelligence pipeline
+    # (tactical / prediction / assessment / guard / commit-abort) does not
+    # run, so it doesn't validate any Scenic-stack change. The .scenic file
+    # is retained for ART-baseline work but is no longer in the regression
+    # sweep.
     "F14_fellow_ahead_active_blocker.scenic",
 )
 
