@@ -34,6 +34,7 @@ ego.behavior = FollowRacingLineMPCBehavior(
     mpc_config_path=None,
     prediction_enabled=globalParameters.prediction_enabled,
     tactical_planner_enabled=True,
+    stability_guard_enabled=True,
 )
 
 # (delta_s, delta_t): ~32 m ahead along route, ~4.5 m right of centerline (shoulder).

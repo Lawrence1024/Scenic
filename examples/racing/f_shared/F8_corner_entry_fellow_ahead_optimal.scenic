@@ -7,7 +7,7 @@ param ttlFolder = localPath('../../../assets/ttls/LS_ENU_TTL_CSV')
 param launch_veos_ipc_client = True
 param scenic_control = True
 param fellowHarnessLog = True
-param prediction_enabled = False
+param prediction_enabled = True
 model scenic.simulators.dspace.racing_model
 
 ego = new RacingCar at (149.93309387993486, -263.94495526178315), \
@@ -22,6 +22,8 @@ ego.behavior = FollowRacingLineMPCBehavior(
     use_waypoints=True,
     mpc_config_path=None,
     prediction_enabled=globalParameters.prediction_enabled,
+    tactical_planner_enabled=True,
+    stability_guard_enabled=True,
 )
 
 opponent = new RacingCar with _racing_st_offset ('ahead', 20), \
