@@ -168,9 +168,19 @@ class MPCLongitudinalController:
             w_a = getattr(self.config, 'w_a', 0.1)  # Acceleration smoothness weight
             w_u = getattr(self.config, 'w_u_lon', 0.05)  # Control input weight
             w_du = getattr(self.config, 'w_du_lon', 0.5)  # Control rate weight
-            
-            # Speed tracking cost
-            P[x_k_idx, x_k_idx] += w_v
+
+            # Speed tracking cost. SD-41H: factor-of-2 bug. OSQP solves
+            # `0.5·x'Px + q'x`. Expanding `w_v·(v - v_ref)^2`:
+            #   v² coefficient = w_v  →  P[v,v] = 2·w_v (so 0.5·2·w_v·v² = w_v·v²)
+            #   v  coefficient = -2·w_v·v_ref  →  q[v] = -2·w_v·v_ref ✓ (already)
+            # The pre-SD-41H code had P[v,v] += w_v (half) which made the QP
+            # unconstrained-quadratic minimum solve to v = 2·v_ref. Pre-SD-41,
+            # high commit_speed_margin (16 m/s) raised v_ref enough that 2·v_ref
+            # capped at MAX_SPEED_LIMIT_MS — bug was invisible. SD-39 dropped
+            # commit_margin to 2 m/s; bug surfaced as F2 contact (planner cap
+            # 10.94, ego steady at ~22 m/s = 2·cap, oscillating with brief
+            # brake events when overshoot grew too large).
+            P[x_k_idx, x_k_idx] += 2.0 * w_v
             q[x_k_idx] -= 2.0 * w_v * v_k_ref
             
             # Acceleration smoothness cost
@@ -221,7 +231,8 @@ class MPCLongitudinalController:
         # Terminal cost
         x_N_idx = horizon * (n_x + n_u)
         wT_v = getattr(self.config, 'wT_v', 20.0)  # Terminal speed weight
-        P[x_N_idx, x_N_idx] += wT_v
+        # SD-41H: same factor-of-2 fix as the per-step v² cost above.
+        P[x_N_idx, x_N_idx] += 2.0 * wT_v
         if len(v_ref) > 0:
             q[x_N_idx] -= 2.0 * wT_v * float(v_ref[-1])
         
