@@ -44,7 +44,7 @@ Sources:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -166,15 +166,33 @@ def _compute_arc_length(waypoints: Sequence[Sequence[float]]) -> np.ndarray:
 def compute_velocity_profile(
     waypoints: Sequence[Sequence[float]],
     *,
-    a_lat_max_mps2: float = 12.0,
+    a_lat_max_mps2: float = 14.0,
     a_long_accel_max_mps2: float = 8.0,
     a_long_decel_max_mps2: float = 12.0,
     v_max_mps: float = 62.58,
     v_min_mps: float = 3.0,
     kappa_per_waypoint: Optional[Sequence[float]] = None,
+    lon_vel_per_waypoint: Optional[Sequence[float]] = None,
     kappa_eps: float = 1.0e-3,
 ) -> VelocityProfile:
-    """Build a `VelocityProfile` from a polyline using TUM's forward-backward pass.
+    """Build a `VelocityProfile` from a polyline.
+
+    SD-42 prefers race_common's offline-optimized LON_VEL (column 6 of the
+    20-col TTL format) when available — that's the ground-truth racing-line
+    velocity profile, computed offline by race_common's optimization pipeline
+    with full track / friction / aero knowledge. Our runtime forward-backward
+    pass is a backup for plain (x, y, z) TTLs that don't ship LON_VEL.
+
+    Algorithm:
+      - If `lon_vel_per_waypoint` is supplied: use it directly as
+        `vx_optimal_mps`, clipped to [v_min_mps, v_max_mps]. ax_optimal
+        derived as vx · d(vx)/ds (chain rule).
+      - Else: TUM's forward-backward pass:
+        1. Cornering ceiling per waypoint: vx_max(s) = sqrt(a_lat_max / max(|kappa|, eps))
+        2. Forward pass (accel limit): vx[i+1] = min(vx_max[i+1], sqrt(vx[i]² + 2·a·ds))
+        3. Backward pass (decel limit): vx[i] = min(vx[i], sqrt(vx[i+1]² + 2·a·ds))
+        4. Clip to [v_min, v_max]
+        5. ax via chain rule
 
     Parameters
     ----------
@@ -183,27 +201,31 @@ def compute_velocity_profile(
         waypoint connects back to first for curvature computation).
     a_lat_max_mps2
         Lateral acceleration budget (m/s²). Default 12.0 is a conservative IAC
-        Dallara number; TUM publishes 14.0 for actual race conditions. The
-        SD-41I `commit_max_lateral_accel_mps2` was 8.0 — that was a cornering
-        cap not a friction limit, so 12.0 here is consistent.
-    a_long_accel_max_mps2
-        Longitudinal acceleration limit (m/s²) for the forward pass.
-    a_long_decel_max_mps2
-        Longitudinal deceleration limit (m/s²) for the backward pass.
-        Higher than accel because braking is normally stronger than throttle.
+        Dallara number; TUM publishes 14.0 for actual race conditions. Used
+        only when `lon_vel_per_waypoint` is None (forward-backward backup
+        path). The race_common LON_VEL implicitly encodes its own friction
+        budget via the offline optimizer.
+    a_long_accel_max_mps2, a_long_decel_max_mps2
+        Longitudinal grip limits (m/s²) — forward and backward passes only.
     v_max_mps
         Absolute speed ceiling (m/s). Default matches `MAX_SPEED_LIMIT_MS`.
+        Applied as a clip in BOTH paths so race_common LON_VEL also respects
+        the global cap.
     v_min_mps
         Floor so we never command full-stop on an apex. The minimum
         sustainable speed in gear 2 (~3 m/s with idle creep).
     kappa_per_waypoint
         If supplied (e.g., race_common TTL column 4), used directly. Otherwise
-        computed via `_compute_kappa_3point`.
+        computed via `_compute_kappa_3point`. Stored on the dataclass either
+        way for diagnostics.
+    lon_vel_per_waypoint
+        SD-42-rich-ttl: race_common LON_VEL column. When supplied, this IS
+        the optimal vx — bypasses the runtime forward-backward pass entirely.
+        The result is what race_common's offline pipeline computed, just
+        repackaged into our `VelocityProfile` interface.
     kappa_eps
         Floor on |kappa| to prevent division-by-zero on perfectly straight
-        segments. 1e-3 corresponds to a 1000 m radius (essentially straight),
-        which gives vx_max = sqrt(12 / 0.001) = 109 m/s, well above v_max
-        so the actual ceiling becomes v_max.
+        segments (forward-backward path only).
 
     Returns
     -------
@@ -229,40 +251,47 @@ def compute_velocity_profile(
     else:
         kappa = _compute_kappa_3point(waypoints)
 
-    # Step 1: cornering ceiling. abs() because vx_max only depends on the
-    # *magnitude* of curvature (lateral force is a scalar).
-    abs_kappa = np.maximum(np.abs(kappa), float(kappa_eps))
-    a_lat = float(a_lat_max_mps2)
-    vx_max = np.sqrt(a_lat / abs_kappa)
-    vx_max = np.minimum(vx_max, float(v_max_mps))
-    vx_max = np.maximum(vx_max, float(v_min_mps))
+    # SD-42: rich-TTL preferred path. When race_common's offline-optimized
+    # LON_VEL is supplied, use it directly — it's the ground truth, computed
+    # offline by an optimization pipeline our runtime forward-backward can't
+    # match. Just clip to [v_min, v_max] for safety.
+    if lon_vel_per_waypoint is not None and len(lon_vel_per_waypoint) == n:
+        vx = np.asarray(lon_vel_per_waypoint, dtype=np.float64)
+        vx = np.minimum(vx, float(v_max_mps))
+        vx = np.maximum(vx, float(v_min_mps))
+    else:
+        # Backup path: TUM forward-backward pass over our friction estimate.
+        # Step 1: cornering ceiling. abs() because vx_max only depends on the
+        # *magnitude* of curvature (lateral force is a scalar).
+        abs_kappa = np.maximum(np.abs(kappa), float(kappa_eps))
+        a_lat = float(a_lat_max_mps2)
+        vx_max = np.sqrt(a_lat / abs_kappa)
+        vx_max = np.minimum(vx_max, float(v_max_mps))
+        vx_max = np.maximum(vx_max, float(v_min_mps))
 
-    # Step 2: forward pass. Initialize ego at the cornering ceiling (assume
-    # we entered at racing speed). Walk forward enforcing accel limit.
-    vx = vx_max.copy()
-    a_a = float(a_long_accel_max_mps2)
-    for i in range(n - 1):
-        ds = float(s[i + 1] - s[i])
-        if ds <= 0.0:
-            continue
-        # vf^2 = vi^2 + 2·a·ds; vi is current vx[i], cap by lateral ceiling at i+1.
-        cap = (vx[i] * vx[i] + 2.0 * a_a * ds) ** 0.5
-        vx[i + 1] = min(vx[i + 1], cap)
+        # Step 2: forward pass. Initialize at the cornering ceiling. Walk
+        # forward enforcing accel limit.
+        vx = vx_max.copy()
+        a_a = float(a_long_accel_max_mps2)
+        for i in range(n - 1):
+            ds = float(s[i + 1] - s[i])
+            if ds <= 0.0:
+                continue
+            cap = (vx[i] * vx[i] + 2.0 * a_a * ds) ** 0.5
+            vx[i + 1] = min(vx[i + 1], cap)
 
-    # Step 3: backward pass. Walk backward enforcing decel limit.
-    a_d = float(a_long_decel_max_mps2)
-    for i in range(n - 2, -1, -1):
-        ds = float(s[i + 1] - s[i])
-        if ds <= 0.0:
-            continue
-        # vi^2 = vf^2 + 2·a_d·ds; vf is downstream vx[i+1].
-        cap = (vx[i + 1] * vx[i + 1] + 2.0 * a_d * ds) ** 0.5
-        vx[i] = min(vx[i], cap)
+        # Step 3: backward pass. Walk backward enforcing decel limit.
+        a_d = float(a_long_decel_max_mps2)
+        for i in range(n - 2, -1, -1):
+            ds = float(s[i + 1] - s[i])
+            if ds <= 0.0:
+                continue
+            cap = (vx[i + 1] * vx[i + 1] + 2.0 * a_d * ds) ** 0.5
+            vx[i] = min(vx[i], cap)
 
-    # Step 4: final clip (forward-backward can occasionally undershoot v_min on
-    # very tight corners — the grip-limited cornering is what it is).
-    vx = np.minimum(vx, float(v_max_mps))
-    vx = np.maximum(vx, float(v_min_mps))
+        # Step 4: final clip.
+        vx = np.minimum(vx, float(v_max_mps))
+        vx = np.maximum(vx, float(v_min_mps))
 
     # Step 5: ax via chain rule. Forward difference; last sample copies previous.
     ax = np.zeros(n, dtype=np.float64)
@@ -284,7 +313,130 @@ def compute_velocity_profile(
     )
 
 
+def load_lon_vel_aligned_to_waypoints(
+    target_waypoints: Sequence[Sequence[float]],
+    rich_ttl_csv_path: str,
+    *,
+    frame_translation_xy: Optional[Tuple[float, float]] = None,
+    max_neighbor_dist_m: float = 12.0,
+) -> Optional[np.ndarray]:
+    """SD-42-rich-ttl: extract per-waypoint LON_VEL from a vendored race_common
+    20-col TTL file, aligned to the target polyline via xy nearest-neighbor.
+
+    The race_common-format file (`tools/frames/data/race_common_ttl_17.csv`)
+    is the offline-optimized racing-line velocity profile — the
+    "theoretical max speed" the user wants ego to achieve on each section
+    of the track. Note: the race_common optimal racing line is NOT
+    identical to our `ttl_optimal_xodr.csv` line (it's a slightly
+    different optimization, with worst-case xy distance ~9 m at one
+    awkward turn-stitching point on Laguna Seca). We resample by
+    nearest-neighbor xy lookup, accepting up to `max_neighbor_dist_m`
+    of mismatch — over that the alignment is too poor to trust.
+
+    The lon_vel values vary smoothly along the racing line (~0.1 m/s
+    delta per meter of track), so a 5-10 m nearest-neighbor xy mismatch
+    contributes <1 m/s error to the resampled lon_vel — well below the
+    plant's tracking accuracy.
+
+    Parameters
+    ----------
+    target_waypoints
+        The polyline ego will track (typically loaded from
+        `ttl_*_xodr.csv` via `load_ttl_region`). Each entry is (x, y) or
+        (x, y, z).
+    rich_ttl_csv_path
+        Absolute path to a race_common 20-col TTL file (vendored locally
+        in `tools/frames/data/`). Format: row 0 = metadata, row 1 = sector
+        markers, rows 2+ = data with x,y,z,...,LON_VEL,... per `TtlColumn`.
+    frame_translation_xy
+        Optional (dx, dy) to add to the rich TTL's (x, y) before matching
+        against `target_waypoints`. Use (0, 0) or None when both files are
+        already in the same frame; use (-6.101, -50.761) when the rich
+        file is in race_common's canonical origin and the target is in
+        the MathWorks XODR frame (per `docs/frames.md:195`).
+    max_neighbor_dist_m
+        If the nearest neighbor for a target waypoint is farther than this,
+        return None (geometric mismatch — likely wrong frame or wrong file).
+        5 m is generous; matching points should be within 1–2 m.
+
+    Returns
+    -------
+    np.ndarray of shape (len(target_waypoints),) with per-waypoint LON_VEL
+    in m/s, or None if the file can't be loaded / parsed / aligned.
+    """
+    import csv as _csv
+    import os as _os
+
+    if not _os.path.exists(rich_ttl_csv_path):
+        return None
+
+    # Parse race_common 20-col format. Row 0 = metadata, row 1 = sectors,
+    # rows 2+ = data. Cols 0,1 = x,y; col 6 = LON_VEL.
+    rich_xy: list = []
+    rich_lon_vel: list = []
+    try:
+        with open(rich_ttl_csv_path, newline="") as f:
+            rows = list(_csv.reader(f))
+        if len(rows) < 3:
+            return None
+        # Skip the 2 header rows; parse data.
+        dx, dy = float(frame_translation_xy[0]) if frame_translation_xy else 0.0, \
+                 float(frame_translation_xy[1]) if frame_translation_xy else 0.0
+        for row in rows[2:]:
+            if len(row) < 7:
+                continue
+            try:
+                x = float(row[0]) + dx
+                y = float(row[1]) + dy
+                v = float(row[6])
+            except (ValueError, IndexError):
+                continue
+            rich_xy.append((x, y))
+            rich_lon_vel.append(v)
+    except Exception:
+        return None
+
+    if len(rich_xy) < 2:
+        return None
+
+    rich_arr = np.asarray(rich_xy, dtype=np.float64)
+    rich_v = np.asarray(rich_lon_vel, dtype=np.float64)
+
+    # Nearest-neighbor lookup for each target waypoint.
+    n_target = len(target_waypoints)
+    out = np.zeros(n_target, dtype=np.float64)
+    max_dist_sq = float(max_neighbor_dist_m) ** 2
+    for i, wp in enumerate(target_waypoints):
+        wx, wy = float(wp[0]), float(wp[1])
+        # O(n_rich) linear scan; n_rich is ~3600. With 3600 target waypoints
+        # this is O(n²) ≈ 13M ops at scene init — ~50 ms in Python. Acceptable.
+        # Could KD-tree for speed but not worth the dependency.
+        dx_arr = rich_arr[:, 0] - wx
+        dy_arr = rich_arr[:, 1] - wy
+        d2 = dx_arr * dx_arr + dy_arr * dy_arr
+        idx = int(np.argmin(d2))
+        if float(d2[idx]) > max_dist_sq:
+            # Geometric mismatch — bail rather than return garbage.
+            return None
+        out[i] = float(rich_v[idx])
+
+    return out
+
+
+def _default_race_common_reference_path() -> str:
+    """Absolute path to the locally-vendored race_common TTL reference
+    (`tools/frames/data/race_common_ttl_17.csv`). Used by behaviors.scenic
+    to enrich the optimal TTL with race_common's offline LON_VEL.
+    """
+    import os as _os
+    here = _os.path.dirname(_os.path.abspath(__file__))
+    # planner/ → racing/ → domains/ → scenic/ → src/ → repo
+    repo = _os.path.abspath(_os.path.join(here, "..", "..", "..", "..", ".."))
+    return _os.path.join(repo, "tools", "frames", "data", "race_common_ttl_17.csv")
+
+
 __all__ = [
     "VelocityProfile",
     "compute_velocity_profile",
+    "load_lon_vel_aligned_to_waypoints",
 ]

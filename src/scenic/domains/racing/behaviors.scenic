@@ -58,6 +58,8 @@ from scenic.domains.racing.tactical_planner import (
 )
 from scenic.domains.racing.planner.velocity_profile import (
     compute_velocity_profile as _compute_velocity_profile,
+    load_lon_vel_aligned_to_waypoints as _load_lon_vel_aligned,
+    _default_race_common_reference_path as _default_rc_ref_path,
 )
 from scenic.domains.racing.prediction import FellowPredictor, format_prediction_log_line
 from scenic.domains.racing.assessment import (
@@ -595,28 +597,57 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             if _ttl_folder:
                 _preloaded_keys = []
                 # SD-42L: read the lateral-friction param once for the velocity
-                # profile generator. Default 12.0 m/s² is conservative for the
-                # IAC Dallara; TUM publishes 14.0 for actual race conditions.
-                # If understeer surfaces, halve and retest.
+                # profile generator backup path. Default 14.0 m/s² (TUM published
+                # for IAC Dallara race conditions). If understeer surfaces, halve
+                # and retest. Used only when rich race_common LON_VEL is not
+                # available or `use_rich_ttl_lon_vel=False`.
                 try:
-                    _a_lat_max_param = float((_params or {}).get("racing_a_lat_max_mps2", 12.0))
+                    _a_lat_max_param = float((_params or {}).get("racing_a_lat_max_mps2", 14.0))
                 except Exception:
-                    _a_lat_max_param = 12.0
+                    _a_lat_max_param = 14.0
+                # SD-42-rich-ttl: opt-in to use race_common's offline-optimized
+                # LON_VEL (in `tools/frames/data/race_common_ttl_17.csv`) instead
+                # of our forward-backward backup. The race_common profile is
+                # ground-truth and conservative-but-realistic; the backup is
+                # often more aggressive than physically achievable. Currently
+                # only the OPTIMAL TTL has a vendored race_common reference;
+                # left/right TTLs always use the backup.
+                # Override: `--param use_rich_ttl_lon_vel True`.
+                try:
+                    _use_rich_ttl_param = (_params or {}).get("use_rich_ttl_lon_vel", False)
+                    if isinstance(_use_rich_ttl_param, bool):
+                        _use_rich_ttl = bool(_use_rich_ttl_param)
+                    else:
+                        _use_rich_ttl = str(_use_rich_ttl_param).strip().lower() in ("true", "1", "yes", "on")
+                except Exception:
+                    _use_rich_ttl = False
                 for _ttl_key, _ttl_file in _PHASE1_TTL_FILE_BY_SELECTION.items():
                     try:
                         _region, _pts = load_ttl_region(str(_ttl_folder), _ttl_file)
                         if _region is not None and _pts and len(_pts) >= 2:
                             _scripted_ttl_cache[_ttl_key] = (_region, list(_pts))
                             _preloaded_keys.append(_ttl_key)
-                            # SD-42L: precompute the velocity profile for this
-                            # TTL once at load time. Stored in the parallel
-                            # `_scripted_velocity_profiles` dict keyed by
-                            # ttl_key. Stage M will consume.
+                            # SD-42L/-rich-ttl: precompute the velocity profile.
+                            # If rich TTL is opted in AND a race_common reference
+                            # exists for this TTL key (currently only "optimal"),
+                            # resample race_common's LON_VEL onto our polyline.
+                            # Otherwise compute via forward-backward backup.
                             try:
-                                _vp = _compute_velocity_profile(
-                                    _pts,
-                                    a_lat_max_mps2=_a_lat_max_param,
-                                )
+                                _lv_aligned = None
+                                _profile_source = "backup"
+                                if _use_rich_ttl and _ttl_key == "optimal":
+                                    _rc_path = _default_rc_ref_path()
+                                    _lv_aligned = _load_lon_vel_aligned(_pts, _rc_path)
+                                    if _lv_aligned is not None:
+                                        _profile_source = "race_common_ttl_17"
+                                if _lv_aligned is not None:
+                                    _vp = _compute_velocity_profile(
+                                        _pts, lon_vel_per_waypoint=_lv_aligned,
+                                    )
+                                else:
+                                    _vp = _compute_velocity_profile(
+                                        _pts, a_lat_max_mps2=_a_lat_max_param,
+                                    )
                                 _scripted_velocity_profiles[_ttl_key] = _vp
                                 _vp_min = float(_vp.vx_optimal_mps.min())
                                 _vp_max = float(_vp.vx_optimal_mps.max())
@@ -624,7 +655,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                                 print(
                                     f"{_fbhv} [VelProfile] ttl={_ttl_key} n={int(_vp.s_m.shape[0])} "
                                     f"corner_min={_vp_min:.2f} straight_max={_vp_max:.2f} "
-                                    f"mean={_vp_mean:.2f} a_lat_max={_a_lat_max_param:.1f}"
+                                    f"mean={_vp_mean:.2f} source={_profile_source}"
                                 )
                             except Exception as _e_vp:
                                 print(f"{_fbhv} [VelProfile] failed for ttl={_ttl_key}: {_e_vp}")
