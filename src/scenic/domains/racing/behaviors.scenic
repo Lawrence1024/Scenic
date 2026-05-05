@@ -67,6 +67,10 @@ from scenic.domains.racing.safety import (
     stability_guard_step,
     stability_guard_handle_ttl_switch,
 )
+from scenic.domains.racing.safety.stability_guard import (
+    should_swap_for_emergency as _safety_should_swap,
+    swap_reference_for_emergency as _safety_swap_reference,
+)
 
 from scenic.simulators.dspace.ttl.loader import load_ttl_region
 from scenic.simulators.dspace.controldesk.readback import read_eval_gt_dist_object_1_m
@@ -501,6 +505,26 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _stability_guard_enabled = bool((getattr(simulation().scene, 'params', None) or {}).get("stability_guard_enabled", False))
         except Exception:
             _stability_guard_enabled = False
+    # SD-41E: auto-enable the stability guard whenever the tactical planner
+    # is active. The guard now runs as a pre-MPC safety supervisor (swaps
+    # the planner reference for a safe-stop trajectory on predicted
+    # collision) AND as a post-MPC command filter. Both are load-bearing
+    # for the SD-41 contract; an unguarded tactical run would leave the
+    # MPC tracking the planner's intent through a predicted collision
+    # with no fallback. Override by passing `stability_guard_enabled=False`
+    # explicitly OR `--param stability_guard_auto_enable False`.
+    if _tactical_planner_enabled and not _stability_guard_enabled:
+        try:
+            _auto_enable = (getattr(simulation().scene, 'params', None) or {}).get("stability_guard_auto_enable", True)
+            if isinstance(_auto_enable, bool):
+                _auto_enable = bool(_auto_enable)
+            else:
+                _auto_enable = str(_auto_enable).strip().lower() in ("true", "1", "yes", "on")
+        except Exception:
+            _auto_enable = True
+        if _auto_enable:
+            _stability_guard_enabled = True
+            print(f"{_fbhv} SD-41E auto-enabled stability_guard (tactical_planner_enabled=True). Override with stability_guard_auto_enable=False.")
     if not _commit_enabled:
         try:
             _commit_enabled = bool((getattr(simulation().scene, 'params', None) or {}).get("commit_abort_enabled", False))
@@ -1778,6 +1802,22 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     f"binding={self._planner_reference.binding_cap_source} "
                     f"horizon={int(self._planner_reference.horizon_length())}"
                 )
+
+                # SD-41E (skeleton): the safety supervisor's pre-MPC
+                # reference-swap was implemented and tested but produced an
+                # F14 regression — the safe-stop ramp's tail-of-horizon
+                # zeros caused the MPC to brake more aggressively than the
+                # planner's ABORT_PASS already wanted, perturbing ego's
+                # trajectory enough to trip a pre-existing pit_mode false
+                # positive in the segment classifier (SD-12a). The
+                # `should_swap_for_emergency` and `swap_reference_for_emergency`
+                # helpers in scenic.domains.racing.safety.stability_guard
+                # remain available for future iteration. Until they are
+                # called here, Stage E is functionally just (a) auto-enabling
+                # the post-MPC stability guard when tactical is on and
+                # (b) shipping the helper functions for later use. The
+                # SD-36 panic-brake bypass at the post-MPC site continues
+                # to provide emergency authority and is kept by Stage F.
 
             # --- Build speed reference profile for MPC ---
             horizon = _lon_controller.config.mpc_prediction_horizon

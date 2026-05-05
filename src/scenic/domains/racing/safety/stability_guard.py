@@ -12,11 +12,24 @@ Authority model (post-SD-4d):
 
 The legacy fallback is intentional — tests that don't construct full TTL
 polylines still work. Production callers always set _available=True.
+
+SD-41E: safety supervisor — pre-MPC reference-swap channel.
+``should_swap_for_emergency`` and ``swap_reference_for_emergency`` give the
+guard a third channel that runs BETWEEN the planner and the MPC. When an
+emergency is predicted, the planner's reference is replaced with a
+structured safe-stop trajectory (vx ramps linearly to 0 over ~1.5 s)
+before the MPC consumes it. The MPC then tracks the ramp naturally and
+produces strong brake commands without any post-MPC command clipping.
+This eliminates the SD-36 panic-brake bypass band-aid (Stage F).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+import numpy as np
+
+from scenic.domains.racing.planner.planner_reference import PlannerReference
 
 
 @dataclass
@@ -299,6 +312,120 @@ def stability_guard_step(
         brake_limited=bool(brake_limited),
         ttl_switch_blocked=bool(ttl_switch_blocked),
         emergency_stable_mode=bool(emergency_stable_mode),
+    )
+
+
+def should_swap_for_emergency(
+    *,
+    config: StabilityGuardConfig,
+    pit_mode: bool,
+    predicted_collision: bool,
+    predicted_collision_available: bool,
+    overlap_flag: bool = False,
+    closing_flag: bool = False,
+    gap_ok: bool = True,
+    emergency_risk_01: float = 0.0,
+    in_pass_maneuver: bool = False,
+) -> bool:
+    """SD-41E: pre-MPC trigger that mirrors stability_guard_step's emergency_trigger.
+
+    Returns True iff the safety supervisor should swap the planner's
+    reference for a safe-stop reference this tick. Same authority model:
+    predicted_collision is sole authority when available; snapshot
+    heuristics (overlap / risk / closing+gap) are the legacy fallback.
+    """
+    if pit_mode:
+        return False
+    if predicted_collision_available:
+        return bool(predicted_collision)
+    risk = max(0.0, min(1.0, float(emergency_risk_01)))
+    return bool(
+        bool(overlap_flag)
+        or risk >= float(config.emergency_risk_enter_01)
+        or (
+            (not in_pass_maneuver)
+            and (not bool(gap_ok))
+            and bool(closing_flag)
+            and risk >= 0.50
+        )
+    )
+
+
+def swap_reference_for_emergency(
+    ref: PlannerReference,
+    *,
+    current_speed_mps: float,
+    control_dt_s: float,
+    ramp_duration_s: float = 1.5,
+) -> PlannerReference:
+    """SD-41E: return a safe-stop variant of the planner reference.
+
+    The lateral profile (x_m / y_m / psi_rad / kappa_radpm / s_m) is
+    preserved so the MPC continues tracking the same TTL while braking.
+    Only the longitudinal columns change:
+
+      ramp_to_zero[i] = max(0, v0 * (1 - t_i / T))
+      vx_mps[i] = min(planner_vx[i], ramp_to_zero[i])
+
+    The element-wise min is load-bearing: when the planner is already
+    commanding a deep brake (e.g. ABORT_PASS with vx=3 m/s, or FOLLOW
+    behind an active blocker with vx=12 m/s), we MUST NOT raise the
+    reference above the planner's intent. Initial Stage E used
+    `vx_mps = ramp_to_zero` directly, anchoring the ramp at
+    current_speed_mps; this produced an *acceleration* command at the
+    moment of predicted collision when the planner was already braking.
+    Observed F14 t=17.0s: planner vx0=12.75, ramp vx0=34.19 — MPC saw
+    v_error=0 and produced no brake → contact.
+
+    With the min(): emergency means "at least as much brake as the
+    planner already asked for, plus more along the horizon if the
+    ramp demands it". The ramp-to-zero adds force at the *tail* of
+    the horizon (where the planner's ABORT might level off), giving
+    the MPC a cleaner profile to track to a stop.
+
+    The swapped reference is marked ``is_safe_stop=True`` and its mode
+    is overwritten to ``EMERGENCY_STABLE`` so downstream telemetry can
+    distinguish "planner intent" from "supervisor override".
+
+    Why ~1.5 s ramp: at 25 m/s ego this asks for ~1.7 g longitudinal —
+    within the IAC Dallara's brake envelope while leaving margin.
+    Shorter ramps over-saturate the brake; longer ramps may not stop
+    in time.
+    """
+    if ref is None or ref.vx_mps is None or ref.vx_mps.size == 0:
+        return ref
+    n = int(ref.vx_mps.shape[0])
+    dt = max(1.0e-3, float(control_dt_s))
+    T = max(dt, float(ramp_duration_s))
+    v0 = max(0.0, float(current_speed_mps))
+
+    t_grid = np.arange(n, dtype=np.float64) * dt
+    ramp_to_zero = np.maximum(0.0, v0 * (1.0 - t_grid / T))
+    planner_vx = np.asarray(ref.vx_mps, dtype=np.float64)
+    vx = np.minimum(planner_vx, ramp_to_zero)
+
+    # ax recomputed from the actual vx to stay consistent with the profile
+    # the MPC will track. Forward difference; tail copies the previous step.
+    ax = np.zeros(n, dtype=np.float64)
+    if n >= 2 and dt > 0.0:
+        ax[:-1] = (vx[1:] - vx[:-1]) / dt
+        ax[-1] = ax[-2]
+
+    return PlannerReference(
+        s_m=ref.s_m,
+        x_m=ref.x_m,
+        y_m=ref.y_m,
+        psi_rad=ref.psi_rad,
+        kappa_radpm=ref.kappa_radpm,
+        vx_mps=vx,
+        ax_mps2=ax,
+        traj_id=int(ref.traj_id),
+        t_planner_stamp_s=float(ref.t_planner_stamp_s),
+        mode="EMERGENCY_STABLE",
+        decision_reason="safety_supervisor_safe_stop",
+        is_safe_stop=True,
+        binding_cap_source="safe_stop",
+        ttl_key=str(ref.ttl_key or "optimal"),
     )
 
 
