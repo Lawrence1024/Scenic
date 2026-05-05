@@ -1684,9 +1684,28 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _time_since_merge = float(_sim_time_s) - float(
                 getattr(self, '_last_lateral_merge_sim_t', -1.0e9)
             )
-            _recent_merge_window_s = 2.0
+            # SD-41K (refined): suppression remains active until ego has
+            # actually converged (CTE returned below 0.5 m for ≥ 0.2 s) OR a
+            # generous safety window expires. The original 2.0 s window was
+            # too tight for typical merge-back trajectories — F3R showed CTE
+            # decreasing monotonically from 2.05 → 1.38 m, then the window
+            # expired at t=9.0 s while CTE was still 1.4 m, the cap fired,
+            # and ego braked from 28 → 26 m/s for ~0.4 s right after a clean
+            # pass. Tracking CTE convergence ends suppression when ego has
+            # actually settled, which handles long and short merges alike.
+            _cte_converged_thresh_m = 0.5
+            _converged_dwell_s = 0.2
+            if cte_mag_for_speed < _cte_converged_thresh_m:
+                self._cte_converged_t_s = float(
+                    getattr(self, '_cte_converged_t_s', 0.0)
+                ) + float(simulation().timestep) * float(getattr(simulation(), '_control_interval', 1))
+            else:
+                self._cte_converged_t_s = 0.0
+            _ego_has_converged = float(getattr(self, '_cte_converged_t_s', 0.0)) >= _converged_dwell_s
+            _safety_window_s = 5.0  # absolute upper bound on suppression
             _suppress_small_cte_cap = (
-                _in_lateral_merge_now or _time_since_merge < _recent_merge_window_s
+                _in_lateral_merge_now
+                or (_time_since_merge < _safety_window_s and not _ego_has_converged)
             )
             if cte_mag_for_speed >= 10.0:
                 # 10m+ CTE: strong decel and hard cap so we don't maintain high speed off-track
