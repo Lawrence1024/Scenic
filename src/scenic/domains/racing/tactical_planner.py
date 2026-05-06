@@ -13,16 +13,6 @@ State machine (SD-3d expanded with HOLD):
 Maps opponent situation + race assessment to (TTL choice, optional speed cap,
 decision_reason). Called each control cycle from the racing behavior.
 
-SD-41 contract (post-refactor): the planner is the SOLE authority for the
-strategic speed and TTL choice. `tactical_planner_step_v1` returns the
-classic `(mode, ttl_key, speed_cap, decision_reason)` tuple for back-compat,
-but the load-bearing output is `build_reference(...)` which composes ALL
-caps (cte, curvature, global, scripted, tactical) into a dense
-`PlannerReference` that the MPC tracks directly. The MPC has no override
-authority; it is a pure tracker. The stability guard is a third channel
-that may swap the reference (Stage E helpers exist; not currently wired)
-but never modifies MPC outputs.
-
 Brake-trigger gating (post-SD-4):
   All snapshot heuristics (overlap_flag, gap_ok, closing_flag, risk thresholds)
   go through ``_apply_predicted_collision_gate`` which combines them with the
@@ -46,24 +36,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Sequence, Tuple
 
-import numpy as np
-
 from scenic.domains.racing.assessment.pass_geometry import (
-    _xy_at_arclength,
     pass_window_check,
     path_collision_predicted,
     select_tracks_for_state,
 )
 from scenic.domains.racing.prediction.strategy_simulator import (
     ALL_STRATEGIES as _ALL_STRATEGIES,
-    _signed_cross_track_at_s as _planner_cross_track_at_s,
     simulate_strategy as _simulate_strategy,
 )
-from scenic.domains.racing.planner.planner_reference import PlannerReference
 from scenic.domains.racing.planner.strategy_selector import (
     select_strategy as _select_strategy,
 )
-from scenic.domains.racing.planner.velocity_profile import VelocityProfile
 from scenic.domains.racing.situation_assessment import OpponentSituation
 
 FREE_RUN = "FREE_RUN"
@@ -334,23 +318,6 @@ class TacticalPlannerConfig:
     # Override via `param use_strategy_authority False` to fall back to the
     # snapshot path for A/B comparison.
     use_strategy_authority: bool = True
-    # SD-42M: when True, the planner emits PlannerReference.vx_mps by slicing
-    # the per-TTL precomputed velocity profile (Stage L) and shaping by mode
-    # (FREE_RUN / FOLLOW / COMMIT_* / HOLD_* / ABORT / SAFE_STOP) — the entire
-    # min-of-caps composition (cte / curvature / global / scripted / tactical)
-    # is bypassed. The velocity profile already encodes the friction-limited
-    # cornering ceiling (replaces curvature_speed_cap), forward-backward
-    # smoothing (replaces "brake before corner" RC-7b heuristic), and global
-    # max (clipped at MAX_SPEED_LIMIT_MS during profile generation).
-    # SD-42N: flipped from False (Stage M roll-in) to True after F3R/F9 with
-    # the flag enabled produced clean traces — profile vx0 climbed naturally
-    # (39 → 62 m/s) as ego converged on the active TTL via the CTE-tracking
-    # gate, no scared throttling, no oscillating merge-back. Legacy
-    # cap-chain code still runs in behaviors.scenic but its output goes
-    # nowhere (the MPC consumes ref.vx_mps directly); Stage P deletes that
-    # dead code. Override via `--param use_velocity_profile_reference False`
-    # for a side-by-side regression compare against the SD-41 cap-chain path.
-    use_velocity_profile_reference: bool = True
     strategy_horizon_s: float = 10.0
     strategy_sample_dt_s: float = 0.5
     # SD-27b: clearance is now OBB edge-to-edge gap (NOT centroid distance).
@@ -417,213 +384,6 @@ def _dv_commit_gap_max_m(config: "TacticalPlannerConfig", dv_mps: float) -> floa
 
 def _dv_hold_release_long_m(config: "TacticalPlannerConfig", dv_mps: float) -> float:
     return float(config.hold_release_long_intercept_m) + float(config.hold_release_long_dv_slope) * max(0.0, float(dv_mps))
-
-
-def slice_trajectory_from_profile(
-    profile: VelocityProfile,
-    *,
-    ego_s_m: float,
-    ego_speed_mps: float,
-    horizon_n: int,
-    horizon_dt: float,
-    mode: str,
-    opp_speed_mps: float = 0.0,
-    follow_headway_margin_mps: float = 2.0,
-    abort_derate: float = 0.7,
-    abort_speed_margin_mps: float = 1.0,
-    cte_now_m: float = 0.0,
-    cte_tau_m: float = 3.0,
-    cte_deadband_m: float = 1.0,
-    safe_stop_ramp_s: float = 1.5,
-    v_min_mps: float = 3.0,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, str]:
-    """SD-42M: build (vx, ax, s) per-horizon arrays by slicing a precomputed
-    velocity profile and shaping by tactical mode.
-
-    Returns ``(vx_mps[N], ax_mps2[N], s_m[N], binding_source)``.
-
-    Mode shaping (per the SD-42 architecture):
-
-      FREE_RUN, SETUP_*       → vx[i] = profile.lookup(s[i])           (raceline)
-      FOLLOW                  → vx[i] = min(profile.lookup, opp + headway)
-      COMMIT_PASS_*, HOLD_*   → vx[i] = profile.lookup of *the active TTL*
-                                (caller switched ttl_key already; the profile
-                                we receive is the side TTL's, so just slice it)
-      ABORT_PASS              → vx[i] = max(v_min, min(profile · derate,
-                                                       opp − margin))
-                                ABORT means "this pass isn't going to work,
-                                back off behind the fellow" — gentle deceleration
-                                to slightly slower than the fellow, NOT an
-                                emergency brake. SD-42N+: margin defaults to
-                                1.0 m/s (was 5.0); the prior 5 m/s margin
-                                slammed ego from racing speed to walking pace
-                                (e.g. F14 abort: 17→3 m/s in 1 s), dropping
-                                ego below gear-1→2 downshift and triggering
-                                a 12+ second crawl/recovery cascade. Real
-                                emergency = EMERGENCY_STABLE below.
-      EMERGENCY_STABLE,       → linear ramp from ego_speed to 0 over
-        SAFE_STOP                safe_stop_ramp_s seconds (existing Stage E
-                                pattern, applied here so the planner reference
-                                IS the safe-stop trajectory)
-
-    CTE-tracking gate (the ONE legitimate residual modulation): when ego
-    is laterally off the active TTL by more than `cte_deadband_m` (default
-    1 m), apply
-        multiplier = exp(-(|cte| - deadband) / cte_tau_m)
-    This is the lateral-tracking-error backoff that Stage K's CTE-cap
-    suppression was trying to approximate. It's a plant gate (proportional
-    to actual tracking error), not a tactical decision. Steady-state
-    racing (|CTE| < 1 m) is unaffected; large CTE during TTL switches
-    modulates speed naturally as ego converges.
-
-    The slicer integrates s forward via constant-vx within each step:
-    s[i+1] = s[i] + vx[i] * dt. This is the same approximation the
-    SD-41B build_reference uses, but applied per-step rather than
-    constant-vx0-extrapolation.
-
-    Replaces the entire min-of-caps composition (cte / curvature / global /
-    scripted / tactical) with one source of truth: the offline-computed
-    profile + mode shaping + CTE gate. See `velocity_profile.py` for the
-    profile generation algorithm.
-    """
-    n = max(1, int(horizon_n))
-    dt = max(1e-3, float(horizon_dt))
-    mode_str = str(mode or "").upper()
-
-    # ----- Safe-stop / emergency: linear ramp from current speed to 0 -----
-    if mode_str in ("EMERGENCY_STABLE", "SAFE_STOP"):
-        v0 = max(0.0, float(ego_speed_mps))
-        T = max(dt, float(safe_stop_ramp_s))
-        t_grid = np.arange(n, dtype=np.float64) * dt
-        vx = np.maximum(0.0, v0 * (1.0 - t_grid / T))
-        s = np.zeros(n, dtype=np.float64)
-        s[0] = float(ego_s_m)
-        for i in range(n - 1):
-            s[i + 1] = s[i] + vx[i] * dt
-        ax = np.zeros(n, dtype=np.float64)
-        if n >= 2:
-            ax[:-1] = (vx[1:] - vx[:-1]) / dt
-            ax[-1] = ax[-2]
-        return vx, ax, s, "safe_stop"
-
-    # ----- CTE-tracking gate multiplier (active only when |CTE| > deadband)
-    cte_abs = abs(float(cte_now_m))
-    cte_excess = max(0.0, cte_abs - float(cte_deadband_m))
-    cte_mult = float(np.exp(-cte_excess / max(1e-3, float(cte_tau_m)))) if cte_excess > 0 else 1.0
-
-    # ----- Determine sample-0 binding label (telemetry only) --------------
-    v_profile_0 = float(profile.lookup(float(ego_s_m)))
-    binding = "profile"
-    if mode_str == "FOLLOW":
-        v_headway_0 = float(opp_speed_mps) + float(follow_headway_margin_mps)
-        if v_headway_0 < v_profile_0:
-            binding = "follow_headway"
-    elif mode_str == "ABORT_PASS":
-        binding = "abort_derate"
-    if cte_mult < 1.0:
-        # The CTE gate, if active, is the most informative label — it tells
-        # the user "ego is mid-merge, that's why we're slow."
-        binding = "cte_gate"
-
-    # ----- Walk forward, sampling profile at running s --------------------
-    vx = np.zeros(n, dtype=np.float64)
-    s = np.zeros(n, dtype=np.float64)
-    s[0] = float(ego_s_m)
-    floor = max(0.0, float(v_min_mps))
-
-    for i in range(n):
-        v_profile = float(profile.lookup(s[i]))
-        if mode_str == "FOLLOW":
-            v_headway = float(opp_speed_mps) + float(follow_headway_margin_mps)
-            v_mode = min(v_profile, v_headway)
-        elif mode_str == "ABORT_PASS":
-            v_derated = v_profile * float(abort_derate)
-            v_opp_minus = float(opp_speed_mps) - float(abort_speed_margin_mps)
-            v_mode = min(v_derated, v_opp_minus)
-        else:
-            # FREE_RUN, COMMIT_*, HOLD_*, SETUP_*, etc. — raceline speed.
-            v_mode = v_profile
-
-        v_final = max(floor, v_mode * cte_mult)
-        vx[i] = v_final
-        if i + 1 < n:
-            s[i + 1] = s[i] + v_final * dt
-
-    # ----- ax via numerical derivative ------------------------------------
-    ax = np.zeros(n, dtype=np.float64)
-    if n >= 2 and dt > 0.0:
-        ax[:-1] = (vx[1:] - vx[:-1]) / dt
-        ax[-1] = ax[-2]
-
-    return vx, ax, s, binding
-
-
-def _smart_commit_cap(
-    opp_speed_mps: float,
-    *,
-    racing_line_target_mps: float,
-    commit_margin_mps: float,
-    stationary_threshold_mps: float = 3.0,
-    sustained_pace_floor_mps: float = 13.0,
-    pass_side: str = "",
-    fellow_lat_track_m: float = 0.0,
-    decisive_side_threshold_m: float = 1.5,
-) -> float:
-    """SD-41B + SD-41I + SD-41J: clearance- and physics-aware commit cap.
-
-    The COMMIT_PASS_* speed cap has three regimes, listed from most to
-    least permissive:
-
-    1. **Stationary opponent (SD-41B).** opp < `stationary_threshold_mps`:
-       skip the closing-speed cap entirely; return racing-line target.
-       Pass against a parked car is a lateral shift, not a race.
-
-    2. **Decisive opposite-side fellow (SD-41J).** Fellow's signed
-       cross-track on the optimal centerline (`fellow_lat_track_m`,
-       +left / -right) is decisively opposite the chosen pass side
-       (|lat| ≥ `decisive_side_threshold_m`). Examples:
-         pass_left  with fellow_lat_track ≤ -1.5 (fellow on right TTL)
-         pass_right with fellow_lat_track ≥ +1.5 (fellow on left TTL)
-       In these cases the side TTL ego is shifting to has full track-width
-       lateral separation from fellow's TTL — closing rate dominates the
-       outcome, and crawling at `opp+2` makes the commit window outlast
-       the simulation. Return racing-line target so ego races past.
-
-       This is what the user observed as "scared driving on F3R/F3L":
-       brain correctly picked pass_left against a fellow on the right
-       TTL, but cap = 13 m/s (gear-2 floor) gave only 4 m/s closing
-       against the 9 m/s fellow → pass took 25+ s and ran out the clock.
-
-       The threshold is conservative: `1.5 m` corresponds to fellow being
-       at least one car-width off the optimal centerline, which the IAC
-       Dallara TTL geometry only achieves on a side TTL. Fellow on
-       optimal (|lat| < 1.5) gets the conservative regime.
-
-    3. **Tight or adjacent-TTL fellow (SD-41I).** Default — fellow on
-       optimal or near it. Use the gear-2-floor cap:
-       `max(sustained_pace_floor_mps, opp_speed + commit_margin_mps)`.
-
-       The floor (default 13 m/s) sits just above the gear 1 → 2 upshift
-       point (12 m/s, derived from the dSPACE Dallara AV24 plant model)
-       so the planner cap always lands ego firmly in gear 2 or higher.
-
-    Curvature clip is applied by the caller after this function returns.
-    """
-    if float(opp_speed_mps) < float(stationary_threshold_mps):
-        return float(racing_line_target_mps)
-    # SD-41J: decisive opposite-side fellow → race past at racing speed.
-    side = str(pass_side or "").lower()
-    lat = float(fellow_lat_track_m)
-    threshold = float(decisive_side_threshold_m)
-    if side == "left" and lat <= -threshold:
-        return float(racing_line_target_mps)
-    if side == "right" and lat >= threshold:
-        return float(racing_line_target_mps)
-    # Default: gear-2-floor cap.
-    return max(
-        float(sustained_pace_floor_mps),
-        float(opp_speed_mps) + float(commit_margin_mps),
-    )
 
 
 @dataclass
@@ -705,15 +465,6 @@ class TacticalPlannerState:
     # persisted strategy_commit_cycles ticks.
     strategy_committed_name: str = ""
     strategy_commit_run_count: int = 0
-    # SD-41J: fellow's signed cross-track from the optimal centerline (m,
-    # +left / -right in track frame). Populated each tick that the strategy
-    # pipeline runs (alongside strategy_min_clearances). Used by
-    # `_smart_commit_cap` to detect "decisive opposite-side fellow" passes
-    # where ego can race past at racing-line speed instead of crawling at
-    # the conservative gear-2 floor. Defaults to 0.0 (treated as "fellow
-    # on optimal — conservative cap") when the strategy pipeline didn't
-    # run this tick.
-    fellow_lat_track_m: float = 0.0
 
 
 def apply_ttl_key_to_agent(agent, ttl_key: str, ttl_cache: dict, file_by_sel: Dict[str, str]) -> bool:
@@ -814,14 +565,6 @@ def tactical_planner_step_v1(
     # cannot ask the longitudinal MPC for a speed the tires can't honor in
     # the upcoming curve.
     curvature_ahead_max: Optional[float] = None,
-    # SD-42O: per-TTL precomputed velocity profiles. When supplied, the
-    # strategy simulator's per-strategy speed_target consults the profile
-    # for that strategy's active TTL, matching what `slice_trajectory_from_profile`
-    # produces in the planner's reference. This eliminates the strategy-vs-
-    # execution divergence that caused F2 to commit to passes the simulator
-    # predicted as safe (slow merge speed → wide clearance) but reality
-    # contacted (racing speed → ego catches fellow earlier in the merge).
-    velocity_profiles_by_ttl: Optional[Dict[str, "VelocityProfile"]] = None,
 ) -> Tuple[str, str, Optional[float], str]:
     """Return ``(mode, ttl_key, speed_cap, decision_reason)``.
 
@@ -1023,9 +766,6 @@ def tactical_planner_step_v1(
             # by projecting fellow xy onto the optimal polyline. The previous
             # sit.lateral_m wiring was heading-frame and gave the wrong side
             # under yaw — see SD-32C-fix in strategy_simulator.py.
-            # SD-42O: thread the per-TTL profiles so the simulator's
-            # speed_target consults the same vx the planner will execute.
-            velocity_profiles_by_ttl=velocity_profiles_by_ttl,
         )
         _outcomes = []
         for _strat in _ALL_STRATEGIES:
@@ -1045,22 +785,6 @@ def tactical_planner_step_v1(
         state.strategy_reachable_progress = {
             o.strategy: float(o.reachable_progress_at_horizon_m) for o in _outcomes
         }
-        # SD-41J: stash fellow's signed cross-track on the optimal centerline
-        # so the commit-cap helper can detect "decisive opposite-side fellow"
-        # passes (clear race-past lane) vs "fellow on optimal" passes (tight
-        # lateral merge required, conservative cap).
-        try:
-            _f0 = fellow_trajectory[0]
-            _fxy_now = (float(_f0[1]), float(_f0[2]))
-            _fellow_lat = _planner_cross_track_at_s(
-                _fxy_now,
-                optimal_waypoints,
-                float(opp_s_m),
-                float(lap_length_m),
-            )
-            state.fellow_lat_track_m = float(_fellow_lat) if _fellow_lat is not None else 0.0
-        except Exception:
-            state.fellow_lat_track_m = 0.0
         # Telemetry print (one line per tick when strategy was computed).
         _clear_str = " ".join(
             f"{k}={v:.2f}" for k, v in state.strategy_min_clearances.items()
@@ -1101,14 +825,7 @@ def tactical_planner_step_v1(
         # to behind, the COMMIT branch transitions to FREE_RUN (cap=None) at line 522.
         cap: Optional[float] = None
         if relation_ahead and sit is not None:
-            # SD-41B/I/J: stationary fix + gear-2 floor + opposite-side aggressive.
-            cap = _smart_commit_cap(
-                float(opponent_speed_mps),
-                racing_line_target_mps=float(config.strategy_target_speed_mps),
-                commit_margin_mps=float(config.commit_speed_margin_mps),
-                pass_side=str(side or ""),
-                fellow_lat_track_m=float(getattr(state, "fellow_lat_track_m", 0.0) or 0.0),
-            )
+            cap = max(3.0, float(opponent_speed_mps) + float(config.commit_speed_margin_mps))
             cap = _curvature_clip(cap)
         # SD-2f: leaving SETUP — clear the entry timestamp so a future SETUP gets a
         # fresh timeout window.
@@ -1214,18 +931,9 @@ def tactical_planner_step_v1(
                 float(state.lateral_path_lock_until_s),
                 float(sim_time_s) + float(config.lateral_path_lock_hold_s),
             )
-            # SD-41B/I/J: smart commit cap composes three regimes:
-            #   stationary fellow → racing-line speed (lateral shift only)
-            #   decisive opposite-side fellow → racing-line speed (clear pass)
-            #   default (fellow on optimal / adjacent) → gear-2-floor cap
-            # Curvature clip applied next.
-            cap_commit = _smart_commit_cap(
-                float(opponent_speed_mps),
-                racing_line_target_mps=float(config.strategy_target_speed_mps),
-                commit_margin_mps=float(config.commit_speed_margin_mps),
-                pass_side=str(side or ""),
-                fellow_lat_track_m=float(getattr(state, "fellow_lat_track_m", 0.0) or 0.0),
-            )
+            # COMMIT cap = opp + commit_speed_margin_mps (matches _commit_result),
+            # then clipped by upcoming curvature (SD-31).
+            cap_commit = max(3.0, float(opponent_speed_mps) + float(config.commit_speed_margin_mps))
             cap_commit = _curvature_clip(cap_commit)
             if side == "left":
                 state.mode = COMMIT_PASS_LEFT
@@ -1759,169 +1467,6 @@ def tactical_planner_step_v1(
     return _follow_result("strategy_inactive_follow_fallback")
 
 
-def build_reference(
-    *,
-    mode: str,
-    ttl_key: str,
-    decision_reason: str,
-    planner_cap_mps: Optional[float],
-    ego_x: float,
-    ego_y: float,
-    ego_speed_mps: float,
-    ego_s_m: float,
-    chosen_waypoints: Optional[Sequence[Sequence[float]]],
-    lap_length_m: float,
-    cte_cap_mps: float,
-    curvature_cap_mps: float,
-    global_max_mps: float,
-    scripted_cap_mps: Optional[float],
-    racing_line_target_mps: float,
-    mpc_horizon_n: int,
-    mpc_dt_s: float,
-    sim_time_s: float,
-    traj_id: int,
-    prev_vx0_mps: Optional[float] = None,
-    # SD-42M: profile-based path. When `use_velocity_profile=True` and
-    # `velocity_profile` is provided, the slicer fills vx_mps / ax_mps2
-    # from the profile + mode shaping and the min-of-caps composition is
-    # bypassed. Default off so existing callers keep their behavior.
-    velocity_profile: Optional[VelocityProfile] = None,
-    use_velocity_profile: bool = False,
-    opp_speed_mps: float = 0.0,
-    follow_headway_margin_mps: float = 2.0,
-    abort_derate: float = 0.7,
-    abort_speed_margin_mps: float = 5.0,
-    cte_now_m: float = 0.0,
-    cte_tau_m: float = 3.0,
-    cte_deadband_m: float = 1.0,
-) -> PlannerReference:
-    """SD-41B: build a dense PlannerReference from already-computed caps.
-
-    Cap composition (formerly in behaviors.scenic:1657-1666):
-      vx[0] = min(planner_cap, cte, curvature, global, scripted)
-    Each None component is skipped. The smallest cap source is recorded
-    in `binding_cap_source` (one of: 'tactical', 'cte', 'curvature',
-    'global', 'phase1', 'none'). When all caps are None the binding source
-    is 'none' and vx defaults to `racing_line_target_mps`.
-
-    Stage B contract: only the longitudinal columns (vx_mps, ax_mps2, s_m)
-    are load-bearing. The lateral columns (x_m, y_m, psi_rad, kappa_radpm)
-    are populated from `_xy_at_arclength` along the chosen TTL but Stage D
-    is the consumer that depends on them; until then they're informational.
-
-    s_m is integrated naively as s[i] = ego_s + vx[0] * i * dt (constant-
-    speed extrapolation). Stage F can add a curvature-aware speed profile.
-    """
-    n = max(1, int(mpc_horizon_n))
-    dt = max(1e-3, float(mpc_dt_s))
-
-    # ----- SD-42M: profile-based path (flag-gated) -------------------------
-    # When the velocity profile is available and the flag is set, slice the
-    # profile + mode shaping for vx/ax/s. The legacy min-of-caps composition
-    # below is bypassed entirely. This is the SD-42 architectural target.
-    used_profile_path = bool(use_velocity_profile and velocity_profile is not None)
-    if used_profile_path:
-        vx, ax, s_m, binding_source = slice_trajectory_from_profile(
-            velocity_profile,
-            ego_s_m=float(ego_s_m),
-            ego_speed_mps=float(ego_speed_mps),
-            horizon_n=n,
-            horizon_dt=dt,
-            mode=str(mode or ""),
-            opp_speed_mps=float(opp_speed_mps),
-            follow_headway_margin_mps=float(follow_headway_margin_mps),
-            abort_derate=float(abort_derate),
-            abort_speed_margin_mps=float(abort_speed_margin_mps),
-            cte_now_m=float(cte_now_m),
-            cte_tau_m=float(cte_tau_m),
-            cte_deadband_m=float(cte_deadband_m),
-        )
-        vx0 = float(vx[0])
-    else:
-        # ----- Legacy cap composition (Stage B / pre-SD-42 path) ----------
-        cap_sources: Dict[str, float] = {
-            "cte": float(cte_cap_mps),
-            "curvature": float(curvature_cap_mps),
-            "global": float(global_max_mps),
-        }
-        if scripted_cap_mps is not None:
-            cap_sources["phase1"] = float(scripted_cap_mps)
-        if planner_cap_mps is not None:
-            cap_sources["tactical"] = float(planner_cap_mps)
-
-        if cap_sources:
-            vx0 = min(cap_sources.values())
-            binding_source = min(cap_sources, key=cap_sources.get)
-        else:
-            vx0 = float(racing_line_target_mps)
-            binding_source = "none"
-        vx0 = max(0.0, float(vx0))
-
-        # ----- Per-step vx_mps + ax_mps2 ----------------------------------
-        vx = np.full(n, vx0, dtype=np.float64)
-        ax = np.zeros(n, dtype=np.float64)
-        if prev_vx0_mps is not None and dt > 0.0:
-            # Reflect step change from previous tick at sample 0; subsequent
-            # samples cruise at vx0 so ax stays zero. MPC will smooth via slew
-            # at the actuator level.
-            ax[0] = (vx0 - float(prev_vx0_mps)) / dt
-
-        # ----- s_m (naive constant-speed integration) ---------------------
-        s_m = float(ego_s_m) + vx0 * dt * np.arange(n, dtype=np.float64)
-
-    # ----- Lateral columns from chosen TTL ---------------------------------
-    x_m = np.full(n, float(ego_x), dtype=np.float64)
-    y_m = np.full(n, float(ego_y), dtype=np.float64)
-    psi_rad = np.zeros(n, dtype=np.float64)
-    kappa_radpm = np.zeros(n, dtype=np.float64)
-
-    if chosen_waypoints and lap_length_m > 0.0 and len(chosen_waypoints) >= 2:
-        for i in range(n):
-            xy = _xy_at_arclength(chosen_waypoints, float(s_m[i]), float(lap_length_m))
-            if xy is not None:
-                x_m[i] = float(xy[0])
-                y_m[i] = float(xy[1])
-        # Tangent (psi) via forward difference; last sample copies previous.
-        for i in range(n - 1):
-            dx = x_m[i + 1] - x_m[i]
-            dy = y_m[i + 1] - y_m[i]
-            if abs(dx) + abs(dy) > 1e-9:
-                psi_rad[i] = float(np.arctan2(dy, dx))
-            elif i > 0:
-                psi_rad[i] = psi_rad[i - 1]
-        if n >= 2:
-            psi_rad[-1] = psi_rad[-2]
-        # Curvature via 3-point cross-product (signed: left turn > 0).
-        for i in range(1, n - 1):
-            v1x = x_m[i] - x_m[i - 1]
-            v1y = y_m[i] - y_m[i - 1]
-            v2x = x_m[i + 1] - x_m[i]
-            v2y = y_m[i + 1] - y_m[i]
-            l1 = (v1x * v1x + v1y * v1y) ** 0.5
-            l2 = (v2x * v2x + v2y * v2y) ** 0.5
-            if l1 > 1e-6 and l2 > 1e-6:
-                cross = v1x * v2y - v1y * v2x
-                avg_len = 0.5 * (l1 + l2)
-                if avg_len > 1e-6:
-                    kappa_radpm[i] = float(2.0 * cross / (l1 * l2 * avg_len))
-
-    return PlannerReference(
-        s_m=s_m,
-        x_m=x_m,
-        y_m=y_m,
-        psi_rad=psi_rad,
-        kappa_radpm=kappa_radpm,
-        vx_mps=vx,
-        ax_mps2=ax,
-        traj_id=int(traj_id),
-        t_planner_stamp_s=float(sim_time_s),
-        mode=str(mode or ""),
-        decision_reason=str(decision_reason or ""),
-        binding_cap_source=binding_source,
-        ttl_key=str(ttl_key or "optimal"),
-    )
-
-
 __all__ = [
     "FREE_RUN",
     "FOLLOW",
@@ -1937,7 +1482,6 @@ __all__ = [
     "TacticalPlannerState",
     "_canonical_mode",
     "apply_ttl_key_to_agent",
-    "build_reference",
     "tactical_planner_step",
     "tactical_planner_step_v1",
 ]

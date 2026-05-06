@@ -45,21 +45,13 @@ from scenic.domains.racing.tactical_planner import (
     TacticalPlannerConfig,
     TacticalPlannerState,
     apply_ttl_key_to_agent,
-    build_reference as _planner_build_reference,
     tactical_planner_step,
     tactical_planner_step_v1,
     ABORT_PASS,
     COMMIT_PASS_LEFT,
     COMMIT_PASS_RIGHT,
-    HOLD_PASS_LEFT,
-    HOLD_PASS_RIGHT,
     SETUP_LEFT,
     SETUP_RIGHT,
-)
-from scenic.domains.racing.planner.velocity_profile import (
-    compute_velocity_profile as _compute_velocity_profile,
-    load_lon_vel_aligned_to_waypoints as _load_lon_vel_aligned,
-    _default_race_common_reference_path as _default_rc_ref_path,
 )
 from scenic.domains.racing.prediction import FellowPredictor, format_prediction_log_line
 from scenic.domains.racing.assessment import (
@@ -73,10 +65,6 @@ from scenic.domains.racing.safety import (
     format_stability_guard_log_line,
     stability_guard_step,
     stability_guard_handle_ttl_switch,
-)
-from scenic.domains.racing.safety.stability_guard import (
-    should_swap_for_emergency as _safety_should_swap,
-    swap_reference_for_emergency as _safety_swap_reference,
 )
 
 from scenic.simulators.dspace.ttl.loader import load_ttl_region
@@ -482,11 +470,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         _scripted_schedule_enabled = False
     _scripted_schedule = []
     _scripted_ttl_cache = {}
-    # SD-42L: per-TTL precomputed velocity profile (forward-backward pass on
-    # the polyline geometry alone — no rich TTL columns required). Populated
-    # from `_PHASE1_TTL_FILE_BY_SELECTION` keys at scene init below; the
-    # planner consults these per tick via Stage M's slice_trajectory_from_profile.
-    _scripted_velocity_profiles = {}
     _scripted_active_ttl = str(getattr(self, 'ttl_selection', '') or '').lower()
     if _scripted_active_ttl not in _PHASE1_TTL_FILE_BY_SELECTION:
         _scripted_active_ttl = _scripted_selection_from_ttl_filename(getattr(self, 'ttlFileName', None)) or "optimal"
@@ -517,26 +500,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _stability_guard_enabled = bool((getattr(simulation().scene, 'params', None) or {}).get("stability_guard_enabled", False))
         except Exception:
             _stability_guard_enabled = False
-    # SD-41E: auto-enable the stability guard whenever the tactical planner
-    # is active. The guard now runs as a pre-MPC safety supervisor (swaps
-    # the planner reference for a safe-stop trajectory on predicted
-    # collision) AND as a post-MPC command filter. Both are load-bearing
-    # for the SD-41 contract; an unguarded tactical run would leave the
-    # MPC tracking the planner's intent through a predicted collision
-    # with no fallback. Override by passing `stability_guard_enabled=False`
-    # explicitly OR `--param stability_guard_auto_enable False`.
-    if _tactical_planner_enabled and not _stability_guard_enabled:
-        try:
-            _auto_enable = (getattr(simulation().scene, 'params', None) or {}).get("stability_guard_auto_enable", True)
-            if isinstance(_auto_enable, bool):
-                _auto_enable = bool(_auto_enable)
-            else:
-                _auto_enable = str(_auto_enable).strip().lower() in ("true", "1", "yes", "on")
-        except Exception:
-            _auto_enable = True
-        if _auto_enable:
-            _stability_guard_enabled = True
-            print(f"{_fbhv} SD-41E auto-enabled stability_guard (tactical_planner_enabled=True). Override with stability_guard_auto_enable=False.")
     if not _commit_enabled:
         try:
             _commit_enabled = bool((getattr(simulation().scene, 'params', None) or {}).get("commit_abort_enabled", False))
@@ -565,23 +528,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         pass
     if _tactical_config.use_strategy_authority:
         print(f"{_fbhv} SD-11e strategy authority ENABLED (use_strategy_authority=True)")
-    # SD-42M: parse `use_velocity_profile_reference` scene param. Default
-    # False during Stage M roll-in; flipped True in Stage N once the
-    # flag-True path passes the F-bank smoke. Override via
-    # `--param use_velocity_profile_reference True`.
-    try:
-        _v_use_vp = _params_for_strategy.get("use_velocity_profile_reference", None)
-        if _v_use_vp is not None:
-            if isinstance(_v_use_vp, bool):
-                _tactical_config.use_velocity_profile_reference = bool(_v_use_vp)
-            else:
-                _tactical_config.use_velocity_profile_reference = (
-                    str(_v_use_vp).strip().lower() in ("true", "1", "yes", "on")
-                )
-    except Exception:
-        pass
-    if _tactical_config.use_velocity_profile_reference:
-        print(f"{_fbhv} SD-42M velocity-profile reference ENABLED (use_velocity_profile_reference=True)")
     if _segment_aware_enabled:
         # Segment-aware gating via fine-grained modifiers;
         # disable the legacy straight-only blanket gate so corner passes are possible.
@@ -596,69 +542,12 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _ttl_folder = getattr(self, 'ttlFolder', None) or _params.get("ttlFolder")
             if _ttl_folder:
                 _preloaded_keys = []
-                # SD-42L: read the lateral-friction param once for the velocity
-                # profile generator backup path. Default 14.0 m/s² (TUM published
-                # for IAC Dallara race conditions). If understeer surfaces, halve
-                # and retest. Used only when rich race_common LON_VEL is not
-                # available or `use_rich_ttl_lon_vel=False`.
-                try:
-                    _a_lat_max_param = float((_params or {}).get("racing_a_lat_max_mps2", 14.0))
-                except Exception:
-                    _a_lat_max_param = 14.0
-                # SD-42-rich-ttl: opt-in to use race_common's offline-optimized
-                # LON_VEL (in `tools/frames/data/race_common_ttl_17.csv`) instead
-                # of our forward-backward backup. The race_common profile is
-                # ground-truth and conservative-but-realistic; the backup is
-                # often more aggressive than physically achievable. Currently
-                # only the OPTIMAL TTL has a vendored race_common reference;
-                # left/right TTLs always use the backup.
-                # Override: `--param use_rich_ttl_lon_vel True`.
-                try:
-                    _use_rich_ttl_param = (_params or {}).get("use_rich_ttl_lon_vel", False)
-                    if isinstance(_use_rich_ttl_param, bool):
-                        _use_rich_ttl = bool(_use_rich_ttl_param)
-                    else:
-                        _use_rich_ttl = str(_use_rich_ttl_param).strip().lower() in ("true", "1", "yes", "on")
-                except Exception:
-                    _use_rich_ttl = False
                 for _ttl_key, _ttl_file in _PHASE1_TTL_FILE_BY_SELECTION.items():
                     try:
                         _region, _pts = load_ttl_region(str(_ttl_folder), _ttl_file)
                         if _region is not None and _pts and len(_pts) >= 2:
                             _scripted_ttl_cache[_ttl_key] = (_region, list(_pts))
                             _preloaded_keys.append(_ttl_key)
-                            # SD-42L/-rich-ttl: precompute the velocity profile.
-                            # If rich TTL is opted in AND a race_common reference
-                            # exists for this TTL key (currently only "optimal"),
-                            # resample race_common's LON_VEL onto our polyline.
-                            # Otherwise compute via forward-backward backup.
-                            try:
-                                _lv_aligned = None
-                                _profile_source = "backup"
-                                if _use_rich_ttl and _ttl_key == "optimal":
-                                    _rc_path = _default_rc_ref_path()
-                                    _lv_aligned = _load_lon_vel_aligned(_pts, _rc_path)
-                                    if _lv_aligned is not None:
-                                        _profile_source = "race_common_ttl_17"
-                                if _lv_aligned is not None:
-                                    _vp = _compute_velocity_profile(
-                                        _pts, lon_vel_per_waypoint=_lv_aligned,
-                                    )
-                                else:
-                                    _vp = _compute_velocity_profile(
-                                        _pts, a_lat_max_mps2=_a_lat_max_param,
-                                    )
-                                _scripted_velocity_profiles[_ttl_key] = _vp
-                                _vp_min = float(_vp.vx_optimal_mps.min())
-                                _vp_max = float(_vp.vx_optimal_mps.max())
-                                _vp_mean = float(_vp.vx_optimal_mps.mean())
-                                print(
-                                    f"{_fbhv} [VelProfile] ttl={_ttl_key} n={int(_vp.s_m.shape[0])} "
-                                    f"corner_min={_vp_min:.2f} straight_max={_vp_max:.2f} "
-                                    f"mean={_vp_mean:.2f} source={_profile_source}"
-                                )
-                            except Exception as _e_vp:
-                                print(f"{_fbhv} [VelProfile] failed for ttl={_ttl_key}: {_e_vp}")
                     except Exception:
                         print(f"{_fbhv} TTL preload failed for {_ttl_file}.")
                 print(f"{_fbhv} TTL preload (Phase 1 / Phase 3): folder={_ttl_folder} keys={_preloaded_keys}")
@@ -676,26 +565,9 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _stability_guard_enabled = False
             print(f"{_fbhv} Phase1/Phase3 TTL dynamic mode disabled due to setup error.")
 
-    # SD-41I — Gear thresholds (m/s) derived from the dSPACE Dallara AV24
-    # plant model. Source files (canonical authority for these numbers):
-    #   .../IAC_Project/Parameterization/MOD_Traffic/Pool/Parameter/ASM/
-    #     Drivetrain/GearboxAT/GearboxAT_dallara24.xml
-    #   .../IAC_Project/.../SoftECU/ShiftStrategy/ShiftStrategy_dallara24.xml
-    #   .../IAC_Project/.../Drivetrain/Rear Differential/Rear Differential_dallara24.xml
-    #
-    # Computation: speed = Proc_n_up_acc / (gear_ratio · final_drive · 60) · π·D
-    # with Proc_n_up_acc = 3850 RPM, final_drive (MainReductionGear) = 3.0,
-    # tire diameter D ≈ 0.686 m (Dallara IL-15 spec).
-    #
-    #   Gear ratios (Map_GearRatio):  1=3.75  2=2.235  3=1.518  4=1.13  5=0.7
-    #   Computed upshift speeds (m/s): 1→2≈12.3   2→3≈20.6   3→4≈30.4   4→5≈40.8
-    #   Plant has NO gear 6: Map_GearRatio saturates at 0.7 for indices > 5.
-    #
-    # The Scenic upshift values [12, 22, 32, 42] match within ~1 m/s. Downshift
-    # values are 3 m/s below upshift for hysteresis. The previous lists
-    # included [42, 52] / [38, 48] entries for a phantom gear 6; removed.
-    gear_up_thresholds = [0.0, 12.0, 22.0, 32.0, 42.0]
-    gear_down_thresholds = [0.0, 9.0, 18.0, 28.0, 38.0]
+    # Gear thresholds (m/s)
+    gear_up_thresholds = [0.0, 12.0, 22.0, 32.0, 42.0, 52.0]
+    gear_down_thresholds = [0.0, 9.0, 18.0, 28.0, 38.0, 48.0]
 
     wp_last_idx = 0
 
@@ -1484,14 +1356,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     # the longitudinal MPC isn't asked for a speed the tires
                     # can't honor in the upcoming curve.
                     curvature_ahead_max=float(getattr(self, "_last_curvature_ahead_for_tactical", 0.0) or 0.0),
-                    # SD-42O: pass per-TTL profiles so the simulator's
-                    # speed_target consults the same vx the planner will
-                    # execute via slice_trajectory_from_profile.
-                    velocity_profiles_by_ttl=(
-                        _scripted_velocity_profiles
-                        if isinstance(_scripted_velocity_profiles, dict) and _scripted_velocity_profiles
-                        else None
-                    ),
                 )
                 _sec_planner_ms += (_wallclock_time.perf_counter() - _sec_t_planner_start) * 1000.0
                 _mode_tac = _mode3
@@ -1748,80 +1612,27 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             # --- CTE-based speed reduction (for MPC speed reference) ---
             # Generic: no TTL or segment IDs; only |CTE| so we slow when off-line on any track.
             # When CTE is large, cap target speed so the car can recover instead of running off.
-            #
-            # SD-41K: suppress the small-CTE bands (≤ 5 m) during planner-driven
-            # lateral merges. The CTE cap was designed for "ego is accidentally
-            # off-line, slow down to recover" — but during COMMIT_PASS_*,
-            # HOLD_PASS_*, or ABORT_PASS (and the ~2-second window after
-            # exiting them while ego physically converges back to the new
-            # active TTL), the off-line state is *expected and managed* by
-            # the planner. Throttling ego mid-merge for those CTE values
-            # made F3R look "scared at start" (CTE 0.98m → cap 8 m/s during
-            # the lateral shift to the left TTL) and produced the unstable
-            # merge-back the user observed (FREE_RUN after pass with ego
-            # still 3+m off optimal → CTE cap 7-8 + lateral MPC fighting to
-            # converge → throttle/brake oscillation).
-            #
-            # Above 5 m CTE the cap still fires — that range is genuine
-            # off-track / run-off territory that the planner doesn't intend
-            # to put ego in even during a merge.
-            _phase_state = str(getattr(self, '_phase_effective_planner_state', '') or '')
-            _in_lateral_merge_now = _phase_state in (
-                COMMIT_PASS_LEFT, COMMIT_PASS_RIGHT,
-                HOLD_PASS_LEFT, HOLD_PASS_RIGHT,
-                ABORT_PASS,
-            )
-            if _in_lateral_merge_now:
-                self._last_lateral_merge_sim_t = float(_sim_time_s)
-            _time_since_merge = float(_sim_time_s) - float(
-                getattr(self, '_last_lateral_merge_sim_t', -1.0e9)
-            )
-            # SD-41K (refined): suppression remains active until ego has
-            # actually converged (CTE returned below 0.5 m for ≥ 0.2 s) OR a
-            # generous safety window expires. The original 2.0 s window was
-            # too tight for typical merge-back trajectories — F3R showed CTE
-            # decreasing monotonically from 2.05 → 1.38 m, then the window
-            # expired at t=9.0 s while CTE was still 1.4 m, the cap fired,
-            # and ego braked from 28 → 26 m/s for ~0.4 s right after a clean
-            # pass. Tracking CTE convergence ends suppression when ego has
-            # actually settled, which handles long and short merges alike.
-            _cte_converged_thresh_m = 0.5
-            _converged_dwell_s = 0.2
-            if cte_mag_for_speed < _cte_converged_thresh_m:
-                self._cte_converged_t_s = float(
-                    getattr(self, '_cte_converged_t_s', 0.0)
-                ) + float(simulation().timestep) * float(getattr(simulation(), '_control_interval', 1))
-            else:
-                self._cte_converged_t_s = 0.0
-            _ego_has_converged = float(getattr(self, '_cte_converged_t_s', 0.0)) >= _converged_dwell_s
-            _safety_window_s = 5.0  # absolute upper bound on suppression
-            _suppress_small_cte_cap = (
-                _in_lateral_merge_now
-                or (_time_since_merge < _safety_window_s and not _ego_has_converged)
-            )
             if cte_mag_for_speed >= 10.0:
                 # 10m+ CTE: strong decel and hard cap so we don't maintain high speed off-track
                 cte_target_speed = min(3.0, max(0.0, current_speed - 4.0))
             elif cte_mag_for_speed >= 5.0:
                 # 5-10m CTE: cap speed (was current_speed -> run-off). Cap at 5 m/s so MPC brakes.
-                # SD-41K: keep this band even during lateral merges — 5+m CTE is genuinely
-                # off-track territory that the planner doesn't intend.
                 cte_target_speed = min(5.0, current_speed)
             elif cte_mag_for_speed >= 3.0:
                 # 3-5m CTE: limit to 5 m/s (earlier recovery, any track)
-                cte_target_speed = target_speed if _suppress_small_cte_cap else 5.0
+                cte_target_speed = 5.0
             elif cte_mag_for_speed >= 2.0:
                 # 2-3m CTE: limit to 6 m/s
-                cte_target_speed = target_speed if _suppress_small_cte_cap else 6.0
+                cte_target_speed = 6.0
             elif cte_mag_for_speed >= 1.5:
                 # 1.5-2m CTE: limit to 6 m/s (early intervention)
-                cte_target_speed = target_speed if _suppress_small_cte_cap else 6.0
+                cte_target_speed = 6.0
             elif cte_mag_for_speed >= 1.0:
                 # 1.0-1.5m CTE: limit to 7 m/s
-                cte_target_speed = target_speed if _suppress_small_cte_cap else 7.0
+                cte_target_speed = 7.0
             elif cte_mag_for_speed >= 0.5:
                 # 0.5-1.0m CTE: limit to 8 m/s
-                cte_target_speed = target_speed if _suppress_small_cte_cap else 8.0
+                cte_target_speed = 8.0
             elif cte_mag_for_speed >= cte_stop_threshold:
                 # At 50m+ CTE: aim for very low speed (encourages heavy braking)
                 cte_target_speed = target_speed * 0.1
@@ -1885,126 +1696,36 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 if not hasattr(self, '_last_effective_target_speed'):
                     self._last_effective_target_speed = float(effective_target_speed)
                 last_eff = float(self._last_effective_target_speed)
-                # SD-32A (post-SD-41F): raise slew-down rate to ~1.5g when the
-                # CURVATURE cap is binding and asking for deceleration so the cap
-                # is honored within ~0.4s instead of ~0.85s. Originally this also
-                # fired for the "tactical" cap, but Stage C wired v_ref_profile
-                # straight from PlannerReference.vx_mps; the slew limiter no
-                # longer affects what the MPC tracks in tactical mode (it only
-                # mutates the telemetry-only effective_target_speed). The
-                # "tactical" check was deleted as dead work. The curvature path
-                # remains load-bearing for non-tactical scenarios where
-                # effective_target_speed still drives v_ref_profile.
+                # SD-32A: when a SAFETY cap is binding (curvature or tactical pass-cap)
+                # and is asking for deceleration, raise the slew-down rate to ~1.5g so
+                # the cap is honored within ~0.4s instead of ~0.85s. cte slew rates stay
+                # unchanged — those target smoothness, not safety. Without this bump,
+                # SD-31's curvature-clipped commit cap (e.g. 7.4 m/s into a hairpin) is
+                # defeated by the 0.6 m/s/tick floor and ego enters the curve at ~14
+                # m/s, exceeding tire grip (S2 sample 6 fly-and-spin).
                 _bind = str(getattr(self, '_binding_speed_cap', '') or '')
-                _safety_binding = _bind == "curvature"
+                _safety_binding = _bind in ("curvature", "tactical")
                 _decelerating = float(effective_target_speed) < last_eff
                 if _safety_binding and _decelerating:
                     slew_down_ms = max(slew_down_ms, 15.0)
                 effective_target_speed = max(last_eff - slew_down_ms * dt_slew, min(last_eff + slew_up_ms * dt_slew, float(effective_target_speed)))
-                # SD-41C: SD-40 hard-ceiling clamp removed. The clamp was a
-                # band-aid for the brain-leg gap — when planner cap dropped,
-                # the slew limiter held effective_target_speed at the prior
-                # value and the MPC kept accelerating. SD-40 forced eff <= cap
-                # in one tick. With Stage C, v_ref_profile is sourced from
-                # PlannerReference.vx_mps directly (which already composed all
-                # caps with no slew), so the slew limiter no longer affects
-                # what the MPC tracks in tactical mode — the clamp is redundant.
-                # The slew limiter and effective_target_speed remain, but only
-                # matter for the legacy non-tactical fallback path.
+                # SD-40: brain-leg cohesion -- enforce planner's tactical cap
+                # as a HARD CEILING regardless of slew state. Without this, the
+                # slew limiter delays the MPC's tracked target by 1+ seconds when
+                # the planner drops the cap (e.g. FOLLOW mode commands cap=opp+0.3,
+                # but slew keeps the MPC tracking the previous higher value). The
+                # leg then accelerates while the brain is screaming "follow!".
+                # The slew is preserved for smoothness on UPWARD changes and for
+                # CTE / curvature / global caps; the tactical cap (which is the
+                # brain's explicit decision about safe speed given the situation)
+                # is treated as non-negotiable. Observed F14 t=15-17s: planner=
+                # FOLLOW with cap~12.3 m/s, ego speed climbed to 14.88 m/s before
+                # brake activated, then climbed again to 14.27 m/s at risk=0.95
+                # right before contact at t=17.95.
+                if _p3cap is not None:
+                    effective_target_speed = min(effective_target_speed, float(_p3cap))
                 self._last_effective_target_speed = float(effective_target_speed)
-
-            # --- SD-41B: emit dense PlannerReference (compatibility shim) ---
-            # Built every tick when the tactical planner is on. Stage B is a
-            # non-consuming shim: the reference is stored on self for Stage C
-            # (longitudinal MPC) and Stage D (lateral MPC) to consume. Until
-            # those stages land, the per-tick effective_target_speed chain
-            # above remains authoritative. The [PlannerRef] log line lets us
-            # diff vx_mps[0] (planner-composed cap, no slew) against the
-            # actual effective_target_speed (post-slew, post-clamp) to verify
-            # the contract before flipping consumers.
-            if _tactical_planner_enabled and not pit_mode:
-                _ref_ttl_key = str(_scripted_active_ttl or "optimal")
-                _ref_chosen_wp = None
-                _ref_lap_len = 0.0
-                _ref_ego_s = 0.0
-                if _scripted_ttl_cache is not None and _ref_ttl_key in _scripted_ttl_cache:
-                    _ref_chosen_wp = _scripted_ttl_cache[_ref_ttl_key][1]
-                    _ref_lap_len = polyline_lap_length_m(_ref_chosen_wp) if _ref_chosen_wp else 0.0
-                    if _ref_lap_len and _ref_lap_len > 0.0:
-                        _ego_s_proj = _arc_length_project_xy(float(px), float(py), _ref_chosen_wp)
-                        _ref_ego_s = float(_ego_s_proj) if _ego_s_proj is not None else 0.0
-                _ref_horizon = _lon_controller.config.mpc_prediction_horizon if hasattr(_lon_controller, 'config') else 35
-                _ref_dt = _lon_controller.config.mpc_prediction_dt if hasattr(_lon_controller, 'config') else 0.05
-                self._planner_traj_id = int(getattr(self, '_planner_traj_id', 0)) + 1
-                _prev_ref = getattr(self, '_planner_reference', None)
-                _prev_vx0 = float(_prev_ref.vx_mps[0]) if _prev_ref is not None and _prev_ref.vx_mps.size > 0 else None
-                # SD-42M: thread the per-TTL velocity profile + flag into
-                # build_reference. When the flag is on AND a profile for the
-                # active TTL exists, the legacy min-of-caps composition is
-                # bypassed and vx_mps comes from `slice_trajectory_from_profile`.
-                _ref_velocity_profile = (
-                    _scripted_velocity_profiles.get(_ref_ttl_key)
-                    if isinstance(_scripted_velocity_profiles, dict) else None
-                )
-                _ref_use_profile = bool(getattr(_tactical_config, 'use_velocity_profile_reference', False))
-                # Opp speed for FOLLOW headway / ABORT margin. _nearest_vs3
-                # is set above when a fellow exists; default 0 otherwise.
-                _ref_opp_v = float(_nearest_vs3 or 0.0)
-                # CTE for the tracking-error gate. self._last_waypoint_cte_for_speed
-                # is populated by the lateral MPC; default 0 if missing.
-                _ref_cte_now = float(getattr(self, '_last_waypoint_cte_for_speed', 0.0) or 0.0)
-                self._planner_reference = _planner_build_reference(
-                    mode=str(_mode_tac or "FREE_RUN"),
-                    ttl_key=_ref_ttl_key,
-                    decision_reason=str(_eff_reason or ""),
-                    planner_cap_mps=self._tactical_speed_cap,
-                    ego_x=float(px),
-                    ego_y=float(py),
-                    ego_speed_mps=float(current_speed),
-                    ego_s_m=float(_ref_ego_s),
-                    chosen_waypoints=_ref_chosen_wp,
-                    lap_length_m=float(_ref_lap_len),
-                    cte_cap_mps=float(cte_target_speed),
-                    curvature_cap_mps=float(curvature_speed_cap),
-                    global_max_mps=float(MAX_SPEED_LIMIT_MS),
-                    scripted_cap_mps=float(_scripted_speed_cap) if _scripted_speed_cap is not None else None,
-                    racing_line_target_mps=float(target_speed),
-                    mpc_horizon_n=int(_ref_horizon),
-                    mpc_dt_s=float(_ref_dt),
-                    sim_time_s=float(_sim_time_s),
-                    traj_id=int(self._planner_traj_id),
-                    prev_vx0_mps=_prev_vx0,
-                    velocity_profile=_ref_velocity_profile,
-                    use_velocity_profile=_ref_use_profile,
-                    opp_speed_mps=_ref_opp_v,
-                    cte_now_m=_ref_cte_now,
-                )
-                _ref0 = float(self._planner_reference.vx_mps[0])
-                print(
-                    f"{_fl_mpc} [PlannerRef] t={_sim_time_s:.2f}s "
-                    f"traj_id={self._planner_traj_id} mode={self._planner_reference.mode} "
-                    f"ttl={self._planner_reference.ttl_key} "
-                    f"vx0={_ref0:.2f} eff={effective_target_speed:.2f} "
-                    f"binding={self._planner_reference.binding_cap_source} "
-                    f"horizon={int(self._planner_reference.horizon_length())}"
-                )
-
-                # SD-41E (skeleton): the safety supervisor's pre-MPC
-                # reference-swap was implemented and tested but produced an
-                # F14 regression — the safe-stop ramp's tail-of-horizon
-                # zeros caused the MPC to brake more aggressively than the
-                # planner's ABORT_PASS already wanted, perturbing ego's
-                # trajectory enough to trip a pre-existing pit_mode false
-                # positive in the segment classifier (SD-12a). The
-                # `should_swap_for_emergency` and `swap_reference_for_emergency`
-                # helpers in scenic.domains.racing.safety.stability_guard
-                # remain available for future iteration. Until they are
-                # called here, Stage E is functionally just (a) auto-enabling
-                # the post-MPC stability guard when tactical is on and
-                # (b) shipping the helper functions for later use. The
-                # SD-36 panic-brake bypass at the post-MPC site continues
-                # to provide emergency authority and is kept by Stage F.
-
+            
             # --- Build speed reference profile for MPC ---
             horizon = _lon_controller.config.mpc_prediction_horizon
             # Pit mode: constant profile at coast target (no curvature lookahead)
@@ -2014,25 +1735,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             else:
                 # Main mode: profile from effective_target_speed, then reduce for upcoming turns
                 v_ref_profile = [float(effective_target_speed)] * horizon
-            # SD-41C: when the tactical planner is on, source v_ref_profile
-            # from PlannerReference.vx_mps directly. The planner already
-            # composed all caps (cte, curvature, global, scripted, tactical)
-            # into vx_mps with NO slew or hard-ceiling band-aid, so the MPC
-            # tracks the brain's intent at the same tick it's set. The
-            # per-step curvature reduction below still runs on top, so any
-            # apex tighter than the planner's binding cap will pull the
-            # profile down further. Non-tactical scenarios (no PlannerReference)
-            # fall through to the legacy effective_target_speed source above.
-            if not pit_mode and _tactical_planner_enabled:
-                _ref_for_mpc = getattr(self, '_planner_reference', None)
-                if _ref_for_mpc is not None and _ref_for_mpc.vx_mps is not None and _ref_for_mpc.vx_mps.size > 0:
-                    _vx = _ref_for_mpc.vx_mps
-                    if _vx.size >= horizon:
-                        v_ref_profile = [float(v) for v in _vx[:horizon]]
-                    else:
-                        # Pad with the last value to fill the horizon.
-                        _last = float(_vx[-1])
-                        v_ref_profile = [float(v) for v in _vx] + [_last] * (horizon - _vx.size)
             # If we have waypoints (main mode only; pit already has constant profile), build a speed profile that reduces speed for upcoming turns (cached + vectorized)
             if not pit_mode and use_waypoints and wp_list and len(wp_list) >= 2:
                 # Stable cache key (shape + first/last waypoint) so cache hits when racing line is unchanged
@@ -2203,13 +1905,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 brake_mpc = float(brake_mpc)
             except Exception as ex:
                 print(f"{_fbhv} MPC longitudinal error: {ex}, using fallback")
-                # Fallback: simple proportional control. SD-41C: prefer the
-                # planner reference's vx[0] when available so the fallback
-                # honors the brain even when the MPC solver bails.
-                _fb_target = float(effective_target_speed)
-                if v_ref_profile:
-                    _fb_target = float(v_ref_profile[0])
-                speed_error = _fb_target - current_speed
+                # Fallback: simple proportional control
+                speed_error = effective_target_speed - current_speed
                 if speed_error > 0:
                     throttle_mpc = min(1.0, speed_error * 0.1)
                     brake_mpc = 0.0
@@ -2970,13 +2667,13 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     self.gear = new_gear
                     gear_changed = True
                     print(f"  [Gear] Proactive downshift from {current_gear} to {new_gear} (curvature_ahead={curvature_ahead_max:.3f} 1/m, speed={current_speed:.2f} m/s)")
-                elif current_gear < 5 and current_speed > gear_up_thresholds[min(current_gear, 4)]:
+                elif current_gear < 6 and current_speed > gear_up_thresholds[min(current_gear, 5)]:
                     new_gear = current_gear + 1
                     actions_to_take.append(SetGearAction(new_gear))
                     self.gear = new_gear
                     gear_changed = True
                     print(f"  [Gear] Shifting up from {current_gear} to {new_gear} (speed={current_speed:.2f} m/s)")
-                elif current_gear > 1 and current_speed < gear_down_thresholds[min(current_gear - 1, 4)]:
+                elif current_gear > 1 and current_speed < gear_down_thresholds[min(current_gear - 1, 5)]:
                     new_gear = current_gear - 1
                     actions_to_take.append(SetGearAction(new_gear))
                     self.gear = new_gear
@@ -3562,10 +3259,8 @@ behavior FollowModeBehavior(target_car, target_gap=31.0, manage_gears=True, use_
     # Get controllers
     _lon_controller, _lat_controller = simulation().getRacingControllers(self)
     past_steer_angle = 0
-    # SD-41I: see the matching block in FollowRacingLineMPCBehavior for the
-    # plant-derived rationale. Keep the two lists in sync.
-    gear_up_thresholds = [0.0, 12.0, 22.0, 32.0, 42.0]
-    gear_down_thresholds = [0.0, 9.0, 18.0, 28.0, 38.0]
+    gear_up_thresholds = [0.0, 12.0, 22.0, 32.0, 42.0, 52.0]
+    gear_down_thresholds = [0.0, 9.0, 18.0, 28.0, 38.0, 48.0]
     
     # Waypoint state (nearest index), used only if waypoints are available
     wp_last_idx = 0
@@ -3660,7 +3355,7 @@ behavior FollowModeBehavior(target_car, target_gap=31.0, manage_gears=True, use_
                 self.gear = 1
                 current_gear = 1
             elif current_speed is not None:
-                if current_gear < 5 and current_speed > gear_up_thresholds[current_gear]:
+                if current_gear < 6 and current_speed > gear_up_thresholds[current_gear]:
                     take SetGearAction(current_gear + 1)
                     self.gear = current_gear + 1
                     current_gear = self.gear
