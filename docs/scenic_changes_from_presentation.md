@@ -1640,3 +1640,137 @@ consolidations:
 **Files.** `src/scenic/domains/racing/behaviors.scenic` (4 sites),
 `src/scenic/domains/racing/benchmarks/metrics.py` (`_RECORD_TAGS`).
 Backward-compatible — no downstream parser breakage.
+
+---
+
+## Smart-ego closing entry — SD-41/42/43 reverted; surgical patches kept
+
+This section closes the active smart-ego work. Three architectural
+refactors (SD-41 brain-leg dense `PlannerReference`, SD-42 trajectory-
+as-interface with TUM velocity profile, SD-43 α-RACER smooth policy
+parametrization) were attempted between 2026-05-04 and 2026-05-06.
+**All three were reverted to baseline `e189704c SD-35..40`.** Two
+surgical fixes survive on top of that baseline; the rest of this
+section documents what landed, what was reverted, and the lessons.
+
+### What survived (committed on top of e189704c)
+
+Four stand-alone changes, each independently reverted-able:
+
+1. **F-bank uniformity + runner ordering.** `F13_fellow_ahead_always_faster`
+   and `F13c_control_no_fellow` flipped `scenic_control = True` so the
+   entire F-bank now exercises the Scenic-ego control path uniformly.
+   `phase_run_common.py` patched to walk `default_scenario_names` in
+   declared order rather than ASCII-sorted glob output (which placed
+   F14 before F1 because `'4' < '_'`). Runner now executes F1, F2,
+   F3L, F3R, F4, F5, F6, F7, F8, F9, F13, F13c, F14 in numeric order.
+
+2. **F9 stationary-fellow skip.** A 4-line guard inside
+   `tactical_planner.py:_commit_result`: when `opponent_speed_mps < 3.0`
+   (e.g. F9 roadside obstacle), skip the closing-speed cap (= opp +
+   commit_margin = 16 m/s) which previously held ego at gear-1 crawl
+   speeds for the entire pass. Verified F9 r01: ego enters
+   COMMIT_PASS_LEFT at 22.54 m/s instead of the prior 0.72 m/s
+   12-second crawl. Borrowed concept from the reverted SD-41B but
+   shipped as a contained guard rather than the dense-reference
+   refactor that wrapped it.
+
+3. **EMERGENCY_STABLE sticky exit gate.** `stability_guard.py` exit
+   condition tightened. The prior exit released as soon as
+   `predicted_collision` flickered False, which happens reflexively
+   when ego brakes hard (brake-shortened predicted path no longer
+   reaches the still-close fellow). Resulted in F14 ABORT ↔
+   EMERGENCY chatter at ~8 transitions/sec. New exit requires ALL
+   of: `not predicted_collision` AND one of (fellow no longer ahead,
+   fellow laterally clear by `emergency_lateral_clear_m=2.5m`, OR
+   along-track gap > `emergency_safe_gap_m=15m`). Verified F14:
+   emergency holds 4–10× longer (genuine stickiness). Verified
+   F2/F3R/F4: zero spurious emergency activations (no scared-driving
+   re-introduction). F14 collision rate within noise (3/3 vs baseline
+   2/3 across one 3-rep run — see "Why F14 still collides" below).
+
+4. **Dead-code cleanup (zero behavior change).** Three orphan private
+   functions removed: `_dv_setup_gap_max_m` and `_dv_commit_gap_max_m`
+   in `tactical_planner.py` (both helpers for a deleted Δv-derived
+   gate path), and `_polyline_for_pass_phase` in
+   `prediction/strategy_simulator.py` (helper for a deleted pass-side
+   selection codepath). Verified by AST scan; pytest unchanged.
+
+### What was reverted
+
+| SD-stage | Description | Why reverted |
+|---|---|---|
+| SD-41A–G | Dense `PlannerReference` + brain-leg refactor | Stuck in band-aid loop (I/J/K compensations chained); did not produce visible lap-time wins |
+| SD-41H | MPC longitudinal QP factor-of-2 fix | Was load-bearing for the e189704c slew limiter chain — fixing the bug at this baseline broke F1/F2/F9/F14 (ego correctly tracked the planner cap, which was calibrated assuming 2× overshoot) |
+| SD-41I/J/K | Gear floor / decisive-side / CTE-cap suppression patches | Each fixed one symptom and exposed another (band-aid cascade) |
+| SD-42L–N+ | TUM velocity profile + slicer + cap-composition strip + ABORT softening | CTE-tracking gate over-fired (28% speed cut at CTE=2m, 50% at CTE=3m) and dominated F-bank failure modes |
+| SD-42O | Strategy simulator consults profile | Same root cause as the velocity profile work |
+| SD-42 rich-TTL | race_common LON_VEL alignment + a_lat bump | Race_common profile was *more* conservative than backup; net no benefit |
+| SD-43-1..4 | α-RACER 5-parameter (`q, ζ, s_1, s_2, s_3`) policy + reference mutator + CTE gate deletion | Math worked correctly in unit tests, but downstream MPC tracking + plant gear-1 crawl dominated lap-time behavior — the architecture wasn't the bottleneck |
+
+### Why F14 still collides
+
+F14 is a structurally hard scenario at this baseline architecture:
+
+- Ego enters COMMIT_PASS_LEFT (lateral migration toward left TTL)
+- Active blocker observes ego's lateral motion, mirrors it
+- Ego cannot complete the migration (cte never reaches the side TTL)
+- COMMIT runs for ~13 seconds without resolving
+- ABORT eventually fires; ego snaps back to optimal centerline (cte → 0)
+- Ego is now slow + on the racing line + directly behind the still-
+  close blocker → re-enters EMERGENCY → cycle repeats
+
+The sticky exit gate (above) reduces the chatter at the END of this
+pattern, but the structural problem is the lack of a COMMIT timeout —
+COMMIT can run indefinitely against an active blocker. A
+`commit_max_hold_s` timeout (mirror of the existing `setup_max_hold_s`
+and `hold_max_s`) would address this. **Deferred** as the next
+targeted improvement; not implemented in this round to avoid
+re-entering an iteration cycle.
+
+### Lessons (saved to memory)
+
+These are persisted in `.claude/projects/.../memory/` for future
+sessions:
+
+- **Don't cherry-pick load-bearing "bug fixes"** out of multi-stage
+  refactors. Bugs that survive long enough often have downstream
+  code calibrated to them. SD-41H's commit message even hinted at
+  this ("exposed cleanly by Stage C wiring v_ref straight from
+  PlannerReference"); we read it but didn't internalize the
+  implication.
+
+- **Brake-authority bumps don't fix active-blocker collisions.**
+  Tested `emergency_closing_brake_floor` 0.45 → 0.65 on F14;
+  result was 3/3 collisions vs baseline 2/3 (worse). Stronger
+  brake creates bigger speed swings that the active blocker
+  exploits. The answer is earlier prediction or path deflection,
+  not more brake.
+
+- **Revert when the iteration pattern emerges.** When 2-3 successive
+  fixes each create new symptoms, stop and revert to a known-good
+  baseline rather than continuing to patch. Documented twice now
+  (SD-29 in late April, SD-41/42/43 on 2026-05-06).
+
+### Reference materials preserved (not in repo)
+
+- α-RACER paper PDF: `C:\Users\bklfh\Documents\references\alpha-RACER_2412.08855.pdf`
+- α-RACER public repo (deployment shell only — no policy params, no
+  training): `C:\Users\bklfh\Documents\references\alpha-RACER\`
+- SD-43 plan + α-RACER paper extraction: `.claude/plans/` and
+  `.claude_scratch/` in the repo working tree (untracked)
+- Backup git branch with all SD-41/42 commits: `backup-2026-05-06-pre-revert`
+  (recoverable via `git checkout backup-... -- <path>`)
+
+### Closing statement
+
+Smart-ego work pauses here. The current baseline (e189704c + the
+four surviving changes above) drives competitively on most F-bank
+scenarios (F1, F3L, F3R, F4, F6, F7, F8, F9, F13, F13c clean
+across 3 reps; F2 and F5 occasional collisions; F14 active-blocker
+unresolved). Further architectural work on the planner is not
+recommended until a hard A/B baseline plan exists to evaluate
+returns vs the iteration cost. The next likely-productive areas
+are downstream of the planner — MPC longitudinal tracking, plant
+gear-1 dynamics, brake actuator authority — none of which were
+exercised by this round's work.
