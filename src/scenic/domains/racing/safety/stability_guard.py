@@ -39,6 +39,22 @@ class StabilityGuardConfig:
     emergency_overlap_brake_floor: float = 0.60
     emergency_closing_brake_floor: float = 0.45
     emergency_max_steer_abs_rad: float = 0.15
+    # Sticky-exit gate: EMERGENCY_STABLE only releases when ego is GEOMETRICALLY
+    # safe, not just when the brake-shortened predicted_collision lookahead
+    # flickers False. Three orthogonal release conditions (any ONE suffices):
+    #   (a) fellow is no longer ahead of ego (we passed them)
+    #   (b) fellow's lateral offset > emergency_lateral_clear_m
+    #       (clear opening on a different line; overtake geometry intact)
+    #   (c) along-track gap > emergency_safe_gap_m
+    #       (sufficient runway on our line to plan / re-attempt)
+    # Without (a)/(b)/(c), emergency stays latched. This prevents the F14
+    # active-blocker chatter where ego brakes hard, predicted_collision goes
+    # False because the brake-shortened predicted path no longer overlaps the
+    # (still-close) fellow, ego accelerates, then collides on re-encounter.
+    # The 2.5m lateral threshold matches roughly half the IAC track-lane width;
+    # a left/right TTL pass auto-clears it without false-positive sticking.
+    emergency_safe_gap_m: float = 15.0
+    emergency_lateral_clear_m: float = 2.5
     reapproach_recovery_hold_s: float = 1.2
     reapproach_retrigger_risk_01: float = 0.55
     reapproach_max_throttle: float = 0.20
@@ -135,6 +151,16 @@ def stability_guard_step(
     # when it IS available — this commit only adds the kwargs (no behavior change).
     predicted_collision: bool = False,
     predicted_collision_available: bool = False,
+    # SD-43-followup: geometric-gap exit gate inputs. When provided (production
+    # caller threads situation assessment), used to require ACTUAL safety
+    # (fellow behind, OR laterally clear, OR sufficient along-track runway)
+    # before releasing the emergency latch. When omitted (legacy callers /
+    # unit tests not threading sit), the exit reverts to the prior
+    # predicted_collision-only condition for backward compat.
+    fellow_ahead: bool = True,
+    fellow_lateral_m: float = 0.0,
+    fellow_along_track_gap_m: float = 1.0e6,
+    geometric_gap_available: bool = False,
 ) -> StabilityGuardDecision:
     """Apply command-level stability constraints and emergency containment."""
     steer = float(steer_cmd_rad)
@@ -199,10 +225,26 @@ def stability_guard_step(
             float(sim_time_s) + float(config.reapproach_recovery_hold_s),
         )
     emergency_latched = float(sim_time_s) < float(state.emergency_latch_until_s)
-    # SD-4d: when predicted_collision is available, exit_ok is simply
-    # "predicted_collision==False". Otherwise fall back to the snapshot exit gate.
+    # SD-4d: when predicted_collision is available, the BASE exit_ok is
+    # "predicted_collision==False". SD-43-followup tightens this further:
+    # when geometric_gap_available is also True, additionally require ACTUAL
+    # safety (one of: fellow no longer ahead, fellow laterally clear, or
+    # along-track gap >= safe threshold). This prevents the F14 chatter where
+    # ego brakes hard, predicted_collision flickers False because the brake-
+    # shortened predicted path no longer overlaps the (still-close) fellow,
+    # ego accelerates, then collides on re-encounter. Geometric safety is
+    # checked against ACTUAL fellow position, not against ego's own (now
+    # shrunken) predicted path.
     if bool(predicted_collision_available):
-        emergency_exit_ok = bool(not predicted_collision)
+        if bool(geometric_gap_available):
+            actually_safe = bool(
+                (not bool(fellow_ahead))
+                or abs(float(fellow_lateral_m)) > float(config.emergency_lateral_clear_m)
+                or float(fellow_along_track_gap_m) > float(config.emergency_safe_gap_m)
+            )
+            emergency_exit_ok = bool((not predicted_collision) and actually_safe)
+        else:
+            emergency_exit_ok = bool(not predicted_collision)
     else:
         emergency_exit_ok = bool(
             bool(gap_ok)

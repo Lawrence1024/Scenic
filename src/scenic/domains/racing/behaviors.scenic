@@ -2462,6 +2462,21 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     # (defaults to False here so it has no effect until SD-4d rewires).
                     predicted_collision=bool(getattr(self, "_predicted_collision", False)),
                     predicted_collision_available=bool(getattr(self, "_predicted_collision_available", False)),
+                    # SD-43-followup: geometric-gap exit gate inputs. Sourced from
+                    # the situation assessment computed earlier in this tick (_sit3).
+                    # When _sit3 is None (no fellow detected), geometric_gap_available
+                    # is False and the guard reverts to the prior predicted_collision-
+                    # only exit. With _sit3 present, EMERGENCY_STABLE only releases
+                    # when ego is GEOMETRICALLY safe (fellow behind, OR laterally
+                    # clear by config.emergency_lateral_clear_m, OR along-track gap
+                    # > config.emergency_safe_gap_m). Prevents the F14 active-
+                    # blocker chatter where predicted_collision flickered False
+                    # purely because ego's brake-shortened lookahead no longer
+                    # reached the (still-close) fellow.
+                    fellow_ahead=bool(getattr(_sit3, "ahead", True)) if _sit3 is not None else True,
+                    fellow_lateral_m=float(getattr(_sit3, "lateral_m", 0.0) or 0.0) if _sit3 is not None else 0.0,
+                    fellow_along_track_gap_m=float(abs(getattr(_sit3, "longitudinal_m", 1.0e6) or 1.0e6)) if _sit3 is not None else 1.0e6,
+                    geometric_gap_available=(_sit3 is not None),
                 )
                 final_steer = float(_p10_guard.steer_cmd_rad)
                 # SD-36: panic-brake authority during EMERGENCY_STABLE. The guard
