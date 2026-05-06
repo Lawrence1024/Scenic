@@ -1212,10 +1212,13 @@ def run_phase_main(spec: PhaseRunnerSpec) -> int:
 
     # Apply phase-default scenario subsets only when the caller did not
     # explicitly request scenarios/globs. Explicit CLI filters must win.
+    # Respect the explicit ordering declared in default_scenario_names so
+    # the runner runs F1, F2, F3L, F3R, ..., F14 in numeric order. ASCII
+    # sort would otherwise put F14 before F1 (because '4' < '_').
     if spec.default_scenario_names and (not args.scenario) and (not args.scenario_glob):
-        wanted_default = set(spec.default_scenario_names)
-        scenarios = [s for s in scenarios if s.name in wanted_default]
-        missing_default = sorted(wanted_default - {s.name for s in scenarios})
+        by_name = {s.name: s for s in scenarios}
+        scenarios = [by_name[name] for name in spec.default_scenario_names if name in by_name]
+        missing_default = [name for name in spec.default_scenario_names if name not in by_name]
         if missing_default:
             print(
                 f"Warning: default scenarios missing in {scenario_dir}: {', '.join(missing_default)}",
