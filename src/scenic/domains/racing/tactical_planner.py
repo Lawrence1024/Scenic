@@ -370,18 +370,6 @@ class TacticalPlannerConfig:
 
 # SD-3b: Δv-derived gate helpers. All clamped to a sane band so a freak
 # Δv (e.g. negative or huge) doesn't produce nonsensical gap thresholds.
-def _dv_setup_gap_max_m(config: "TacticalPlannerConfig", dv_mps: float) -> float:
-    raw = float(config.setup_gap_dv_slope) * float(dv_mps) + float(config.setup_gap_dv_intercept_m)
-    return max(float(config.setup_gap_dv_floor_m),
-               min(float(config.setup_gap_dv_ceiling_m), raw))
-
-
-def _dv_commit_gap_max_m(config: "TacticalPlannerConfig", dv_mps: float) -> float:
-    raw = float(config.commit_gap_dv_slope) * float(dv_mps) + float(config.commit_gap_dv_intercept_m)
-    return max(float(config.commit_gap_dv_floor_m),
-               min(float(config.commit_gap_dv_ceiling_m), raw))
-
-
 def _dv_hold_release_long_m(config: "TacticalPlannerConfig", dv_mps: float) -> float:
     return float(config.hold_release_long_intercept_m) + float(config.hold_release_long_dv_slope) * max(0.0, float(dv_mps))
 
@@ -823,10 +811,23 @@ def tactical_planner_step_v1(
         # over-acceleration that caused F2_tactical's right-TTL convergence overshoot.
         # The cap only applies while the fellow is still ahead; once relation flips
         # to behind, the COMMIT branch transitions to FREE_RUN (cap=None) at line 522.
+        #
+        # Stationary-fellow exception: when opponent_speed < 3 m/s (e.g. F9
+        # roadside obstacle), the closing-speed cap (=opp+commit_margin=16 m/s
+        # for opp=0) holds ego at gear-1 crawl speeds for the entire pass —
+        # observed in F9 r01: 12 s of sub-2 m/s while passing the obstacle.
+        # A stationary obstacle has no fellow speed to gate against; skip the
+        # cap and pass at racing-line target. Curvature cap (via the global
+        # path, NOT here) is independent and still applies. SD-41B insight,
+        # ported as a contained 4-line guard rather than the dense-reference
+        # refactor that wrapped it.
         cap: Optional[float] = None
         if relation_ahead and sit is not None:
-            cap = max(3.0, float(opponent_speed_mps) + float(config.commit_speed_margin_mps))
-            cap = _curvature_clip(cap)
+            if float(opponent_speed_mps) < 3.0:
+                cap = None  # racing-line speed; no closing-rate cap
+            else:
+                cap = max(3.0, float(opponent_speed_mps) + float(config.commit_speed_margin_mps))
+                cap = _curvature_clip(cap)
         # SD-2f: leaving SETUP — clear the entry timestamp so a future SETUP gets a
         # fresh timeout window.
         state.setup_entry_s = -1.0e9

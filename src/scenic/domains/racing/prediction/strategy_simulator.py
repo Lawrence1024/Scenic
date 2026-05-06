@@ -93,21 +93,6 @@ def _ramp_speed(current_v: float, target_v: float, accel: float, dt: float) -> f
     return max(target_v, current_v - accel * dt)
 
 
-def _polyline_for_pass_phase(
-    side: str,
-    phase: str,
-    polylines: dict,
-) -> Optional[Sequence[Sequence[float]]]:
-    """Return which polyline ego walks during a pass_* phase.
-
-    side  : "left" or "right"
-    phase : "lane_change" | "alongside" | "merge_back"
-    """
-    if phase in ("lane_change", "alongside"):
-        return polylines.get(side)
-    return polylines.get("optimal")
-
-
 def _signed_cross_track_at_s(
     xy: Tuple[float, float],
     polyline,
