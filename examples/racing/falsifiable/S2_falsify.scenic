@@ -4,12 +4,14 @@ A more comprehensive twin of `S1_falsify.scenic`. S1 samples only one
 variable (the longitudinal gap). S2 samples three:
 
   1. gap_m         (continuous, m)   -- how far ahead the fellow starts
-  2. fellow side   (binary)          -- which TTL the fellow occupies
-                                        (left vs right racing line);
-                                        lateral offset and ttlFileName
-                                        are kept synchronized so that
-                                        a "left" sample places the fellow
-                                        at +5m lateral on ttl_left_xodr.
+                                        (along ego's route, in meters)
+  2. fellow side   (binary)          -- which TTL the fellow follows
+                                        (ttl_left_xodr vs ttl_right_xodr).
+                                        Determines pass-side geometry; the
+                                        runtime FellowFollowTTLGeometricBehavior
+                                        steers the fellow onto its TTL
+                                        within the first few ticks regardless
+                                        of the initial lateral coordinate.
   3. fellow speed  (continuous, mph) -- the cruise speed handed to
                                         FellowFollowTTLGeometricBehavior.
 
@@ -28,14 +30,15 @@ Bumping `--count` is reasonable here -- the sample space is 3-dim
 instead of S1's 1-dim, so 50-60 samples gives the CE sampler more
 room to converge on adversarial regions.
 
-Synchronization trick: VerifAI's sampler treats each VerifaiRange /
-VerifaiDiscreteRange as an independent dimension, so two separate
-samplers (one for lateral offset, one for TTL filename) would let
-VerifAI emit inconsistent combos like lat=+5 with the right TTL.
-We sample ONE `VerifaiDiscreteRange(0, 1)` and route it through two
-`@distributionFunction`-decorated helpers (`_fellow_lat_for_side` and
-`_fellow_ttl_for_side`). Both helpers share the same underlying
-sampled index, so left/right always agrees between offset and TTL.
+Lateral placement: the fellow is placed at `_racing_st_offset (gap_m, 0)`,
+i.e. the same lateral coordinate as ego in route frame. The runtime
+TTL-tracking behavior then converges the fellow to its actual TTL
+polyline (ttl_left_xodr or ttl_right_xodr) within a few control ticks.
+Pre-2026-05-06 we placed the fellow at lat=+/-5 m to "match" the side
+TTL, but that lateral coupling was redundant (the runtime behavior
+overrides it) and constrained the projection trajectory. Removing it
+gives the sampler a cleaner geometric interpretation: gap_m is
+honestly the along-route distance from ego.
 
 Speed knob caveat: Scenic does NOT auto-resolve Distribution kwargs
 passed to behavior constructors at scene-sample time. Object
@@ -58,33 +61,30 @@ model scenic.simulators.dspace.racing_model
 
 # --- ACTIVE-FALSIFICATION KNOBS --------------------------------------------
 
-# Knob 1: longitudinal gap (m).
-gap_m = VerifaiRange(20, 60)
+# Knob 1: longitudinal gap (m). Range bumped from 20-60 to 20-80 on
+# 2026-05-06 alongside the lateral-coupling removal: with the runtime
+# TTL projection now solely responsible for the fellow's lateral, gap_m
+# is an honest along-route distance, so a wider range gives the sampler
+# more useful coverage without producing geometrically-degenerate samples.
+gap_m = VerifaiRange(20, 80)
 
-# Knob 2: fellow side -- BINARY. The lateral offset and the TTL
-# filename describe the same physical placement so they must stay
-# synchronized. Two independent VerifaiOptions would let VerifAI
-# sample inconsistent combos like (lat=+5, right TTL).
-#
-# We sample ONE VerifaiDiscreteRange and route it through two
-# Python helper functions; Scenic auto-lifts these to FunctionDistribution
-# instances that resolve at sampling time. Both helpers share the
-# same underlying sampled index, so left/right always agrees between
-# the lateral offset and the TTL filename.
+# Knob 2: fellow side -- BINARY (0 = left TTL, 1 = right TTL).
+# Determines which TTL polyline the fellow tracks at runtime. The
+# initial lateral coordinate of the fellow is held at 0 (same as ego's
+# route-frame t); the FellowFollowTTLGeometricBehavior pulls the fellow
+# onto its TTL within a few control ticks. Pre-2026-05-06 we synthesized
+# a +/-5 m initial lateral to "match" the chosen TTL, but that coupling
+# was redundant with the runtime tracking behavior and constrained the
+# initial-projection geometry; removed for cleaner sample distribution.
 from scenic.core.distributions import distributionFunction
 
 _fellow_side_idx = VerifaiDiscreteRange(0, 1)  # 0 = left, 1 = right
 
 @distributionFunction
-def _fellow_lat_for_side(idx):
-    return [5.0, -5.0][int(idx)]
-
-@distributionFunction
 def _fellow_ttl_for_side(idx):
     return ['ttl_left_xodr.csv', 'ttl_right_xodr.csv'][int(idx)]
 
-fellow_lat_offset = _fellow_lat_for_side(_fellow_side_idx)
-fellow_ttl_file   = _fellow_ttl_for_side(_fellow_side_idx)
+fellow_ttl_file = _fellow_ttl_for_side(_fellow_side_idx)
 
 # Knob 3: fellow cruise speed (mph). FellowFollowTTLGeometricBehavior
 # accepts mph natively. Range covers slow blocking (15 mph) up through
@@ -121,8 +121,11 @@ ego.behavior = FollowRacingLineMPCBehavior(
     tactical_planner_enabled=True,
 )
 
-# Opponent: placed at (gap_m, fellow_lat_offset) in race s-t coords,
-# on the TTL chosen by the same fellow_setup sample.
+# Opponent: placed at (gap_m, 0) in race s-t coords, on the TTL chosen
+# by the fellow_side sample. The lateral coordinate is intentionally 0
+# -- the runtime FellowFollowTTLGeometricBehavior steers the fellow
+# onto ttl_left_xodr or ttl_right_xodr as appropriate within a few
+# control ticks. See module docstring for rationale.
 #
 # NOTE on `at (0, 0)`: with ttlFileName a Distribution (sampled via
 # VerifaiOptions), the racing_model's default position formula
@@ -135,7 +138,7 @@ ego.behavior = FollowRacingLineMPCBehavior(
 # value `(0, 0)` here is never actually used by the simulator.
 opponent = new RacingCar at (0, 0), \
     with regionContainedIn everywhere, \
-    with _racing_st_offset (gap_m, fellow_lat_offset), \
+    with _racing_st_offset (gap_m, 0), \
     with raceNumber 2, \
     with ttlFileName fellow_ttl_file, \
     with ttlFolder localPath('../../../assets/ttls/LS_ENU_TTL_CSV')
