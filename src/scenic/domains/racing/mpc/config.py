@@ -195,9 +195,15 @@ class MPCConfig:
         self.creep_accel_gear1 = config_dict.get('creep_accel_gear1', 0.3)  # m/s^2 equivalent at zero throttle
         self.creep_speed_threshold = config_dict.get('creep_speed_threshold', 3.0)  # m/s, apply creep below this
         
-        # Deadbands to avoid brake/throttle oscillation (especially in turns)
-        self.speed_deadband = config_dict.get('speed_deadband', 0.3)  # m/s, hold command if |v - v_ref| < this
-        self.accel_deadband = config_dict.get('accel_deadband', 0.25)  # m/s^2, zero accel_cmd if |accel_cmd| < this
+        # Deadbands to avoid brake/throttle oscillation (especially in turns).
+        # SD-44 Action B: bumped from (0.3, 0.25) to (1.5, 0.6) per the racing-
+        # literature recommendation that the controller should COAST through
+        # mid-corner (neither brake nor throttle) rather than micro-managing
+        # speed around v_ref. The wider deadband produces smoother lap times
+        # and lets lateral grip dominate at the apex (Pacejka tire model: when
+        # longitudinal force is small, lateral grip is highest).
+        self.speed_deadband = config_dict.get('speed_deadband', 1.5)  # m/s, hold command if |v - v_ref| < this
+        self.accel_deadband = config_dict.get('accel_deadband', 0.6)  # m/s^2, zero accel_cmd if |accel_cmd| < this
         
         # Curvature-based speed limiting
         self.max_lateral_acceleration = config_dict.get('max_lateral_acceleration', 8.0)  # m/s² (conservative for indoor sim)

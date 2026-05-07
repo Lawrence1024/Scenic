@@ -200,5 +200,5 @@ def test_guard_reapproach_hold_suppresses_throttle_after_emergency():
     )
     assert d.emergency_stable_mode is False
     assert d.guard_active is True
-    assert d.guard_reason in ("reapproach_hold", "steer_rate_limited", "brake_steer_coupled")
+    assert d.guard_reason in ("reapproach_hold", "steer_rate_limited")
     assert d.throttle_cmd <= 0.1501

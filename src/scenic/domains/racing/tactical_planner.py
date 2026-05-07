@@ -189,7 +189,7 @@ class TacticalPlannerConfig:
     # only 8.5 m -- not enough margin for a clean retry. 3.0 s gives the gap
     # time to grow to ~12-15 m before re-evaluating. Larger = more patient;
     # smaller = quicker retry.
-    abort_cooldown_s: float = 3.0
+    abort_cooldown_s: float = 5.0
     # SD-37b: speed cap during the abort cooldown FOLLOW. The original SD-37
     # used opp+0.3 (matching the regular follow_fellow strategy), but this
     # caused ego to creep forward and shrink the gap during cooldown. The
@@ -453,6 +453,10 @@ class TacticalPlannerState:
     # persisted strategy_commit_cycles ticks.
     strategy_committed_name: str = ""
     strategy_commit_run_count: int = 0
+    # Counts consecutive ticks where the committed pass-side is blocked AND
+    # the opposite side is open. After SIDE_SWITCH_HYSTERESIS_TICKS, the
+    # COMMIT branch performs a direct side-switch (no abort).
+    side_flip_pressure_count: int = 0
 
 
 def apply_ttl_key_to_agent(agent, ttl_key: str, ttl_cache: dict, file_by_sel: Dict[str, str]) -> bool:
@@ -553,6 +557,11 @@ def tactical_planner_step_v1(
     # cannot ask the longitudinal MPC for a speed the tires can't honor in
     # the upcoming curve.
     curvature_ahead_max: Optional[float] = None,
+    # A: kinematic feasibility for new pass commits — True when ego can
+    # decelerate to the upcoming curve's grip-limited speed within the
+    # distance to the curve (computed in behaviors.scenic from segment
+    # metadata). False blocks new commits. Default True (no info → allow).
+    curve_overtake_safe: bool = True,
 ) -> Tuple[str, str, Optional[float], str]:
     """Return ``(mode, ttl_key, speed_cap, decision_reason)``.
 
@@ -817,14 +826,18 @@ def tactical_planner_step_v1(
         # for opp=0) holds ego at gear-1 crawl speeds for the entire pass —
         # observed in F9 r01: 12 s of sub-2 m/s while passing the obstacle.
         # A stationary obstacle has no fellow speed to gate against; skip the
-        # cap and pass at racing-line target. Curvature cap (via the global
-        # path, NOT here) is independent and still applies. SD-41B insight,
-        # ported as a contained 4-line guard rather than the dense-reference
-        # refactor that wrapped it.
+        # closing-rate cap. SD-44 Stage 1: previously this branch returned
+        # cap=None which ALSO bypassed _curvature_clip — sample 7 of S2
+        # showed ego at 25 m/s in a κ=0.05 curve as a result. The curvature
+        # clip is ALWAYS load-bearing and should never be bypassed; restore
+        # it here using the racing-line target as the closing-rate-free
+        # ceiling, then curvature-clip as in the moving-fellow branch.
         cap: Optional[float] = None
         if relation_ahead and sit is not None:
             if float(opponent_speed_mps) < 3.0:
-                cap = None  # racing-line speed; no closing-rate cap
+                # Racing-line target as ceiling; closing-rate cap skipped;
+                # curvature cap STILL applied.
+                cap = _curvature_clip(float(config.strategy_target_speed_mps))
             else:
                 cap = max(3.0, float(opponent_speed_mps) + float(config.commit_speed_margin_mps))
                 cap = _curvature_clip(cap)
@@ -905,6 +918,21 @@ def tactical_planner_step_v1(
                 state.mode = FOLLOW
                 cap_val = max(0.0, float(opponent_speed_mps) + float(config.cooldown_follow_speed_offset_mps))
                 return FOLLOW, "optimal", cap_val, f"strategy_pass_{name[5:]}_cooldown_{cooldown_remaining:.2f}s"
+            # A: defer NEW pass commits only when ego CANNOT decelerate to
+            # the upcoming curve's grip-limited speed in time. If ego is
+            # already slow enough or the curve is far enough that braking
+            # fits with margin, the overtake is geometrically feasible —
+            # don't block it. Computed in behaviors.scenic from segment
+            # metadata + ego_s + speed; passed via curve_overtake_safe.
+            # Only blocks NEW commits; an already-active COMMIT_PASS_* is
+            # unaffected (state branches above this).
+            if (
+                not bool(curve_overtake_safe)
+                and state.mode not in (COMMIT_PASS_LEFT, COMMIT_PASS_RIGHT)
+            ):
+                state.mode = FOLLOW
+                cap_val = max(0.0, float(opponent_speed_mps) + 0.3)
+                return FOLLOW, "optimal", cap_val, f"strategy_pass_{name[5:]}_deferred_curve_decel"
             side = "left" if name == "pass_left" else "right"
             # SD-13a: route DIRECTLY to COMMIT_PASS_*, skipping SETUP entirely.
             # The strategy pipeline (SD-11b) already validated geometry over
@@ -1205,6 +1233,43 @@ def tactical_planner_step_v1(
         # close.  If it carries into COMMIT, the hazard brake floor prevents ego from
         # accelerating past the fellow.  True hazards are handled by hard_abort_hazard.
         _clear_safety_latches()
+        # Direct side-switch (replaces R2 abort). When the committed side is
+        # blocked AND the opposite side is open for SIDE_SWITCH_HYSTERESIS_TICKS
+        # consecutive ticks (1.5s @ 50ms control), flip state.mode directly to
+        # the opposite COMMIT_PASS_* without going through ABORT_PASS/optimal.
+        # No intermediate FREE_RUN means no lateral jump back to optimal —
+        # ego transitions from one side commit to the other in one decision.
+        # Sample 6 of S2 spent 30+ ticks stuck in COMMIT_PASS_RIGHT with
+        # left_open=1, right_open=0; this lets ego flip to LEFT decisively.
+        SIDE_SWITCH_HYSTERESIS_TICKS = 30
+        _committed_side_open: Optional[bool] = None
+        _opposite_side_open: Optional[bool] = None
+        if state.mode == COMMIT_PASS_LEFT:
+            _committed_side_open = assessment_left_open
+            _opposite_side_open = assessment_right_open
+        elif state.mode == COMMIT_PASS_RIGHT:
+            _committed_side_open = assessment_right_open
+            _opposite_side_open = assessment_left_open
+        if (
+            _committed_side_open is False
+            and _opposite_side_open is True
+        ):
+            state.side_flip_pressure_count = int(state.side_flip_pressure_count) + 1
+        else:
+            state.side_flip_pressure_count = 0
+        if state.side_flip_pressure_count >= SIDE_SWITCH_HYSTERESIS_TICKS:
+            state.side_flip_pressure_count = 0
+            new_side = "right" if state.mode == COMMIT_PASS_LEFT else "left"
+            state.mode = COMMIT_PASS_RIGHT if new_side == "right" else COMMIT_PASS_LEFT
+            state.commit.side = new_side
+            state.lateral_path_lock_side = new_side
+            state.lateral_path_lock_until_s = max(
+                float(state.lateral_path_lock_until_s),
+                float(sim_time_s) + float(config.lateral_path_lock_hold_s),
+            )
+            cap_switch = max(3.0, float(opponent_speed_mps) + float(config.commit_speed_margin_mps))
+            cap_switch = _curvature_clip(cap_switch)
+            return state.mode, new_side, cap_switch, f"commit_pass_{new_side}_side_switched"
         commit_side = "left" if state.mode == COMMIT_PASS_LEFT else "right"
         state.commit.side = commit_side
         # Track when we first entered commit so we can measure elapsed commit time.
@@ -1268,6 +1333,19 @@ def tactical_planner_step_v1(
             and not relation_ahead
             and commit_elapsed_s >= float(config.commit_success_time_s)
         ):
+            # S1 #2: defer TTL release when a curve is imminent. Switching
+            # from the side TTL back to optimal mid-curve causes a lateral
+            # target jump of several meters — sample 10 of S2 jumped to
+            # cte=7.4m at max steer for ~15 ticks. Hold on the commit-side
+            # TTL until past the curve, then release.
+            CURVE_BLOCK_KAPPA = 0.011
+            if (
+                curvature_ahead_max is not None
+                and float(curvature_ahead_max) > CURVE_BLOCK_KAPPA
+            ):
+                if commit_side == "left":
+                    return _commit_result("left", "pass_success_held_for_curve")
+                return _commit_result("right", "pass_success_held_for_curve")
             state.commit.pass_success = True
             state.commit.post_event_state = FREE_RUN
             _clear_lateral_lock()

@@ -16,14 +16,27 @@ polylines still work. Production callers always set _available=True.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
 @dataclass
 class StabilityGuardConfig:
     max_steer_rate_rad_per_s: float = 2.8
-    high_steer_abs_rad: float = 0.20
-    max_brake_when_high_steer: float = 0.35
+    # Friction-circle brake-steer coupling: longitudinal grip budget is
+    # sqrt(1 - (|steer|/steer_max)²), shrunk multiplicatively by
+    # tire_wear_grip_loss · tireWear.
+    friction_circle_steer_max_rad: float = 0.2816  # Dallara delta_max
+    # Tire wear maps linearly to grip loss. tireWear=0 → no loss; tireWear=1 → 30%
+    # loss. Calibrated from amateur-racing tire-wear curves (90% grip @ 1/3 worn,
+    # 70% @ fully worn). The Scenic RacingCar.tireWear field was previously a
+    # dead property (declared but never read); SD-44 makes it physically meaningful.
+    tire_wear_grip_loss: float = 0.30
+    # F1: floor the friction-circle brake budget. Real ABS keeps ~50% braking
+    # authority during max-steer (trades lateral grip). Without a floor, the
+    # raw circle gives 0 brake at steer_frac=1, which strips emergency-floored
+    # brake to zero in samples 2/8/10 of S2 falsify.
+    brake_friction_floor: float = 0.5
     ttl_switch_min_interval_s: float = 0.75
     # SD-35: lowered from 0.85 to 0.75. Under the new exponential TTC ramp
     # in race_situation._compute_emergency_risk, 0.75 corresponds to ttc ~1.5 s
@@ -34,7 +47,10 @@ class StabilityGuardConfig:
     # SD-35: exit lowered from 0.55 to 0.50. Maintains the original 0.25
     # hysteresis spread between enter and exit thresholds.
     emergency_risk_exit_01: float = 0.50
-    emergency_hold_s: float = 0.8
+    # F4: was 0.8s. Lengthened to suppress emergency↔reapproach oscillation
+    # observed in S2 sample 9 (snapshot conditions flicker fast; short hold
+    # lets reapproach throttle floor restart ego just before re-trigger).
+    emergency_hold_s: float = 1.5
     emergency_brake_floor: float = 0.30
     emergency_overlap_brake_floor: float = 0.60
     emergency_closing_brake_floor: float = 0.45
@@ -161,6 +177,22 @@ def stability_guard_step(
     fellow_lateral_m: float = 0.0,
     fellow_along_track_gap_m: float = 1.0e6,
     geometric_gap_available: bool = False,
+    # SD-44 Action C: tire wear ∈ [0, 1] from RacingCar.tireWear. 0 = fresh
+    # tires (full friction circle); 1 = fully worn (envelope shrinks per
+    # config.tire_wear_grip_loss). Production caller passes self.tireWear;
+    # legacy / test callers omitting it get the default of fresh tires.
+    tire_wear_01: float = 0.0,
+    # SD-44 Action E (revised): actual OBB bumper-to-bumper gap (m) computed
+    # from current ego/fellow positions and dimensions. Used by the proximity
+    # trigger as the primary signal (was previously |fellow_lateral_m| < 1m
+    # which failed for diagonal converging geometries — see sample 7 of S2).
+    # Default 1e6 = "no fellow" disables the trigger.
+    bbox_gap_m_now: float = 1.0e6,
+    # F2: closing rate (m/s, positive = gap shrinking) used by TTC-based
+    # proximity trigger. Caller computes from frame-to-frame bbox_gap delta;
+    # 0.0 default disables TTC trigger (only the absolute-distance threshold
+    # fires for legacy callers that don't thread closing rate).
+    closing_rate_mps: float = 0.0,
 ) -> StabilityGuardDecision:
     """Apply command-level stability constraints and emergency containment."""
     steer = float(steer_cmd_rad)
@@ -185,11 +217,23 @@ def stability_guard_step(
         guard_active = True
         guard_reason = "steer_rate_limited"
 
-    if abs(steer) >= float(config.high_steer_abs_rad) and brake > float(config.max_brake_when_high_steer):
-        brake = float(config.max_brake_when_high_steer)
+    steer_max = max(1e-3, float(config.friction_circle_steer_max_rad))
+    steer_frac = min(1.0, abs(steer) / steer_max)
+    long_budget = math.sqrt(max(0.0, 1.0 - steer_frac * steer_frac))
+    wear = max(0.0, min(1.0, float(tire_wear_01)))
+    grip_factor = max(0.1, 1.0 - float(config.tire_wear_grip_loss) * wear)
+    brake_friction_budget = max(float(config.brake_friction_floor), grip_factor * long_budget)
+    if brake > brake_friction_budget:
+        brake_requested = brake
+        brake = brake_friction_budget
         brake_limited = True
         guard_active = True
-        guard_reason = "brake_steer_coupled"
+        guard_reason = "brake_steer_friction_coupled"
+        print(
+            f"[FrictionClip] t={float(sim_time_s):.2f}s "
+            f"brake_req={brake_requested:.3f} brake_after={brake:.3f} "
+            f"steer_frac={steer_frac:.3f} grip_factor={grip_factor:.3f} budget={brake_friction_budget:.3f}"
+        )
 
     risk = max(0.0, min(1.0, float(emergency_risk_01)))
     in_pass_maneuver = str(planner_state or "") in (
@@ -199,13 +243,55 @@ def stability_guard_step(
     # available. Snapshot heuristics (overlap_flag, risk, gap_ok+closing) only
     # apply as fallback for legacy callers without polyline data. The user's
     # explicit ask: "we only emergency break if we predict the path will collide".
+    # SD-44 Action E (revised): proximity trigger using ACTUAL OBB bumper gap.
+    # Per the user's directive: "regardless of what we think the fellow will
+    # do in the future (geometric), if we are ramming straight into the
+    # fellow according to our heading, we should safety stop."
+    #
+    # The earlier version used `|fellow_lateral_m| < 1m` to filter out
+    # side-by-side passes. That filter mis-fired in sample 7 of S2: ego on
+    # right TTL, fellow on optimal TTL — laterally 5m apart in track frame
+    # AND in ego frame, but converging diagonally as the curve tightened.
+    # bbox_gap was 0.49m (cars touching) yet |lateral_m|=2-3m so the trigger
+    # was filtered out and ego threw full throttle into the fellow.
+    #
+    # New conditions (current physical state, not predicted):
+    #   bbox_gap_m_now < BBOX_THRESH_M  → physically close (bumper distance
+    #                                     accounts for vehicle dims + heading)
+    #   fellow_ahead                    → fellow in ego's heading direction
+    #                                     (longitudinal_m > 0 in ego frame).
+    #                                     This handles "side-by-side legitimate
+    #                                     pass" naturally: when alongside,
+    #                                     longitudinal_m ≈ 0 → fellow_ahead
+    #                                     becomes False once ego's nose is
+    #                                     past, no false trigger.
+    #   closing_flag                    → gap shrinking (not opening)
+    #   geometric_gap_available         → fellow info is meaningful
+    # F2: TTC-based proximity trigger. Absolute 1.5m threshold is too tight
+    # at racing speeds — sample 4 of S2 had ego at 26 m/s with 6 m/s closing,
+    # bbox_gap shrinking from 9m to 1.35m in 1.2s; the absolute trigger fired
+    # too late to brake-stop. TTC = bbox_gap / closing_rate gives a time-based
+    # threshold that scales with relative velocity. Either condition fires.
+    BBOX_THRESH_M = 1.5
+    TTC_THRESH_S = 1.0
+    _crate = max(0.0, float(closing_rate_mps))
+    _ttc_s = float(bbox_gap_m_now) / max(0.5, _crate) if _crate > 0.0 else 1.0e9
+    proximity_trigger = bool(
+        (not pit_mode)
+        and bool(geometric_gap_available)
+        and (float(bbox_gap_m_now) < BBOX_THRESH_M or _ttc_s < TTC_THRESH_S)
+        and bool(fellow_ahead)
+        and bool(closing_flag)
+    )
+
     if bool(predicted_collision_available):
-        emergency_trigger = bool((not pit_mode) and predicted_collision)
+        emergency_trigger = bool((not pit_mode) and (predicted_collision or proximity_trigger))
     else:
         emergency_trigger = bool(
             (not pit_mode)
             and (
-                bool(overlap_flag)
+                proximity_trigger
+                or bool(overlap_flag)
                 or risk >= float(config.emergency_risk_enter_01)
                 or (
                     (not in_pass_maneuver)

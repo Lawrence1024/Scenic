@@ -119,6 +119,16 @@ ego.behavior = FollowRacingLineMPCBehavior(
     mpc_config_path=None,
     prediction_enabled=globalParameters.prediction_enabled,
     tactical_planner_enabled=True,
+    # SD-44 (2026-05-06): the stability guard was previously OFF in S2 falsify
+    # because we never explicitly enabled it. Result: all SD-44 work in the
+    # guard (friction-circle brake-steer coupling, OBB proximity trigger,
+    # sticky exit gate) was silently inert during S2 sweeps. Sample 2 / 7
+    # failures we saw were diagnosed as "guard didn't fire" but actually
+    # "guard wasn't running." Same set of layers full_stack_runner enables.
+    stability_guard_enabled=True,
+    assessment_enabled=True,
+    commit_abort_enabled=True,
+    segment_aware_enabled=True,
 )
 
 # Opponent: placed at (gap_m, 0) in race s-t coords, on the TTL chosen

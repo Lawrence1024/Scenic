@@ -819,6 +819,17 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                             self._last_valid_segment_name = ""
                             num_seg = len(set(seg_id for seg_id, _ in self._waypoint_segment_map)) if self._waypoint_segment_map else 0
                             print(f"{_fbhv} Segment map built from TTL waypoints ({num_seg} segments, main+pit, overlap=main); ring-strict segment filtering active")
+                            # SD-44 diagnostic: dump per-segment recommended speed caps so the
+                            # log shows what each segment's v_max actually is. Independent of
+                            # whether the cap binds at runtime; for behavior, see [CtrlTrace]
+                            # `binding=` field per tick.
+                            if self._waypoint_segment_map is not None and hasattr(self._waypoint_segment_map, 'get_segment_info'):
+                                _smap_dbg = self._waypoint_segment_map
+                                _wp_seg_ids = sorted({sid for sid, _ in _smap_dbg})
+                                for _sid in _wp_seg_ids:
+                                    _info = _smap_dbg.get_segment_info(_sid)
+                                    if _info is not None:
+                                        print(f"{_fbhv} [SegmentCaps] id={_info.segment_id} type={_info.segment_type} start_s={_info.start_s_m:.1f} end_s={_info.end_s_m:.1f} max_kappa={_info.max_kappa_radpm:.5f} v_max={_info.recommended_max_speed_mps:.2f}")
                         else:
                             track = params.get('track') or getattr(scene, 'track', None)
                             if track is not None:
@@ -827,6 +838,14 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                                 self._last_valid_segment_name = ""
                                 num_seg = len(set(seg_id for seg_id, _ in self._waypoint_segment_map)) if self._waypoint_segment_map else 0
                                 print(f"{_fbhv} Segment map built from OpenDRIVE ({num_seg} segments, main+pit); ring-strict segment filtering active")
+                                # SD-44 diagnostic (same as the TTL branch above)
+                                if self._waypoint_segment_map is not None and hasattr(self._waypoint_segment_map, 'get_segment_info'):
+                                    _smap_dbg = self._waypoint_segment_map
+                                    _wp_seg_ids = sorted({sid for sid, _ in _smap_dbg})
+                                    for _sid in _wp_seg_ids:
+                                        _info = _smap_dbg.get_segment_info(_sid)
+                                        if _info is not None:
+                                            print(f"{_fbhv} [SegmentCaps] id={_info.segment_id} type={_info.segment_type} start_s={_info.start_s_m:.1f} end_s={_info.end_s_m:.1f} max_kappa={_info.max_kappa_radpm:.5f} v_max={_info.recommended_max_speed_mps:.2f}")
                             else:
                                 self._waypoint_segment_map = None
                                 print(f"{_fbhv} Segment map not built (no track and no TTL waypoints); log will show segment ?")
@@ -1320,6 +1339,37 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         )
                     except Exception as _e_traj:
                         _fellow_traj_for_strategy = None
+                # A: kinematic feasibility for new pass commits. Allow the
+                # overtake if (a) ego can decelerate to the upcoming curve's
+                # grip-limited speed in time AND (b) the curve is far enough
+                # that ego can complete the lateral lane shift before entry.
+                # Uses segment metadata from SD-44 Stage 2.
+                #   d_brake = (v² - v_target²) / (2·a_decel), 10% safety margin
+                #   a_decel=6 m/s² (friction-floor reality, was 8)
+                #   d_min_lane_shift = 50m (lateral shift takes time)
+                # Defaults to True (allow) when segment data unavailable.
+                _curve_overtake_safe = True
+                _smap_for_feas = getattr(self, '_waypoint_segment_map', None)
+                _cur_seg_for_feas = getattr(self, '_last_valid_segment_id', None)
+                if (
+                    _smap_for_feas is not None
+                    and _cur_seg_for_feas is not None
+                    and hasattr(_smap_for_feas, 'get_segment_info')
+                    and hasattr(_smap_for_feas, 'get_next_segment_after')
+                    and _opt_ego_s is not None
+                ):
+                    _next_info = _smap_for_feas.get_next_segment_after(_cur_seg_for_feas)
+                    if _next_info is not None and getattr(_next_info, 'segment_type', '') == 'curve':
+                        _v_target = float(_next_info.recommended_max_speed_mps)
+                        _v_now = float(current_speed)
+                        _d_to_next = max(0.0, float(_next_info.start_s_m) - float(_opt_ego_s))
+                        # Distance gate: if curve is < 50m away, no time to
+                        # complete the lateral lane shift even if decel fits.
+                        if _d_to_next < 50.0:
+                            _curve_overtake_safe = False
+                        elif _v_now > _v_target + 1.0:
+                            _d_brake = (_v_now * _v_now - _v_target * _v_target) / (2.0 * 6.0)
+                            _curve_overtake_safe = (_d_brake * 1.1 < _d_to_next)
                 _sec_t_planner_start = _wallclock_time.perf_counter()
                 _mode3, _ttl3, _cap3, _reason3 = tactical_planner_step_v1(
                     self._tactical_tp_state,
@@ -1356,6 +1406,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     # the longitudinal MPC isn't asked for a speed the tires
                     # can't honor in the upcoming curve.
                     curvature_ahead_max=float(getattr(self, "_last_curvature_ahead_for_tactical", 0.0) or 0.0),
+                    # A: kinematic feasibility for new pass commits.
+                    curve_overtake_safe=bool(_curve_overtake_safe),
                 )
                 _sec_planner_ms += (_wallclock_time.perf_counter() - _sec_t_planner_start) * 1000.0
                 _mode_tac = _mode3
@@ -1608,6 +1660,42 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             else:
                 curvature_speed_cap = target_speed
             self._last_curvature_ahead_for_tactical = float(curvature_ahead_max)
+
+            # SD-44 Stage 3: segment-aware speed cap.
+            # The existing `curvature_speed_cap` above is REACTIVE — derived
+            # per-tick from the geometric curvature lookahead window. It can
+            # arrive too late at high speed because slew-rate-limited
+            # deceleration takes ~1-1.5 s to bleed speed by 10 m/s. The
+            # segment cap below is PRECOMPUTED at scenario load (in
+            # build_waypoint_segment_map[_from_ttl]) and accessed via the
+            # segment_metadata dict on the waypoint segment map. Values:
+            #   straight segments -> MAX_SPEED_LIMIT_MS (i.e. unbinding)
+            #   curve segments    -> sqrt(8 / max(|kappa|, eps)) * 0.96
+            # The transition-anticipation step factors in the NEXT segment's
+            # cap when ego is within `wp_last_idx + 25` of a slower segment
+            # (the same lookahead window already used by `_segment_id_ahead`),
+            # giving the slew limiter ~1 s of runway at typical racing speeds.
+            #
+            # ADDITIVE: this is one MORE term in the `_speed_caps` dict
+            # below; it does not replace `curvature_speed_cap` or any other
+            # source. The most-restrictive cap wins (defense in depth).
+            segment_speed_cap = MAX_SPEED_LIMIT_MS
+            _smap = getattr(self, '_waypoint_segment_map', None)
+            _cur_seg_id = getattr(self, '_last_valid_segment_id', None)
+            _ahead_seg_id = getattr(self, '_segment_id_ahead', None)
+            if _smap is not None and _cur_seg_id is not None and hasattr(_smap, 'get_segment_info'):
+                _cur_info = _smap.get_segment_info(_cur_seg_id)
+                if _cur_info is not None:
+                    segment_speed_cap = float(_cur_info.recommended_max_speed_mps)
+                    # Transition anticipation: derate to upcoming segment's
+                    # cap when ego is geometrically close (within the 25 m
+                    # `_segment_id_ahead` lookahead) AND that segment is
+                    # slower. Most useful at straight->curve transitions.
+                    if _ahead_seg_id is not None and _ahead_seg_id != _cur_seg_id:
+                        _ahead_info = _smap.get_segment_info(_ahead_seg_id)
+                        if _ahead_info is not None and _ahead_info.recommended_max_speed_mps < segment_speed_cap:
+                            segment_speed_cap = float(_ahead_info.recommended_max_speed_mps)
+            self._last_segment_speed_cap = float(segment_speed_cap)
             
             # --- CTE-based speed reduction (for MPC speed reference) ---
             # Generic: no TTL or segment IDs; only |CTE| so we slow when off-line on any track.
@@ -1657,6 +1745,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             _speed_caps = {
                 'cte': float(cte_target_speed),
                 'curvature': float(curvature_speed_cap),
+                'segment': float(segment_speed_cap),  # SD-44 Stage 3
                 'global': float(MAX_SPEED_LIMIT_MS),
             }
             if _scripted_speed_cap is not None:
@@ -1703,12 +1792,38 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 # SD-31's curvature-clipped commit cap (e.g. 7.4 m/s into a hairpin) is
                 # defeated by the 0.6 m/s/tick floor and ego enters the curve at ~14
                 # m/s, exceeding tire grip (S2 sample 6 fly-and-spin).
+                #
+                # SD-44 Action D: SD-32A's 15 m/s² boost STILL wasn't fast enough.
+                # Sample 5 of S2 showed Stage 3's segment cap correctly binding
+                # (seg=14/straight seg_ahead=15/curve seg_v=17.59) but ego still
+                # throttling at 87-97% at v=25-26 because slew-rate-limited
+                # effective_target_speed only drops 0.75 m/s per tick. Across
+                # ~152 m of seg 14 ego covered the segment in ~3 s before the
+                # slew brought v_ref down to 17.59 — meanwhile MPC chased the
+                # slew-limited (still high) target with full throttle.
+                #
+                # New behavior: when the segment cap or curvature cap is binding
+                # AND ego is over the target by more than 2 m/s, BYPASS the slew
+                # limiter entirely on the down direction. The cap's purpose is
+                # "you MUST be at this speed by the curve entry"; gradual ramp
+                # defeats that. The longitudinal MPC's brake-actuator dynamics
+                # provide enough smoothing for ride quality. Up-slew (acceleration)
+                # is unchanged — gradual ramp on throttle is appropriate.
                 _bind = str(getattr(self, '_binding_speed_cap', '') or '')
-                _safety_binding = _bind in ("curvature", "tactical")
+                _safety_binding = _bind in ("curvature", "tactical", "segment")
                 _decelerating = float(effective_target_speed) < last_eff
-                if _safety_binding and _decelerating:
+                _over_by = float(last_eff) - float(effective_target_speed)
+                if _safety_binding and _decelerating and _over_by > 2.0:
+                    # Bypass slew on the down direction: slam to the cap immediately.
+                    # Up direction still respects slew_up_ms (preserves throttle smoothing).
+                    effective_target_speed = min(last_eff + slew_up_ms * dt_slew, float(effective_target_speed))
+                elif _safety_binding and _decelerating:
+                    # Within 2 m/s of target — use SD-32A boost rate (legacy path).
                     slew_down_ms = max(slew_down_ms, 15.0)
-                effective_target_speed = max(last_eff - slew_down_ms * dt_slew, min(last_eff + slew_up_ms * dt_slew, float(effective_target_speed)))
+                    effective_target_speed = max(last_eff - slew_down_ms * dt_slew, min(last_eff + slew_up_ms * dt_slew, float(effective_target_speed)))
+                else:
+                    # No safety cap binding — normal slew behavior.
+                    effective_target_speed = max(last_eff - slew_down_ms * dt_slew, min(last_eff + slew_up_ms * dt_slew, float(effective_target_speed)))
                 # SD-40: brain-leg cohesion -- enforce planner's tactical cap
                 # as a HARD CEILING regardless of slew state. Without this, the
                 # slew limiter delays the MPC's tracked target by 1+ seconds when
@@ -2396,13 +2511,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 )
             self._hazard_brake_floor = float(_hazard_brake_floor)
     
-            # Global mutual exclusion: never command throttle and brake at the same time.
-            # When slowing (e.g. for a turn), lift throttle and brake only—no simultaneous throttle+brake.
-            BRAKE_THROTTLE_EXCLUSION_THRESHOLD = 0.05  # treat as "active" above this
-            if final_brake > BRAKE_THROTTLE_EXCLUSION_THRESHOLD:
-                final_throttle = 0.0
-            elif final_throttle > BRAKE_THROTTLE_EXCLUSION_THRESHOLD:
-                final_brake = 0.0
+            BRAKE_THROTTLE_EXCLUSION_THRESHOLD = 0.05
     
             # Throttle ramp after brake release: avoid jumping from full brake to full throttle (generic, any TTL)
             THROTTLE_RAMP_STEPS = 12   # ~0.6 s at 0.05 s/step
@@ -2440,6 +2549,39 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                         last_ttl=str(_scripted_active_ttl or "optimal")
                     )
                     self._guard_state = _p10_state
+                # SD-44 Action E (revised): compute current OBB bumper-to-bumper
+                # gap so the guard's proximity trigger uses ACTUAL physical
+                # distance (not polyline-predicted clearance). Per the user's
+                # directive: regardless of where polylines say cars will go,
+                # if we are physically about to ram into the fellow given our
+                # current heading, EMERGENCY_STABLE must fire. Reuses the
+                # `obb_separation_distance_m` helper already used by the
+                # eval-contact code at the END of each tick — pulled forward
+                # so it's available at guard call time.
+                _bbox_gap_now = 1.0e6
+                if _nearest_o3 is not None and hasattr(_nearest_o3, 'position'):
+                    try:
+                        _opp_h = float(getattr(_nearest_o3, 'heading', 0.0) or 0.0)
+                        _opp_w = float(getattr(_nearest_o3, 'width', 1.9304) or 1.9304)
+                        _opp_l = float(getattr(_nearest_o3, 'length', 4.8768) or 4.8768)
+                        _bbox_gap_now = float(obb_separation_distance_m(
+                            float(px), float(py), float(car_heading or 0.0),
+                            float(getattr(self, 'length', 4.8768) or 4.8768),
+                            float(getattr(self, 'width', 1.9304) or 1.9304),
+                            float(_nearest_o3.position.x), float(_nearest_o3.position.y), _opp_h,
+                            _opp_l, _opp_w,
+                        ))
+                    except Exception:
+                        _bbox_gap_now = 1.0e6
+                # F2: closing rate from frame-to-frame bbox_gap delta. Sentinel
+                # values (1e6 = "no fellow") yield rate=0 (no TTC trigger).
+                _prev_bbox_gap = float(getattr(self, '_prev_bbox_gap_for_closing', _bbox_gap_now) or _bbox_gap_now)
+                if _prev_bbox_gap > 1.0e5 or _bbox_gap_now > 1.0e5:
+                    _closing_rate_mps = 0.0
+                else:
+                    _closing_rate_mps = max(0.0, (_prev_bbox_gap - _bbox_gap_now) / max(1.0e-3, _ctrl_dt))
+                self._prev_bbox_gap_for_closing = float(_bbox_gap_now)
+                self._last_bbox_gap_now = float(_bbox_gap_now)
                 _p10_guard = stability_guard_step(
                     _p10_state,
                     config=_guard_config,
@@ -2477,6 +2619,15 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     fellow_lateral_m=float(getattr(_sit3, "lateral_m", 0.0) or 0.0) if _sit3 is not None else 0.0,
                     fellow_along_track_gap_m=float(abs(getattr(_sit3, "longitudinal_m", 1.0e6) or 1.0e6)) if _sit3 is not None else 1.0e6,
                     geometric_gap_available=(_sit3 is not None),
+                    # SD-44 Action C: hand the guard the (previously dead)
+                    # RacingCar.tireWear so the friction-circle budget shrinks
+                    # with worn tires. tireWear=0 → fresh / full grip;
+                    # tireWear=1 → 30% grip loss per config.tire_wear_grip_loss.
+                    tire_wear_01=float(getattr(self, 'tireWear', 0.0) or 0.0),
+                    # SD-44 Action E (revised): pass the OBB bumper gap so the
+                    # proximity trigger uses ACTUAL physical distance.
+                    bbox_gap_m_now=float(_bbox_gap_now),
+                    closing_rate_mps=float(_closing_rate_mps),
                 )
                 final_steer = float(_p10_guard.steer_cmd_rad)
                 # SD-36: panic-brake authority during EMERGENCY_STABLE. The guard
@@ -2493,17 +2644,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 else:
                     final_throttle = float(_p10_guard.throttle_cmd)
                     final_brake = float(_p10_guard.brake_cmd)
-                # SD-38: defense-in-depth mutual exclusion AFTER the guard.
-                # The pre-guard mutual exclusion (line 2387-2390) only catches
-                # conflicts that exist before the guard runs. The guard itself
-                # can re-introduce both-active commands (e.g. reapproach_hold's
-                # cap-throttle + floor-brake combo). This final check ensures
-                # the controller NEVER emits both throttle and brake. Brake
-                # wins because if anything in the chain decided "brake",
-                # there's a safety reason for it -- shedding throttle is
-                # always safer than the alternative.
-                if final_brake > 0.05 and final_throttle > 0.05:
-                    final_throttle = 0.0
                 # SD-38: idle-creep brake floor at near-stop speeds. A real
                 # car with engaged gear creeps forward due to idle TORQUE
                 # (not constant speed); the actual effect depends on road
@@ -2534,7 +2674,15 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 self._guard_brake_limited = bool(_p10_guard.brake_limited)
                 self._guard_ttl_switch_blocked = bool(_p10_guard.ttl_switch_blocked)
                 self._guard_emergency_stable_mode = bool(_p10_guard.emergency_stable_mode)
-                print(format_stability_guard_log_line(_sim_time_s, _p10_guard))
+                _g_state_now = (
+                    bool(_p10_guard.guard_active),
+                    str(_p10_guard.guard_reason or "none"),
+                    bool(_p10_guard.emergency_stable_mode),
+                )
+                _g_state_prev = getattr(self, '_last_guard_log_state', None)
+                if _g_state_now != _g_state_prev:
+                    print(format_stability_guard_log_line(_sim_time_s, _p10_guard))
+                    self._last_guard_log_state = _g_state_now
                 _record_event('Guard', {
                     't': float(_sim_time_s),
                     'guard_active': bool(_p10_guard.guard_active),
@@ -2544,6 +2692,8 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     'ttl_switch_blocked': bool(_p10_guard.ttl_switch_blocked),
                     'emergency_stable_mode': bool(_p10_guard.emergency_stable_mode),
                 })
+            if final_brake > BRAKE_THROTTLE_EXCLUSION_THRESHOLD and final_throttle > BRAKE_THROTTLE_EXCLUSION_THRESHOLD:
+                final_throttle = 0.0
             # RC-1: consolidated controller-trace per tick. Read-only telemetry; safe to remove.
             # Captures POST-stability-guard (truly final) commands plus the upstream values
             # the executor used. Some fields are populated by code paths that don't always
@@ -2573,7 +2723,16 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                     f"{str(getattr(self, '_segment_type_at_wp', None) or 'na')} "
                     f"seg_ahead={getattr(self, '_segment_id_ahead', None)}/"
                     f"{str(getattr(self, '_segment_type_ahead', None) or 'na')} "
-                    f"curve_hold={int(bool(getattr(self, '_curve_nearby_telemetry', False)))}"
+                    f"curve_hold={int(bool(getattr(self, '_curve_nearby_telemetry', False)))} "
+                    # SD-44: surface which speed cap was binding this tick + the
+                    # segment-cap value if it was computed. Lets the log show
+                    # whether `binding=segment` ever wins (= Stage 3 fired) or
+                    # `binding=curvature` / `binding=tactical` etc. dominate.
+                    f"binding={str(getattr(self, '_binding_speed_cap', '') or 'none')} "
+                    f"seg_v={float(getattr(self, '_last_segment_speed_cap', 0.0) or 0.0):.2f} "
+                    f"pred_coll={int(bool(getattr(self, '_predicted_collision', False)))} "
+                    f"closing={int(bool(getattr(self, '_assessment_closing_flag', False)))} "
+                    f"bbox_gap={float(getattr(self, '_last_bbox_gap_now', 1.0e6) or 1.0e6):.2f}"
                 )
                 # SD-10g: end-of-tick wall-clock measurement. Records:
                 #   wall_t = process-relative wall seconds since first tick
@@ -2836,12 +2995,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             if ctrl_dt is None or ctrl_dt <= 0:
                 ctrl_dt = float(getattr(sim, 'timestep', 0.05))
             t_log = self._behavior_step_count * ctrl_dt
-            _eid_log = getattr(self, '_last_valid_segment_id', None)
-            _ename_log = getattr(self, '_last_valid_segment_name', "") or ""
-            segment_str = f" {get_segment_label(_eid_log, _ename_log)}" if (_eid_log is not None or _ename_log) else " segment ?"
-            print(f"{_fl_mpc} t={t_log:.2f}s Step {self._behavior_step_count}: pos=({px:.2f},{py:.2f}) speed={current_speed:.2f}m/s CTE={cte:.3f}m steer={final_steer:.3f} throttle={final_throttle:.3f} brake={final_brake:.3f} gear={gear_val} curv_ahead={curvature_ahead_max:.3f}{segment_str}")
-            # Phase 0 telemetry (baseline visibility): active TTL, planner mode, ego s/speed,
-            # nearest-opponent relative metrics, and event markers (switch/near-miss/collision/off-track).
+            # Phase 0 telemetry: TTL switch detection (event-only, see below).
             _ttl_label = None
             _ttl_file = getattr(self, 'ttlFileName', None)
             _ttl_sel = getattr(self, 'ttl_selection', None)
@@ -2871,15 +3025,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 print(f"[Phase0Event] t={t_log:.2f}s type=ttl_switch from={_last_ttl_label} to={_ttl_label}")
                 self._baseline_last_ttl_label = _ttl_label
 
-            _opp_dist_s = f"{nearest_dist:.2f}" if nearest_dist is not None else "na"
-            _opp_rel_v_s = f"{nearest_rel_speed:.2f}" if nearest_rel_speed is not None else "na"
-            _opp_rel_s_s = f"{nearest_rel_longitudinal:.2f}" if nearest_rel_longitudinal is not None else "na"
-            _ego_s_s = f"{_ego_s:.2f}" if _ego_s is not None else "na"
-            print(
-                f"[Phase0] t={t_log:.2f}s ttl={_ttl_label} planner_mode={_planner_mode} "
-                f"ego_s={_ego_s_s} ego_speed={current_speed:.2f} "
-                f"nearest_opp_ds={_opp_rel_s_s} nearest_opp_rel_speed={_opp_rel_v_s} nearest_opp_dist={_opp_dist_s}"
-            )
             # Evaluation-only: dSPACE Object_Sensor_3D + IAC OBB gap (not used for control).
             _p0 = getattr(simulation().scene, "params", None) or {}
             if _p0.get("eval_gt_dist_log", True):
@@ -2995,87 +3140,10 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
                 pass
             if cte is not None and abs(float(cte)) >= 10.0:
                 print(f"[Phase0Event] t={t_log:.2f}s type=off_track cte_m={float(cte):.3f}")
-            # Ref continuity / gate logging (todo1: match_dist, gate ACCEPT/REJECT, s_ref/dS_ref/s_jump_flag, segment_prev->new, stick_blocked, e_y_mpc vs cte_behavior)
             _lc = _lat_controller
-            _md = getattr(_lc, '_log_match_dist_m', None)
-            _gs = getattr(_lc, '_log_gate_status', '?')
-            _gr = getattr(_lc, '_log_gate_reason', None)
-            _sr = getattr(_lc, '_log_s_ref', None)
-            _ds = getattr(_lc, '_log_delta_s_ref', None)
-            _sj = getattr(_lc, '_log_s_jump_flag', False)
-            _sp = getattr(_lc, '_log_segment_prev', None)
-            _sn = getattr(_lc, '_log_segment_new', None)
-            _st = getattr(_lc, '_log_stick_blocked', False)
             _ey = getattr(_lc, '_log_mpc_e_y', None)
-            _md_s = f"{_md:.3f}" if _md is not None else "?"
-            _gr_s = f" reason={_gr}" if _gr else ""
-            _sr_s = f"{_sr:.2f}" if _sr is not None else "?"
-            _ds_s = f"{_ds:.3f}" if _ds is not None else "?"
-            _seg_s = f"{_sp}->{_sn}" if _sp is not None else f"->{_sn}"
-            _ey_s = f"{_ey:.3f}" if _ey is not None else "?"
-            cte_b = float(cte) if cte is not None else 0.0
-            print(f"{_fl_mpc} ref_log match_dist_m={_md_s} gate={_gs}{_gr_s} s_ref={_sr_s} dS_ref={_ds_s} s_jump_flag={1 if _sj else 0} seg={_seg_s} stick={1 if _st else 0} e_y_mpc={_ey_s} cte_behavior={cte_b:.3f}")
-            # Task 4: Quick projection check — match_dist_m, proj_xy, ego_xy, segment_id progression (stuck = segment_id stops advancing or match_dist spikes at left-right transition)
-            _rp = getattr(_lc, '_log_ref_point', None)
-            _ego = getattr(_lc, '_log_ego', None)
-            _proj_s = f"({_rp[0]:.3f},{_rp[1]:.3f})" if _rp is not None and len(_rp) >= 2 else "?"
-            _ego_xy_s = f"({_ego[0]:.3f},{_ego[1]:.3f})" if _ego is not None and len(_ego) >= 2 else "?"
-            print(f"{_fl_mpc} projection_check match_dist_m={_md_s} proj_xy={_proj_s} veh_xy={_ego_xy_s} segment_id={_seg_s}")
-            # Task 1: projection continuity — s_ref, segment_id, proj_xy, match_dist; ensure s doesn't jump and projection doesn't hop
-            _s_ok = 1 if getattr(_lc, '_log_s_ref_continuous', True) else 0
-            _hop_ok = 1 if not getattr(_lc, '_log_proj_hop', False) else 0
-            _cont_ok = 1 if getattr(_lc, '_log_projection_continuity_ok', True) else 0
-            print(f"{_fl_mpc} projection_continuity s_ref={_sr_s} segment_id={_seg_s} proj_xy={_proj_s} match_dist_m={_md_s} s_ok={_s_ok} proj_hop_ok={_hop_ok} continuity_ok={_cont_ok}")
-            _stuck_hint = False
-            if _md is not None and _md > 5.0:
-                _stuck_hint = True  # match_dist spike
-            if _sp is not None and _sn is not None and _sp == _sn and _ds is not None and abs(_ds) < 0.01 and _md is not None and _md > 2.0:
-                _stuck_hint = True  # segment not advancing with significant match_dist
-            if _stuck_hint:
-                print(f"{_fl_mpc} projection_check STUCK? (segment_id not advancing or match_dist spike)")
-            # CTE cross-check log: cte_to_waypoints = e_y_mpc (single source); cte_behavior is same when MPC ran
-            _rp = getattr(_lc, '_log_ref_point', None)
-            _ego = getattr(_lc, '_log_ego', None)
-            _cte_wp_s = _ey_s
-            _rp_s = f"({_rp[0]:.3f},{_rp[1]:.3f})" if _rp is not None and len(_rp) >= 2 else "?"
-            _ego_s = f"({_ego[0]:.3f},{_ego[1]:.3f})" if _ego is not None and len(_ego) >= 2 else "?"
-            print(f"{_fl_mpc} ct_crosscheck cte_to_waypoints={_cte_wp_s} cte_behavior={cte_b:.3f} ref_point={_rp_s} vehicle={_ego_s}")
             if _ey is not None:
                 self._last_waypoint_cte_for_speed = abs(_ey)
-            # To-Do C: Polyline identity (behavior CTE, MPCC waypoints, segment map) — n_pts, first/last, total length, id
-            _pts_b = wp_list if (use_waypoints and wp_list) else None
-            if _pts_b is None or len(_pts_b) == 0:
-                _pw = "behavior_cte_polyline: n=0"
-            else:
-                _n_b = len(_pts_b)
-                _f_b = (float(_pts_b[0][0]), float(_pts_b[0][1])) if len(_pts_b[0]) >= 2 else (0, 0)
-                _l_b = (float(_pts_b[-1][0]), float(_pts_b[-1][1])) if len(_pts_b[-1]) >= 2 else (0, 0)
-                _len_b = 0.0
-                for _i in range(len(_pts_b) - 1):
-                    _a, _b = _pts_b[_i], _pts_b[_i + 1]
-                    _len_b += ((float(_b[0]) - float(_a[0]))**2 + (float(_b[1]) - float(_a[1]))**2) ** 0.5
-                _pw = f"behavior_cte_polyline: id={id(_pts_b)} n={_n_b} first=({_f_b[0]:.2f},{_f_b[1]:.2f}) last=({_l_b[0]:.2f},{_l_b[1]:.2f}) length={_len_b:.2f}m"
-            _pts_m = waypoints_for_mpc if waypoints_for_mpc else None
-            if _pts_m is None or len(_pts_m) == 0:
-                _pm = "mpcc_waypoint_polyline: n=0"
-            else:
-                _n_m = len(_pts_m)
-                _f_m = (float(_pts_m[0][0]), float(_pts_m[0][1])) if len(_pts_m[0]) >= 2 else (0, 0)
-                _l_m = (float(_pts_m[-1][0]), float(_pts_m[-1][1])) if len(_pts_m[-1]) >= 2 else (0, 0)
-                _len_m = 0.0
-                for _i in range(len(_pts_m) - 1):
-                    _a, _b = _pts_m[_i], _pts_m[_i + 1]
-                    _len_m += ((float(_b[0]) - float(_a[0]))**2 + (float(_b[1]) - float(_a[1]))**2) ** 0.5
-                _pm = f"mpcc_waypoint_polyline: id={id(_pts_m)} n={_n_m} first=({_f_m[0]:.2f},{_f_m[1]:.2f}) last=({_l_m[0]:.2f},{_l_m[1]:.2f}) length={_len_m:.2f}m"
-            _smap = getattr(self, '_waypoint_segment_map', None)
-            if _smap is not None and len(_smap) > 0:
-                _seg_first = _smap[0]
-                _seg_last = _smap[-1]
-                _sm_s = f"segment_map: id={id(_smap)} n={len(_smap)} first_seg=({_seg_first[0]},{_seg_first[1]}) last_seg=({_seg_last[0]},{_seg_last[1]})"
-            else:
-                _sm_s = "segment_map: (none)"
-            print(f"{_fl_mpc} polyline_check {_pw} | {_pm} | {_sm_s}")
-            # ff_log is printed every MPC tick (see above) with segment_id, v, kappa_ref_at_proj, delta_ff, delta_fb, delta_total, steer_mpc_raw, steer_after_lpf
 
         # Supplement log (Todo2): deadzone decision, association, curvature, steering — every 10 ticks or when deadzone state changes
         _lc2 = _lat_controller

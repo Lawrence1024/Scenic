@@ -266,7 +266,13 @@ class RacingCar(Car):
     
     # State properties
     fuelLevel: Range(0.5, 1.0)  # Start with reasonable fuel
-    tireWear: 0.0  # Start with fresh tires
+    # tireWear ∈ [0, 1]: 0 = fresh tires (full grip), 1 = fully worn (30% grip
+    # loss per stability_guard's tire_wear_grip_loss). SD-44 Action C wired
+    # this into the friction-circle brake-steer coupling: as tireWear rises,
+    # the controller's available brake authority while steering shrinks
+    # proportionally. Was a declared-but-unread property until SD-44 made it
+    # physically meaningful.
+    tireWear: 0.0
     
     # Autonomous capabilities
     waypointTolerance: 2.5  # Distance tolerance for waypoint following

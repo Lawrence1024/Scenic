@@ -22,13 +22,130 @@ Use scenic.domains.racing.segments.visualize_racing_segments to visualize.
 """
 
 import math
-from typing import Any, List, Optional, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from scenic.core.geometry import makeShapelyPoint
 from scenic.core.regions import PolylineRegion
 from scenic.core.vectors import Vector
 
 from scenic.domains.racing.segments.ring_topology import build_ring_topology, get_pit_entry_main_road
+
+
+# SD-44 Stage 2: per-segment metadata for speed-aware control.
+#
+# Each segment computed by `_build_curve_straight_segments` covers a span of
+# arc length on a road's centerline. The metadata below is computed once at
+# scenario load (in `build_waypoint_segment_map[_from_ttl]`) using the same
+# centerline curvature data that already drives the curve/straight
+# classification — no extra geometry computation. The per-segment
+# `recommended_max_speed_mps` is consumed downstream in `behaviors.scenic`
+# as ONE term in the existing `min()` cap chain (additive; does NOT replace
+# the reactive per-tick `curvature_speed_cap`).
+
+# Default lateral-acceleration limit for the cornering-grip ceiling, in
+# m/s^2. Matches `commit_max_lateral_accel_mps2` in TacticalPlannerConfig
+# and the `a_lat_max` constant in behaviors.scenic's reactive cap (so we
+# don't introduce a second tuning knob).
+SEGMENT_A_LAT_MAX_MPS2 = 8.0
+
+# Safety margin on the grip ceiling. Matches `curvature_speed_margin` used
+# by the reactive cap. 0.96 corresponds to "use 96% of the friction-limited
+# speed" — the same margin the existing per-tick cap applies.
+SEGMENT_SAFETY_MARGIN = 0.96
+
+# Numerical floor on curvature when computing the grip ceiling. Matches
+# `curvature_epsilon` in behaviors.scenic.
+SEGMENT_CURVATURE_EPS = 0.001
+
+# Hard ceiling on per-segment recommended speed; matches MAX_SPEED_LIMIT_MS
+# the rest of the racing stack uses (~140 mph).
+SEGMENT_MAX_SPEED_MPS = 62.58
+
+
+@dataclass(frozen=True)
+class SegmentInfo:
+    """Read-only metadata for a single track segment.
+
+    Built once at scenario load by `build_waypoint_segment_map[_from_ttl]`
+    and stored on the returned `_SegmentMapWithSequences` as a dict keyed by
+    absolute segment_id. Lookup via `segment_map.get_segment_info(seg_id)`.
+
+    `recommended_max_speed_mps` is the cornering-grip ceiling for this
+    segment's max curvature, with safety margin. For straight segments it
+    equals SEGMENT_MAX_SPEED_MPS (i.e. unbinding). The downstream control
+    layer applies this in the same `min()` cap chain that already exists.
+    """
+    segment_id: int
+    segment_name: str
+    segment_type: str          # 'curve' | 'straight' | 'road' (legacy coarse mode)
+    start_s_m: float           # arc-length start within the segment's road
+    end_s_m: float             # arc-length end within the segment's road
+    length_m: float
+    max_kappa_radpm: float     # max |kappa| observed within segment
+    recommended_max_speed_mps: float
+
+
+def _compute_segment_max_kappa(
+    centerline: Any, segments: List[Tuple[float, float, str]]
+) -> List[float]:
+    """For each (s_start, s_end, seg_type) span, return max |kappa| observed
+    on the centerline within that span. Read-only; reuses the same per-vertex
+    curvature computation that `_build_curve_straight_segments` already runs.
+    """
+    n = len(segments)
+    out: List[float] = [0.0] * n
+    if n == 0:
+        return out
+    ls = getattr(centerline, "lineString", None)
+    if ls is None:
+        return out
+    try:
+        coords = list(getattr(ls, "coords", []))
+    except Exception:
+        return out
+    if len(coords) < 3:
+        return out
+    s_cum: List[float] = [0.0]
+    for i in range(1, len(coords)):
+        s_cum.append(s_cum[-1] + _dist2(coords[i - 1], coords[i]))
+    # Per-vertex curvature; endpoints inherit neighbor (matches
+    # _build_curve_straight_segments lines 282-285)
+    curvature: List[float] = [0.0] * len(coords)
+    for i in range(1, len(coords) - 1):
+        curvature[i] = _curvature_at_vertex(coords[i - 1], coords[i], coords[i + 1])
+    if len(coords) > 1:
+        curvature[0] = curvature[1]
+        curvature[-1] = curvature[-2]
+    for seg_idx, (s_start, s_end, _seg_type) in enumerate(segments):
+        max_k = 0.0
+        for i, s_v in enumerate(s_cum):
+            if s_start <= s_v <= s_end:
+                k = abs(float(curvature[i]))
+                if k > max_k:
+                    max_k = k
+        out[seg_idx] = float(max_k)
+    return out
+
+
+def _segment_recommended_max_speed_mps(
+    seg_type: str,
+    max_kappa: float,
+    a_lat_max: float = SEGMENT_A_LAT_MAX_MPS2,
+    safety_margin: float = SEGMENT_SAFETY_MARGIN,
+    eps: float = SEGMENT_CURVATURE_EPS,
+    max_speed: float = SEGMENT_MAX_SPEED_MPS,
+) -> float:
+    """Cornering-grip ceiling: v_max = safety_margin * sqrt(a_lat_max / max(|kappa|, eps)).
+
+    Straights (kappa below eps OR seg_type marks straight) return max_speed
+    (i.e. unbinding). Returns are clipped to [0, max_speed].
+    """
+    if seg_type != "curve":
+        return float(max_speed)
+    k = max(float(max_kappa), float(eps))
+    v_grip = float(safety_margin) * math.sqrt(float(a_lat_max) / k)
+    return float(max(0.0, min(v_grip, float(max_speed))))
 
 # Curvature threshold (1/m): above this = curve, below = straight.
 # Lower value = gentler bends count as curve (curve segments extend further into approaches).
@@ -411,6 +528,47 @@ def _segment_for_road_s(
     return (road_idx + 1, "")
 
 
+def _build_segment_metadata(
+    centerlines: List[Any],
+    road_segments: List[List[Tuple[float, float, str]]],
+    segment_id_offset: List[int],
+    n_main_roads: int,
+) -> Dict[int, SegmentInfo]:
+    """Build the {segment_id -> SegmentInfo} dict that backs the new
+    metadata accessors on `_SegmentMapWithSequences`.
+
+    Walks the same per-road segment lists used to populate the main/pit
+    ring topology (lines just below this helper); for each segment, samples
+    centerline curvature within (s_start, s_end) to find max |kappa| and
+    derives `recommended_max_speed_mps` via the cornering-grip formula.
+
+    No additional geometry computation: re-uses the per-vertex curvature
+    that `_build_curve_straight_segments` already runs.
+    """
+    metadata: Dict[int, SegmentInfo] = {}
+    for road_idx, segs in enumerate(road_segments):
+        if road_idx >= len(centerlines) or road_idx >= len(segment_id_offset):
+            continue
+        prefix = "main " if road_idx < n_main_roads else "pit "
+        max_kappa_per_seg = _compute_segment_max_kappa(centerlines[road_idx], segs)
+        offset = int(segment_id_offset[road_idx])
+        for i, (s_start, s_end, seg_type) in enumerate(segs):
+            seg_id = offset + i + 1
+            max_k = float(max_kappa_per_seg[i]) if i < len(max_kappa_per_seg) else 0.0
+            rec_v = _segment_recommended_max_speed_mps(seg_type, max_k)
+            metadata[seg_id] = SegmentInfo(
+                segment_id=seg_id,
+                segment_name=prefix + seg_type,
+                segment_type=str(seg_type),
+                start_s_m=float(s_start),
+                end_s_m=float(s_end),
+                length_m=float(max(0.0, s_end - s_start)),
+                max_kappa_radpm=max_k,
+                recommended_max_speed_mps=float(rec_v),
+            )
+    return metadata
+
+
 def build_waypoint_segment_map(
     waypoints: List[Tuple[float, ...]],
     track: Any,
@@ -557,6 +715,20 @@ def build_waypoint_segment_map(
         pit_ring_segment_ids=pit_ring_segment_ids if pit_ring_segment_ids else None,
     )
 
+    # SD-44 Stage 2: build per-segment metadata dict from the road_segments
+    # already computed above. Skipped when not in curve/straight mode.
+    # Filter to only segments actually reachable via waypoint assignment;
+    # the segments list from `_build_curve_straight_segments` can include a
+    # trailing entry that no waypoint ever falls on (consequence of the
+    # end-of-road edge case in `_segment_for_curve_straight`).
+    segment_metadata: Dict[int, SegmentInfo] = {}
+    if use_curvature_segments and road_segments and segment_id_offset:
+        full_metadata = _build_segment_metadata(
+            centerlines, road_segments, segment_id_offset, n_main_roads
+        )
+        waypoint_seg_ids = {sid for sid, _ in path_respecting}
+        segment_metadata = {k: v for k, v in full_metadata.items() if k in waypoint_seg_ids}
+
     return _SegmentMapWithSequences(
         path_respecting,
         main_sequence,
@@ -565,6 +737,7 @@ def build_waypoint_segment_map(
         pit_ring_segment_ids=pit_ring_segment_ids,
         pit_exit_transitions=pit_exit_transitions,
         pit_enter_transitions=pit_enter_transitions,
+        segment_metadata=segment_metadata,
     )
 
 
@@ -697,6 +870,17 @@ def build_waypoint_segment_map_from_ttl(
         pit_ring_segment_ids=pit_ring_segment_ids if pit_ring_segment_ids else None,
     )
 
+    # SD-44 Stage 2: build per-segment metadata dict from the road_segments
+    # already computed above. Skipped when not in curve/straight mode.
+    # See OpenDRIVE builder for waypoint-set filter rationale.
+    segment_metadata: Dict[int, SegmentInfo] = {}
+    if use_curvature_segments and road_segments and segment_id_offset:
+        full_metadata = _build_segment_metadata(
+            centerlines, road_segments, segment_id_offset, n_main_roads
+        )
+        waypoint_seg_ids = {sid for sid, _ in path_respecting}
+        segment_metadata = {k: v for k, v in full_metadata.items() if k in waypoint_seg_ids}
+
     return _SegmentMapWithSequences(
         path_respecting,
         main_sequence,
@@ -705,6 +889,7 @@ def build_waypoint_segment_map_from_ttl(
         pit_ring_segment_ids=pit_ring_segment_ids,
         pit_exit_transitions=pit_exit_transitions,
         pit_enter_transitions=pit_enter_transitions,
+        segment_metadata=segment_metadata,
     )
 
 
@@ -890,6 +1075,14 @@ class _SegmentMapWithSequences(list):
     """List of (segment_id, segment_name) per waypoint with main/pit sequences and ring topology.
 
     Subclasses list so indexing and len() work; get_segment_at_waypoint uses it as-is.
+
+    SD-44 Stage 2 adds an OPTIONAL `segment_metadata` parameter — a dict keyed
+    by absolute segment_id mapping to a `SegmentInfo`. Constructed at scenario
+    load by `build_waypoint_segment_map[_from_ttl]` from the same centerline
+    curvature data that drives curve/straight classification. Lookups via
+    `get_segment_info(seg_id)` and `get_recommended_max_speed_mps(seg_id)`.
+    Existing tuple-based consumers (`for sid, sname in segment_map: ...`) are
+    unaffected.
     """
 
     def __init__(
@@ -901,6 +1094,7 @@ class _SegmentMapWithSequences(list):
         pit_ring_segment_ids: Optional[List[int]] = None,
         pit_exit_transitions: Optional[List[Tuple[int, int]]] = None,
         pit_enter_transitions: Optional[List[Tuple[int, int]]] = None,
+        segment_metadata: Optional[Dict[int, "SegmentInfo"]] = None,
     ):
         super().__init__(path_respecting_map)
         self._main_sequence = main_sequence
@@ -909,6 +1103,7 @@ class _SegmentMapWithSequences(list):
         self._pit_ring_segment_ids = pit_ring_segment_ids or []
         self._pit_exit_transitions = pit_exit_transitions or []
         self._pit_enter_transitions = pit_enter_transitions or []
+        self._segment_metadata: Dict[int, "SegmentInfo"] = segment_metadata or {}
 
     @property
     def main_sequence(self) -> List[Tuple[int, str]]:
@@ -937,6 +1132,59 @@ class _SegmentMapWithSequences(list):
     def pit_enter_transitions(self) -> List[Tuple[int, int]]:
         """(from_seg_id, to_seg_id) pairs that denote pit enter (e.g. 15 -> 26)."""
         return self._pit_enter_transitions
+
+    # -----------------------------------------------------------------------
+    # SD-44 Stage 2: per-segment metadata accessors
+    # -----------------------------------------------------------------------
+    def get_segment_info(self, segment_id: int) -> Optional[SegmentInfo]:
+        """Return the `SegmentInfo` for `segment_id`, or None if unknown.
+
+        Built at scenario load by `build_waypoint_segment_map[_from_ttl]`.
+        Coarse-mode segment maps have no metadata; lookups return None and
+        callers should fall back to whatever default behavior they already use.
+        """
+        return self._segment_metadata.get(int(segment_id))
+
+    def get_recommended_max_speed_mps(self, segment_id: int) -> Optional[float]:
+        """Convenience for the most common metadata access pattern."""
+        info = self._segment_metadata.get(int(segment_id))
+        return None if info is None else float(info.recommended_max_speed_mps)
+
+    def get_next_segment_after(self, segment_id: int) -> Optional[SegmentInfo]:
+        """Return the segment immediately following `segment_id` along the
+        same road (main or pit), in ascending arc-length order.
+
+        Derives ordering directly from the metadata dict — finds segments
+        with the same road prefix ("main" / "pit") as `segment_id`'s
+        segment, sorts by `start_s_m`, returns the next one (lap-wraps).
+        Independent of `main_ring_segment_ids` / `pit_ring_segment_ids`
+        (those use an unrelated indexing convention; see `_segment_for_curve_straight`).
+
+        Returns None when:
+          - `segment_id` has no metadata (e.g. coarse-mode segment maps).
+          - Only one segment exists on this road (no "next" defined).
+        """
+        cur = self._segment_metadata.get(int(segment_id))
+        if cur is None:
+            return None
+        # Identify same-road siblings via the name prefix.
+        if cur.segment_name.startswith("main"):
+            road_prefix = "main"
+        elif cur.segment_name.startswith("pit"):
+            road_prefix = "pit"
+        else:
+            return None
+        siblings = sorted(
+            (info for info in self._segment_metadata.values()
+             if info.segment_name.startswith(road_prefix)),
+            key=lambda info: info.start_s_m,
+        )
+        if len(siblings) < 2:
+            return None
+        for idx, info in enumerate(siblings):
+            if info.segment_id == cur.segment_id:
+                return siblings[(idx + 1) % len(siblings)]
+        return None
 
 
 def get_segment_sequences(

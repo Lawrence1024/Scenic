@@ -9,6 +9,7 @@ This package provides:
 
 from scenic.domains.racing.segments.segment_map import (
     CURVATURE_THRESHOLD,
+    SegmentInfo,
     build_waypoint_segment_map,
     build_waypoint_segment_map_from_ttl,
     get_pit_transitions,
@@ -36,6 +37,7 @@ from scenic.domains.racing.segments.track_regions import (
 
 __all__ = [
     "CURVATURE_THRESHOLD",
+    "SegmentInfo",
     "build_waypoint_segment_map",
     "build_waypoint_segment_map_from_ttl",
     "get_pit_transitions",
