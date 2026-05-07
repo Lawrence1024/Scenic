@@ -138,7 +138,10 @@ services:
       # /home/dspace/VEOS/ASM_Traffic.osa.
       - /mnt/c/Users/bklfh/Documents/dspace/SimulationPackage_v3.2/IAC_Project/Cosim-VEOS:/home/dspace/Cosim-VEOS
     environment:
-      - DS_CMU_SERVER=license-server-lb-2-1021906136.eu-central-1.elb.amazonaws.com
+      # License server URL is provided by the dSPACE CMU group and rotates
+      # over time. Sourced from `.env` (gitignored) so the URL is not
+      # tracked in version control. See `.env.example` for the variable name.
+      - DS_CMU_SERVER=${DS_CMU_SERVER}
       # CoSim VEOS (Dennis's 2026-04 build). Old pre-CoSim path retained as
       # a commented reference to the non-CoSim yml's default.
       - DS_VEOS_LOAD_OSA=/home/dspace/Cosim-VEOS/ASM_Traffic.osa
