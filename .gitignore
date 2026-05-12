@@ -153,3 +153,7 @@ logs/
 
 # Benchmark run outputs (reproducibility is captured in paper/data/raw/)
 src/scenic/domains/racing/benchmarks/results/
+
+# Root-level visualizer outputs and odd-suffix log files
+/*.png
+run.log.*
