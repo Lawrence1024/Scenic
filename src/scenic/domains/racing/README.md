@@ -6,7 +6,7 @@
 > - `docs/racing_smart_driving.md` — opponent-aware planner improvements (SD-* cycle).
 > - `docs/falsification_pipeline.md` — verifai-runner pipeline.
 >
-> **Canonical scenarios:** `examples/racing/f_shared/F0–F12` is the complete test set.
+> **Canonical scenarios:** `examples/racing/f_shared/F0–F14` (17 scenarios incl. `F3L`, `F3R`, `F13c` variants) is the complete test set.
 > All other historical scenario directories were removed in CC-2.
 >
 > **Phase numbering removed:** the old "Phase 0–12" tags throughout the codebase
