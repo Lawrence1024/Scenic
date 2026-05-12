@@ -143,3 +143,13 @@ src/scenic/syntax/parser.py
 # generated media/output
 simulation.gif
 metadrive_gifs/
+
+# Working artifacts not for shipping
+paper/
+paper_text.txt
+presentations/
+.claude_scratch/
+logs/
+
+# Benchmark run outputs (reproducibility is captured in paper/data/raw/)
+src/scenic/domains/racing/benchmarks/results/
