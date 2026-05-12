@@ -246,17 +246,6 @@ class HasFellowPlant:
 
 Action: `SetFellowPlantAction(v_kmh, d_m)`. Plant state is mirrored in `agent._fellow_plant_state`.
 
-### Actions Referenced But Not Implemented
-
-The following actions are referenced in behaviors but are **not** implemented in `actions.py`. Simulators may need to provide their own implementations:
-
-- `PitLimiterAction` - Speed limiter for pit lane
-- `DRSAction` - Drag Reduction System
-- `ERSDeployAction` - Energy Recovery System deployment
-- `TractionControlAction` - Traction control adjustment
-- `BrakeBiasAction` - Brake balance adjustment
-- `DifferentialAction` - Differential settings
-
 ---
 
 ## Racing Behaviors
@@ -292,29 +281,15 @@ FollowRacingLineMPCBehavior(
 
 **Details**: See `mpc/README.md` for formulation, configuration, and integration.
 
-### `PitStopBehavior`
+### Other supported behaviors
 
-**Purpose**: Execute a pit stop sequence. **Status: stub** — the behavior exists in `behaviors.scenic` but is a minimal placeholder. Full implementation requires simulator-specific `PitLimiterAction`.
+In addition to `FollowRacingLineMPCBehavior`, the domain ships the following behaviors used by the F-bank and demo scenarios:
 
-**Usage**: `do PitStopBehavior()`
+- **Fellow plant behaviors**: `FellowConstantSpeedTrackOffsetBehavior`, `FellowFollowTTLGeometricBehavior`, `FellowSuddenStopIntervalBehavior`, `FellowSwerveOutOfControlBehavior`, `FellowAlwaysFasterThanEgoBehavior`, `FellowActiveBlockBehavior` — drive non-ego traffic via route-relative `(v, d)` plant inputs.
+- **Decision-tree behaviors**: `FlagBasedSpeedBehavior`, `LaneSelectionBehavior`, `StopBehavior`, `FollowModeBehavior`, `SimpleRaceBehavior`, `PitLaneBehavior`.
+- **ART integration**: `ARTStackControlBehavior` hands ego control off to the external ART driving stack (for the S2-falsify ART-ego comparison).
 
-**Note**: References `PitLimiterAction` which is not implemented in the base domain. Simulators must provide their own implementation.
-
-### `OvertakingBehavior`
-
-**Purpose**: Execute overtaking maneuvers using racing systems. **Status: stub** — the behavior exists in `behaviors.scenic` as a placeholder. Full implementation requires `ERSDeployAction` and `DRSAction`.
-
-**Usage**: `do OvertakingBehavior(target_car, aggressive=False)`
-
-**Note**: References `ERSDeployAction` and `DRSAction` which are not implemented in the base domain. For opponent-aware overtaking, use `FollowRacingLineMPCBehavior` with `tactical_planner_enabled=True` instead.
-
-### `DefensiveBehavior`
-
-**Purpose**: Defend position using racing-specific systems. **Status: stub** — the behavior exists in `behaviors.scenic` as a placeholder. Full implementation requires `TractionControlAction` and `BrakeBiasAction`.
-
-**Usage**: `do DefensiveBehavior()`
-
-**Note**: References `TractionControlAction` and `BrakeBiasAction` which are not implemented in the base domain.
+See `behaviors.scenic` for full signatures.
 
 ---
 
@@ -524,25 +499,10 @@ model scenic.domains.racing.model
 ego = new RacingCar on mainTrack, \
     with behavior FollowRacingLineMPCBehavior(target_speed=30)
 
-# Opponent with defensive behavior
+# Opponent with cruise-like behavior on the optimal TTL
 opponent = new RacingCar on mainTrack, \
-    with behavior DefensiveBehavior()
+    with behavior FellowConstantSpeedTrackOffsetBehavior(speed_mph=130)
 ```
-
-### Pit Stop Scenario
-
-```scenic
-param map = localPath('LGS_v1.xodr')
-param use2DMap = True
-model scenic.domains.racing.model
-
-# Car on track with low fuel
-ego = new RacingCar on mainRacingRoad, \
-    with fuelLevel 0.15, \
-    with behavior PitStopBehavior()
-```
-
-**Note**: `PitStopBehavior` references `PitLimiterAction` which is not yet implemented in the base domain.
 
 ### Manual Transmission Control
 
@@ -559,14 +519,23 @@ take SetGearAction(3)
 
 ### Overtaking Scenario
 
+For opponent-aware overtaking, use `FollowRacingLineMPCBehavior` with the tactical pipeline enabled — it picks among `optimal`/`left`/`right` TTLs at runtime based on the predicted fellow trajectory:
+
 ```scenic
 # Create cars for overtaking
-leader = new RacingCar on mainRacingRoad
-chaser = new RacingCar behind leader by 20
-
-# Assign overtaking behavior
-chaser.behavior = OvertakingBehavior(leader, aggressive=True)
+leader = new RacingCar on mainRacingRoad, \
+    with behavior FellowConstantSpeedTrackOffsetBehavior(speed_mph=130)
+chaser = new RacingCar behind leader by 20, \
+    with behavior FollowRacingLineMPCBehavior(
+        target_speed=40,
+        tactical_planner_enabled=True,
+        prediction_enabled=True,
+        assessment_enabled=True,
+        commit_abort_enabled=True,
+    )
 ```
+
+See `examples/racing/f_shared/F1`..`F14` for the canonical overtaking scenarios used in the SD-44 regression baseline.
 
 ---
 
@@ -587,34 +556,18 @@ chaser.behavior = OvertakingBehavior(leader, aggressive=True)
 - MPC module: MPCC lateral controller, longitudinal MPC, reference builder, speed profile, result_data analysis (see `mpc/README.md`)
 - **Opponent-aware trajectory-prediction-driven planning** (post-SD-13): Perception (`situation_assessment.py`) → Assessment (`assessment/race_situation.py`) → Trajectory Prediction (`prediction/fellow_predictor.py`) → Strategy Selection (`prediction/strategy_simulator.py` + `planner/strategy_selector.py`) → Planning (`tactical_planner.py`) → Safety (`safety/stability_guard.py`). Enabled via `tactical_planner_enabled=True` + `prediction_enabled=True`. Tactical modes: FREE_RUN / FOLLOW / COMMIT_PASS_{LEFT,RIGHT} / HOLD_PASS_{LEFT,RIGHT} / ABORT_PASS. The strategy authority simulates each candidate (stay_optimal / follow_fellow / pass_left / pass_right) over a 10s horizon and picks the fastest safe one — replacing the legacy snapshot-driven SETUP entry chain. Two-key safety: strategy commits a plan, SD-4's 1.5s `path_collision_predicted` vetoes mid-flight if needed. Full cycle history: `docs/racing_smart_driving.md`.
 
-### ⚠️ Partially Implemented / Stubs
+### ❌ Not in supported surface
 
-- **`PitStopBehavior`, `OvertakingBehavior`, `DefensiveBehavior`**: Present as stubs in `behaviors.scenic` but are not functional. They reference actions that are not implemented in `actions.py`:
-  - `PitLimiterAction`
-  - `DRSAction`
-  - `ERSDeployAction`
-  - `TractionControlAction`
-  - `BrakeBiasAction`
-  
-  These behaviors will work only if simulators provide these actions.
+The following names appear in older Scenic-racing documentation but are **not part of this fork's supported API**. They were removed in the Phase E production-readiness cleanup (see commit history) because they were either stubs that referenced non-existent action classes, or simply documentation aspirational items never implemented:
 
-- **Racing line**: Defaults to `mainRacingRoad` but explicit racing line calculation is not implemented.
+- **Specialized car types**: `FormulaCar`, `GTCar`, `PrototypeCar`
+- **Personnel objects**: `PitCrew`, `TrackMarshal`
+- **Stub behaviors (removed)**: `PitStopBehavior`, `OvertakingBehavior`, `DefensiveBehavior` — for opponent-aware overtaking, use `FollowRacingLineMPCBehavior` with `tactical_planner_enabled=True` instead.
+- **Racing-system actions (never implemented)**: `DRSAction`, `ERSDeployAction`, `TractionControlAction`, `BrakeBiasAction`, `DifferentialAction`, `PitLimiterAction`, `FormationHoldAction`, `OvertakeAction`, `DefendPositionAction`, `SlipstreamAction`
+- **Aspirational behaviors**: `QualifyingLapBehavior`, `FormationLapBehavior`, `RaceStartBehavior`, `ConserveFuelBehavior`, `TrafficManagementBehavior`
+- **Race-state features**: automatic DRS zones, track-limits detection, tire-temperature simulation, weather, safety car, flag system
 
-### ❌ Not Implemented
-
-These features are referenced in documentation or behaviors but are **not** in the codebase:
-
-- Specialized car types: `FormulaCar`, `GTCar`, `PrototypeCar`
-- Personnel objects: `PitCrew`, `TrackMarshal`
-- Additional behaviors: `QualifyingLapBehavior`, `FormationLapBehavior`, `RaceStartBehavior`, `ConserveFuelBehavior`, `TrafficManagementBehavior`
-- Racing system actions: `DRSAction`, `ERSDeployAction`, `TractionControlAction`, `BrakeBiasAction`, `DifferentialAction`, `PitLimiterAction`
-- Advanced racing actions: `FormationHoldAction`, `OvertakeAction`, `DefendPositionAction`, `SlipstreamAction`
-- Automatic DRS zones
-- Track limits detection
-- Tire temperature simulation
-- Weather conditions
-- Safety car behavior
-- Flag system (yellow, red, blue)
+If you need any of the above, treat them as new feature work — they have no existing skeleton in this repo.
 
 ---
 
@@ -697,9 +650,25 @@ FollowRacingLineMPCBehavior(
     commit_abort_enabled=False,           # COMMIT_PASS / ABORT_PASS states
     segment_aware_enabled=False,          # segment-conditioned commit gating
 )
-PitStopBehavior()  # May require simulator-specific PitLimiterAction
-OvertakingBehavior(target_car, aggressive=False)  # May require simulator-specific actions
-DefensiveBehavior()  # May require simulator-specific actions
+
+# Fellow (non-ego) plant-driven behaviors
+FellowConstantSpeedTrackOffsetBehavior(speed_mph=31)
+FellowFollowTTLGeometricBehavior(speed_mph=31)
+FellowSuddenStopIntervalBehavior(speed_mph=150, interval=20.0, duration=3.0)
+FellowSwerveOutOfControlBehavior(...)
+FellowAlwaysFasterThanEgoBehavior(speed_offset_mph=10, ...)
+FellowActiveBlockBehavior(speed_offset_mph=-5.0, ...)
+
+# Decision-tree behaviors (race-state oriented)
+FlagBasedSpeedBehavior(speed_type="green", speed_limit=None)
+LaneSelectionBehavior(ttl_selection="race")
+StopBehavior(stop_type="safe")
+FollowModeBehavior(target_car, target_gap=31.0)
+PitLaneBehavior(manage_gears=True)
+SimpleRaceBehavior(...)
+
+# ART (external stack) hand-off
+ARTStackControlBehavior()
 ```
 
 ### Racing Controllers (from `RacingSimulation`)
@@ -795,16 +764,17 @@ def assignRoute(self, agent, track_segment):
         return 'Lap'
 ```
 
-### 6. Implement Missing Actions (Optional)
+### 6. Add Custom Actions (Optional)
 
-If behaviors need them, implement missing actions:
+If a downstream backend needs additional racing actions beyond the supported set (max speed, TTL, gear/clutch, fellow plant), implement them as `Action` subclasses in simulator-specific code:
 
 ```python
 # In simulator-specific code
-class PitLimiterAction(Action):
+class CustomBackendAction(Action):
+    def __init__(self, value):
+        self.value = value
     def applyTo(self, obj, sim):
-        obj.pitLimiter = self.activate
-        sim.setPitLimiter(obj, self.activate)
+        sim.setBackendSpecificField(obj, self.value)
 ```
 
 ### dSPACE Example
