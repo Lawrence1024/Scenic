@@ -1,0 +1,45 @@
+# Auto-detect text files; default behavior is to normalize line endings.
+* text=auto
+
+# Source / config: enforce LF in the repo. Git checks out with native
+# line endings on Windows by default, but the index stays LF.
+*.py     text eol=lf
+*.scenic text eol=lf
+*.md     text eol=lf
+*.rst    text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.json   text eol=lf
+*.toml   text eol=lf
+*.cfg    text eol=lf
+*.ini    text eol=lf
+*.sh     text eol=lf
+*.txt    text eol=lf
+*.csv    text eol=lf
+*.xodr   text eol=lf
+*.xml    text eol=lf
+*.tex    text eol=lf
+
+# Windows-only scripts: keep CRLF.
+*.bat    text eol=crlf
+*.ps1    text eol=crlf
+
+# Binary files: git must not touch them.
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.pdf    binary
+*.snet   binary
+*.bin    binary
+*.zip    binary
+*.tar    binary
+*.gz     binary
+*.bz2    binary
+*.dll    binary
+*.exe    binary
+*.lib    binary
+*.obj    binary
+*.pdb    binary
+*.bsc    binary
+*.pptx   binary
+*.so     binary
