@@ -3183,67 +3183,6 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
         # Execute all actions together
         take actions_to_take
 
-behavior PitStopBehavior(manage_gears=True):
-    """Execute a pit stop using racing-specific systems.
-    
-    This behavior demonstrates the use of racing-specific actions like
-    pit limiter and ERS deployment.
-    """
-    
-    # Enter pit lane with speed limiter
-    take PitLimiterAction(activate=True)
-    do FollowRacingLineMPCBehavior(target_speed=20, manage_gears=manage_gears)
-    
-    # Stop for pit stop
-    take SetBrakeAction(1.0)
-    wait  # Simulate pit stop time
-    
-    # Exit pit lane
-    take PitLimiterAction(activate=False)
-
-behavior OvertakingBehavior(target_car, aggressive=False):
-    """Attempt to overtake target car using racing systems.
-    
-    This behavior uses DRS and ERS systems for overtaking maneuvers.
-    
-    Args:
-        target_car: The car to overtake
-        aggressive: If True, use all available systems (DRS, ERS)
-    """
-    
-    # Close the gap
-    while (distance from self to target_car) > 5:
-        do FollowRacingLineMPCBehavior(target_speed=35)
-    
-    # Execute overtake with racing systems
-    if aggressive:
-        take ERSDeployAction(mode='overtake', amount=1.0)
-        take DRSAction(activate=True)
-    
-    # Move to side and accelerate
-    take SetThrottleAction(1.0)
-    
-    # Complete overtake
-    do FollowRacingLineMPCBehavior() until (distance from self to target_car) > 10
-    
-    # Return to racing line
-    do FollowRacingLineMPCBehavior()
-
-behavior DefensiveBehavior():
-    """Defend position using racing-specific systems.
-    
-    This behavior uses traction control and brake bias adjustments
-    for defensive driving.
-    """
-    
-    # Adjust racing systems for defense
-    take TractionControlAction(level=8)  # More conservative TC
-    take BrakeBiasAction(bias=0.6)  # More front bias for stability
-    
-    # Follow racing line defensively
-    do FollowRacingLineMPCBehavior(target_speed=25)
-
-
 ## Decision tree behaviors (for race decision engine integration)
 
 behavior FlagBasedSpeedBehavior(speed_type="green", speed_limit=None, manage_gears=True):
