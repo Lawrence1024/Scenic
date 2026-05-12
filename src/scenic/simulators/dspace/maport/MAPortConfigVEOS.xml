@@ -3,14 +3,7 @@
 	<MAPortConfig>
         <!-- Replace #DEMO_ROOT# by the path to the Demos directory in your XIL API installation, e.g. C:\Program Files (x86)\Common Files\dSPACE\XIL API .NET\2.0\Demos -->
         <!-- <ApplicationPath>#DEMO_ROOT#\RTApplications\Throttle\DS1006\throttlecontroldemo.sdf</ApplicationPath> -->
-        <!-- Set this absolute path to your local dSPACE install — typically:
-             <DSPACE_INSTALL>\AURELIONManager\IAC_Project\Instrumentation\
-                  CD_Traffic\Experiment_001\Variable Descriptions\
-                  ASM_Traffic.sdf\ASM_Traffic.sdf
-             See maport/README.md for context. The %DSPACE_INSTALL% token is
-             NOT expanded by the dSPACE XIL API loader; edit the path literally
-             before first run. -->
-        <SystemDescriptionFile>%DSPACE_INSTALL%\AURELIONManager\IAC_Project\Instrumentation\CD_Traffic\Experiment_001\Variable Descriptions\ASM_Traffic.sdf\ASM_Traffic.sdf</SystemDescriptionFile>
+        <SystemDescriptionFile>C:\Users\bklfh\Documents\dspace\AURELIONManager\IAC_Project\Instrumentation\CD_Traffic\Experiment_001\Variable Descriptions\ASM_Traffic.sdf\ASM_Traffic.sdf</SystemDescriptionFile>
         <!-- The processor board on which the application is running, e.g. DS1006, SCALEXIO, or VEOS -->
 		<PlatformName>VEOS</PlatformName>
 	</MAPortConfig>
