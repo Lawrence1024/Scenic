@@ -157,3 +157,10 @@ src/scenic/domains/racing/benchmarks/results/
 # Root-level visualizer outputs and odd-suffix log files
 /*.png
 run.log.*
+
+# C++ build artifacts under the dSPACE CoSim bridge
+src/scenic/simulators/dspace/cosim/**/*.obj
+src/scenic/simulators/dspace/cosim/**/*.pdb
+
+# Top-level working dir
+presentations/
