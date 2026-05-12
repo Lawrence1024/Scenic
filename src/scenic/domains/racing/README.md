@@ -681,7 +681,6 @@ getRacingControllers(agent, use_mpc=False, mpc_config_path=None)
 
 getRacingLineControllers(agent) -> Tuple[PIDLongitudinalController, PIDLateralController]
 getPitLaneControllers(agent) -> Tuple[PIDLongitudinalController, PIDLateralController]
-getOvertakingControllers(agent) -> Tuple[PIDLongitudinalController, PIDLateralController]
 ```
 
 ---
@@ -859,7 +858,7 @@ src/scenic/simulators/dspace/
 | **Lanes** | Regular roads | Racing line + pit lane |
 | **Start** | Anywhere on road | Starting grid |
 | **Properties** | Basic vehicle | Fuel, tires, race number |
-| **Behaviors** | Lane following | Racing line, pit stops |
+| **Behaviors** | Lane following | Racing line (PID + MPC + tactical pipeline), fellow plant |
 | **Actions** | Basic control | Max speed, TTL, gear/clutch + `RacingSteers`/`HasFellowPlant` protocols |
 | **Controllers** | Standard PID | Racing-optimized PID |
 
@@ -871,7 +870,7 @@ The Racing Domain provides a **minimal but functional** foundation for racing sc
 
 - **1 Object Type**: `RacingCar` with racing systems
 - **14 Actions**: 5 behavior-facing (max speed, TTL, gear, clutch press/release) + 8 `RacingSteers` protocol + 1 `HasFellowPlant` protocol
-- **4 Behaviors**: Racing line following (PID), **racing line following with MPC + 4-layer intelligence pipeline**, and stubs for pit stops / overtaking / defense
+- **Behaviors**: racing-line following (PID and MPC with the 4-layer tactical pipeline), Fellow plant behaviors (Fellow{ConstantSpeedTrackOffset, FollowTTLGeometric, SuddenStopInterval, SwerveOutOfControl, AlwaysFasterThanEgo, ActiveBlock}), decision-tree helpers (FlagBasedSpeed, LaneSelection, StopBehavior, FollowMode, SimpleRaceBehavior, PitLaneBehavior), and ART hand-off (ARTStackControlBehavior)
 - **3 Regions**: Main racing road, pit lane road, racing line
 - **Multiple Track Features**: Pit lanes, racing lines
 - **MPC submodule**: MPCC lateral + longitudinal MPC, waypoint reference, speed profile, log analysis (`mpc/`, `segments/`)

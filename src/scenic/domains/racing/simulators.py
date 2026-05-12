@@ -169,35 +169,6 @@ class RacingSimulation(Simulation):
         
         return lon_controller, lat_controller
 
-    def getOvertakingControllers(self, agent):
-        """Get controllers optimized for overtaking maneuvers.
-        
-        Overtaking controllers are tuned for quick lane changes and
-        aggressive acceleration while maintaining control.
-        
-        Args:
-            agent: The racing agent
-            
-        Returns:
-            A pair of controllers for throttle and steering respectively.
-        """
-        dt = self.timestep
-        
-        if hasattr(agent, 'isFormulaCar') and agent.isFormulaCar:
-            # Formula cars: Aggressive overtaking
-            lon_controller = PIDLongitudinalController(K_P=0.8, K_D=0.15, K_I=0.9, dt=dt)
-            lat_controller = PIDLateralController(K_P=0.12, K_D=0.4, K_I=0.0, dt=dt)
-        elif hasattr(agent, 'isRacingCar') and agent.isRacingCar:
-            # Racing cars: Optimized overtaking
-            lon_controller = PIDLongitudinalController(K_P=0.7, K_D=0.12, K_I=0.8, dt=dt)
-            lat_controller = PIDLateralController(K_P=0.1, K_D=0.35, K_I=0.0, dt=dt)
-        else:
-            # Standard cars: Conservative overtaking
-            lon_controller = PIDLongitudinalController(K_P=0.5, K_D=0.1, K_I=0.7, dt=dt)
-            lat_controller = PIDLateralController(K_P=0.08, K_D=0.3, K_I=0.0, dt=dt)
-            
-        return lon_controller, lat_controller
-
     def detectTrackSegment(self, position):
         """Detect which track segment a position belongs to.
         
