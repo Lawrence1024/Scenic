@@ -9,10 +9,9 @@ benchmark log with ``param fellowHarnessLog = True`` should additionally contain
   readback (throttled)
 
 **Interpretation:** the parser aggregates fellow **readback**; it does not prove the
-fellow's *commanded* (v,d) matches intent — compare behaviors in ``behaviors.scenic``
-and see ``examples/racing/fellow_smoke/README.md`` (TTL vs plant). **Ego** reaction is
-in ``[Phase0]`` / ``[Phase2]`` and benchmark ``summary.json``, not in fellow-side
-collision detection.
+fellow's *commanded* (v,d) matches intent — compare behaviors in ``behaviors.scenic``.
+**Ego** reaction shows up in benchmark ``summary.json`` (full_stack_runner output),
+not in fellow-side collision detection.
 """
 
 from pathlib import Path

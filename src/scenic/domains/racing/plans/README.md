@@ -49,14 +49,15 @@ The implementations live in:
 - `src/scenic/domains/racing/situation_assessment.py`
 - `src/scenic/domains/racing/behaviors.scenic` (orchestration)
 
-The benchmarks live in `src/scenic/domains/racing/benchmarks/`:
-- `baseline_runner.py`, `scripted_runner.py`, `opponent_runner.py`,
-  `tactical_runner.py`, `tactical_on_baseline_runner.py`,
-  `prediction_runner.py`, `assessment_runner.py`, `hazard_runner.py`,
-  `guard_runner.py`, `commit_pass_runner.py`, `segment_aware_runner.py`,
-  `full_stack_runner.py`, `validation_full_stack_runner.py`,
-  `validation_orchestration_runner.py`, `fellow_runner.py`,
-  `fellow_placement_debug_runner.py`, `verifai_runner.py`.
+The benchmarks live in `src/scenic/domains/racing/benchmarks/`. The current
+runners are `full_stack_runner.py` (F-bank regression) and `verifai_runner.py`
+(falsification sweeps). The per-phase runners that grew during the Phase 0–12
+build cycle (baseline / scripted / opponent / tactical / prediction /
+assessment / hazard / guard / commit_pass / segment_aware) plus the
+validation orchestrators (`validation_full_stack`, `validation_orchestration`)
+and fellow harnesses (`fellow_runner`, `fellow_placement_debug_runner`) were
+removed once `full_stack_runner` superseded them; see commit history for
+details.
 
-The canonical scenario set is `examples/racing/f_shared/` (F0–F12 plus
-3L/3R variants).
+The canonical scenario set is `examples/racing/f_shared/` (F0–F14 plus
+F3L, F3R, F13c variants).

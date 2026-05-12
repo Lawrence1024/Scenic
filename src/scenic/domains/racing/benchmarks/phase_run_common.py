@@ -206,7 +206,8 @@ STANDARD_BENCHMARK_DIGEST_KEYS: Tuple[str, ...] = (
     "seg_seg_modifier_conservative_count",
 )
 
-# Fellow traffic harness digest (see examples/racing/fellow_smoke, fellow_runner.py).
+# Fellow traffic harness digest schema. Consumed by tests parsing benchmark logs;
+# the harness runner itself was removed once full_stack_runner subsumed it.
 FELLOW_HARNESS_DIGEST_KEYS: Tuple[str, ...] = (
     "scenario",
     "return_code",

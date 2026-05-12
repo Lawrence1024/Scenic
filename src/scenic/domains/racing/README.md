@@ -860,16 +860,12 @@ src/scenic/domains/racing/
 │   ├── stability_guard.py   #   stability_guard_step() → StabilityGuardDecision
 │   └── __init__.py
 ├── benchmarks/              # Benchmark runners and log analysis
-│   ├── phase_run_common.py  #   Log parser (RE_PLANNER, RE_ASSESSMENT, RE_GUARD, RE_COMMIT …)
-│   ├── f_scenario_bank.py   #   Scenario name banks per runner
-│   ├── baseline_runner.py … tactical_runner.py          # original-architecture runners
-│   ├── tactical_on_baseline_runner.py                   # cross-check runner
-│   ├── prediction_runner.py … segment_aware_runner.py         # new-architecture (post-Phase 6 restructure)
-│   ├── full_stack_runner.py                         # complete intelligence stack (all F-scenarios)
-│   ├── validation_full_stack_runner.py              # full-stack stress/validation campaign
-│   ├── validation_orchestration_runner.py               # phase 6-12 regression suite
-│   ├── fellow_runner.py                             # fellow harness smoke tests
-│   └── fellow_placement_debug_runner.py             # fellow placement diagnostics
+│   ├── phase_run_common.py  #   Shared framework: log parser, runner spec, digest emitter
+│   ├── f_scenario_bank.py   #   F-scenario registry (F0..F14 + variants)
+│   ├── metrics.py           #   SampleMetrics (used by verifai_runner)
+│   ├── monitors.py          #   Robustness monitors (used by verifai_runner)
+│   ├── full_stack_runner.py #   F-bank regression: all F-scenarios with the full smart-ego stack
+│   └── verifai_runner.py    #   In-process falsification driver (Halton / CE / random samplers)
 ├── mpc/                     # MPC/MPCC lateral + longitudinal controllers
 │   ├── config.py, reference_builder.py, mpc_lateral.py, mpc_longitudinal.py
 │   ├── speed_profile.py, io_adapter.py, utils.py, calibration.py
