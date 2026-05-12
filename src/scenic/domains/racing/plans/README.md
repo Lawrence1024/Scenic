@@ -8,18 +8,18 @@ with the phase numbering they referenced.
 ## Where the work lives now
 
 - **Architecture / control-side cleanup**: see
-  [`docs/cleanup_inventory.md`](../../../../docs/cleanup_inventory.md) for
+  [`docs/cleanup_inventory.md`](../../../../../docs/cleanup_inventory.md) for
   the CC-* cleanup (dead-code deletion, phase-number-to-descriptive-name
   renames). RC-* refactor notes that previously lived in
   `docs/racing_controller_cleanup.md` were folded into commit history.
 - **Smart-driving (one opponent)**: see
-  [`docs/racing_smart_driving.md`](../../../../docs/racing_smart_driving.md)
+  [`docs/racing_smart_driving.md`](../../../../../docs/racing_smart_driving.md)
   for the SD-* cycle (assessment-side fixes that allow the tactical planner
   to attempt overtakes against a centered slow opponent).
 - **Frame calibration history**: see
-  [`docs/frames.md`](../../../../docs/frames.md) for the B5/B6 frame-migration
+  [`docs/frames.md`](../../../../../docs/frames.md) for the B5/B6 frame-migration
   (different "phase" concept — frames cycle, not control cycle).
-- **Cleanup inventory**: [`docs/cleanup_inventory.md`](../../../../docs/cleanup_inventory.md)
+- **Cleanup inventory**: [`docs/cleanup_inventory.md`](../../../../../docs/cleanup_inventory.md)
   is the change log of what was deleted/renamed during CC-* and why.
 
 ## What "phase" used to mean (historical reference only)
