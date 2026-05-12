@@ -167,3 +167,6 @@ presentations/
 
 # Generated XODR outputs (regenerable from build_ttl_xodr.py)
 src/scenic/domains/racing/XODR_generation/generated/*.xodr
+
+# Webots simulation runtime log binaries
+examples/webots/robotics/log/
