@@ -194,3 +194,25 @@ For the current workflow, use either:
 - the IPC-enabled EXE
 
 but not both at once.
+
+---
+
+## Provenance
+
+The contents of this directory — `VeosCoSim.h`, the `client/x64/`,
+`client/x86/`, `bscgenerator/` subtrees with their `.lib` / `.dll` /
+`.exe` files, and the `examples/client/` sources — are **redistributed
+from the dSPACE VeosCoSim SDK**. They are vendored here so that the
+companion bridge under `../veos_cosim_ipc_bridge/` can be built without
+requiring a separate dSPACE SDK checkout.
+
+These files are © dSPACE GmbH and ship under the dSPACE SDK license
+that accompanies a customer's dSPACE installation. They are **not**
+covered by this repository's BSD-3-Clause license. Anyone
+redistributing this repository outside the original recipient
+organization should consult dSPACE about licensing terms for the
+redistribution of SDK headers, libraries, and example binaries.
+
+The thin Scenic-side wrapper that uses this SDK lives at
+[`../veos_cosim_ipc_bridge/`](../veos_cosim_ipc_bridge/) and is
+BSD-3-Clause along with the rest of this fork.
