@@ -2,6 +2,16 @@
 
 This folder is the top-level home for the VEOS CoSimulation integration used by Scenic.
 
+## External dependencies
+
+The VEOS IPC bridge has external/vendor dependencies. The Python Scenic integration (under `veos_cosim_ipc_bridge/python_listener/`) can be inspected and unit-tested without them, but **running full VEOS CoSim end-to-end requires**:
+
+- The dSPACE VeosCoSim SDK (vendored under `VeosCoSim_Client/`, see that folder's README for licensing — distributed under dSPACE SDK license, not BSD-3).
+- The locally built bridge executable `VeosCoSimTestClientIpc.exe` at `veos_cosim_ipc_bridge/client/build/` (build via `build_client.bat`, requires Visual Studio Developer Prompt).
+- A running dSPACE ModelDesk + ControlDesk + VEOS stack with the `Cosim-VEOS/ASM_Traffic.osa` application loaded.
+
+If you're auditing the Python side without the dSPACE runtime, the bridge code is still readable and self-contained; only the live CoSim loop needs the vendor stack.
+
 This README is for:
 
 ```text

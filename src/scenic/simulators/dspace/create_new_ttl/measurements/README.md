@@ -1,3 +1,12 @@
+**Reference calibration data — checked in deliberately.** The CSV and
+checkpoint JSON in this directory are the canonical route-measurement
+sweep used to derive `assets/ttls/LS_ENU_TTL_CSV/ttl_main_road.csv` and
+`ttl_pitlane.csv`. They are required to reproduce TTL generation from
+scratch without re-running the (expensive, ModelDesk-dependent)
+`find_xodr_for_st_coordinates.py` sweep. Total ~10 MB.
+
+---
+
 Generated route-measurement outputs are written here by `find_xodr_for_st_coordinates.py`.
 
 Expected files:

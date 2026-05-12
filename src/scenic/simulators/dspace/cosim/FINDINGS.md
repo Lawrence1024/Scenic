@@ -1,4 +1,22 @@
-# CoSim integration findings
+# CoSim Engineering Knowledge Base
+
+> **What this is.** Canonical engineering documentation for the dSPACE CoSim
+> integration: VEOS switch wiring (`Sw_Activate_CLIF`,
+> `Sw_Manual_VESI_Overwrite`, `Sw_RaceControl`, `Sw_MultiEgo_Fellows`), the
+> `MANEUVER_START` handshake across COM/MAPort backends, the race-control
+> state machine, the bridge `AUTO ↔ MANUAL` transitions, and the ART-vs-
+> Scenic-ego deployment topology.
+>
+> **Why it's organized this way.** Sections numbered §1..§N below were
+> added incrementally as each integration issue was diagnosed and resolved;
+> later sections supersede earlier ones where they conflict. The structure
+> reflects the chronological order in which problems were encountered.
+>
+> **Inbound references.** This file is cited by `controldesk/connection.py`,
+> `cosim/README.md`, and `veos_cosim_ipc_bridge/README.md`. Do not move it
+> without updating those references.
+
+---
 
 Empirical notes from the Scenic ↔ VEOS CoSim investigation. Contents here are
 pragmatic lessons about variable access, data types, and engine behaviour that

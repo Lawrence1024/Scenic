@@ -12,6 +12,16 @@ Scenarios for the racing domain using the dSPACE racing simulator. All examples 
 | **calibration/** | One-off calibration scenarios (`measure_lgs_v1_centerline.scenic`, `F2_tactical.scenic`). |
 | **dSPACE/** | dSPACE-specific demo scenarios (`art_control`, `constant_speed_fellow`, `relative_pos`, `three_tracks`, `ttl_fellow`). |
 
+## Quick syntax-check (no dSPACE required)
+
+To verify the Python in the racing domain and dSPACE simulator compiles cleanly without needing a dSPACE runtime up:
+
+```powershell
+python -m compileall src/scenic/domains/racing src/scenic/simulators/dspace examples/racing
+```
+
+(A Scenic-level smoke command isn't included here because every scenario in `examples/racing/` imports `scenic.simulators.dspace.racing_model`, which requires the dSPACE runtime to load.)
+
 ## Running
 
 Pick a scenario and run it under the dSPACE racing model. Memory: pass `--count 1` to avoid wasteful multi-sample generation.
