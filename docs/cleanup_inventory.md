@@ -217,11 +217,11 @@ references to the renamed prefix.
 | File | Action |
 |---|---|
 | `docs/frames.md` | Add note clarifying that Phase A/B inside the doc refer to the FRAME-CALIBRATION cycle (B5/B6), unrelated to the deleted code-side Phase 0-12. |
-| `docs/racing_controller_cleanup.md` | Add new section "Cleanup cycle (CC-*) post-RC" referencing this inventory doc. |
+| `docs/racing_controller_cleanup.md` | ~~Add new section "Cleanup cycle (CC-*) post-RC" referencing this inventory doc.~~ Later removed entirely during the deep-scrub cleanup; RC-* context now lives in commit history. |
 | `docs/racing_smart_driving.md` | NEW — empty stub, populated during Part B (SD-* stages). |
 | `src/scenic/domains/racing/README.md` | Major rewrite: replace Phase 0-12 references with descriptive section names matching the new symbol prefixes; include F-bank inventory (F0-F12 with one-line summary). |
 | `src/scenic/domains/racing/segments/README.md` | Minor update for renamed `_segment_aware_*` symbols. |
-| `src/scenic/domains/racing/plans/README.md` | Update to point to `docs/racing_controller_cleanup.md` and `docs/racing_smart_driving.md`; note that historical phase-*.md docs were removed in this cycle. |
+| `src/scenic/domains/racing/plans/README.md` | Update to point to `docs/cleanup_inventory.md` and `docs/racing_smart_driving.md`; note that historical phase-*.md docs were removed in this cycle. |
 
 ---
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Full-stack validation runner: sequences phase0–phase5 and fellow harness runners, merges results.
 
-Runs each child benchmark in subprocesses (same pattern as ``run_all_benchmarks_so_far``),
+Runs each child benchmark in subprocesses (one phase runner per subprocess),
 writes a **parent** folder under ``--out-dir`` with one subdirectory per child, then merges
 all ``summary.json`` result rows into ``merged_summary.json`` and prints a single
 ``BENCHMARK_AI_DIGEST_*`` block.

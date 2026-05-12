@@ -127,7 +127,7 @@ The **inverse** direction (Frenet → RD) is what ModelDesk does internally when
 **Re-measure when the dSPACE project changes routes** (not when the XODR changes):
 - `examples/racing/calibration/measure_lgs_v1_centerline.scenic` — drives 5 R2 + 3
   R1 fellows at constant d; logs per-step RD readback to
-  `tools/frames/data/lgs_v1_centerline_drive.csv`.
+  `tools/frames/data/lgs_v1_centerline_drive.csv` (regenerated locally; gitignored).
 - `tools/frames/measure_centerline_from_drive.py` — extracts d=0 polylines and
   3-way diffs new vs old empirical vs XODR-derived.
 
@@ -247,9 +247,9 @@ against dSPACE RD-frame data, translate by `(-6.101, -50.761)` (ENU → RD); oth
 distances appear ~50 m larger than reality. Source:
 `/home/bklfh/ros_ws/race_common/src/external/common/race_metadata/geo_fences/LS_ENU_TTL_CSV/`.
 
-`tools/frames/check_ego_in_bounds.py` parses an F-bank log file and reports per-sample
-distance to the inside/outside boundaries plus an in-track flag. Used to verify the
-Phase A.6/A.7 fixes against ground truth.
+(A one-off `tools/frames/check_ego_in_bounds.py` was used during Phase A.6/A.7 to
+verify these fixes against ground truth; that diagnostic script was removed in the
+deep-scrub cleanup once the calibration was validated.)
 
 ## Corridor-aware MPC (Phase B - 2026-04-26)
 
@@ -340,13 +340,11 @@ These could move to XODR-native too, but require care because the `s` value sent
 | Calibration fit script | `src/scenic/domains/racing/ttl_processing/fit_gnss_rd_calibration.py` |
 | Centerline derivation utility | `tools/frames/derive_centerline_from_xodr.py` |
 | Alignment verification utility | `tools/frames/verify_xodr_rd_alignment.py` |
-| Ego-start derivation utility | `tools/frames/derive_ego_start.py` |
 | Placement-time (s, t) projection | `src/scenic/simulators/dspace/geometry/route_projection.py` |
 | ModelDesk placement | `src/scenic/simulators/dspace/modeldesk/placement.py` |
 | Ego/fellow readback | `src/scenic/simulators/dspace/controldesk/readback.py` |
 | Phase B target consolidation | `src/scenic/simulators/dspace/geometry/frames.py` (NEW) |
-| Elevation backfill (RC-Z) | `tools/frames/add_elevation_from_race_common.py` |
-| Elevation reference data | `tools/frames/data/race_common_ttl_17.csv` (race_common's 20-col ttl_17 vendored locally) |
+| Elevation backfill (RC-Z) | `tools/frames/add_elevation_from_race_common.py` (vendored ttl_17.csv removed; re-export from race_common when needed) |
 
 ## Note on TTL z-column (RC-Z, 2026-04-26)
 
@@ -356,6 +354,6 @@ Previously z was near-flat (~0.06 m range) which silently no-op'd the longitudin
 MPC's grade compensation (`gravity_force = mass * g * sin(grade)` at
 `mpc_longitudinal.py:399`). The file format is unchanged (still 3-column
 `x,y,z`); user-authored TTLs are not required to provide rich data, but the
-controller will use whatever is provided. See
-[`docs/racing_controller_cleanup.md`](racing_controller_cleanup.md) for the
-broader RC-* cycle context.
+controller will use whatever is provided. The broader RC-* cycle context lives
+in commit history (the standalone `docs/racing_controller_cleanup.md` ledger
+was removed during the deep-scrub cleanup).

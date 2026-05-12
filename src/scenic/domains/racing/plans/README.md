@@ -8,10 +8,10 @@ with the phase numbering they referenced.
 ## Where the work lives now
 
 - **Architecture / control-side cleanup**: see
-  [`docs/racing_controller_cleanup.md`](../../../../docs/racing_controller_cleanup.md)
-  for the RC-* refactor (telemetry, weight de-tune, segment-aware speed
-  planner, elevation backfill) and the CC-* cleanup (dead-code deletion,
-  phase-number-to-descriptive-name renames).
+  [`docs/cleanup_inventory.md`](../../../../docs/cleanup_inventory.md) for
+  the CC-* cleanup (dead-code deletion, phase-number-to-descriptive-name
+  renames). RC-* refactor notes that previously lived in
+  `docs/racing_controller_cleanup.md` were folded into commit history.
 - **Smart-driving (one opponent)**: see
   [`docs/racing_smart_driving.md`](../../../../docs/racing_smart_driving.md)
   for the SD-* cycle (assessment-side fixes that allow the tactical planner
@@ -56,7 +56,7 @@ The benchmarks live in `src/scenic/domains/racing/benchmarks/`:
   `guard_runner.py`, `commit_pass_runner.py`, `segment_aware_runner.py`,
   `full_stack_runner.py`, `validation_full_stack_runner.py`,
   `validation_orchestration_runner.py`, `fellow_runner.py`,
-  `fellow_placement_debug_runner.py`, `run_all_benchmarks_so_far.py`.
+  `fellow_placement_debug_runner.py`, `verifai_runner.py`.
 
 The canonical scenario set is `examples/racing/f_shared/` (F0–F12 plus
 3L/3R variants).

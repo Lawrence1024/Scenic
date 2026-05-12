@@ -130,7 +130,7 @@ wheel_base (e.g. 2.9718 m); delta_ff = atan(L * kappa_ref); max_steer_angle in r
 
 ## Testing
 
-**Location:** `mpc/testing/`. Run: `python run_tests.py` or `python -m pytest test_*.py -v`. Coverage: config, reference builder, lateral MPC (state, gate/stick, OSQP), behavior/simulation integration. See `testing/README.md`. Do not run `scenic` from automated scripts; use `--count 1` when running scenarios manually.
+**Location:** `mpc/testing/`. Run: `python -m pytest src/scenic/domains/racing/mpc/testing/ -v`. Coverage: config, reference builder, lateral MPC (state, gate/stick, OSQP), behavior/simulation integration. See `testing/README.md`. Do not run `scenic` from automated scripts; use `--count 1` when running scenarios manually.
 
 ---
 

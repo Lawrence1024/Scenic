@@ -133,7 +133,7 @@ def main() -> int:
         default="all",
         help=(
             "Which child runners to include. "
-            "'all': phase6-12; 'tactical': phase10-12; 'corner': phase11-12."
+            "'all': all orchestration phases; 'tactical': guard+commit+segment; 'corner': commit+segment."
         ),
     )
     parser.add_argument(

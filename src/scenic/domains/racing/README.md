@@ -1,12 +1,10 @@
 # Racing Domain - Complete Reference
 
 > **Architecture / change log**
-> - `docs/racing_controller_cleanup.md` — RC-* refactor (telemetry, weight de-tune,
->   segment-aware speed planner, elevation backfill) and CC-* cleanup (phase
->   renaming, dead-code deletion).
 > - `docs/cleanup_inventory.md` — full deletion + rename map for the CC-* cycle.
 > - `docs/frames.md` — coordinate frames, track elevation, frame calibration history.
 > - `docs/racing_smart_driving.md` — opponent-aware planner improvements (SD-* cycle).
+> - `docs/falsification_pipeline.md` — verifai-runner pipeline.
 >
 > **Canonical scenarios:** `examples/racing/f_shared/F0–F12` is the complete test set.
 > All other historical scenario directories were removed in CC-2.

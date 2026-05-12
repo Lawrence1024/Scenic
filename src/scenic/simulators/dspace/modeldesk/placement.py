@@ -80,8 +80,8 @@ def _maybe_warn_placement_contradiction(sim, obj, x, y, vehicle_label):
           legacy maps without RacingTrack).
 
     Emits a `'PlacementContradiction'` record alongside the print so monitors
-    can filter on it. See ``docs/scenic_changes_from_presentation.md`` SD-24
-    for the full 4-cell contradiction matrix.
+    can filter on it. The 4-cell contradiction matrix was documented in SD-24
+    (see commit history for full rationale).
     """
     try:
         from scenic.domains.racing.segments.track_regions import ttl_category
