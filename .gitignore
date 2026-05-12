@@ -164,3 +164,6 @@ src/scenic/simulators/dspace/cosim/**/*.pdb
 
 # Top-level working dir
 presentations/
+
+# Generated XODR outputs (regenerable from build_ttl_xodr.py)
+src/scenic/domains/racing/XODR_generation/generated/*.xodr
