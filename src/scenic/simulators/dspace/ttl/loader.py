@@ -7,7 +7,7 @@ from scenic.core.regions import PolylineRegion
 
 
 # race_common TtlColumn enum (from
-# /home/bklfh/ros_ws/race_common/src/common/target_trajectory_line/include/target_trajectory_line/ttl.hpp).
+# <RACE_COMMON_ROOT>/src/common/target_trajectory_line/include/target_trajectory_line/ttl.hpp).
 # 20 columns per data row.
 class TtlColumn:
     X = 0

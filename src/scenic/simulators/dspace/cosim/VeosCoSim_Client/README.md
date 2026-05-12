@@ -72,17 +72,17 @@ Instead, it builds on top of it.
 Run this from:
 
 ```powershell
-cd C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\cosim\VeosCoSim_Client\examples\client
+cd %SCENIC_ROOT%\src\scenic\simulators\dspace\cosim\VeosCoSim_Client\examples\client
 ```
 
 Then build:
 
 ```powershell
 cl /std:c++17 /EHsc /MD ^
-  /I "C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\cosim\VeosCoSim_Client\client\x64\Release\include" ^
+  /I "%SCENIC_ROOT%\src\scenic\simulators\dspace\cosim\VeosCoSim_Client\client\x64\Release\include" ^
   VeosCoSimTestClient.cpp ClientServerTestHelper.cpp Generator.cpp ^
   /link ^
-  /LIBPATH:"C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\cosim\VeosCoSim_Client\client\x64\Release\lib" ^
+  /LIBPATH:"%SCENIC_ROOT%\src\scenic\simulators\dspace\cosim\VeosCoSim_Client\client\x64\Release\lib" ^
   VeosCoSimApplStatic.lib Ws2_32.lib ^
   /OUT:"VeosCoSimTestClient.exe"
 ```

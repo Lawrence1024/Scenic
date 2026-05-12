@@ -73,10 +73,10 @@
 # compatible with the old bridges. If not, the signal-name skew theory in
 # cosim/FINDINGS.md §10 is confirmed.
 #
-# Usage (from the Windows host via WSL-mounted docker):
-#   wsl docker compose -f /mnt/c/Users/bklfh/Documents/Scenic/Scenic/src/scenic/simulators/dspace/dspace_art_cosim_stack.yml up -d
+# Usage (from the Windows host via WSL-mounted docker; set $SCENIC_ROOT in .env):
+#   wsl docker compose -f $SCENIC_ROOT/src/scenic/simulators/dspace/dspace_art_cosim_stack.yml up -d
 # Tear down:
-#   wsl docker compose -f /mnt/c/Users/bklfh/Documents/Scenic/Scenic/src/scenic/simulators/dspace/dspace_art_cosim_stack.yml down
+#   wsl docker compose -f $SCENIC_ROOT/src/scenic/simulators/dspace/dspace_art_cosim_stack.yml down
 #
 # Cannot coexist with dspace_scenic_stack.yml or dspace_art_stack.yml —
 # shared container names (veos, vesi, ctun, asm_socketcan_bridge, can-netns,
@@ -136,7 +136,7 @@ services:
       # CoSim-specific: mount Dennis's new Cosim-VEOS OSA into the container.
       # The non-CoSim yml doesn't mount this because it only uses the baked-in
       # /home/dspace/VEOS/ASM_Traffic.osa.
-      - /mnt/c/Users/bklfh/Documents/dspace/SimulationPackage_v3.2/IAC_Project/Cosim-VEOS:/home/dspace/Cosim-VEOS
+      - ${DSPACE_INSTALL}/SimulationPackage_v3.2/IAC_Project/Cosim-VEOS:/home/dspace/Cosim-VEOS
     environment:
       # License server URL is provided by the dSPACE CMU group and rotates
       # over time. Sourced from `.env` (gitignored) so the URL is not
@@ -205,7 +205,7 @@ services:
       # If race_common's pinning changes, the file mounted here changes with
       # it — keep the ART stack using race_common's source of truth for its
       # CAN config.
-      - /home/bklfh/ros_ws/race_common/tools/dspace/asm_socketcan_bridge_override.yaml:/root/dspace_bridge_ws/install/asm_socketcan_bridge/share/asm_socketcan_bridge/config/asm_socketcan_bridge.yaml
+      - ${RACE_COMMON_ROOT}/tools/dspace/asm_socketcan_bridge_override.yaml:/root/dspace_bridge_ws/install/asm_socketcan_bridge/share/asm_socketcan_bridge/config/asm_socketcan_bridge.yaml
     cap_add:
       - NET_ADMIN
     network_mode: "service:can-netns"
@@ -274,7 +274,7 @@ services:
 
   # OPTIONAL observability sidecar — NOT part of the functional non-CoSim yml.
   # Tails every stack container's stdout+stderr into
-  # /mnt/c/Users/bklfh/Documents/Scenic/.../dspace/logs/<name>.log via the
+  # $SCENIC_ROOT/src/scenic/simulators/dspace/logs/<name>.log via the
   # mounted Docker socket. Shares the Scenic stack's log directory so both
   # stacks write to one place.
   #
@@ -294,7 +294,7 @@ services:
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /mnt/c/Users/bklfh/Documents/Scenic/Scenic/src/scenic/simulators/dspace/logs:/logs
+      - ${SCENIC_ROOT}/src/scenic/simulators/dspace/logs:/logs
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -324,4 +324,4 @@ services:
 # so host tooling inside the container can use the host SSH key when needed.
 secrets:
   host_ssh_key:
-    file: /home/bklfh/.ssh/id_ed25519
+    file: ${HOST_SSH_KEY}

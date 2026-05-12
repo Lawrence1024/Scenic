@@ -7,6 +7,10 @@ set VEOS_NAME=CoSimServerScenic
 set IPC_PORT=51555
 set PID_FILE=%TEMP%\scenic_cosim_ipc.pid
 
+REM Override RACE_COMMON_STACK via env var if your race_common clone lives
+REM elsewhere; default below is the WSL convention used during development.
+if not defined RACE_COMMON_STACK set RACE_COMMON_STACK=/home/%USERNAME%/ros_ws/race_common/tools/dspace/dspace_art_stack.yml
+
 REM ── Check if IPC client is already running ────────────────────────────────
 if exist "%PID_FILE%" (
     set /p EXISTING_PID=<"%PID_FILE%"
@@ -21,7 +25,7 @@ if exist "%PID_FILE%" (
 
 REM ── Start Docker stack in WSL ─────────────────────────────────────────────
 echo [Launcher] Starting dSPACE Docker stack in WSL ...
-wsl docker compose -f /home/bklfh/ros_ws/race_common/tools/dspace/dspace_art_stack.yml up -d
+wsl docker compose -f %RACE_COMMON_STACK% up -d
 if errorlevel 1 (
     echo [Launcher] ERROR: docker compose up failed.
     exit /b 1
@@ -59,4 +63,4 @@ echo [Launcher] WARNING: could not determine IPC client PID.
 :done
 echo [Launcher] Ready. Run Python/Scenic scripts normally.
 echo [Launcher] The IPC client will reconnect to each new bridge automatically.
-echo [Launcher] To stop: taskkill /im VeosCoSimTestClientIpc.exe /f ^&^& wsl docker compose -f /home/bklfh/ros_ws/race_common/tools/dspace/dspace_art_stack.yml down
+echo [Launcher] To stop: taskkill /im VeosCoSimTestClientIpc.exe /f ^&^& wsl docker compose -f %RACE_COMMON_STACK% down

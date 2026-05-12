@@ -96,7 +96,7 @@ an **x64 Native Tools Command Prompt for VS** (Start menu → Visual Studio 2019
 From the Native Tools prompt:
 
 ```text
-cd C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\cosim\veos_cosim_ipc_bridge
+cd %SCENIC_ROOT%\src\scenic\simulators\dspace\cosim\veos_cosim_ipc_bridge
 .\build_client.bat
 ```
 
@@ -130,7 +130,7 @@ That means Scenic is listening for the IPC client.
 Run:
 
 ```powershell
-cd C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\cosim\veos_cosim_ipc_bridge\client\build
+cd %SCENIC_ROOT%\src\scenic\simulators\dspace\cosim\veos_cosim_ipc_bridge\client\build
 .\VeosCoSimTestClientIpc.exe --host 192.168.100.101 --name CoSimServerScenic --ipc-host 127.0.0.1 --ipc-port 50555
 ```
 

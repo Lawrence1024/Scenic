@@ -43,16 +43,17 @@ from typing import List, Tuple
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TTL_DIR = REPO_ROOT / "assets" / "ttls" / "LS_ENU_TTL_CSV"
 
-# WSL path (race_common ships in linux-side home). User runs this from Windows / git
-# bash, so we need WSL to access it. We'll write a small WSL invocation to read the
-# file, or document that it's been copied locally first.
-RACE_COMMON_TTL_WSL = (
-    "/home/bklfh/ros_ws/race_common/src/external/common/race_metadata/ttls/"
-    "LS_ENU_TTL_CSV/ttl_17.csv"
+# WSL path (race_common ships in the linux-side home). User runs this from Windows /
+# git bash, so we need WSL to access it. Override via the RACE_COMMON_TTL env var if
+# your clone lives somewhere else. The default below is the WSL convention used
+# during development.
+import os as _os
+RACE_COMMON_TTL_WSL = _os.environ.get(
+    "RACE_COMMON_TTL",
+    f"/home/{_os.environ.get('USER', 'USERNAME')}/ros_ws/race_common/src/external/common/race_metadata/ttls/LS_ENU_TTL_CSV/ttl_17.csv",
 )
 # Optional local copy (if user has staged it, skip the WSL hop)
 RACE_COMMON_TTL_LOCAL_CANDIDATES = [
-    REPO_ROOT / "tools" / "frames" / "data" / "race_common_ttl_17.csv",
     REPO_ROOT / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "_race_common_ttl_17_full.csv",
 ]
 

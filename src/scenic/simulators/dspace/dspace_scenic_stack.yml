@@ -24,16 +24,13 @@
 # Philosophy: get Scenic end-to-end on CoSim first, then layer raptor back in
 # once signal-name compatibility is resolved.
 #
-# Usage:
-#   wsl docker compose -f /mnt/c/Users/bklfh/Documents/Scenic/Scenic/src/scenic/simulators/dspace/dspace_scenic_stack.yml up -d
-# Or from WSL directly:
-#   docker compose -f /mnt/c/.../dspace_scenic_stack.yml up -d
-#
+# Usage (set $SCENIC_ROOT in .env to your repo's WSL path):
+#   wsl docker compose -f $SCENIC_ROOT/src/scenic/simulators/dspace/dspace_scenic_stack.yml up -d
 # Tear down:
 #   ... compose down
 #
 # Logs land in ./logs/ next to this file, i.e.:
-#   C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\logs\
+#   $SCENIC_ROOT/src/scenic/simulators/dspace/logs/
 #   *.log files per container, rotating by truncation on each compose up.
 
 networks:
@@ -61,7 +58,7 @@ services:
     cap_add:
       - SYS_PTRACE
     volumes:
-      - /mnt/c/Users/bklfh/Documents/dspace/SimulationPackage_v3.2/IAC_Project/Cosim-VEOS:/home/dspace/Cosim-VEOS
+      - ${DSPACE_INSTALL}/SimulationPackage_v3.2/IAC_Project/Cosim-VEOS:/home/dspace/Cosim-VEOS
     environment:
       - DS_CMU_SERVER=license-server-lb-2-1021906136.eu-central-1.elb.amazonaws.com
       # Toggle which OSA VEOS loads. Exactly ONE of these should be active.

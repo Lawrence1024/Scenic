@@ -245,7 +245,7 @@ All four are in the canonical `LS_ENU` (East-North-Up) frame, anchored at GPS
 `LGS_v1.xodr`'s `<geoReference>`. So **ENU ≈ XODR** for these files. To compare
 against dSPACE RD-frame data, translate by `(-6.101, -50.761)` (ENU → RD); otherwise
 distances appear ~50 m larger than reality. Source:
-`/home/bklfh/ros_ws/race_common/src/external/common/race_metadata/geo_fences/LS_ENU_TTL_CSV/`.
+`<RACE_COMMON_ROOT>/src/external/common/race_metadata/geo_fences/LS_ENU_TTL_CSV/`.
 
 (A one-off `tools/frames/check_ego_in_bounds.py` was used during Phase A.6/A.7 to
 verify these fixes against ground truth; that diagnostic script was removed in the
@@ -286,7 +286,7 @@ variables or constraint changes. It mirrors race_common's behavior to first orde
 ### Where (file map)
 | Concern | File | Notes |
 |---|---|---|
-| race_common 20-column TTL format | `assets/ttls/LS_ENU_TTL_CSV/ttl_*_xodr_full.csv` | mirrored from `/home/bklfh/ros_ws/race_common/.../race_metadata/ttls/LS_ENU_TTL_CSV/`; ttl_17 -> optimal, ttl_2g -> left, ttl_9g -> right, ttl27 -> pit |
+| race_common 20-column TTL format | `assets/ttls/LS_ENU_TTL_CSV/ttl_*_xodr_full.csv` | mirrored from `<RACE_COMMON_ROOT>/.../race_metadata/ttls/LS_ENU_TTL_CSV/`; ttl_17 -> optimal, ttl_2g -> left, ttl_9g -> right, ttl27 -> pit |
 | TTL column enum | `src/scenic/simulators/dspace/ttl/loader.py` `TtlColumn` | mirrors race_common's `ttl.hpp` |
 | Full-format loader | `src/scenic/simulators/dspace/ttl/loader.py::load_ttl_full` | returns dict with racing line + bounds + speed/curvature + metadata; None if format is just 3-col x,y,z |
 | Auto-pickup of `_full.csv` sibling | `src/scenic/simulators/dspace/ttl/loader.py::_autodetect_full_ttl_filename` | scenarios that point at `ttl_optimal_xodr.csv` get the corridor MPC for free if `ttl_optimal_xodr_full.csv` exists next to it |

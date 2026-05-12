@@ -132,12 +132,12 @@ This folder is the main place to extend if you want new Scenic-visible CoSim beh
 Use this when you want to rebuild the original VEOS example client and verify the SDK/source setup works.
 
 ```powershell
-cd C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\cosim\VeosCoSim_Client\examples\client
+cd %SCENIC_ROOT%\src\scenic\simulators\dspace\cosim\VeosCoSim_Client\examples\client
 cl /std:c++17 /EHsc /MD ^
-  /I "C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\cosim\VeosCoSim_Client\client\x64\Release\include" ^
+  /I "%SCENIC_ROOT%\src\scenic\simulators\dspace\cosim\VeosCoSim_Client\client\x64\Release\include" ^
   VeosCoSimTestClient.cpp ClientServerTestHelper.cpp Generator.cpp ^
   /link ^
-  /LIBPATH:"C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\cosim\VeosCoSim_Client\client\x64\Release\lib" ^
+  /LIBPATH:"%SCENIC_ROOT%\src\scenic\simulators\dspace\cosim\VeosCoSim_Client\client\x64\Release\lib" ^
   VeosCoSimApplStatic.lib Ws2_32.lib ^
   /OUT:"VeosCoSimTestClient.exe"
 ```
@@ -153,7 +153,7 @@ If this EXE builds and runs successfully, then:
 ## 2. Build the IPC bridge client
 
 ```powershell
-cd C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\cosim\veos_cosim_ipc_bridge
+cd %SCENIC_ROOT%\src\scenic\simulators\dspace\cosim\veos_cosim_ipc_bridge
 .\build_client.bat
 ```
 
@@ -214,7 +214,7 @@ Bridge modes:
 **Manual:** launch the IPC-enabled client in a separate terminal:
 
 ```powershell
-cd C:\Users\bklfh\Documents\Scenic\Scenic\src\scenic\simulators\dspace\cosim\veos_cosim_ipc_bridge\client\build
+cd %SCENIC_ROOT%\src\scenic\simulators\dspace\cosim\veos_cosim_ipc_bridge\client\build
 .\VeosCoSimTestClientIpc.exe --host 192.168.100.101 --name CoSimServerScenic --ipc-host 127.0.0.1 --ipc-port 50555
 ```
 
