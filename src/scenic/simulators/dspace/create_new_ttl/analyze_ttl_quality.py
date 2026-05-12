@@ -106,7 +106,7 @@ def curvature_at(p_prev: np.ndarray, p_curr: np.ndarray, p_next: np.ndarray) -> 
 
 
 def main():
-    default_xodr = REPO_ROOT / "assets" / "maps" / "dSPACE" / "LagunaSeca.xodr"
+    default_xodr = REPO_ROOT / "assets" / "maps" / "dSPACE" / "LGS_v1.xodr"
     default_ttl = REPO_ROOT / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "ttl_racing_line_xodr.csv"
 
     parser = argparse.ArgumentParser(

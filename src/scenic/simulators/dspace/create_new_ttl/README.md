@@ -25,7 +25,7 @@ Everything is in **XODR** coordinates: TTLs, placement, and MPC tracking. The si
 | **generate_racing_line.py** | Curvature-based racing line from centerline; outputs open line then close with `close_ttl_loop.py`. |
 | **find_xodr_for_st_coordinates.py** | Full-route dSPACE measurement sweep for `R2` and `R1`; batches up to 30 fellows, checkpoints progress, uses measurement-only segment setup with longitudinal `Velocity=Constant(0)` and lateral `Continue`, and writes outputs under `create_new_ttl/measurements/` including `(s, t)`, RD `(x, y, z)`, GNSS `(lon, lat, heading)`, and XODR `(x, y, z)`. |
 | **measurements_to_centerlines.py** | Export R2 (main) and R1 (pit) centerlines from `measurements/route_st_to_xodr_measurements.csv` as TTL CSVs (t=0, XODR coords). Use `--copy-to-assets` to replace `assets/ttls/LS_ENU_TTL_CSV/ttl_main_road.csv` and `ttl_pitlane.csv`. |
-| **build_main_track_xodr.py** | Build main-track-only XODR from TTL centerline → `LagunaSeca_MainTrack_FromTTL.xodr`. |
+| **build_main_track_xodr.py** | Build main-track-only XODR from TTL centerline → `LGS_v1_MainTrack_FromTTL.xodr`. |
 | **analyze_ttl_quality.py** | Per-point distance to boundaries and curvature (e.g. segment 43). |
 | **verify_ttl_against_xodr.py** | Plot TTL vs XODR centerline/boundaries. |
 | **visualize_ttl_boundaries.py** | TTL vs track boundaries (XODR). |

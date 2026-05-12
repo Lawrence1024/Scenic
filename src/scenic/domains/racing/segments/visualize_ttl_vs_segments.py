@@ -104,7 +104,7 @@ def main():
     parser.add_argument(
         "--map",
         default=None,
-        help="Path to OpenDRIVE .xodr (default: assets/maps/dSPACE/LagunaSeca.xodr)",
+        help="Path to OpenDRIVE .xodr (default: assets/maps/dSPACE/LGS_v1.xodr)",
     )
     parser.add_argument(
         "--ttl-folder",
@@ -137,7 +137,7 @@ def main():
     repo_root = _find_repo_root()
     map_path = args.map
     if map_path is None:
-        map_path = repo_root / "assets" / "maps" / "dSPACE" / "LagunaSeca.xodr"
+        map_path = repo_root / "assets" / "maps" / "dSPACE" / "LGS_v1.xodr"
     else:
         map_path = Path(map_path)
     if not map_path.is_absolute():

@@ -213,9 +213,9 @@ def build_xodr(
 
 def main():
     parser = argparse.ArgumentParser(description="Build main-track-only OpenDRIVE from TTL centerline and XODR widths")
-    default_xodr = REPO_ROOT / "assets" / "maps" / "dSPACE" / "LagunaSeca.xodr"
+    default_xodr = REPO_ROOT / "assets" / "maps" / "dSPACE" / "LGS_v1.xodr"
     default_ttl = REPO_ROOT / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "ttl_fellow_test_xodr_all.csv"
-    default_out = REPO_ROOT / "assets" / "maps" / "dSPACE" / "LagunaSeca_MainTrack_FromTTL.xodr"
+    default_out = REPO_ROOT / "assets" / "maps" / "dSPACE" / "LGS_v1_MainTrack_FromTTL.xodr"
     parser.add_argument("--xodr", type=Path, default=default_xodr, help="Source XODR (for widths)")
     parser.add_argument("--ttl", type=Path, default=default_ttl, help="TTL centerline CSV (x,y,z)")
     parser.add_argument("--output", "-o", type=Path, default=default_out, help="Output XODR path")

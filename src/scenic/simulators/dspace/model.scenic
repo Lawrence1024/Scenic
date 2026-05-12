@@ -5,7 +5,7 @@ It implements the abstract racing protocols defined in the racing domain.
 
 Usage::
 
-    param map = localPath('../../assets/maps/dSPACE/LagunaSeca.xodr')
+    param map = localPath('../../assets/maps/dSPACE/LGS_v1.xodr')
     param use2DMap = True
     param trackDirection = 'counterclockwise'
     model scenic.simulators.dspace.racing_model

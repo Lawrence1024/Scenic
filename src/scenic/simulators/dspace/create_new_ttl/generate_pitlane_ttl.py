@@ -4,7 +4,7 @@ Generate a pitlane TTL that runs in parallel with the existing racing TTL.
 
 High‑level behavior:
 - Load the existing racing TTL (main loop) in XODR coordinates.
-- Build the racing track from the full LagunaSeca.xodr map.
+- Build the racing track from the full LGS_v1.xodr map.
 - Extract a continuous polyline for the pit path:
   main→pit connector, pit lane, pit→main connector.
 - Find the closest points on the racing TTL to the pit entry/exit junctions.
@@ -14,7 +14,7 @@ High‑level behavior:
 - Save the result as a new TTL CSV for the pitlane.
 
 Default IO:
-- Input XODR: assets/maps/dSPACE/LagunaSeca.xodr
+- Input XODR: assets/maps/dSPACE/LGS_v1.xodr
 - Input main TTL: assets/ttls/LS_ENU_TTL_CSV/ttl_racing_line_xodr.csv
 - Output pit TTL (tooling copy): create_new_ttl/ttl_pitlane_xodr.csv (in this folder)
 - Output pit TTL (runtime asset): assets/ttls/LS_ENU_TTL_CSV/ttl_pitlane_xodr.csv
@@ -307,7 +307,7 @@ def build_pitlane_ttl(
 
 
 def main() -> int:
-    default_xodr = REPO_ROOT / "assets" / "maps" / "dSPACE" / "LagunaSeca.xodr"
+    default_xodr = REPO_ROOT / "assets" / "maps" / "dSPACE" / "LGS_v1.xodr"
     default_main_ttl = (
         REPO_ROOT
         / "assets"

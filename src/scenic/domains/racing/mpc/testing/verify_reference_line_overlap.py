@@ -345,19 +345,19 @@ def main():
     # Try going up from script location
     project_root = script_dir.parent.parent.parent.parent.parent.parent
     rd_path = project_root / "assets" / "maps" / "dSPACE" / "Laguna_Seca.rd"
-    xodr_path = project_root / "assets" / "maps" / "dSPACE" / "LagunaSeca.xodr"
-    
+    xodr_path = project_root / "assets" / "maps" / "dSPACE" / "LGS_v1.xodr"
+
     # If not found, try relative to current working directory
     if not rd_path.exists():
         rd_path = Path("assets/maps/dSPACE/Laguna_Seca.rd")
     if not xodr_path.exists():
-        xodr_path = Path("assets/maps/dSPACE/LagunaSeca.xodr")
-    
+        xodr_path = Path("assets/maps/dSPACE/LGS_v1.xodr")
+
     # If still not found, try from workspace root (Scenic/)
     if not rd_path.exists():
         rd_path = Path("Scenic/assets/maps/dSPACE/Laguna_Seca.rd")
     if not xodr_path.exists():
-        xodr_path = Path("Scenic/assets/maps/dSPACE/LagunaSeca.xodr")
+        xodr_path = Path("Scenic/assets/maps/dSPACE/LGS_v1.xodr")
     
     if not rd_path.exists():
         print(f"\nERROR: RD file not found: {rd_path}")

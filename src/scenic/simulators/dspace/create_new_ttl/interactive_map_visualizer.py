@@ -83,8 +83,8 @@ def _plot_segments(ax, segments, color, linewidth=1.0, label=None, alpha=0.9):
 
 
 def main():
-    default_xodr = REPO_ROOT / "assets/maps/dSPACE/LagunaSeca.xodr"
-    default_main_track_xodr = REPO_ROOT / "assets/maps/dSPACE/LagunaSeca_MainTrack_FromTTL.xodr"
+    default_xodr = REPO_ROOT / "assets/maps/dSPACE/LGS_v1.xodr"
+    default_main_track_xodr = REPO_ROOT / "assets/maps/dSPACE/LGS_v1_MainTrack_FromTTL.xodr"
     centerline_path = REPO_ROOT / "assets/ttls/LS_ENU_TTL_CSV/ttl_fellow_test_xodr_all.csv"
     temp_path = _CREATE_NEW_TTL / "temp_aligned_to_centerline.csv"
 

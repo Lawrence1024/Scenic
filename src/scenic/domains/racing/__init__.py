@@ -30,7 +30,7 @@ constraints:
 
 Example racing scenario::
 
-    param map = localPath('../../assets/maps/dSPACE/LagunaSeca.xodr')
+    param map = localPath('../../assets/maps/dSPACE/LGS_v1.xodr')
     param use2DMap = True
     model scenic.domains.racing.model
     

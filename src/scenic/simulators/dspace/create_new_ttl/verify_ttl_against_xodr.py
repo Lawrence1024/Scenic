@@ -9,7 +9,7 @@ OpenDRIVE parser) matches it.
 
 Usage (run from Scenic repo root):
   python src/scenic/simulators/dspace/create_new_ttl/verify_ttl_against_xodr.py
-  python src/scenic/simulators/dspace/create_new_ttl/verify_ttl_against_xodr.py --ttl path/to/ttl.csv --xodr path/to/LagunaSeca.xodr --save out.png
+  python src/scenic/simulators/dspace/create_new_ttl/verify_ttl_against_xodr.py --ttl path/to/ttl.csv --xodr path/to/LGS_v1.xodr --save out.png
 """
 
 import argparse
@@ -137,7 +137,7 @@ def path_length(pts: np.ndarray) -> float:
 
 def main():
     default_ttl = REPO_ROOT / "assets" / "ttls" / "LS_ENU_TTL_CSV" / "ttl_fellow_test_xodr_all.csv"
-    default_xodr = REPO_ROOT / "assets" / "maps" / "dSPACE" / "LagunaSeca.xodr"
+    default_xodr = REPO_ROOT / "assets" / "maps" / "dSPACE" / "LGS_v1.xodr"
 
     parser = argparse.ArgumentParser(
         description="Verify TTL (known centerline) matches XODR-extracted centerline"
