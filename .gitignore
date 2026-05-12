@@ -170,3 +170,8 @@ src/scenic/domains/racing/XODR_generation/generated/*.xodr
 
 # Webots simulation runtime log binaries
 examples/webots/robotics/log/
+
+# dSPACE vendor SDK content (not redistributed; see Scenic_Racing_Public/VENDOR_SETUP.md)
+src/scenic/simulators/dspace/cosim/VeosCoSim_Client/
+src/scenic/simulators/dspace/cosim/reference/
+src/scenic/simulators/dspace/maport/DemoHelpers.py
