@@ -74,8 +74,8 @@
     w_ddu_high_curv: 0.000003  # Steering acceleration in high curvature (smoother than 0.0000005 to reduce overcorrect)
     
     # Oscillation fixes (Phase 3+): reduce small oscillation and overcorrection
-    cte_deadzone: 0.2       # (m) treat |e_y| < this as 0 so MPC does not correct tiny errors (Todo2: only when association good + curv low)
-    deadzone_dist_ok_m: 1.0 # (m) max match_dist to allow deadzone; above = BLOCKED_MATCH_BAD (Todo2 conditional deadzone)
+    cte_deadzone: 0.2       # (m) treat |e_y| < this as 0 so MPC does not correct tiny errors (only when association good + curv low)
+    deadzone_dist_ok_m: 1.0 # (m) max match_dist to allow deadzone; above = BLOCKED_MATCH_BAD (conditional deadzone)
     curv_deadzone_max: 0.04 # (1/m) max curv_ahead_max to allow deadzone; never deadzone in moderate curvature (e.g. 0.03-0.05)
     cte_multiplier_max: 1.5 # cap on off-track tracking-weight multiplier (was 3x; 1.5 avoids overshoot)
 

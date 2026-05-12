@@ -273,7 +273,7 @@ class MPCLateralController:
                 v_k = v_raw
             kappa_k = kappa_ref[k]
             psi_ref_k = psi_ref[k]
-            # Todo 4: curvature feedforward — u_k is delta_fb; steering = delta_ff_k + u_k
+            # Curvature feedforward: u_k is delta_fb; total steering = delta_ff_k + u_k.
             delta_ff_k = math.atan(L * kappa_k)
             
             # Select weights based on curvature; smooth blend between low and high (oscillation fix)
@@ -434,7 +434,7 @@ class MPCLateralController:
             u[constraint_idx] = 0.0
             constraint_idx += 1
             
-            # Todo 4: e_psi with steering = delta_ff_k + u_k (u_k = delta_fb)
+            # e_psi update with steering = delta_ff_k + u_k (u_k = delta_fb).
             # e_psi_{k+1} = e_psi_k + (v_k/L)*(delta_ff_k + u_k)*dt - v_k*kappa_k*dt
             A[constraint_idx, x_k_idx + 1] = 1.0  # e_psi_k
             A[constraint_idx, u_k_idx] = (v_k / L) * dt  # u_k (delta_fb)
@@ -670,7 +670,7 @@ class MPCLateralController:
         self._log_s_ref_for_dz = getattr(self, '_log_s_ref', None)
         # Tripwire: deadzone must never apply when |cte_raw|>0.5 or match_dist_m>1.5
         if deadzone_applied and (abs(cte_raw) > 0.5 or (match_dist_m is not None and match_dist_m > 1.5)):
-            print(f"{self._mpc_log_prefix()} *** DEADZONE TRIPWIRE: deadzone_applied=True but |cte_raw|={abs(cte_raw):.3f}m or match_dist_m={match_dist_m} — Todo2 miswired / unsafe")
+            print(f"{self._mpc_log_prefix()} *** DEADZONE TRIPWIRE: deadzone_applied=True but |cte_raw|={abs(cte_raw):.3f}m or match_dist_m={match_dist_m} — deadzone misapplied / unsafe")
         
         # Safety check: disable MPC if errors too large
         # Use proportional fallback to prevent catch-22 (large error → no steering → larger error)
@@ -819,7 +819,7 @@ class MPCLateralController:
             self.prev_prev_control = self.prev_control
             self.prev_control = delta_cmd_rad
             
-            # Todo 4: store feedforward/feedback for next step's w_du/w_ddu and for logging
+            # Store feedforward/feedback for next step's w_du/w_ddu and for logging.
             self._last_delta_ff_prev_rad = getattr(self, '_last_delta_ff_rad', 0.0)
             self._last_delta_ff_rad = delta_ff_rad
             self._last_delta_fb_rad = delta_fb_rad

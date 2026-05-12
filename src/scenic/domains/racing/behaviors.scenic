@@ -3145,7 +3145,7 @@ behavior FollowRacingLineMPCBehavior(target_speed=30, manage_gears=True, use_way
             if _ey is not None:
                 self._last_waypoint_cte_for_speed = abs(_ey)
 
-        # Supplement log (Todo2): deadzone decision, association, curvature, steering — every 10 ticks or when deadzone state changes
+        # Supplement log: deadzone decision, association, curvature, steering — every 10 ticks or when deadzone state changes
         _lc2 = _lat_controller
         _dz_app = getattr(_lc2, '_log_deadzone_applied', False)
         _last_dz = getattr(self, '_last_deadzone_applied', None)

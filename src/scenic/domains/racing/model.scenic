@@ -203,7 +203,9 @@ pitLaneRoad: Region = pitTrack
 racingLine: Region = _track.racingLine.region if hasattr(_track, 'racingLine') and _track.racingLine else mainTrack
 
 #: Start/finish line region
-# TODO: Create actual start/finish line region from track data
+# Known limitation: the start/finish line region is not derived from
+# track-data geometry; consumers that need a specific region today must
+# define one inside their scenario.
 
 ## Racing-specific object types
 
