@@ -79,7 +79,7 @@ Numeric helpers live in `src/scenic/domains/racing/fellow/commands.py` (`compute
 
 | Behavior | Role | Example scene |
 |----------|------|----------------|
-| **FellowConstantSpeedTrackOffsetBehavior** | Constant `speed_mph` and lateral **d** from placement. | `examples/racing/dSPACE/dummy_fellow.scenic` |
+| **FellowConstantSpeedTrackOffsetBehavior** | Constant `speed_mph` and lateral **d** from placement. | `examples/racing/dSPACE/constant_speed_fellow.scenic` |
 | **FellowFollowTTLGeometricBehavior** | Constant **v** and lateral **d** from TTL δ(s) (Lap + optimal CSV). | `examples/racing/dSPACE/ttl_fellow.scenic` |
 | **FellowSuddenStopIntervalBehavior** | Repeating cruise (`speed_mph`) then commanded **v = 0**; **d** tracks TTL δ(s). | `examples/combined/fellow_sudden_stop.scenic` |
 | **FellowSwerveOutOfControlBehavior** | TTL cruise (`speed_mph`), then rate-limited swerve right/left in **d**, then stop; optional **stop_hold_d**. | `examples/combined/fellow_swerve_out_of_control.scenic` |

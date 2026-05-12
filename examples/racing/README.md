@@ -10,7 +10,7 @@ Scenarios for the racing domain using the dSPACE racing simulator. All examples 
 | **falsifiable/** | Falsification templates with `VerifaiRange(...)` parameters (`S1_falsify.scenic`, `S2_falsify.scenic`, `S3_blocker_falsify.scenic`, `F_curve_falsify.scenic`). |
 | **sampled/** | Sampled-parameter scenarios (random / Halton smoke tests). |
 | **calibration/** | One-off calibration scenarios (`measure_lgs_v1_centerline.scenic`, `F2_tactical.scenic`). |
-| **dSPACE/** | dSPACE-specific demo scenarios (`art_control`, `dummy_fellow`, `relative_pos`, `three_tracks`, `ttl_fellow`). |
+| **dSPACE/** | dSPACE-specific demo scenarios (`art_control`, `constant_speed_fellow`, `relative_pos`, `three_tracks`, `ttl_fellow`). |
 
 ## Running
 
