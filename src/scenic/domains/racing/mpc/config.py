@@ -125,7 +125,7 @@ class MPCConfig:
         # genuine danger. Identity if the TTL lacks LEFT_BOUND/RIGHT_BOUND columns.
         # See ``docs/frames.md`` for math.
         self.corridor_barrier_enabled = config_dict.get('corridor_barrier_enabled', True)
-        # Half the IAC AV-21 vehicle width (1.93 m / 2 = 0.965 m).
+        # Half the IAC AV-21 / AV-24 vehicle width (1.93 m / 2 = 0.965 m).
         self.vehicle_half_width_m = config_dict.get('vehicle_half_width_m', 0.965)
         # Body clearance (= min(d_left, d_right) - vehicle_half_width) above which the
         # barrier is FULLY DISABLED. Default 1.5 m -- chosen so that:
