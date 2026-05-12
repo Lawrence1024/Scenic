@@ -2,13 +2,9 @@
 
 This folder provides **MAPort-based read/write** for the dSPACE simulator, mirroring the variable-access API of the ControlDesk COM layer (`controldesk/`). Session control (go online, start maneuver, stepping) remains via **ControlDesk COM**; only variable **get_var** / **set_var** can be performed through MAPort (XIL API) for better performance.
 
-## Original dSPACE demo files
+## Origin
 
-The reference Python demos and helpers in this folder are derived from the dSPACE XIL API .NET demos. The **original files** are installed at:
-
-- **`C:\Program Files\dSPACE XIL API .NET 2023-A\Demos\MAPort\Python`**
-
-That directory contains the official dSPACE samples (e.g. `1_ReadWrite.py`, `18_ReadWriteArrays.py`, `DemoHelpers.py`, port configurations). The copies under this Scenic `maport` folder are adapted for use with the Scenic dSPACE simulator (paths, config, and integration).
+This folder's helper `DemoHelpers.py` is adapted from the dSPACE XIL API .NET demos installed at `C:\Program Files\dSPACE XIL API .NET 2023-A\Demos\MAPort\Python`. The two standalone tutorial scripts (`1_ReadWrite.py`, `18_ReadWriteArrays.py`) that originally sat alongside were removed in the production-readiness cleanup; they were never imported by our code and only added vendor-tutorial noise. The original dSPACE samples remain available in the install path above for anyone learning the XIL API.
 
 ## Contents of this folder
 
@@ -17,9 +13,7 @@ That directory contains the official dSPACE samples (e.g. `1_ReadWrite.py`, `18_
 | **connection.py** | `MAPortApp`: wrapper that creates an MAPort instance and exposes **get_var(path)** and **set_var(path, value)** with the same semantics as ControlDesk (scalars and arrays). Use this for variable read/write instead of ControlDesk COM when MAPort is enabled. |
 | **session.py** | `connect_and_prepare_maport(sim, config_path=None)`: creates and configures an MAPort instance (load config, configure, optionally start simulation). Returns a `MAPortApp` ready for get_var/set_var. Session control (go online, start maneuver, step) is **not** done here—use ControlDesk for that. |
 | **__init__.py** | Package exports for `maport` (e.g. `connection`, `session`). |
-| **1_ReadWrite.py** | dSPACE demo: scalar read/write via MAPort (reference). |
-| **18_ReadWriteArrays.py** | dSPACE demo: vector/array and element access via MAPort (reference). |
-| **DemoHelpers.py** | Helper for XIL API value conversion (e.g. `convertIBaseValue`). |
+| **DemoHelpers.py** | dSPACE-adapted helper for XIL API value conversion (`convertIBaseValue`). Imported lazily by `connection.py` get/set methods; required at runtime. |
 | **MAPortConfigVEOS.xml** | MAPort configuration for VEOS; points to the ASM_Traffic .sdf. Edit `<SystemDescriptionFile>` to match your installation. |
 | **README.md** | This file. |
 
